@@ -1,0 +1,58 @@
+version: 2
+project_name: diverge
+builds:
+  - main: cmd/controller/main.go
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+archives:
+  - format: tar.gz
+    files:
+      - src: README*
+      - src: LICENSE*
+dockers:
+  - image_templates:
+      - "ghcr.io/divergedev/diverge:{{ .Tag }}-amd64"
+    dockerfile: Dockerfile
+    goos: linux
+    goarch: amd64
+  - image_templates:
+      - "ghcr.io/divergedev/diverge:{{ .Tag }}-arm64"
+    dockerfile: Dockerfile
+    goos: linux
+    goarch: arm64
+docker_manifests:
+  - name_template: "ghcr.io/divergedev/diverge:{{ .Tag }}"
+    image_templates:
+      - "ghcr.io/divergedev/diverge:{{ .Tag }}-amd64"
+      - "ghcr.io/divergedev/diverge:{{ .Tag }}-arm64"
+  - name_template: "ghcr.io/divergedev/diverge:latest"
+    image_templates:
+      - "ghcr.io/divergedev/diverge:{{ .Tag }}-amd64"
+      - "ghcr.io/divergedev/diverge:{{ .Tag }}-arm64"
+checksum:
+  name_template: 'checksums.txt'
+  algorithm: sha256
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+  groups:
+    - title: Features
+      regexp: "^.*feat[(\\w)]*:+.*$"
+      order: 0
+    - title: 'Bug fixes'
+      regexp: "^.*fix[(\\w)]*:+.*$"
+      order: 1
+    - title: Others
+      order: 999
+release:
+  github:
+    owner: divergedev
+    name: diverge

@@ -59,3 +59,7 @@ docker-push: ## Push docker image with the manager.
 .PHONY: install
 install: manifests ## Install CRDs into the K8s cluster specified in ~/.kube/config.
 	echo "Installing CRDs..."
+
+.PHONY: release-snapshot
+release-snapshot: ## Run GoReleaser locally (snapshot)
+	goreleaser release --snapshot --clean
