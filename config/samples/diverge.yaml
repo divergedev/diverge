@@ -1,0 +1,12 @@
+version: "1.0"
+services:
+  frontend:
+    paths:
+      - "apps/frontend/**"
+  backend:
+    paths:
+      - "apps/backend/**"
+      - "pkg/shared/**"
+  database-migrator:
+    paths:
+      - "db/migrations/**"

@@ -1,0 +1,23 @@
+apiVersion: diverge.io/v1alpha1
+kind: Environment
+metadata:
+  name: preview-mr-123
+spec:
+  source:
+    provider: gitlab
+    project: my-org/my-app
+    mr: 123
+    branch: feature/new-login
+  deploy:
+    mode: delta
+    baselineRef: main
+  routing:
+    mode: header
+    headerKey: x-diverge-env
+    headerValue: preview-mr-123
+  database:
+    mode: schema
+    connectionRef: main-db-secret
+  lifecycle:
+    ttl: 72h
+    cleanupOnMerge: true

@@ -1,0 +1,19 @@
+apiVersion: diverge.io/v1alpha1
+kind: Environment
+metadata:
+  name: staging
+spec:
+  source:
+    provider: gitlab
+    project: my-org/my-app
+    branch: main
+  deploy:
+    mode: full
+  routing:
+    mode: subdomain
+    externalUrl: staging.myapp.com
+  database:
+    mode: snapshot
+    seedSource: prod-db-snapshot
+  lifecycle:
+    cleanupOnMerge: false
