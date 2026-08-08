@@ -1,30 +1,52 @@
 {
-  description = "Nix dev shell for Diverge operator";
+  description = "Nix dev shell for Diverge — environment-as-a-service engine for Kubernetes";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+    flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs }: let
-    supportedSystems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
-    forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
-  in {
-    devShells = forAllSystems (system: let
-      pkgs = import nixpkgs { inherit system; };
-    in {
-      default = pkgs.mkShell {
-        buildInputs = with pkgs; [
-          go_1_22 # Go 1.22 is available, falling back as 1.26 might not be available yet in nixpkgs, though project uses 1.26
-          kubectl
-          kubernetes-helm
-          kustomize
-          golangci-lint
-        ];
+  outputs = { self, nixpkgs, flake-utils }:
+    flake-utils.lib.eachDefaultSystem (system:
+      let
+        pkgs = import nixpkgs { inherit system; };
+      in
+      {
+        devShells.default = pkgs.mkShell {
+          buildInputs = with pkgs; [
+            # Go
+            go
+            gopls
+            golangci-lint
+            delve
 
-        shellHook = ''
-          echo "Welcome to the Diverge dev shell!"
-        '';
-      };
-    });
-  };
+            # Kubernetes
+            kubectl
+            kubernetes-helm
+            kustomize
+            kind
+
+            # Tools
+            gh
+            jq
+            yq-go
+            pre-commit
+
+            # Container
+            docker-client
+          ];
+
+          shellHook = ''
+            export GOPATH="$HOME/go"
+            export PATH="$GOPATH/bin:$PATH"
+            echo ""
+            echo "🔀 Diverge dev shell loaded"
+            echo "   Go:      $(go version | cut -d' ' -f3)"
+            echo "   kubectl: $(kubectl version --client -o json 2>/dev/null | jq -r '.clientVersion.gitVersion' 2>/dev/null || echo 'n/a')"
+            echo "   helm:    $(helm version --short 2>/dev/null || echo 'n/a')"
+            echo ""
+          '';
+        };
+      }
+    );
 }

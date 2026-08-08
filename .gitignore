@@ -20,3 +20,10 @@
 bin/
 diverge
 manager
+
+# Nix / direnv
+.direnv/
+result
+
+# OS
+.DS_Store
