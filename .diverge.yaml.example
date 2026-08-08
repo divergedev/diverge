@@ -1,0 +1,30 @@
+version: "1"
+
+# Define your services and how to detect changes for them
+services:
+  my-service:
+    paths:
+      - "src/**"
+    image:
+      repository: "registry.example.com/org/my-service"
+      tag_template: "mr-{{.MR}}"
+    # helm:
+    #   path: "charts/my-service"
+    #   values_file: "values-preview.yaml"
+
+# Configure defaults for the environments
+defaults:
+  deploy:
+    mode: delta # Only deploy changed services. Use 'full' to deploy all.
+  routing:
+    mode: header # Can be 'header', 'namespace', or 'subdomain'
+    baseline_namespace: staging
+  lifecycle:
+    ttl: 72h
+    cleanup_on_merge: true
+
+# Define your environment types
+environments:
+  preview:
+    trigger: label
+    label: "diverge/deploy"

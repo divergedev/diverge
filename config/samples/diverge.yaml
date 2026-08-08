@@ -1,12 +1,105 @@
-version: "1.0"
+version: "1"               # Schema version
+
+# Service discovery — maps service names to source paths
 services:
-  frontend:
+  patient-api:
     paths:
-      - "apps/frontend/**"
-  backend:
+      - "services/patient-api/**"
+    image:
+      repository: "registry.gitlab.com/invenero/engineering/patient-insights/patient-api"
+      tag_template: "mr-{{.MR}}"
+    helm:
+      path: "charts/patient-api"
+      values_file: "values-preview.yaml"
+      
+  auth-service:
     paths:
-      - "apps/backend/**"
-      - "pkg/shared/**"
-  database-migrator:
+      - "services/auth-service/**"
+    image:
+      repository: "registry.gitlab.com/invenero/engineering/patient-insights/auth-service"
+      tag_template: "mr-{{.MR}}"
+      
+  web-frontend:
     paths:
-      - "db/migrations/**"
+      - "apps/web-frontend/**"
+    image:
+      repository: "registry.gitlab.com/invenero/engineering/patient-insights/web-frontend"
+      tag_template: "mr-{{.MR}}"
+    helm:
+      path: "charts/web-frontend"
+
+  report-service:
+    paths:
+      - "services/report-service/**"
+    image:
+      repository: "registry.gitlab.com/invenero/engineering/patient-insights/report-service"
+      tag_template: "mr-{{.MR}}"
+
+# Default environment settings (can be overridden per-type or via MR labels)
+defaults:
+  deploy:
+    mode: delta            # Only deploy changed services
+  routing:
+    mode: header           # Use header-based routing against a baseline
+    baseline_namespace: staging
+    header_key: x-diverge-env
+    domain: preview.patient-insights.example.com
+  database:
+    mode: shared           # Connect to shared DB by default
+    connection_ref: staging-db-secret
+    seed_source: "gs://patient-insights-seed-data/v1.tar.gz"
+    migration_command: "flyway migrate"
+  lifecycle:
+    ttl: 72h
+    cleanup_on_merge: true
+
+# Environment type overrides
+environments:
+  preview:
+    trigger: label
+    label: "diverge/deploy"
+    database:
+      mode: shared
+  staging:
+    trigger: branch
+    branch: main
+    deploy:
+      mode: full
+    database:
+      mode: snapshot
+    lifecycle:
+      ttl: ""             # Empty = no TTL (long-lived)
+      cleanup_on_merge: false
+  demo:
+    trigger: manual
+    database:
+      mode: snapshot
+    lifecycle:
+      ttl: 168h           # 7 days
+  qa:
+    trigger: manual
+    database:
+      mode: fresh
+    lifecycle:
+      ttl: 48h
+
+# MR label overrides mapping
+label_overrides:
+  "diverge/full-stack":
+    deploy:
+      mode: full
+  "diverge/fresh-db":
+    database:
+      mode: fresh
+  "diverge/shared-db":
+    database:
+      mode: shared
+  "diverge/skip":
+    skip: true
+
+# Notifications
+notifications:
+  provider: gitlab
+  comment_on_create: true
+  comment_on_ready: true
+  comment_on_destroy: true
