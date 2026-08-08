@@ -1,0 +1,31 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "diverge.fullname" . }}-manager-role
+rules:
+- apiGroups:
+  - diverge.io
+  resources:
+  - environments
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - diverge.io
+  resources:
+  - environments/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - diverge.io
+  resources:
+  - environments/status
+  verbs:
+  - get
+  - patch
+  - update
