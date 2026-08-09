@@ -43,6 +43,9 @@ func newOpenCmd(app *App) *cobra.Command {
 			if parsed.Scheme != "http" && parsed.Scheme != "https" {
 				return fmt.Errorf("refusing to open URL with scheme %q (only http/https allowed)", parsed.Scheme)
 			}
+			if parsed.Hostname() == "" {
+				return fmt.Errorf("environment URL %q has no hostname", url)
+			}
 
 			if env.Spec.Routing.Mode == "header" {
 				// Construct magic URL for opening

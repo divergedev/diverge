@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -101,9 +102,10 @@ func (app *App) ResolveNamespace() error {
 	}
 	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
 	ns, _, err := kubeConfig.Namespace()
-	if err == nil {
-		app.Namespace = ns
+	if err != nil {
+		return fmt.Errorf("failed to resolve namespace from kubeconfig: %w", err)
 	}
+	app.Namespace = ns
 	return nil
 }
 
