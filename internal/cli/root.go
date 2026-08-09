@@ -25,6 +25,10 @@ var (
 	cliVersion string
 	cliCommit  string
 	cliDate    string
+
+	// enterpriseInits holds registered enterprise initializers.
+	// These are called during Execute() to add enterprise commands and middleware.
+	enterpriseInits []func(*cobra.Command)
 )
 
 var rootCmd = &cobra.Command{
@@ -33,10 +37,22 @@ var rootCmd = &cobra.Command{
 	Long:  `The developer's daily driver for interacting with Diverge environments.`,
 }
 
+// RegisterEnterprise adds an enterprise initializer that will be called
+// during Execute() to register enterprise commands, middleware, and handlers.
+// This is typically called from an init() function in an enterprise package.
+func RegisterEnterprise(init func(*cobra.Command)) {
+	enterpriseInits = append(enterpriseInits, init)
+}
+
 func Execute(version, commit, date string) {
 	cliVersion = version
 	cliCommit = commit
 	cliDate = date
+
+	// Initialize enterprise features if registered
+	for _, init := range enterpriseInits {
+		init(rootCmd)
+	}
 
 	err := rootCmd.ExecuteContext(context.Background())
 	if err != nil {
