@@ -26,10 +26,10 @@ func newDeleteCmd(app *App) *cobra.Command {
 
 			if !deleteForce {
 				var resp string
-				fmt.Printf("Are you sure you want to delete environment %s? [y/N]: ", name)
+				cmd.Printf("Are you sure you want to delete environment %s? [y/N]: ", name)
 				_, _ = fmt.Scanln(&resp)
 				if resp != "y" && resp != "Y" {
-					fmt.Println("Cancelled")
+					cmd.Println("Cancelled")
 					return nil
 				}
 			}
@@ -42,7 +42,7 @@ func newDeleteCmd(app *App) *cobra.Command {
 				return fmt.Errorf("failed to delete environment %s: %w", name, err)
 			}
 
-			fmt.Printf("Environment %s deleted\n", name)
+			cmd.Printf("Environment %s deleted\n", name)
 			return nil
 		},
 	}

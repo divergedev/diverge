@@ -3,7 +3,6 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"text/tabwriter"
 	"time"
 
@@ -65,14 +64,14 @@ func newListCmd(app *App) *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("failed to marshal JSON: %w", err)
 				}
-				fmt.Println(string(b))
+				cmd.Println(string(b))
 				return nil
 			case "yaml":
 				b, err := yaml.Marshal(envList.Items)
 				if err != nil {
 					return fmt.Errorf("failed to marshal YAML: %w", err)
 				}
-				fmt.Println(string(b))
+				cmd.Println(string(b))
 				return nil
 			case "table", "":
 				// Continue to table rendering below
@@ -80,7 +79,7 @@ func newListCmd(app *App) *cobra.Command {
 				return fmt.Errorf("unsupported output format: %s (supported: table, json, yaml)", outputFormat)
 			}
 
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 3, ' ', 0)
 			_, _ = fmt.Fprintln(w, "NAME\tPHASE\tAGE\tURL\tMR\tSERVICES")
 
 			for _, env := range envList.Items {
