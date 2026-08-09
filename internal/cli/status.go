@@ -27,32 +27,32 @@ func newStatusCmd(app *App) *cobra.Command {
 				return fmt.Errorf("failed to get environment %s: %w", name, err)
 			}
 
-			fmt.Printf("Name:      %s\n", env.Name)
-			fmt.Printf("Namespace: %s\n", env.Namespace)
-			fmt.Printf("Phase:     %s\n", env.Status.Phase)
-			fmt.Printf("URL:       %s\n", env.Status.URL)
+			cmd.Printf("Name:      %s\n", env.Name)
+			cmd.Printf("Namespace: %s\n", env.Namespace)
+			cmd.Printf("Phase:     %s\n", env.Status.Phase)
+			cmd.Printf("URL:       %s\n", env.Status.URL)
 			if env.Status.CreatedAt != nil {
-				fmt.Printf("Created:   %s\n", env.Status.CreatedAt.String())
+				cmd.Printf("Created:   %s\n", env.Status.CreatedAt.String())
 			}
 			if env.Status.ExpiresAt != nil {
-				fmt.Printf("Expires:   %s\n", env.Status.ExpiresAt.String())
+				cmd.Printf("Expires:   %s\n", env.Status.ExpiresAt.String())
 			}
 
-			fmt.Println("\nConditions:")
+			cmd.Println("\nConditions:")
 			for _, cond := range env.Status.Conditions {
-				fmt.Printf("  %s: %s (%s) - %s\n", cond.Type, cond.Status, cond.Reason, cond.Message)
+				cmd.Printf("  %s: %s (%s) - %s\n", cond.Type, cond.Status, cond.Reason, cond.Message)
 			}
 
-			fmt.Println("\nServices:")
+			cmd.Println("\nServices:")
 			for _, svc := range env.Status.Services {
-				fmt.Printf("  - %s\n", svc)
+				cmd.Printf("  - %s\n", svc)
 			}
 
 			// Routing info
-			fmt.Println("\nRouting:")
-			fmt.Printf("  Mode: %s\n", env.Spec.Routing.Mode)
+			cmd.Println("\nRouting:")
+			cmd.Printf("  Mode: %s\n", env.Spec.Routing.Mode)
 			if env.Spec.Routing.HeaderKey != "" {
-				fmt.Printf("  Header: %s: %s\n", env.Spec.Routing.HeaderKey, env.Spec.Routing.HeaderValue)
+				cmd.Printf("  Header: %s: %s\n", env.Spec.Routing.HeaderKey, env.Spec.Routing.HeaderValue)
 			}
 
 			return nil

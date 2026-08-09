@@ -16,10 +16,10 @@ func newInitCmd(app *App) *cobra.Command {
 			yamlPath := ".diverge.yaml"
 			if _, err := os.Stat(yamlPath); err == nil {
 				var resp string
-				fmt.Printf("%s already exists. Overwrite? [y/N]: ", yamlPath)
-				_, _ = fmt.Scanln(&resp)
+				cmd.Printf("%s already exists. Overwrite? [y/N]: ", yamlPath)
+				_, _ = fmt.Fscanln(cmd.InOrStdin(), &resp)
 				if resp != "y" && resp != "Y" {
-					fmt.Println("Cancelled")
+					cmd.Println("Cancelled")
 					return nil
 				}
 			}
@@ -57,7 +57,7 @@ environments:
 				return fmt.Errorf("failed to write %s: %w", yamlPath, err)
 			}
 
-			fmt.Printf("Successfully created %s\n", yamlPath)
+			cmd.Printf("Successfully created %s\n", yamlPath)
 			return nil
 		},
 	}

@@ -25,6 +25,9 @@ type App struct {
 	Version    string
 	Commit     string
 	Date       string
+
+	Client    client.Client         // For testing
+	Clientset *kubernetes.Clientset // For testing (logs needs CoreV1)
 }
 
 var lazyRootCmd *cobra.Command
@@ -110,6 +113,10 @@ func (app *App) ResolveNamespace() error {
 }
 
 func (app *App) KubeClient() (client.Client, *kubernetes.Clientset, error) {
+	if app.Client != nil {
+		return app.Client, app.Clientset, nil
+	}
+
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if app.Kubeconfig != "" {
 		loadingRules.ExplicitPath = app.Kubeconfig
