@@ -54,11 +54,11 @@ const readyTmplStr = `## 🟢 Diverge Preview Environment — Ready!
 ### Services
 {{range .Services}}- ✅ {{. | sanitize}}
 {{end}}
-### Quick Access
+{{if .BaseURL}}### Quick Access
 ` + "```\n" + `curl -H "x-diverge-env: {{.Name | sanitize}}" {{.BaseURL}}
 ` + "```\n" + `
-> 💡 **Tip:** Use the [Diverge browser extension](#) or add the header ` + "`x-diverge-env: {{.Name | sanitize}}`" + ` to route traffic to this preview.
-
+> 💡 **Tip:** Use the Diverge browser extension or add the header ` + "`x-diverge-env: {{.Name | sanitize}}`" + ` to route traffic to this preview.
+{{end}}
 ---
 _Powered by [Diverge](https://github.com/divergedev/diverge) • Expires {{.ExpiryTime}}_`
 

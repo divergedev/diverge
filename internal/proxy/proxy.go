@@ -14,13 +14,13 @@ import (
 // Config holds proxy configuration
 type Config struct {
 	// BaseURL is the upstream URL (e.g., https://app.staging.example.com)
-	BaseURL       string
+	BaseURL string
 	// HeaderKey is the header to inject (default: x-diverge-env)
-	HeaderKey     string
+	HeaderKey string
 	// PreviewDomain is the wildcard domain (e.g., preview.example.com)
 	PreviewDomain string
 	// Port to listen on
-	Port          int
+	Port int
 }
 
 // Server is the Magic URL reverse proxy server
@@ -82,12 +82,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	envInfo, err := s.envLister.GetEnvironment(r.Context(), envName)
 	if err != nil {
-		if err == ErrCacheNotSynced {
-			http.Error(w, "Service Unavailable: Cache syncing", http.StatusServiceUnavailable)
+		if err.Error() == "environment not found" {
+			envs, _ := s.envLister.ListEnvironments(r.Context())
+			renderNotFound(w, envName, envs)
 			return
 		}
-		envs, _ := s.envLister.ListEnvironments(r.Context())
-		renderNotFound(w, envName, envs)
+		http.Error(w, "Service Unavailable: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 

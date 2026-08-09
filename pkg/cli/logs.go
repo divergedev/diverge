@@ -1,11 +1,10 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"os"
-	
+
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -28,20 +27,20 @@ var logsCmd = &cobra.Command{
 		}
 
 		envName := args[0]
-		
+
 		// In a real implementation we would fetch the env and look up its namespace/pods.
 		// For simplicity we assume it's running in the requested namespace.
 		targetNamespace := namespace
 		if targetNamespace == "" {
 			targetNamespace = envName
 		}
-		
+
 		labelSelector := fmt.Sprintf("diverge.io/environment=%s", envName)
 		if logsService != "" {
 			labelSelector = fmt.Sprintf("%s,app=%s", labelSelector, logsService)
 		}
 
-		pods, err := clientset.CoreV1().Pods(targetNamespace).List(context.Background(), metav1.ListOptions{
+		pods, err := clientset.CoreV1().Pods(targetNamespace).List(cmd.Context(), metav1.ListOptions{
 			LabelSelector: labelSelector,
 		})
 		if err != nil {
@@ -67,13 +66,13 @@ var logsCmd = &cobra.Command{
 
 		// Simplified log streaming for the pod
 		pod := pods.Items[0]
-		
+
 		req := clientset.CoreV1().Pods(targetNamespace).GetLogs(pod.Name, &corev1.PodLogOptions{
-			Follow: logsFollow,
+			Follow:    logsFollow,
 			TailLines: &logsTail,
 		})
 
-		stream, err := req.Stream(context.Background())
+		stream, err := req.Stream(cmd.Context())
 		if err != nil {
 			return fmt.Errorf("failed to get log stream: %w", err)
 		}

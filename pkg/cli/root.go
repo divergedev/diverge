@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -37,7 +38,7 @@ func Execute(version, commit, date string) {
 	cliCommit = commit
 	cliDate = date
 
-	err := rootCmd.Execute()
+	err := rootCmd.ExecuteContext(context.Background())
 	if err != nil {
 		os.Exit(1)
 	}
@@ -63,7 +64,7 @@ func getKubeClient() (client.Client, *kubernetes.Clientset, error) {
 	}
 
 	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
-	
+
 	if namespace == "" {
 		ns, _, err := kubeConfig.Namespace()
 		if err == nil {
@@ -92,5 +93,3 @@ func getKubeClient() (client.Client, *kubernetes.Clientset, error) {
 
 	return c, clientset, nil
 }
-
-

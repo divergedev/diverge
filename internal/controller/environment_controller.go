@@ -76,6 +76,11 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// 5. Ensure namespace
 	if err := r.ensureNamespace(ctx, &env); err != nil {
 		setCondition(&env, "NamespaceReady", metav1.ConditionFalse, "NamespaceProvisionFailed", err.Error())
+		if r.Notifier != nil {
+			if notifyErr := r.Notifier.PostEnvironmentFailed(ctx, &env, err.Error()); notifyErr != nil {
+				logger.Error(notifyErr, "failed to post environment failed notification")
+			}
+		}
 		return r.updateStatus(ctx, &env, err)
 	}
 	setCondition(&env, "NamespaceReady", metav1.ConditionTrue, "NamespaceProvisioned", "Namespace is ready")
@@ -84,6 +89,11 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	dbStatus, err := r.DatabaseProvider.Provision(ctx, &env)
 	if err != nil {
 		setCondition(&env, "DatabaseReady", metav1.ConditionFalse, "DatabaseProvisionFailed", err.Error())
+		if r.Notifier != nil {
+			if notifyErr := r.Notifier.PostEnvironmentFailed(ctx, &env, err.Error()); notifyErr != nil {
+				logger.Error(notifyErr, "failed to post environment failed notification")
+			}
+		}
 		return r.updateStatus(ctx, &env, err)
 	}
 	if dbStatus != nil && dbStatus.Ready {
@@ -96,6 +106,11 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// 7. Ensure routing
 	if err := r.Router.Reconcile(ctx, &env); err != nil {
 		setCondition(&env, "RoutingReady", metav1.ConditionFalse, "RoutingProvisionFailed", err.Error())
+		if r.Notifier != nil {
+			if notifyErr := r.Notifier.PostEnvironmentFailed(ctx, &env, err.Error()); notifyErr != nil {
+				logger.Error(notifyErr, "failed to post environment failed notification")
+			}
+		}
 		return r.updateStatus(ctx, &env, err)
 	}
 	setCondition(&env, "RoutingReady", metav1.ConditionTrue, "RoutingProvisioned", "Routing is ready")
@@ -113,20 +128,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		r.Recorder.Event(&env, "Normal", "Running", "Environment is up and running")
 	}
 
-	if r.Notifier != nil && oldPhase != newPhase {
-		switch newPhase {
-		case divergeiov1alpha1.PhaseRunning:
-			if err := r.Notifier.PostEnvironmentReady(ctx, &env); err != nil {
-				logger.Error(err, "failed to post environment ready notification")
-			}
-		case divergeiov1alpha1.PhaseFailed:
-			if err := r.Notifier.PostEnvironmentFailed(ctx, &env, "Environment failed to deploy"); err != nil {
-				logger.Error(err, "failed to post environment failed notification")
-			}
-		}
-	}
-
-	// 11. Check TTL expiry
+	// 11. Check TTL expiry and set timestamps
 	if env.Spec.Lifecycle.TTL != nil && env.Status.CreatedAt != nil {
 		expiryTime := env.Status.CreatedAt.Add(env.Spec.Lifecycle.TTL.Duration)
 		env.Status.ExpiresAt = &metav1.Time{Time: expiryTime}
@@ -142,6 +144,19 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		env.Status.CreatedAt = &now
 	}
 
+	if r.Notifier != nil && oldPhase != newPhase {
+		switch newPhase {
+		case divergeiov1alpha1.PhaseRunning:
+			if err := r.Notifier.PostEnvironmentReady(ctx, &env); err != nil {
+				logger.Error(err, "failed to post environment ready notification")
+			}
+		case divergeiov1alpha1.PhaseFailed:
+			if err := r.Notifier.PostEnvironmentFailed(ctx, &env, "Environment failed to deploy"); err != nil {
+				logger.Error(err, "failed to post environment failed notification")
+			}
+		}
+	}
+
 	// 12. Update status
 	return r.updateStatus(ctx, &env, nil)
 }
@@ -149,7 +164,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *divergeiov1alpha1.Environment) (ctrl.Result, error) {
 	if controllerutil.ContainsFinalizer(env, environmentFinalizer) {
 		r.Recorder.Event(env, "Normal", "Terminating", "Teardown started")
-		
+
 		if r.Notifier != nil {
 			if err := r.Notifier.PostEnvironmentTeardown(ctx, env); err != nil {
 				log.FromContext(ctx).Error(err, "failed to post environment teardown notification")
@@ -159,7 +174,7 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		if err := r.Router.Teardown(ctx, env); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to teardown routing: %w", err)
 		}
-		
+
 		if err := r.DatabaseProvider.Teardown(ctx, env); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to teardown database: %w", err)
 		}
@@ -168,7 +183,7 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		if err := r.Update(ctx, env); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to remove finalizer: %w", err)
 		}
-		
+
 		r.Recorder.Event(env, "Normal", "Terminated", "Teardown complete")
 	}
 	return ctrl.Result{}, nil

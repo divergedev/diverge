@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -22,7 +21,7 @@ var deleteCmd = &cobra.Command{
 		}
 
 		name := args[0]
-		
+
 		if !deleteForce {
 			var resp string
 			fmt.Printf("Are you sure you want to delete environment %s? [y/N]: ", name)
@@ -37,7 +36,7 @@ var deleteCmd = &cobra.Command{
 		env.Name = name
 		env.Namespace = namespace
 
-		if err := c.Delete(context.Background(), env); err != nil {
+		if err := c.Delete(cmd.Context(), env); err != nil {
 			return fmt.Errorf("failed to delete environment %s: %w", name, err)
 		}
 

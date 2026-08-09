@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -22,7 +21,7 @@ var statusCmd = &cobra.Command{
 
 		name := args[0]
 		var env divergeiov1alpha1.Environment
-		if err := c.Get(context.Background(), client.ObjectKey{Name: name, Namespace: namespace}, &env); err != nil {
+		if err := c.Get(cmd.Context(), client.ObjectKey{Name: name, Namespace: namespace}, &env); err != nil {
 			return fmt.Errorf("failed to get environment %s: %w", name, err)
 		}
 
@@ -36,12 +35,12 @@ var statusCmd = &cobra.Command{
 		if env.Status.ExpiresAt != nil {
 			fmt.Printf("Expires:   %s\n", env.Status.ExpiresAt.String())
 		}
-		
+
 		fmt.Println("\nConditions:")
 		for _, cond := range env.Status.Conditions {
 			fmt.Printf("  %s: %s (%s) - %s\n", cond.Type, cond.Status, cond.Reason, cond.Message)
 		}
-		
+
 		fmt.Println("\nServices:")
 		for _, svc := range env.Status.Services {
 			fmt.Printf("  - %s\n", svc)

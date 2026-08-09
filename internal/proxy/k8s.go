@@ -105,6 +105,9 @@ func NewK8sEnvironmentLister(kubeconfig, namespace string, scheme *runtime.Schem
 			}
 		},
 		DeleteFunc: func(obj interface{}) {
+			if d, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+				obj = d.Obj
+			}
 			if env, ok := obj.(*v1alpha1.Environment); ok {
 				lister.mu.Lock()
 				delete(lister.envCache, env.Name)

@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"os"
 
@@ -27,9 +26,9 @@ var createCmd = &cobra.Command{
 
 		// Simple stub for creating the environment
 		// In a real implementation we would parse .diverge.yaml, get the branch, repo, etc.
-		
+
 		envName := "preview-my-mr" // dummy
-		
+
 		env := &divergeiov1alpha1.Environment{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      envName,
@@ -51,10 +50,10 @@ var createCmd = &cobra.Command{
 			},
 		}
 
-		if err := c.Create(context.Background(), env); err != nil {
+		if err := c.Create(cmd.Context(), env); err != nil {
 			return fmt.Errorf("failed to create environment: %w", err)
 		}
-		
+
 		fmt.Printf("Environment %s created\n", envName)
 		return nil
 	},

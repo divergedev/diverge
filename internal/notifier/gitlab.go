@@ -135,15 +135,13 @@ func buildTemplateData(env *v1alpha1.Environment, reason string) TemplateData {
 		})
 	}
 
-	baseURL := "https://placeholder.url"
+	baseURL := ""
 	if env.Status.URL != "" {
 		baseURL = env.Status.URL
 	} else if env.Spec.Routing.Mode == "subdomain" {
 		baseURL = fmt.Sprintf("https://%s.preview.example.com", env.Name) // domain not fully known here, assume logic
-	} else if env.Spec.Routing.Mode == "header" {
-		baseURL = "URL requires headers"
 	}
-	
+
 	return TemplateData{
 		Name:        env.Name,
 		Branch:      env.Spec.Source.Branch,
