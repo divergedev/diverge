@@ -18,9 +18,11 @@ import (
 	webhookserver "sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/argocd"
 	"github.com/divergedev/diverge/internal/changeset"
 	"github.com/divergedev/diverge/internal/controller"
 	"github.com/divergedev/diverge/internal/database"
+	"github.com/divergedev/diverge/internal/deployer"
 	"github.com/divergedev/diverge/internal/notifier"
 	"github.com/divergedev/diverge/internal/routing"
 	"github.com/divergedev/diverge/internal/webhook"
@@ -44,6 +46,8 @@ func main() {
 	var probeAddr string
 	var webhookPort int
 	var routingProvider string
+	var deployProvider string
+	var argoNamespace string
 	var webhookSecretToken string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
@@ -53,6 +57,8 @@ func main() {
 			"Enabling this will ensure there is only one active controller manager.")
 	flag.IntVar(&webhookPort, "webhook-port", 9443, "The port the webhook server binds to.")
 	flag.StringVar(&routingProvider, "routing-provider", "gateway", "The routing provider to use (istio|gateway).")
+	flag.StringVar(&deployProvider, "deploy-provider", "noop", "Deployment provider (argocd|noop)")
+	flag.StringVar(&argoNamespace, "argo-namespace", "argocd", "Namespace where Argo CD is installed")
 	flag.StringVar(&webhookSecretToken, "webhook-secret-token", "", "The secret token for authenticating webhooks.")
 
 	opts := zap.Options{
@@ -87,6 +93,20 @@ func main() {
 	detectorImpl := &changeset.GitChangeDetector{}
 	notifierImpl := &notifier.GitLabNotifier{Token: ""}
 
+	var deployerImpl deployer.Deployer
+	switch deployProvider {
+	case "argocd":
+		argoClient := argocd.NewClient(mgr.GetClient(), argoNamespace)
+		argoGenerator := &argocd.Generator{
+			ArgoNamespace:     argoNamespace,
+			DestinationServer: "https://kubernetes.default.svc",
+			Project:           "default",
+		}
+		deployerImpl = deployer.NewArgoDeployer(argoClient, argoGenerator, nil)
+	default:
+		deployerImpl = &deployer.NoopDeployer{}
+	}
+
 	if err = (&controller.EnvironmentReconciler{
 		Client:           mgr.GetClient(),
 		Scheme:           mgr.GetScheme(),
@@ -95,6 +115,7 @@ func main() {
 		DatabaseProvider: dbProviderImpl,
 		ChangeDetector:   detectorImpl,
 		Notifier:         notifierImpl,
+		Deployer:         deployerImpl,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Environment")
 		os.Exit(1)

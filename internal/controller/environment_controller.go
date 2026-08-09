@@ -16,6 +16,7 @@ import (
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/changeset"
 	"github.com/divergedev/diverge/internal/database"
+	"github.com/divergedev/diverge/internal/deployer"
 	"github.com/divergedev/diverge/internal/notifier"
 	"github.com/divergedev/diverge/internal/routing"
 )
@@ -31,6 +32,7 @@ type EnvironmentReconciler struct {
 	DatabaseProvider database.DatabaseProvider
 	ChangeDetector   changeset.ChangeDetector
 	Notifier         notifier.Notifier
+	Deployer         deployer.Deployer
 }
 
 // +kubebuilder:rbac:groups=diverge.io,resources=environments,verbs=get;list;watch;create;update;patch;delete
@@ -116,8 +118,19 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	setCondition(&env, "RoutingReady", metav1.ConditionTrue, "RoutingProvisioned", "Routing is ready")
 	env.Status.URL = r.Router.GetExternalURL(&env)
 
-	// 8. Ensure services (stub)
-	setCondition(&env, "ServicesReady", metav1.ConditionTrue, "ServicesProvisioned", "Services are ready")
+	// 8. Deploy services
+	if r.Deployer != nil {
+		if err := r.Deployer.Deploy(ctx, &env); err != nil {
+			setCondition(&env, "ServicesReady", metav1.ConditionFalse, "DeployFailed", err.Error())
+			if r.Notifier != nil {
+				if notifyErr := r.Notifier.PostEnvironmentFailed(ctx, &env, err.Error()); notifyErr != nil {
+					logger.Error(notifyErr, "failed to post environment failed notification")
+				}
+			}
+			return r.updateStatus(ctx, &env, err)
+		}
+	}
+	setCondition(&env, "ServicesReady", metav1.ConditionTrue, "ServicesDeployed", "Services deployed successfully")
 
 	// 10. Derive phase
 	newPhase := derivePhase(env.Status.Conditions)
@@ -168,6 +181,12 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		if r.Notifier != nil {
 			if err := r.Notifier.PostEnvironmentTeardown(ctx, env); err != nil {
 				log.FromContext(ctx).Error(err, "failed to post environment teardown notification")
+			}
+		}
+
+		if r.Deployer != nil {
+			if err := r.Deployer.Teardown(ctx, env); err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to teardown deployments: %w", err)
 			}
 		}
 
