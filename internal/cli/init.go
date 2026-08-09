@@ -41,7 +41,7 @@ defaults:
   deploy:
     mode: delta # Only deploy changed services. Use 'full' to deploy all.
   routing:
-    mode: header # Can be 'header', 'app.Namespace', or 'subdomain'
+    mode: header # Can be 'header', 'namespace', or 'subdomain'
     baseline_namespace: staging
   lifecycle:
     ttl: 72h

@@ -19,16 +19,16 @@ import (
 	"github.com/divergedev/diverge/internal/git"
 )
 
-var (
-	configPath string
-	envName    string
-	envType    string
-	mrNumber   int
-	labels     string
-	dryRun     bool
-)
-
 func newCreateCmd(app *App) *cobra.Command {
+	var (
+		configPath string
+		envName    string
+		envType    string
+		mrNumber   int
+		labels     string
+		dryRun     bool
+	)
+
 	cmd := &cobra.Command{
 
 		Use:   "create",
@@ -38,7 +38,9 @@ and detecting the current git context (branch, provider, project).
 
 The environment name is generated deterministically from the MR/PR number
 or branch name, unless overridden with --name.`,
-		RunE: func(cmd *cobra.Command, args []string) error { return runCreate(cmd, args, app) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runCreate(cmd, args, app, configPath, envName, envType, mrNumber, labels, dryRun)
+		},
 	}
 	cmd.Flags().StringVarP(&configPath, "config", "c", ".diverge.yaml", "path to config file")
 	cmd.Flags().StringVar(&envName, "name", "", "override environment name")
@@ -50,7 +52,7 @@ or branch name, unless overridden with --name.`,
 	return cmd
 }
 
-func runCreate(cmd *cobra.Command, _ []string, app *App) error {
+func runCreate(cmd *cobra.Command, _ []string, app *App, configPath, envName, envType string, mrNumber int, labels string, dryRun bool) error {
 	// Load config
 	cfg, err := config.Load(configPath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -87,7 +89,7 @@ func runCreate(cmd *cobra.Command, _ []string, app *App) error {
 	}
 
 	// Build the Environment CR
-	env, err := buildEnvironment(name, gitCtx, resolved, cfg, app)
+	env, err := buildEnvironment(name, gitCtx, resolved, cfg, app, mrNumber)
 	if err != nil {
 		return fmt.Errorf("failed to build environment: %w", err)
 	}
@@ -106,7 +108,7 @@ func runCreate(cmd *cobra.Command, _ []string, app *App) error {
 		return fmt.Errorf("failed to create environment: %w", err)
 	}
 
-	fmt.Printf("✅ Environment %q created in app.Namespace %q\n", env.Name, env.Namespace)
+	fmt.Printf("✅ Environment %q created in namespace %q\n", env.Name, env.Namespace)
 	if resolved.Routing.Domain != "" {
 		fmt.Printf("🌐 URL: https://%s.%s\n", name, resolved.Routing.Domain)
 	}
@@ -128,7 +130,7 @@ func generateEnvName(envType string, mr int, branch string) string {
 	return name
 }
 
-func buildEnvironment(name string, gitCtx *git.GitContext, resolved *config.ResolvedSettings, cfg *config.Config, app *App) (*divergeiov1alpha1.Environment, error) {
+func buildEnvironment(name string, gitCtx *git.GitContext, resolved *config.ResolvedSettings, cfg *config.Config, app *App, mrNumber int) (*divergeiov1alpha1.Environment, error) {
 	env := &divergeiov1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -227,7 +229,7 @@ func printDryRun(env *divergeiov1alpha1.Environment) error {
 		return fmt.Errorf("failed to marshal environment: %w", err)
 	}
 	fmt.Println("---")
-	fmt.Printf("# dry-run: would create Environment %q in app.Namespace %q\n", env.Name, env.Namespace)
+	fmt.Printf("# dry-run: would create Environment %q in namespace %q\n", env.Name, env.Namespace)
 	fmt.Print(string(data))
 	return nil
 }

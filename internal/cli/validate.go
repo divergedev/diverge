@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"embed"
 	"fmt"
 	"os"
 
@@ -8,6 +9,9 @@ import (
 	"github.com/xeipuuv/gojsonschema"
 	"sigs.k8s.io/yaml"
 )
+
+//go:embed schema/diverge-config.schema.json
+var schemaFS embed.FS
 
 func newValidateCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
@@ -20,7 +24,12 @@ func newValidateCmd(app *App) *cobra.Command {
 				return fmt.Errorf("no %s found in current directory", yamlPath)
 			}
 
-			schemaLoader := gojsonschema.NewReferenceLoader("file://config/schema/diverge-config.schema.json")
+			schemaBytes, err := schemaFS.ReadFile("schema/diverge-config.schema.json")
+			if err != nil {
+				return fmt.Errorf("failed to read embedded schema: %w", err)
+			}
+
+			schemaLoader := gojsonschema.NewBytesLoader(schemaBytes)
 
 			yamlData, err := os.ReadFile(yamlPath)
 			if err != nil {
@@ -40,16 +49,16 @@ func newValidateCmd(app *App) *cobra.Command {
 			}
 
 			if result.Valid() {
-				fmt.Println("Config is valid.")
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Config is valid.")
 				return nil
 			}
 
-			fmt.Println("Config is invalid. Errors:")
+			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "Config is invalid. Errors:")
 			for _, desc := range result.Errors() {
-				fmt.Printf("- %s\n", desc)
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "- %s\n", desc)
 			}
-			os.Exit(1)
-			return nil
+			cmd.SilenceUsage = true
+			return fmt.Errorf("config validation failed with %d error(s)", len(result.Errors()))
 		},
 	}
 

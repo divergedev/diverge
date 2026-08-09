@@ -35,6 +35,15 @@ func newOpenCmd(app *App) *cobra.Command {
 				return fmt.Errorf("environment URL is not set")
 			}
 
+			// Validate URL scheme to prevent opening dangerous URIs
+			parsed, err := urlPkg.Parse(url)
+			if err != nil {
+				return fmt.Errorf("invalid environment URL: %w", err)
+			}
+			if parsed.Scheme != "http" && parsed.Scheme != "https" {
+				return fmt.Errorf("refusing to open URL with scheme %q (only http/https allowed)", parsed.Scheme)
+			}
+
 			if env.Spec.Routing.Mode == "header" {
 				// Construct magic URL for opening
 				u, err := urlPkg.Parse(env.Status.URL)

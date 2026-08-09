@@ -59,6 +59,9 @@ func NewRootCmd(app *App) *cobra.Command {
 		Use:   "diverge",
 		Short: "Diverge CLI manages preview environments",
 		Long:  `The developer's daily driver for interacting with Diverge environments.`,
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			return app.ResolveNamespace()
+		},
 	}
 
 	rootCmd.PersistentFlags().StringVar(&app.Kubeconfig, "kubeconfig", "", "path to kubeconfig (default: ~/.kube/config)")
@@ -82,6 +85,28 @@ func addCommands(root *cobra.Command, app *App) {
 	root.AddCommand(newVersionCmd(app))
 }
 
+// ResolveNamespace resolves the namespace from the kubeconfig if not
+// explicitly set via --namespace flag.
+func (app *App) ResolveNamespace() error {
+	if app.Namespace != "" {
+		return nil
+	}
+
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	if app.Kubeconfig != "" {
+		loadingRules.ExplicitPath = app.Kubeconfig
+	}
+	configOverrides := &clientcmd.ConfigOverrides{
+		CurrentContext: app.Context,
+	}
+	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
+	ns, _, err := kubeConfig.Namespace()
+	if err == nil {
+		app.Namespace = ns
+	}
+	return nil
+}
+
 func (app *App) KubeClient() (client.Client, *kubernetes.Clientset, error) {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if app.Kubeconfig != "" {
@@ -95,13 +120,6 @@ func (app *App) KubeClient() (client.Client, *kubernetes.Clientset, error) {
 	}
 
 	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
-
-	if app.Namespace == "" {
-		ns, _, err := kubeConfig.Namespace()
-		if err == nil {
-			app.Namespace = ns
-		}
-	}
 
 	config, err := kubeConfig.ClientConfig()
 	if err != nil {

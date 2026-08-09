@@ -32,12 +32,12 @@ func formatAge(t time.Time) string {
 	}
 }
 
-var (
-	allNamespaces bool
-	outputFormat  string
-)
-
 func newListCmd(app *App) *cobra.Command {
+	var (
+		allNamespaces bool
+		outputFormat  string
+	)
+
 	cmd := &cobra.Command{
 
 		Use:   "list",
@@ -116,7 +116,7 @@ func newListCmd(app *App) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVarP(&allNamespaces, "all-namespaces", "A", false, "list environments across all namespaces")
-	cmd.Flags().StringVarP(&outputFormat, "output", "o", "", "output format: json, yaml")
+	cmd.Flags().StringVarP(&outputFormat, "output", "o", "", "output format: table, json, yaml")
 
 	return cmd
 }
