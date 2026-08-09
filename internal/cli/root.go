@@ -33,6 +33,12 @@ var rootCmd = &cobra.Command{
 	Long:  `The developer's daily driver for interacting with Diverge environments.`,
 }
 
+// RootCmd returns the root cobra command. External modules (e.g.,
+// diverge-enterprise) use this to add enterprise subcommands.
+func RootCmd() *cobra.Command {
+	return rootCmd
+}
+
 func Execute(version, commit, date string) {
 	cliVersion = version
 	cliCommit = commit
