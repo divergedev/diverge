@@ -51,6 +51,8 @@ func main() {
 	var argoNamespace string
 	var webhookSecretToken string
 	var argoRepoURL string
+	var notifierProvider string
+	var notifierToken string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -62,6 +64,8 @@ func main() {
 	flag.StringVar(&deployProvider, "deploy-provider", "noop", "Deployment provider (argocd|noop)")
 	flag.StringVar(&argoNamespace, "argo-namespace", "argocd", "Namespace where Argo CD is installed")
 	flag.StringVar(&argoRepoURL, "argo-repo-url", "", "Repository URL for Argo CD Application sources")
+	flag.StringVar(&notifierProvider, "notifier-provider", "noop", "Notification provider (gitlab|github|noop)")
+	flag.StringVar(&notifierToken, "notifier-token", "", "API token for the notification provider")
 	flag.StringVar(&webhookSecretToken, "webhook-secret-token", "", "The secret token for authenticating webhooks.")
 
 	opts := zap.Options{
@@ -94,7 +98,19 @@ func main() {
 
 	dbProviderImpl := &database.SharedProvider{}
 	detectorImpl := &changeset.GitChangeDetector{}
-	notifierImpl := &notifier.GitLabNotifier{Token: ""}
+
+	var notifierImpl notifier.Notifier
+	switch notifierProvider {
+	case "gitlab":
+		notifierImpl = &notifier.GitLabNotifier{Token: notifierToken}
+	case "github":
+		notifierImpl = &notifier.GitHubNotifier{Token: notifierToken}
+	case "noop", "":
+		notifierImpl = &notifier.NoopNotifier{}
+	default:
+		setupLog.Error(fmt.Errorf("unsupported notifier provider: %q", notifierProvider), "invalid --notifier-provider")
+		os.Exit(1)
+	}
 
 	var deployerImpl deployer.Deployer
 	switch deployProvider {
