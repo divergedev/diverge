@@ -196,6 +196,84 @@ func TestGenerate(t *testing.T) {
 				assert.Equal(t, "default", ns)
 			},
 		},
+		{
+			name: "kustomize source type",
+			env: &v1alpha1.Environment{
+				ObjectMeta: metav1.ObjectMeta{Name: "preview-mr-42", Namespace: "product-clinical", UID: "uid"},
+				Spec: v1alpha1.EnvironmentSpec{
+					Source: v1alpha1.EnvironmentSource{Branch: "feat/patient-search"},
+				},
+			},
+			changedServices: []string{"patient-api"},
+			configs: map[string]ServiceConfig{
+				"patient-api": {
+					Name:       "patient-api",
+					SourceType: "kustomize",
+					Path:       "apps/dev/apps/patient-api",
+					Image:      "registry.example.com/patient-api",
+					Tag:        "mr-42-abc123",
+				},
+			},
+			expectedApps: 1,
+			check: func(t *testing.T, env *v1alpha1.Environment, apps []*unstructured.Unstructured) {
+				app := apps[0]
+
+				// Verify source uses kustomize, not helm
+				source, _, _ := unstructured.NestedMap(app.Object, "spec", "source")
+				assert.Equal(t, "apps/dev/apps/patient-api", source["path"])
+				assert.Equal(t, "feat/patient-search", source["targetRevision"])
+
+				// Verify kustomize image override
+				images, _, _ := unstructured.NestedStringSlice(app.Object, "spec", "source", "kustomize", "images")
+				assert.Len(t, images, 1)
+				assert.Equal(t, "registry.example.com/patient-api:mr-42-abc123", images[0])
+
+				// Verify no helm block
+				_, helmFound, _ := unstructured.NestedMap(app.Object, "spec", "source", "helm")
+				assert.False(t, helmFound, "kustomize source should not have helm block")
+			},
+		},
+		{
+			name: "kustomize source with tag only (no image)",
+			env: &v1alpha1.Environment{
+				ObjectMeta: metav1.ObjectMeta{Name: "preview-mr-50", Namespace: "default", UID: "uid"},
+			},
+			changedServices: []string{"api"},
+			configs: map[string]ServiceConfig{
+				"api": {
+					Name:       "api",
+					SourceType: "kustomize",
+					Path:       "apps/dev/apps/api",
+					Tag:        "v1.2.3",
+				},
+			},
+			expectedApps: 1,
+			check: func(t *testing.T, env *v1alpha1.Environment, apps []*unstructured.Unstructured) {
+				images, _, _ := unstructured.NestedStringSlice(apps[0].Object, "spec", "source", "kustomize", "images")
+				assert.Len(t, images, 1)
+				assert.Equal(t, "api:v1.2.3", images[0], "should use service name as default image name")
+			},
+		},
+		{
+			name: "helm source type explicit",
+			env: &v1alpha1.Environment{
+				ObjectMeta: metav1.ObjectMeta{Name: "preview-mr-42", Namespace: "default", UID: "uid"},
+			},
+			changedServices: []string{"api"},
+			configs: map[string]ServiceConfig{
+				"api": {Name: "api", SourceType: "helm", Tag: "v1", ChartPath: "charts/api"},
+			},
+			expectedApps: 1,
+			check: func(t *testing.T, env *v1alpha1.Environment, apps []*unstructured.Unstructured) {
+				// Verify helm block exists
+				params, _, _ := unstructured.NestedSlice(apps[0].Object, "spec", "source", "helm", "parameters")
+				assert.Len(t, params, 1)
+
+				// Verify no kustomize block
+				_, kFound, _ := unstructured.NestedMap(apps[0].Object, "spec", "source", "kustomize")
+				assert.False(t, kFound, "helm source should not have kustomize block")
+			},
+		},
 	}
 
 	for _, tt := range tests {

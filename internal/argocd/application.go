@@ -121,19 +121,7 @@ func (g *Generator) Generate(
 				},
 				"spec": map[string]interface{}{
 					"project": project,
-					"source": map[string]interface{}{
-						"repoURL":        g.RepoURL,
-						"path":           cfg.ChartPath,
-						"targetRevision": targetRevision,
-						"helm": map[string]interface{}{
-							"parameters": []interface{}{
-								map[string]interface{}{
-									"name":  "image.tag",
-									"value": cfg.Tag,
-								},
-							},
-						},
-					},
+					"source":  g.buildSource(cfg, targetRevision),
 					"destination": map[string]interface{}{
 						"server":    destServer,
 						"namespace": destNamespace,
@@ -155,4 +143,48 @@ func (g *Generator) Generate(
 	}
 
 	return apps, nil
+}
+
+// buildSource creates the Argo CD Application source block based on the
+// service's source type. Defaults to Helm if SourceType is empty.
+func (g *Generator) buildSource(cfg ServiceConfig, targetRevision string) map[string]interface{} {
+	switch cfg.SourceType {
+	case "kustomize":
+		source := map[string]interface{}{
+			"repoURL":        g.RepoURL,
+			"path":           cfg.Path,
+			"targetRevision": targetRevision,
+		}
+		// Kustomize image override: sets the container image for the preview
+		if cfg.Image != "" && cfg.Tag != "" {
+			source["kustomize"] = map[string]interface{}{
+				"images": []interface{}{
+					fmt.Sprintf("%s:%s", cfg.Image, cfg.Tag),
+				},
+			}
+		} else if cfg.Tag != "" {
+			// Image name not specified, use service name as default
+			source["kustomize"] = map[string]interface{}{
+				"images": []interface{}{
+					fmt.Sprintf("%s:%s", cfg.Name, cfg.Tag),
+				},
+			}
+		}
+		return source
+
+	default: // "helm" or empty
+		return map[string]interface{}{
+			"repoURL":        g.RepoURL,
+			"path":           cfg.ChartPath,
+			"targetRevision": targetRevision,
+			"helm": map[string]interface{}{
+				"parameters": []interface{}{
+					map[string]interface{}{
+						"name":  "image.tag",
+						"value": cfg.Tag,
+					},
+				},
+			},
+		}
+	}
 }
