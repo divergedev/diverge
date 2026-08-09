@@ -231,10 +231,13 @@ func derivePhase(conditions []metav1.Condition) divergeiov1alpha1.EnvironmentPha
 	}
 	allReady := true
 	for _, c := range conditions {
-		if c.Status == metav1.ConditionFalse {
+		switch c.Status {
+		case metav1.ConditionFalse:
 			return divergeiov1alpha1.PhaseFailed
-		}
-		if c.Status != metav1.ConditionTrue {
+		case metav1.ConditionTrue:
+			// continue checking
+		default:
+			// ConditionUnknown or empty — still transitioning
 			allReady = false
 		}
 	}

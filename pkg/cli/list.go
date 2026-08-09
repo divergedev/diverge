@@ -94,10 +94,7 @@ var listCmd = &cobra.Command{
 				}
 			}
 
-			age := ""
-			if env.CreationTimestamp.Unix() > 0 {
-				age = formatAge(env.CreationTimestamp.Time)
-			}
+			age := formatAge(env.CreationTimestamp.Time)
 
 			services := fmt.Sprintf("%d", len(env.Status.Services))
 
@@ -119,6 +116,6 @@ var listCmd = &cobra.Command{
 
 func init() {
 	listCmd.Flags().BoolVarP(&allNamespaces, "all-namespaces", "A", false, "list environments across all namespaces")
-	listCmd.Flags().StringVarP(&outputFormat, "output", "o", "", "output format: json, yaml, wide")
+	listCmd.Flags().StringVarP(&outputFormat, "output", "o", "", "output format: json, yaml")
 	rootCmd.AddCommand(listCmd)
 }

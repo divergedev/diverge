@@ -50,7 +50,7 @@ func NewServer(cfg Config, lister EnvironmentLister) (*Server, error) {
 		return nil, fmt.Errorf("invalid base URL: %w", err)
 	}
 
-	return &Server{
+	s := &Server{
 		config:    cfg,
 		envLister: lister,
 		proxy: &httputil.ReverseProxy{
@@ -60,7 +60,11 @@ func NewServer(cfg Config, lister EnvironmentLister) (*Server, error) {
 				req.Host = targetURL.Host
 			},
 		},
-	}, nil
+	}
+	if s.config.HeaderKey == "" {
+		s.config.HeaderKey = "x-diverge-env"
+	}
+	return s, nil
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -87,7 +91,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			renderNotFound(w, envName, envs)
 			return
 		}
-		http.Error(w, "Service Unavailable: "+err.Error(), http.StatusServiceUnavailable)
+		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
 		return
 	}
 

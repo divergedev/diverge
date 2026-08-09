@@ -179,7 +179,7 @@ func TestProxy503OnCacheError(t *testing.T) {
 	server.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
-	assert.Contains(t, w.Body.String(), "cache sync failed")
+	assert.Contains(t, w.Body.String(), "Service Unavailable")
 }
 
 func TestProxyListEnvironments(t *testing.T) {

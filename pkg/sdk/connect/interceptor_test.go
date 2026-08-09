@@ -11,7 +11,9 @@ import (
 
 func TestInterceptorExtractsHeader(t *testing.T) {
 	interceptor := PropagateEnvironment()
+	called := false
 	next := connect.UnaryFunc(func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+		called = true
 		env := sdk.EnvironmentFromContext(ctx)
 		assert.Equal(t, "pr-123", env)
 		return nil, nil
@@ -23,11 +25,14 @@ func TestInterceptorExtractsHeader(t *testing.T) {
 	unary := interceptor.WrapUnary(next)
 	_, err := unary(context.Background(), req)
 	assert.NoError(t, err)
+	assert.True(t, called, "downstream handler must be invoked")
 }
 
 func TestInterceptorInjectsHeader(t *testing.T) {
 	interceptor := PropagateEnvironment()
+	called := false
 	next := connect.UnaryFunc(func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+		called = true
 		assert.Equal(t, "pr-123", req.Header().Get(sdk.DefaultHeaderKey))
 		return nil, nil
 	})
@@ -40,4 +45,5 @@ func TestInterceptorInjectsHeader(t *testing.T) {
 	unary := interceptor.WrapUnary(next)
 	_, err := unary(ctx, req)
 	assert.NoError(t, err)
+	assert.True(t, called, "downstream handler must be invoked")
 }

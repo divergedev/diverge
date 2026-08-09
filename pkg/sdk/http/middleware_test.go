@@ -14,28 +14,34 @@ func TestMiddlewareExtractsHeader(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set(DefaultHeaderKey, "pr-123")
 
+	called := false
 	var extractedEnv string
 	handler := PropagateEnvironment(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
 		extractedEnv = sdk.EnvironmentFromContext(r.Context())
 	}))
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
+	assert.True(t, called, "wrapped handler must be invoked")
 	assert.Equal(t, "pr-123", extractedEnv)
 }
 
 func TestMiddlewareNoHeader(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodGet, "/", nil)
 
+	called := false
 	var extractedEnv string
 	handler := PropagateEnvironment(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
 		extractedEnv = sdk.EnvironmentFromContext(r.Context())
 	}))
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
+	assert.True(t, called, "wrapped handler must be invoked")
 	assert.Equal(t, "", extractedEnv)
 }
 
