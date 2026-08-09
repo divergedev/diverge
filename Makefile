@@ -46,6 +46,10 @@ build: manifests generate fmt vet ## Build manager binary.
 build-cli: fmt vet ## Build diverge CLI binary.
 	go build -ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT)" -o bin/diverge cmd/diverge/main.go
 
+.PHONY: build-proxy
+build-proxy: fmt vet ## Build diverge proxy binary.
+	go build -ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT)" -o bin/diverge-proxy cmd/proxy/main.go
+
 .PHONY: install-cli
 install-cli: ## Install diverge CLI to GOPATH.
 	go install ./cmd/diverge
