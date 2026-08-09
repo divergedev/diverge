@@ -18,7 +18,11 @@ jobs:
       - name: Build
         run: go build ./...
       - name: Test
-        run: go test ./... -v -race
+        run: go test ./... -race -coverprofile=coverage.out
+      - name: Coverage Check
+        run: |
+          COVERAGE=$(go tool cover -func=coverage.out | grep total: | awk '{print $3}' | tr -d '%')
+          echo "Total coverage: $COVERAGE%"
       - name: Vet
         run: go vet ./...
 

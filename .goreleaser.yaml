@@ -1,9 +1,21 @@
 version: 2
 project_name: diverge
 builds:
-  - main: cmd/controller/main.go
+  - id: diverge-controller
+    main: cmd/controller/main.go
     goos:
       - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+  - id: diverge
+    main: cmd/diverge/main.go
+    goos:
+      - linux
+      - darwin
+      - windows
     goarch:
       - amd64
       - arm64
