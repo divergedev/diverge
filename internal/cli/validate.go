@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"embed"
 	"fmt"
 	"os"
 
@@ -9,48 +10,57 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-var validateCmd = &cobra.Command{
-	Use:   "validate",
-	Short: "Validate .diverge.yaml against the JSON Schema",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		yamlPath := ".diverge.yaml"
-		if _, err := os.Stat(yamlPath); os.IsNotExist(err) {
-			return fmt.Errorf("no %s found in current directory", yamlPath)
-		}
+//go:embed schema/diverge-config.schema.json
+var schemaFS embed.FS
 
-		schemaLoader := gojsonschema.NewReferenceLoader("file://config/schema/diverge-config.schema.json")
+func newValidateCmd(app *App) *cobra.Command {
+	cmd := &cobra.Command{
 
-		yamlData, err := os.ReadFile(yamlPath)
-		if err != nil {
-			return fmt.Errorf("failed to read %s: %w", yamlPath, err)
-		}
+		Use:   "validate",
+		Short: "Validate .diverge.yaml against the JSON Schema",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			yamlPath := ".diverge.yaml"
+			if _, err := os.Stat(yamlPath); os.IsNotExist(err) {
+				return fmt.Errorf("no %s found in current directory", yamlPath)
+			}
 
-		jsonData, err := yaml.YAMLToJSON(yamlData)
-		if err != nil {
-			return fmt.Errorf("failed to convert YAML to JSON: %w", err)
-		}
+			schemaBytes, err := schemaFS.ReadFile("schema/diverge-config.schema.json")
+			if err != nil {
+				return fmt.Errorf("failed to read embedded schema: %w", err)
+			}
 
-		documentLoader := gojsonschema.NewBytesLoader(jsonData)
+			schemaLoader := gojsonschema.NewBytesLoader(schemaBytes)
 
-		result, err := gojsonschema.Validate(schemaLoader, documentLoader)
-		if err != nil {
-			return fmt.Errorf("failed to validate: %w", err)
-		}
+			yamlData, err := os.ReadFile(yamlPath)
+			if err != nil {
+				return fmt.Errorf("failed to read %s: %w", yamlPath, err)
+			}
 
-		if result.Valid() {
-			fmt.Println("Config is valid.")
-			return nil
-		}
+			jsonData, err := yaml.YAMLToJSON(yamlData)
+			if err != nil {
+				return fmt.Errorf("failed to convert YAML to JSON: %w", err)
+			}
 
-		fmt.Println("Config is invalid. Errors:")
-		for _, desc := range result.Errors() {
-			fmt.Printf("- %s\n", desc)
-		}
-		os.Exit(1)
-		return nil
-	},
-}
+			documentLoader := gojsonschema.NewBytesLoader(jsonData)
 
-func init() {
-	rootCmd.AddCommand(validateCmd)
+			result, err := gojsonschema.Validate(schemaLoader, documentLoader)
+			if err != nil {
+				return fmt.Errorf("failed to validate: %w", err)
+			}
+
+			if result.Valid() {
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Config is valid.")
+				return nil
+			}
+
+			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "Config is invalid. Errors:")
+			for _, desc := range result.Errors() {
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "- %s\n", desc)
+			}
+			cmd.SilenceUsage = true
+			return fmt.Errorf("config validation failed with %d error(s)", len(result.Errors()))
+		},
+	}
+
+	return cmd
 }

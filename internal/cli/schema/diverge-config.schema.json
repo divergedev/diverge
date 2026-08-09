@@ -1,0 +1,144 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Diverge Config",
+  "description": "Configuration for Diverge preview environments",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "string",
+      "enum": ["1"]
+    },
+    "services": {
+      "type": "object",
+      "description": "Service discovery mapping service names to source paths.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "paths": {
+            "type": "array",
+            "description": "Glob patterns for change detection.",
+            "items": { "type": "string" }
+          },
+          "image": {
+            "type": "object",
+            "description": "Container image template settings.",
+            "properties": {
+              "repository": { "type": "string" },
+              "tag_template": { "type": "string", "default": "mr-{{.MR}}" }
+            },
+            "required": ["repository"]
+          },
+          "helm": {
+            "type": "object",
+            "description": "Optional Helm chart location.",
+            "properties": {
+              "path": { "type": "string", "description": "Relative path to chart in repo" },
+              "values_file": { "type": "string", "description": "Optional override values" }
+            }
+          }
+        },
+        "required": ["paths", "image"]
+      }
+    },
+    "defaults": {
+      "description": "Default environment settings.",
+      "$ref": "#/definitions/environment_settings"
+    },
+    "environments": {
+      "type": "object",
+      "description": "Environment type overrides.",
+      "additionalProperties": {
+        "allOf": [
+          { "$ref": "#/definitions/environment_settings" },
+          {
+            "type": "object",
+            "properties": {
+              "trigger": {
+                "type": "string",
+                "enum": ["label", "auto", "manual", "branch", "schedule"]
+              },
+              "label": { "type": "string" },
+              "branch": { "type": "string" }
+            }
+          }
+        ]
+      }
+    },
+    "label_overrides": {
+      "type": "object",
+      "description": "MR label overrides mapping.",
+      "additionalProperties": {
+        "allOf": [
+          { "$ref": "#/definitions/environment_settings" },
+          {
+            "type": "object",
+            "properties": {
+              "skip": { "type": "boolean" }
+            }
+          }
+        ]
+      }
+    },
+    "notifications": {
+      "type": "object",
+      "description": "Notification settings for Git providers.",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["gitlab", "github"]
+        },
+        "comment_on_create": { "type": "boolean" },
+        "comment_on_ready": { "type": "boolean" },
+        "comment_on_destroy": { "type": "boolean" }
+      }
+    }
+  },
+  "required": ["version"],
+  "definitions": {
+    "environment_settings": {
+      "type": "object",
+      "properties": {
+        "deploy": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["delta", "full"]
+            }
+          }
+        },
+        "routing": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["header", "namespace", "subdomain"]
+            },
+            "baseline_namespace": { "type": "string" },
+            "header_key": { "type": "string" },
+            "domain": { "type": "string" }
+          }
+        },
+        "database": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["shared", "schema", "snapshot", "fresh"]
+            },
+            "connection_ref": { "type": "string" },
+            "seed_source": { "type": "string" },
+            "migration_command": { "type": "string" }
+          }
+        },
+        "lifecycle": {
+          "type": "object",
+          "properties": {
+            "ttl": { "type": "string" },
+            "cleanup_on_merge": { "type": "boolean" }
+          }
+        }
+      }
+    }
+  }
+}

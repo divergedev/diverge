@@ -90,11 +90,9 @@ func TestBuildEnvironment(t *testing.T) {
 		},
 	}
 
-	// Set package-level vars
-	namespace = "diverge-system"
-	mrNumber = 42
+	app := &App{Namespace: "diverge-system"}
 
-	env, err := buildEnvironment("preview-mr-42", gitCtx, resolved, cfg)
+	env, err := buildEnvironment("preview-mr-42", gitCtx, resolved, cfg, app, 42)
 	require.NoError(t, err)
 
 	// Verify metadata
@@ -142,10 +140,9 @@ func TestBuildEnvironmentNilConfig(t *testing.T) {
 		},
 	}
 
-	namespace = "default"
-	mrNumber = 0
+	app := &App{Namespace: "default"}
 
-	env, err := buildEnvironment("staging-main", gitCtx, resolved, nil)
+	env, err := buildEnvironment("staging-main", gitCtx, resolved, nil, app, 0)
 	require.NoError(t, err)
 
 	assert.Equal(t, "staging-main", env.Name)
@@ -179,10 +176,9 @@ func TestBuildEnvironmentLabelOverrides(t *testing.T) {
 		},
 	}
 
-	namespace = "preview"
-	mrNumber = 99
+	app := &App{Namespace: "preview"}
 
-	env, err := buildEnvironment("preview-mr-99", gitCtx, resolved, &config.Config{Version: "1"})
+	env, err := buildEnvironment("preview-mr-99", gitCtx, resolved, &config.Config{Version: "1"}, app, 99)
 	require.NoError(t, err)
 
 	assert.Equal(t, "full", env.Spec.Deploy.Mode)
@@ -206,10 +202,9 @@ func TestBuildEnvironmentInvalidTTL(t *testing.T) {
 		},
 	}
 
-	namespace = "default"
-	mrNumber = 0
+	app := &App{Namespace: "default"}
 
-	_, err := buildEnvironment("test", gitCtx, resolved, nil)
+	_, err := buildEnvironment("test", gitCtx, resolved, nil, app, 0)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid TTL")
 }

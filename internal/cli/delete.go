@@ -10,42 +10,43 @@ import (
 
 var deleteForce bool
 
-var deleteCmd = &cobra.Command{
-	Use:   "delete <name>",
-	Short: "Delete an environment",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		c, _, err := getKubeClient()
-		if err != nil {
-			return err
-		}
+func newDeleteCmd(app *App) *cobra.Command {
+	cmd := &cobra.Command{
 
-		name := args[0]
-
-		if !deleteForce {
-			var resp string
-			fmt.Printf("Are you sure you want to delete environment %s? [y/N]: ", name)
-			_, _ = fmt.Scanln(&resp)
-			if resp != "y" && resp != "Y" {
-				fmt.Println("Cancelled")
-				return nil
+		Use:   "delete <name>",
+		Short: "Delete an environment",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, _, err := app.KubeClient()
+			if err != nil {
+				return err
 			}
-		}
 
-		env := &divergeiov1alpha1.Environment{}
-		env.Name = name
-		env.Namespace = namespace
+			name := args[0]
 
-		if err := c.Delete(cmd.Context(), env); err != nil {
-			return fmt.Errorf("failed to delete environment %s: %w", name, err)
-		}
+			if !deleteForce {
+				var resp string
+				fmt.Printf("Are you sure you want to delete environment %s? [y/N]: ", name)
+				_, _ = fmt.Scanln(&resp)
+				if resp != "y" && resp != "Y" {
+					fmt.Println("Cancelled")
+					return nil
+				}
+			}
 
-		fmt.Printf("Environment %s deleted\n", name)
-		return nil
-	},
-}
+			env := &divergeiov1alpha1.Environment{}
+			env.Name = name
+			env.Namespace = app.Namespace
 
-func init() {
-	deleteCmd.Flags().BoolVar(&deleteForce, "force", false, "force delete without confirmation")
-	rootCmd.AddCommand(deleteCmd)
+			if err := c.Delete(cmd.Context(), env); err != nil {
+				return fmt.Errorf("failed to delete environment %s: %w", name, err)
+			}
+
+			fmt.Printf("Environment %s deleted\n", name)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&deleteForce, "force", false, "force delete without confirmation")
+
+	return cmd
 }
