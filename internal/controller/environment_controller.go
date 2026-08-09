@@ -114,11 +114,12 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	if r.Notifier != nil && oldPhase != newPhase {
-		if newPhase == divergeiov1alpha1.PhaseRunning {
+		switch newPhase {
+		case divergeiov1alpha1.PhaseRunning:
 			if err := r.Notifier.PostEnvironmentReady(ctx, &env); err != nil {
 				logger.Error(err, "failed to post environment ready notification")
 			}
-		} else if newPhase == divergeiov1alpha1.PhaseFailed {
+		case divergeiov1alpha1.PhaseFailed:
 			if err := r.Notifier.PostEnvironmentFailed(ctx, &env, "Environment failed to deploy"); err != nil {
 				logger.Error(err, "failed to post environment failed notification")
 			}

@@ -83,7 +83,7 @@ func NewK8sEnvironmentLister(kubeconfig, namespace string, scheme *runtime.Schem
 		return lister, nil
 	}
 
-	informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	if _, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			if env, ok := obj.(*v1alpha1.Environment); ok {
 				lister.mu.Lock()
@@ -111,7 +111,11 @@ func NewK8sEnvironmentLister(kubeconfig, namespace string, scheme *runtime.Schem
 				lister.mu.Unlock()
 			}
 		},
-	})
+	}); err != nil {
+		log.Printf("WARNING: failed to add event handler: %v, falling back to direct API", err)
+		lister.useFallback = true
+		return lister, nil
+	}
 
 	lister.hasSynced = informer.HasSynced
 
