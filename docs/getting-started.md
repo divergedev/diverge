@@ -6,7 +6,8 @@ This guide will walk you through the process of setting up Diverge in your Kuber
 
 Before installing Diverge, ensure you have the following prerequisites installed and configured:
 
-- **Go 1.22+**: Required if building from source.
+- **Go 1.26+**: Required if building from source (use Nix).
+- **Nix**: Used for managing the development environment (`nix develop`).
 - **kubectl**: For interacting with your Kubernetes cluster.
 - **kind** (or another Kubernetes cluster): To run Diverge locally or in a test environment.
 - **Helm v3**: For installing the Diverge chart.
@@ -34,7 +35,7 @@ make run
 
 ## Configure Your Repo
 
-Diverge relies on a configuration file inside your application repository to understand how your project is structured. 
+Diverge relies on a configuration file inside your application repository to understand how your project is structured.
 
 Create a `.diverge.yaml` file in the root of your repository mapping source paths to your services:
 
