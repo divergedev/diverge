@@ -116,6 +116,6 @@ var listCmd = &cobra.Command{
 
 func init() {
 	listCmd.Flags().BoolVarP(&allNamespaces, "all-namespaces", "A", false, "list environments across all namespaces")
-	listCmd.Flags().StringVarP(&outputFormat, "output", "o", "", "output format: json, yaml")
+	listCmd.Flags().StringVarP(&outputFormat, "output", "o", "", "output format: table, json, yaml")
 	rootCmd.AddCommand(listCmd)
 }
