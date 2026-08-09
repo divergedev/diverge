@@ -14,20 +14,29 @@ spec:
       labels:
         control-plane: controller-manager
     spec:
-      serviceAccountName: {{ include "diverge.fullname" . }}-controller-manager
+      serviceAccountName: {{ .Values.serviceAccount.name | default (include "diverge.fullname" .) }}
+      securityContext:
+        runAsNonRoot: true
       containers:
       - args:
-        - --health-probe-bind-address=:8081
-        - --metrics-bind-address=127.0.0.1:8080
+        - --metrics-addr=:8080
+        - --health-probe-addr=:8081
+        - --routing-provider={{ .Values.routingProvider }}
         - --leader-elect
         - --webhook-port={{ .Values.webhook.port }}
         command:
         - /manager
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
         name: manager
+        securityContext:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
         ports:
         - containerPort: {{ .Values.webhook.port }}
           name: webhook-server
+          protocol: TCP
+        - containerPort: 8080
+          name: metrics
           protocol: TCP
         livenessProbe:
           httpGet:

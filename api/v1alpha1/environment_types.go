@@ -4,8 +4,21 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+type SecretRef struct {
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Key       string `json:"key,omitempty"`
+}
+
+type MigrationJobSpec struct {
+	Image   string      `json:"image,omitempty"`
+	Args    []string    `json:"args,omitempty"`
+	EnvFrom []SecretRef `json:"envFrom,omitempty"`
+}
+
 // EnvironmentSource defines the source code origin for the environment
 type EnvironmentSource struct {
+	// +kubebuilder:validation:Enum=gitlab;github
 	Provider string `json:"provider,omitempty"` // e.g., gitlab
 	Project  string `json:"project,omitempty"`
 	MR       int    `json:"mr,omitempty"`
@@ -14,6 +27,7 @@ type EnvironmentSource struct {
 
 // EnvironmentDeploy defines the deployment configuration
 type EnvironmentDeploy struct {
+	// +kubebuilder:validation:Enum=delta;full
 	Mode            string   `json:"mode,omitempty"` // delta or full
 	ChangedServices []string `json:"changedServices,omitempty"`
 	BaselineRef     string   `json:"baselineRef,omitempty"`
@@ -21,7 +35,11 @@ type EnvironmentDeploy struct {
 
 // EnvironmentRouting defines the routing configuration
 type EnvironmentRouting struct {
+	// +kubebuilder:validation:Enum=header;namespace;subdomain
 	Mode        string `json:"mode,omitempty"` // header, namespace, subdomain
+	// +kubebuilder:validation:Enum=istio;gateway
+	// +kubebuilder:default=gateway
+	Provider    string `json:"provider,omitempty"`
 	HeaderKey   string `json:"headerKey,omitempty"`
 	HeaderValue string `json:"headerValue,omitempty"`
 	ExternalURL string `json:"externalUrl,omitempty"`
@@ -29,16 +47,17 @@ type EnvironmentRouting struct {
 
 // EnvironmentDatabase defines the database configuration
 type EnvironmentDatabase struct {
-	Mode             string `json:"mode,omitempty"` // shared, schema, snapshot, fresh
-	ConnectionRef    string `json:"connectionRef,omitempty"`
-	SeedSource       string `json:"seedSource,omitempty"`
-	MigrationCommand string `json:"migrationCommand,omitempty"`
+	// +kubebuilder:validation:Enum=shared;schema;snapshot;fresh
+	Mode          string            `json:"mode,omitempty"` // shared, schema, snapshot, fresh
+	ConnectionRef string            `json:"connectionRef,omitempty"`
+	SeedSource    string            `json:"seedSource,omitempty"`
+	MigrationJob  *MigrationJobSpec `json:"migrationJob,omitempty"`
 }
 
 // EnvironmentLifecycle defines the lifecycle configuration
 type EnvironmentLifecycle struct {
-	TTL            string `json:"ttl,omitempty"`
-	CleanupOnMerge bool   `json:"cleanupOnMerge,omitempty"`
+	TTL            *metav1.Duration `json:"ttl,omitempty"`
+	CleanupOnMerge bool             `json:"cleanupOnMerge,omitempty"`
 }
 
 // EnvironmentSpec defines the desired state of Environment
@@ -63,13 +82,14 @@ const (
 
 // EnvironmentStatus defines the observed state of Environment
 type EnvironmentStatus struct {
-	Phase          EnvironmentPhase   `json:"phase,omitempty"`
-	URL            string             `json:"url,omitempty"`
-	Services       []string           `json:"services,omitempty"`
-	DatabaseStatus string             `json:"databaseStatus,omitempty"`
-	CreatedAt      *metav1.Time       `json:"createdAt,omitempty"`
-	ExpiresAt      *metav1.Time       `json:"expiresAt,omitempty"`
-	Conditions     []metav1.Condition `json:"conditions,omitempty"`
+	Phase              EnvironmentPhase   `json:"phase,omitempty"`
+	URL                string             `json:"url,omitempty"`
+	Services           []string           `json:"services,omitempty"`
+	DatabaseStatus     string             `json:"databaseStatus,omitempty"`
+	CreatedAt          *metav1.Time       `json:"createdAt,omitempty"`
+	ExpiresAt          *metav1.Time       `json:"expiresAt,omitempty"`
+	ObservedGeneration int64              `json:"observedGeneration,omitempty"`
+	Conditions         []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true

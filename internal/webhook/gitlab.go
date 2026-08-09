@@ -8,8 +8,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
+type WebhookConfig struct {
+	SecretToken string
+}
+
 type GitLabWebhookHandler struct {
 	Client client.Client
+	Config WebhookConfig
 }
 
 // GitLabMRPayload is a simple struct to decode MR webhook payloads
@@ -25,7 +30,7 @@ type GitLabMRPayload struct {
 		Action       string `json:"action"`
 	} `json:"object_attributes"`
 	Project struct {
-		Name          string `json:"name"`
+		Name              string `json:"name"`
 		PathWithNamespace string `json:"path_with_namespace"`
 	} `json:"project"`
 }
@@ -36,6 +41,13 @@ func (h *GitLabWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	token := r.Header.Get("X-Gitlab-Token")
+	if token == "" || token != h.Config.SecretToken {
+		logger.Info("Unauthorized webhook request")
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 

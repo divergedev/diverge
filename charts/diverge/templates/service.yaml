@@ -7,5 +7,10 @@ spec:
     - port: 443
       protocol: TCP
       targetPort: {{ .Values.webhook.port }}
+      name: webhook
+    - port: 8080
+      protocol: TCP
+      targetPort: 8080
+      name: metrics
   selector:
     control-plane: controller-manager

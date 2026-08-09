@@ -12,6 +12,7 @@ spec:
     mode: delta
     baselineRef: main
   routing:
+    provider: gateway
     mode: header
     headerKey: x-diverge-env
     headerValue: preview-mr-123
