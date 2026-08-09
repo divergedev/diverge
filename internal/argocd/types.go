@@ -10,6 +10,7 @@ type ServiceConfig struct {
 
 type ApplicationStatus struct {
 	Name       string
+	Service    string // the Diverge service this Application belongs to
 	SyncStatus string // Synced, OutOfSync, Unknown
 	Health     string // Healthy, Progressing, Degraded, Missing
 }
