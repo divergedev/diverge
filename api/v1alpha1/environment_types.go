@@ -1,6 +1,9 @@
 package v1alpha1
 
 import (
+	"crypto/sha256"
+	"fmt"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -107,6 +110,19 @@ type Environment struct {
 
 	Spec   EnvironmentSpec   `json:"spec,omitempty"`
 	Status EnvironmentStatus `json:"status,omitempty"`
+}
+
+// PreviewNamespace returns the namespace name used for this environment's
+// preview resources when running in "create" namespace mode. The name is
+// sanitized to a valid DNS label (max 63 characters) with a stable hash
+// suffix when truncation is needed.
+func (e *Environment) PreviewNamespace() string {
+	name := "diverge-" + e.Name
+	if len(name) <= 63 {
+		return name
+	}
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(name)))[:8]
+	return name[:63-9] + "-" + hash
 }
 
 // +kubebuilder:object:root=true

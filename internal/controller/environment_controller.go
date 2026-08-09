@@ -203,7 +203,7 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		if env.Spec.Deploy.Namespace == "create" {
 			ns := &corev1.Namespace{
 				ObjectMeta: metav1.ObjectMeta{
-					Name: fmt.Sprintf("diverge-%s", env.Name),
+					Name: env.PreviewNamespace(),
 				},
 			}
 			if err := r.Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
@@ -225,7 +225,7 @@ func (r *EnvironmentReconciler) ensureNamespace(ctx context.Context, env *diverg
 	if env.Spec.Deploy.Namespace == "create" {
 		ns := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: fmt.Sprintf("diverge-%s", env.Name),
+				Name: env.PreviewNamespace(),
 				Labels: map[string]string{
 					"diverge.io/environment": env.Name,
 					"diverge.io/managed-by":  "diverge",

@@ -1,6 +1,7 @@
 package argocd
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
@@ -25,7 +26,7 @@ func TestGenerate(t *testing.T) {
 		configs         map[string]ServiceConfig
 		wantErr         string
 		expectedApps    int
-		check           func(t *testing.T, apps []*unstructured.Unstructured)
+		check           func(t *testing.T, env *v1alpha1.Environment, apps []*unstructured.Unstructured)
 	}{
 		{
 			name: "single service - default mode (same)",
@@ -40,7 +41,7 @@ func TestGenerate(t *testing.T) {
 				"api": {Name: "api", Tag: "abc123", ChartPath: "charts/api"},
 			},
 			expectedApps: 1,
-			check: func(t *testing.T, apps []*unstructured.Unstructured) {
+			check: func(t *testing.T, env *v1alpha1.Environment, apps []*unstructured.Unstructured) {
 				app := apps[0]
 				assert.Equal(t, "argoproj.io/v1alpha1", app.GetAPIVersion())
 				assert.Equal(t, "Application", app.GetKind())
@@ -97,10 +98,10 @@ func TestGenerate(t *testing.T) {
 				"api": {Name: "api", Tag: "abc123", ChartPath: "charts/api"},
 			},
 			expectedApps: 1,
-			check: func(t *testing.T, apps []*unstructured.Unstructured) {
+			check: func(t *testing.T, env *v1alpha1.Environment, apps []*unstructured.Unstructured) {
 				app := apps[0]
 				ns, _, _ := unstructured.NestedString(app.Object, "spec", "destination", "namespace")
-				assert.Equal(t, "diverge-preview-mr-42", ns)
+				assert.Equal(t, env.PreviewNamespace(), ns)
 			},
 		},
 		{
@@ -115,7 +116,7 @@ func TestGenerate(t *testing.T) {
 				"worker": {Name: "worker", Tag: "v3.0.0", ChartPath: "charts/worker"},
 			},
 			expectedApps: 3,
-			check: func(t *testing.T, apps []*unstructured.Unstructured) {
+			check: func(t *testing.T, env *v1alpha1.Environment, apps []*unstructured.Unstructured) {
 				names := make(map[string]bool)
 				for _, app := range apps {
 					name := app.GetName()
@@ -141,7 +142,7 @@ func TestGenerate(t *testing.T) {
 				"worker": {Name: "worker", Tag: "v3.0.0", ChartPath: "charts/worker"},
 			},
 			expectedApps: 1,
-			check: func(t *testing.T, apps []*unstructured.Unstructured) {
+			check: func(t *testing.T, env *v1alpha1.Environment, apps []*unstructured.Unstructured) {
 				assert.Equal(t, "diverge-default-preview-mr-42-api", apps[0].GetName())
 			},
 		},
@@ -175,7 +176,7 @@ func TestGenerate(t *testing.T) {
 			configs: map[string]ServiceConfig{
 				"api": {Name: "api", Tag: "v1", ChartPath: "charts/api"},
 			},
-			wantErr: "destination namespace \"diverge-kube-system\" is forbidden",
+			wantErr: fmt.Sprintf("destination namespace %q is forbidden", (&v1alpha1.Environment{ObjectMeta: metav1.ObjectMeta{Name: "kube-system"}}).PreviewNamespace()),
 		},
 		{
 			name: "denied namespace - same mode allowed",
@@ -190,7 +191,7 @@ func TestGenerate(t *testing.T) {
 				"api": {Name: "api", Tag: "v1", ChartPath: "charts/api"},
 			},
 			expectedApps: 1,
-			check: func(t *testing.T, apps []*unstructured.Unstructured) {
+			check: func(t *testing.T, env *v1alpha1.Environment, apps []*unstructured.Unstructured) {
 				ns, _, _ := unstructured.NestedString(apps[0].Object, "spec", "destination", "namespace")
 				assert.Equal(t, "default", ns)
 			},
@@ -207,7 +208,7 @@ func TestGenerate(t *testing.T) {
 				require.NoError(t, err)
 				assert.Len(t, apps, tt.expectedApps)
 				if tt.check != nil {
-					tt.check(t, apps)
+					tt.check(t, tt.env, apps)
 				}
 			}
 		})
