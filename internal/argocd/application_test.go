@@ -176,7 +176,7 @@ func TestGenerate(t *testing.T) {
 			configs: map[string]ServiceConfig{
 				"api": {Name: "api", Tag: "v1", ChartPath: "charts/api"},
 			},
-			wantErr: fmt.Sprintf("destination namespace %q is forbidden", (&v1alpha1.Environment{ObjectMeta: metav1.ObjectMeta{Name: "kube-system"}}).PreviewNamespace()),
+			wantErr: fmt.Sprintf("destination namespace %q is forbidden", (&v1alpha1.Environment{ObjectMeta: metav1.ObjectMeta{Name: "kube-system", Namespace: "default"}}).PreviewNamespace()),
 		},
 		{
 			name: "denied namespace - same mode allowed",

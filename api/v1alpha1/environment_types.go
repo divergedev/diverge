@@ -3,6 +3,8 @@ package v1alpha1
 import (
 	"crypto/sha256"
 	"fmt"
+	"regexp"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -114,15 +116,29 @@ type Environment struct {
 
 // PreviewNamespace returns the namespace name used for this environment's
 // preview resources when running in "create" namespace mode. The name is
-// sanitized to a valid DNS label (max 63 characters) with a stable hash
-// suffix when truncation is needed.
+// sanitized to a valid DNS-1123 label (lowercase alphanumeric and hyphens,
+// max 63 characters) with a stable hash suffix when truncation is needed.
+// The hash incorporates both Name and Namespace to prevent collisions across
+// namespaces.
 func (e *Environment) PreviewNamespace() string {
-	name := "diverge-" + e.Name
-	if len(name) <= 63 {
-		return name
+	// Sanitize to DNS-1123 label: lowercase, replace dots/underscores with hyphens,
+	// strip anything that isn't alphanumeric or hyphen, collapse consecutive hyphens
+	raw := strings.ToLower("diverge-" + e.Name)
+	raw = strings.NewReplacer(".", "-", "_", "-").Replace(raw)
+	raw = regexp.MustCompile(`[^a-z0-9-]`).ReplaceAllString(raw, "")
+	raw = regexp.MustCompile(`-{2,}`).ReplaceAllString(raw, "-")
+	raw = strings.Trim(raw, "-")
+
+	// Hash includes both name and namespace for cross-namespace uniqueness
+	hashInput := e.Namespace + "/" + e.Name
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(hashInput)))[:8]
+
+	if len(raw) <= 63-9 {
+		// Short enough to append hash without truncation
+		return raw + "-" + hash
 	}
-	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(name)))[:8]
-	return name[:63-9] + "-" + hash
+	// Truncate and append hash
+	return raw[:63-9] + "-" + hash
 }
 
 // +kubebuilder:object:root=true
