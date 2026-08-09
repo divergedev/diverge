@@ -142,7 +142,6 @@ func (g *GitHubNotifier) PostEnvironmentTeardown(ctx context.Context, env *v1alp
 	if err != nil {
 		return err
 	}
-	g.setCommentID(env, 0)
 	return g.postOrUpdateComment(ctx, env, msg)
 }
 

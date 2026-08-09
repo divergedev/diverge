@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/xeipuuv/gojsonschema"
+	"sigs.k8s.io/yaml"
 )
 
 var validateCmd = &cobra.Command{
@@ -19,10 +20,17 @@ var validateCmd = &cobra.Command{
 
 		schemaLoader := gojsonschema.NewReferenceLoader("file://config/schema/diverge-config.schema.json")
 		
-		// In a real implementation we would convert YAML to JSON before validating.
-		// For now we'll assume the schema works or use a proper yaml -> json conversion
-		// But as requested, just load and validate.
-		documentLoader := gojsonschema.NewReferenceLoader("file://" + yamlPath)
+		yamlData, err := os.ReadFile(yamlPath)
+		if err != nil {
+			return fmt.Errorf("failed to read %s: %w", yamlPath, err)
+		}
+		
+		jsonData, err := yaml.YAMLToJSON(yamlData)
+		if err != nil {
+			return fmt.Errorf("failed to convert YAML to JSON: %w", err)
+		}
+		
+		documentLoader := gojsonschema.NewBytesLoader(jsonData)
 
 		result, err := gojsonschema.Validate(schemaLoader, documentLoader)
 		if err != nil {

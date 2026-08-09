@@ -82,6 +82,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	envInfo, err := s.envLister.GetEnvironment(r.Context(), envName)
 	if err != nil {
+		if err == ErrCacheNotSynced {
+			http.Error(w, "Service Unavailable: Cache syncing", http.StatusServiceUnavailable)
+			return
+		}
 		envs, _ := s.envLister.ListEnvironments(r.Context())
 		renderNotFound(w, envName, envs)
 		return

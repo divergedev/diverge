@@ -21,7 +21,14 @@ func UnaryClientInterceptor() grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 		env := sdk.EnvironmentFromContext(ctx)
 		if env != "" {
-			ctx = metadata.AppendToOutgoingContext(ctx, sdk.DefaultHeaderKey, env)
+			md, ok := metadata.FromOutgoingContext(ctx)
+			if !ok {
+				md = metadata.New(nil)
+			} else {
+				md = md.Copy()
+			}
+			md.Set(sdk.DefaultHeaderKey, env)
+			ctx = metadata.NewOutgoingContext(ctx, md)
 		}
 		return invoker(ctx, method, req, reply, cc, opts...)
 	}
@@ -33,7 +40,14 @@ func StreamClientInterceptor() grpc.StreamClientInterceptor {
 	return func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
 		env := sdk.EnvironmentFromContext(ctx)
 		if env != "" {
-			ctx = metadata.AppendToOutgoingContext(ctx, sdk.DefaultHeaderKey, env)
+			md, ok := metadata.FromOutgoingContext(ctx)
+			if !ok {
+				md = metadata.New(nil)
+			} else {
+				md = md.Copy()
+			}
+			md.Set(sdk.DefaultHeaderKey, env)
+			ctx = metadata.NewOutgoingContext(ctx, md)
 		}
 		return streamer(ctx, desc, cc, method, opts...)
 	}

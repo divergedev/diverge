@@ -2,14 +2,26 @@ package notifier
 
 import (
 	"bytes"
+	"strings"
 	"text/template"
 )
 
+func sanitizeMarkdown(s string) string {
+	s = strings.ReplaceAll(s, "|", "\\|")
+	s = strings.ReplaceAll(s, "`", "\\`")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	s = strings.ReplaceAll(s, "@", "@\u200b") // zero-width space prevents mentions
+	return s
+}
+
+var funcMap = template.FuncMap{"sanitize": sanitizeMarkdown}
+
 var (
-	createdTemplate  = template.Must(template.New("created").Parse(createdTmplStr))
-	readyTemplate    = template.Must(template.New("ready").Parse(readyTmplStr))
-	failedTemplate   = template.Must(template.New("failed").Parse(failedTmplStr))
-	teardownTemplate = template.Must(template.New("teardown").Parse(teardownTmplStr))
+	createdTemplate  = template.Must(template.New("created").Funcs(funcMap).Parse(createdTmplStr))
+	readyTemplate    = template.Must(template.New("ready").Funcs(funcMap).Parse(readyTmplStr))
+	failedTemplate   = template.Must(template.New("failed").Funcs(funcMap).Parse(failedTmplStr))
+	teardownTemplate = template.Must(template.New("teardown").Funcs(funcMap).Parse(teardownTmplStr))
 )
 
 const createdTmplStr = `## 🚀 Diverge Preview Environment
@@ -17,13 +29,13 @@ const createdTmplStr = `## 🚀 Diverge Preview Environment
 | Field | Value |
 |-------|-------|
 | **Status** | ⏳ Deploying... |
-| **Environment** | ` + "`{{.Name}}`" + ` |
-| **Branch** | ` + "`{{.Branch}}`" + ` |
-| **Deploy Mode** | {{.Mode}} |
-| **Routing** | {{.RoutingMode}} |
+| **Environment** | ` + "`{{.Name | sanitize}}`" + ` |
+| **Branch** | ` + "`{{.Branch | sanitize}}`" + ` |
+| **Deploy Mode** | {{.Mode | sanitize}} |
+| **Routing** | {{.RoutingMode | sanitize}} |
 
 ### Services Being Deployed
-{{range .Services}}- ⏳ {{.}}
+{{range .Services}}- ⏳ {{. | sanitize}}
 {{end}}
 ---
 _Powered by [Diverge](https://github.com/divergedev/diverge) • Environment will auto-expire in {{.TTL}}_`
@@ -34,18 +46,18 @@ const readyTmplStr = `## 🟢 Diverge Preview Environment — Ready!
 |-------|-------|
 | **Status** | ✅ Running |
 | **URL** | [🔗 Open Preview]({{.URL}}) |
-| **Environment** | ` + "`{{.Name}}`" + ` |
-| **Branch** | ` + "`{{.Branch}}`" + ` |
-| **Deploy Mode** | {{.Mode}} ({{.NumServices}} services deployed) |
+| **Environment** | ` + "`{{.Name | sanitize}}`" + ` |
+| **Branch** | ` + "`{{.Branch | sanitize}}`" + ` |
+| **Deploy Mode** | {{.Mode | sanitize}} ({{.NumServices}} services deployed) |
 | **Deployed In** | {{.Duration}} |
 
 ### Services
-{{range .Services}}- ✅ {{.}}
+{{range .Services}}- ✅ {{. | sanitize}}
 {{end}}
 ### Quick Access
-` + "```\n" + `curl -H "x-diverge-env: {{.Name}}" {{.BaseURL}}
+` + "```\n" + `curl -H "x-diverge-env: {{.Name | sanitize}}" {{.BaseURL}}
 ` + "```\n" + `
-> 💡 **Tip:** Use the [Diverge browser extension](#) or add the header ` + "`x-diverge-env: {{.Name}}`" + ` to route traffic to this preview.
+> 💡 **Tip:** Use the [Diverge browser extension](#) or add the header ` + "`x-diverge-env: {{.Name | sanitize}}`" + ` to route traffic to this preview.
 
 ---
 _Powered by [Diverge](https://github.com/divergedev/diverge) • Expires {{.ExpiryTime}}_`
@@ -55,11 +67,11 @@ const failedTmplStr = `## 🔴 Diverge Preview Environment — Failed
 | Field | Value |
 |-------|-------|
 | **Status** | ❌ Failed |
-| **Environment** | ` + "`{{.Name}}`" + ` |
-| **Reason** | {{.Reason}} |
+| **Environment** | ` + "`{{.Name | sanitize}}`" + ` |
+| **Reason** | {{.Reason | sanitize}} |
 
 ### Conditions
-{{range .Conditions}}- {{.Icon}} {{.Type}}: {{.Message}}
+{{range .Conditions}}- {{.Icon}} {{.Type | sanitize}}: {{.Message | sanitize}}
 {{end}}
 Check the controller logs for details:
 ` + "```\n" + `kubectl logs -l app=diverge-controller -n diverge-system
@@ -67,8 +79,8 @@ Check the controller logs for details:
 
 const teardownTmplStr = `## 🗑️ Diverge Preview Environment — Destroyed
 
-Environment ` + "`{{.Name}}`" + ` has been cleaned up.
-**Reason:** {{.Reason}}`
+Environment ` + "`{{.Name | sanitize}}`" + ` has been cleaned up.
+**Reason:** {{.Reason | sanitize}}`
 
 type TemplateData struct {
 	Name        string

@@ -36,11 +36,9 @@ var logsCmd = &cobra.Command{
 			targetNamespace = envName
 		}
 		
-		labelSelector := ""
+		labelSelector := fmt.Sprintf("diverge.io/environment=%s", envName)
 		if logsService != "" {
-			labelSelector = fmt.Sprintf("app=%s", logsService)
-		} else {
-			labelSelector = "app"
+			labelSelector = fmt.Sprintf("%s,app=%s", labelSelector, logsService)
 		}
 
 		pods, err := clientset.CoreV1().Pods(targetNamespace).List(context.Background(), metav1.ListOptions{
@@ -51,10 +49,23 @@ var logsCmd = &cobra.Command{
 		}
 
 		if len(pods.Items) == 0 {
-			return fmt.Errorf("no pods found for environment %s", envName)
+			fmt.Printf("No pods found for environment %s\n", envName)
+			return nil
 		}
 
-		// Simplified log streaming for the first pod
+		if len(pods.Items) > 1 && logsService == "" {
+			fmt.Printf("Multiple pods found for environment %s. Please specify a service with --service:\n", envName)
+			for _, p := range pods.Items {
+				app := p.Labels["app"]
+				if app == "" {
+					app = p.Name
+				}
+				fmt.Printf("  - %s\n", app)
+			}
+			return nil
+		}
+
+		// Simplified log streaming for the pod
 		pod := pods.Items[0]
 		
 		req := clientset.CoreV1().Pods(targetNamespace).GetLogs(pod.Name, &corev1.PodLogOptions{

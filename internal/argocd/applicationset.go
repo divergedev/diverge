@@ -10,6 +10,7 @@ import (
 
 type ApplicationSetGenerator struct {
 	ArgoNamespace string // namespace where Argo CD is installed
+	RepoURL       string // Helm chart repository URL
 }
 
 // GenerateApplicationSet creates an ApplicationSet for the given environment.
@@ -78,7 +79,7 @@ func (g *ApplicationSetGenerator) GenerateApplicationSet(
 						"source": map[string]interface{}{
 							// Argo CD needs repoURL for helm sources. If chart path is used, repoURL might be required.
 							// Usually people put a git URL or helm repo URL here. We'll leave it simple.
-							"repoURL": "https://kubernetes.default.svc",
+							"repoURL": g.RepoURL,
 							"path":    "{{chart}}",
 						},
 						"destination": map[string]interface{}{

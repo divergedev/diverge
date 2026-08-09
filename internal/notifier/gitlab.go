@@ -135,6 +135,15 @@ func buildTemplateData(env *v1alpha1.Environment, reason string) TemplateData {
 		})
 	}
 
+	baseURL := "https://placeholder.url"
+	if env.Status.URL != "" {
+		baseURL = env.Status.URL
+	} else if env.Spec.Routing.Mode == "subdomain" {
+		baseURL = fmt.Sprintf("https://%s.preview.example.com", env.Name) // domain not fully known here, assume logic
+	} else if env.Spec.Routing.Mode == "header" {
+		baseURL = "URL requires headers"
+	}
+	
 	return TemplateData{
 		Name:        env.Name,
 		Branch:      env.Spec.Source.Branch,
@@ -145,7 +154,7 @@ func buildTemplateData(env *v1alpha1.Environment, reason string) TemplateData {
 		URL:         env.Status.URL,
 		NumServices: len(env.Spec.Deploy.ChangedServices),
 		Duration:    durationStr,
-		BaseURL:     "https://placeholder.url", // Would be nice to inject this, using a placeholder for now
+		BaseURL:     baseURL,
 		ExpiryTime:  expiryStr,
 		Reason:      reason,
 		Conditions:  conditions,
@@ -185,12 +194,14 @@ func (g *GitLabNotifier) PostEnvironmentTeardown(ctx context.Context, env *v1alp
 	if err != nil {
 		return err
 	}
-	// Always post a new comment for teardown
-	// clear the ID to force a POST
-	g.setCommentID(env, 0)
 	return g.postOrUpdateComment(ctx, env, msg)
 }
 
 func (g *GitLabNotifier) UpdateEnvironmentStatus(ctx context.Context, env *v1alpha1.Environment) error {
-	return nil
+	data := buildTemplateData(env, "")
+	msg, err := renderTemplate(readyTemplate, data)
+	if err != nil {
+		return err
+	}
+	return g.postOrUpdateComment(ctx, env, msg)
 }

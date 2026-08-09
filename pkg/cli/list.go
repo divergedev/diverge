@@ -10,6 +10,7 @@ import (
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/yaml"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 )
@@ -45,8 +46,7 @@ var listCmd = &cobra.Command{
 			fmt.Println(string(b))
 			return nil
 		case "yaml":
-			// for simplicity, just use JSON for now or import sigs.k8s.io/yaml
-			b, _ := json.Marshal(envList.Items)
+			b, _ := yaml.Marshal(envList.Items)
 			fmt.Println(string(b))
 			return nil
 		}

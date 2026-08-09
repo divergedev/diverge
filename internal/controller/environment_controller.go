@@ -61,6 +61,11 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		if err := r.Update(ctx, &env); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to add finalizer: %w", err)
 		}
+		if r.Notifier != nil {
+			if err := r.Notifier.PostEnvironmentCreated(ctx, &env); err != nil {
+				logger.Error(err, "failed to post environment created notification")
+			}
+		}
 		r.Recorder.Event(&env, "Normal", "Created", "Environment created")
 		return ctrl.Result{}, nil
 	}
@@ -100,10 +105,24 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	setCondition(&env, "ServicesReady", metav1.ConditionTrue, "ServicesProvisioned", "Services are ready")
 
 	// 10. Derive phase
-	env.Status.Phase = derivePhase(env.Status.Conditions)
+	newPhase := derivePhase(env.Status.Conditions)
+	oldPhase := env.Status.Phase
+	env.Status.Phase = newPhase
 
 	if env.Status.Phase == divergeiov1alpha1.PhaseRunning {
 		r.Recorder.Event(&env, "Normal", "Running", "Environment is up and running")
+	}
+
+	if r.Notifier != nil && oldPhase != newPhase {
+		if newPhase == divergeiov1alpha1.PhaseRunning {
+			if err := r.Notifier.PostEnvironmentReady(ctx, &env); err != nil {
+				logger.Error(err, "failed to post environment ready notification")
+			}
+		} else if newPhase == divergeiov1alpha1.PhaseFailed {
+			if err := r.Notifier.PostEnvironmentFailed(ctx, &env, "Environment failed to deploy"); err != nil {
+				logger.Error(err, "failed to post environment failed notification")
+			}
+		}
 	}
 
 	// 11. Check TTL expiry
@@ -130,6 +149,12 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 	if controllerutil.ContainsFinalizer(env, environmentFinalizer) {
 		r.Recorder.Event(env, "Normal", "Terminating", "Teardown started")
 		
+		if r.Notifier != nil {
+			if err := r.Notifier.PostEnvironmentTeardown(ctx, env); err != nil {
+				log.FromContext(ctx).Error(err, "failed to post environment teardown notification")
+			}
+		}
+
 		if err := r.Router.Teardown(ctx, env); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to teardown routing: %w", err)
 		}

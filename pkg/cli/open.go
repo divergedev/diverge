@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	urlPkg "net/url"
 	"os/exec"
 	"runtime"
 
@@ -34,8 +35,14 @@ var openCmd = &cobra.Command{
 		}
 
 		if env.Spec.Routing.Mode == "header" {
+			// Construct magic URL for opening
+			u, err := urlPkg.Parse(env.Status.URL)
+			if err == nil && u.Host != "" {
+				u.Host = fmt.Sprintf("%s.preview.%s", env.Name, u.Host)
+				url = u.String()
+			}
 			fmt.Printf("Note: Environment uses header routing. You can also curl it like this:\n")
-			fmt.Printf("curl -H \"%s: %s\" %s\n\n", env.Spec.Routing.HeaderKey, env.Spec.Routing.HeaderValue, url)
+			fmt.Printf("curl -H \"%s: %s\" %s\n\n", env.Spec.Routing.HeaderKey, env.Spec.Routing.HeaderValue, env.Status.URL)
 		}
 
 		fmt.Printf("Opening %s\n", url)
