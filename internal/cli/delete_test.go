@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
@@ -46,6 +48,11 @@ func TestDeleteConfirmYes(t *testing.T) {
 	err := cmd.Execute()
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "deleted")
+
+	// Verify the object is actually gone from the fake cluster
+	got := &divergeiov1alpha1.Environment{}
+	err = fakeClient.Get(context.Background(), client.ObjectKey{Name: "preview-mr-42", Namespace: "default"}, got)
+	require.Error(t, err, "environment should be deleted from cluster")
 }
 
 func TestDeleteConfirmNo(t *testing.T) {
@@ -73,6 +80,11 @@ func TestDeleteConfirmNo(t *testing.T) {
 	err := cmd.Execute()
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "Cancelled")
+
+	// Verify the object still exists in the fake cluster
+	got := &divergeiov1alpha1.Environment{}
+	err = fakeClient.Get(context.Background(), client.ObjectKey{Name: "preview-mr-42", Namespace: "default"}, got)
+	require.NoError(t, err, "environment should still exist after cancel")
 }
 
 func TestDeleteForceSkipsConfirmation(t *testing.T) {
