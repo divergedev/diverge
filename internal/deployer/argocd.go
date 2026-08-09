@@ -43,5 +43,5 @@ func (d *ArgoDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) er
 
 // Teardown deletes the Argo CD Application CRs for the environment.
 func (d *ArgoDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
-	return d.client.DeleteApplicationsForEnvironment(ctx, env.Name)
+	return d.client.DeleteApplicationsForEnvironment(ctx, env.Name, env.Namespace)
 }

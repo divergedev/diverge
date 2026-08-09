@@ -16,7 +16,7 @@ var _ Deployer = (*ArgoDeployer)(nil)
 
 type fakeApplicator struct {
 	appliedApps []*unstructured.Unstructured
-	deletedEnvs []string
+	deletedEnvs []struct{ name, namespace string }
 }
 
 func (f *fakeApplicator) ApplyApplication(ctx context.Context, app *unstructured.Unstructured) error {
@@ -33,12 +33,12 @@ func (f *fakeApplicator) DeleteApplication(ctx context.Context, name string) err
 	return nil
 }
 
-func (f *fakeApplicator) DeleteApplicationsForEnvironment(ctx context.Context, envName string) error {
-	f.deletedEnvs = append(f.deletedEnvs, envName)
+func (f *fakeApplicator) DeleteApplicationsForEnvironment(ctx context.Context, envName, envNamespace string) error {
+	f.deletedEnvs = append(f.deletedEnvs, struct{ name, namespace string }{envName, envNamespace})
 	return nil
 }
 
-func (f *fakeApplicator) GetSyncStatus(ctx context.Context, envName string) ([]argocd.ApplicationStatus, error) {
+func (f *fakeApplicator) GetSyncStatus(ctx context.Context, envName, envNamespace string) ([]argocd.ApplicationStatus, error) {
 	return nil, nil
 }
 
@@ -91,7 +91,8 @@ func TestArgoDeployerTeardown(t *testing.T) {
 
 	env := &v1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "test-env",
+			Name:      "test-env",
+			Namespace: "test-ns",
 		},
 	}
 
@@ -99,5 +100,6 @@ func TestArgoDeployerTeardown(t *testing.T) {
 	assert.NoError(t, err)
 
 	assert.Len(t, fakeClient.deletedEnvs, 1)
-	assert.Equal(t, "test-env", fakeClient.deletedEnvs[0])
+	assert.Equal(t, "test-env", fakeClient.deletedEnvs[0].name)
+	assert.Equal(t, "test-ns", fakeClient.deletedEnvs[0].namespace)
 }

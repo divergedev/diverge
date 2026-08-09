@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"os"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -49,6 +50,7 @@ func main() {
 	var deployProvider string
 	var argoNamespace string
 	var webhookSecretToken string
+	var argoRepoURL string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -59,6 +61,7 @@ func main() {
 	flag.StringVar(&routingProvider, "routing-provider", "gateway", "The routing provider to use (istio|gateway).")
 	flag.StringVar(&deployProvider, "deploy-provider", "noop", "Deployment provider (argocd|noop)")
 	flag.StringVar(&argoNamespace, "argo-namespace", "argocd", "Namespace where Argo CD is installed")
+	flag.StringVar(&argoRepoURL, "argo-repo-url", "", "Repository URL for Argo CD Application sources")
 	flag.StringVar(&webhookSecretToken, "webhook-secret-token", "", "The secret token for authenticating webhooks.")
 
 	opts := zap.Options{
@@ -99,12 +102,16 @@ func main() {
 		argoClient := argocd.NewClient(mgr.GetClient(), argoNamespace)
 		argoGenerator := &argocd.Generator{
 			ArgoNamespace:     argoNamespace,
+			RepoURL:           argoRepoURL,
 			DestinationServer: "https://kubernetes.default.svc",
 			Project:           "default",
 		}
 		deployerImpl = deployer.NewArgoDeployer(argoClient, argoGenerator, nil)
-	default:
+	case "noop", "":
 		deployerImpl = &deployer.NoopDeployer{}
+	default:
+		setupLog.Error(fmt.Errorf("unsupported deploy provider: %q", deployProvider), "invalid --deploy-provider")
+		os.Exit(1)
 	}
 
 	if err = (&controller.EnvironmentReconciler{

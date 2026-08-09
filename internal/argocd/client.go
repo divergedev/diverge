@@ -83,8 +83,8 @@ func (c *Client) DeleteApplication(ctx context.Context, name string) error {
 
 // DeleteApplicationsForEnvironment deletes all Applications managed by Diverge
 // for the given environment name.
-func (c *Client) DeleteApplicationsForEnvironment(ctx context.Context, envName string) error {
-	apps, err := c.listApplicationsForEnvironment(ctx, envName)
+func (c *Client) DeleteApplicationsForEnvironment(ctx context.Context, envName, envNamespace string) error {
+	apps, err := c.listApplicationsForEnvironment(ctx, envName, envNamespace)
 	if err != nil {
 		return fmt.Errorf("failed to list applications: %w", err)
 	}
@@ -107,8 +107,8 @@ func (c *Client) DeleteApplicationsForEnvironment(ctx context.Context, envName s
 
 // GetSyncStatus returns sync and health status for all Applications
 // belonging to the given environment.
-func (c *Client) GetSyncStatus(ctx context.Context, envName string) ([]ApplicationStatus, error) {
-	apps, err := c.listApplicationsForEnvironment(ctx, envName)
+func (c *Client) GetSyncStatus(ctx context.Context, envName, envNamespace string) ([]ApplicationStatus, error) {
+	apps, err := c.listApplicationsForEnvironment(ctx, envName, envNamespace)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list applications: %w", err)
 	}
@@ -139,16 +139,21 @@ func (c *Client) GetSyncStatus(ctx context.Context, envName string) ([]Applicati
 	return statuses, nil
 }
 
-func (c *Client) listApplicationsForEnvironment(ctx context.Context, envName string) ([]unstructured.Unstructured, error) {
+func (c *Client) listApplicationsForEnvironment(ctx context.Context, envName, envNamespace string) ([]unstructured.Unstructured, error) {
 	appList := &unstructured.UnstructuredList{}
 	appList.SetGroupVersionKind(applicationGVK)
 
+	labels := client.MatchingLabels{
+		"diverge.io/environment": envName,
+		"diverge.io/managed-by":  "diverge",
+	}
+	if envNamespace != "" {
+		labels["diverge.io/environment-namespace"] = envNamespace
+	}
+
 	err := c.k8sClient.List(ctx, appList,
 		client.InNamespace(c.namespace),
-		client.MatchingLabels{
-			"diverge.io/environment": envName,
-			"diverge.io/managed-by":  "diverge",
-		},
+		labels,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list k8s resources: %w", err)

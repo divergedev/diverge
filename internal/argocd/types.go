@@ -12,8 +12,8 @@ type Applicator interface {
 	ApplyApplication(ctx context.Context, app *unstructured.Unstructured) error
 	ApplyApplications(ctx context.Context, apps []*unstructured.Unstructured) error
 	DeleteApplication(ctx context.Context, name string) error
-	DeleteApplicationsForEnvironment(ctx context.Context, envName string) error
-	GetSyncStatus(ctx context.Context, envName string) ([]ApplicationStatus, error)
+	DeleteApplicationsForEnvironment(ctx context.Context, envName, envNamespace string) error
+	GetSyncStatus(ctx context.Context, envName, envNamespace string) ([]ApplicationStatus, error)
 }
 
 // ServiceConfig describes a single service within a preview environment,
