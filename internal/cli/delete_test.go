@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -52,7 +53,7 @@ func TestDeleteConfirmYes(t *testing.T) {
 	// Verify the object is actually gone from the fake cluster
 	got := &divergeiov1alpha1.Environment{}
 	err = fakeClient.Get(context.Background(), client.ObjectKey{Name: "preview-mr-42", Namespace: "default"}, got)
-	require.Error(t, err, "environment should be deleted from cluster")
+	assert.True(t, apierrors.IsNotFound(err), "expected NotFound error")
 }
 
 func TestDeleteConfirmNo(t *testing.T) {
