@@ -39,7 +39,7 @@ type K8sEnvironmentLister struct {
 	ttlCache map[string]*ttlEntry
 }
 
-func NewK8sEnvironmentLister(kubeconfig, namespace string, scheme *runtime.Scheme) (*K8sEnvironmentLister, error) {
+func NewK8sEnvironmentLister(ctx context.Context, kubeconfig, namespace string, scheme *runtime.Scheme) (*K8sEnvironmentLister, error) {
 	var config *rest.Config
 	var err error
 
@@ -77,7 +77,6 @@ func NewK8sEnvironmentLister(kubeconfig, namespace string, scheme *runtime.Schem
 		return lister, nil
 	}
 
-	ctx := context.Background()
 	informer, err := k8sCache.GetInformer(ctx, &v1alpha1.Environment{})
 	if err != nil {
 		k8sLogger.V(0).Info("Failed to get informer, falling back to direct API", "error", err)
@@ -131,6 +130,13 @@ func NewK8sEnvironmentLister(kubeconfig, namespace string, scheme *runtime.Schem
 	}()
 
 	return lister, nil
+}
+
+func (l *K8sEnvironmentLister) HasSynced() bool {
+	if l.hasSynced == nil {
+		return true // Fallback mode
+	}
+	return l.hasSynced()
 }
 
 func (l *K8sEnvironmentLister) GetEnvironment(ctx context.Context, name string) (*EnvironmentInfo, error) {

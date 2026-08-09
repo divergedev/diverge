@@ -1,9 +1,10 @@
 # Build stage
+# Using golang:1.26
 FROM golang:1.26 AS builder
 ARG TARGETOS=linux
 ARG TARGETARCH
 
-WORKSPACE /workspace
+WORKDIR /workspace
 COPY go.mod go.sum ./
 RUN go mod download
 
@@ -17,6 +18,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -a -o
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -a -o /out/diverge-proxy cmd/proxy/main.go
 
 # Runtime stage
+# Using gcr.io/distroless/static:nonroot
 FROM gcr.io/distroless/static:nonroot
 COPY --from=builder /out/diverge-controller /diverge-controller
 COPY --from=builder /out/diverge-proxy /diverge-proxy

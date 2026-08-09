@@ -48,6 +48,9 @@ dockers:
   - image_templates:
       - "ghcr.io/divergedev/diverge:{{ .Tag }}-amd64"
     dockerfile: Dockerfile.goreleaser
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/amd64"
     goos: linux
     goarch: amd64
     extra_files:
@@ -56,6 +59,9 @@ dockers:
   - image_templates:
       - "ghcr.io/divergedev/diverge:{{ .Tag }}-arm64"
     dockerfile: Dockerfile.goreleaser
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/arm64"
     goos: linux
     goarch: arm64
     extra_files:

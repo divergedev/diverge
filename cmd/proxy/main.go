@@ -59,7 +59,10 @@ func main() {
 		Port:          port,
 	}
 
-	lister, err := proxy.NewK8sEnvironmentLister(kubeconfig, namespace, scheme)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	lister, err := proxy.NewK8sEnvironmentLister(ctx, kubeconfig, namespace, scheme)
 	if err != nil {
 		logger.Error(err, "Failed to initialize K8s client")
 		os.Exit(1)
@@ -74,10 +77,14 @@ func main() {
 	handler := proxy.LoggingMiddleware(proxy.CORSMiddleware(server))
 	addr := fmt.Sprintf(":%d", port)
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	srv := &http.Server{Addr: addr, Handler: handler}
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

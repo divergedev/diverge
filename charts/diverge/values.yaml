@@ -40,7 +40,7 @@ tolerations: []
 affinity: {}
 
 proxy:
-  enabled: true
+  enabled: false
   replicaCount: 1
   port: 8090
   previewDomain: ""
