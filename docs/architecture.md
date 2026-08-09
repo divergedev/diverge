@@ -13,17 +13,17 @@ flowchart TD
     B --> C[Diverge Webhook Handler]
     C -->|Creates/Updates| D[Environment CR]
     D --> E[Diverge Controller]
-    
+
     subgraph Diverge Operator
         E --> F[Changeset Detector]
         E --> G[Database Provider]
         E --> H[Routing Engine]
     end
 
-    F -->|Analyzes .diverge.yaml| I[Argo CD ApplicationSets / Deployments]
+    F -->|Analyzes .diverge.yaml| I[Argo CD Application CRs / Deployments]
     G -->|Provisions DB| J[Database Instances]
-    H -->|Creates VirtualService| K[Istio Ingress]
-    
+    H -->|Creates VirtualService| K[Istio Ingress & Diverge Proxy]
+
     I --> L[Changed Services]
     K -->|Header Routing| L
     K -->|Fallback| M[Baseline Services]
@@ -32,11 +32,14 @@ flowchart TD
 ## Components
 
 - **Controller**: The Kubernetes controller (reconciler) that watches `Environment` Custom Resources (CRs). It orchestrates the entire deployment lifecycle, executing state transitions.
+- **Proxy**: A reverse proxy that assists with header-based routing, seamlessly directing traffic to the correct preview environment.
+- **CLI**: A command-line tool (`diverge`) allowing developers to interact with and manage preview environments directly from their terminal.
 - **Webhook Handler**: An HTTP server that listens to GitLab/GitHub webhook events (e.g., MR open, update, merge, close). It translates these events into Kubernetes `Environment` CRs, applying labels for configuration overrides based on MR details.
 - **Changeset Detector**: Responsible for identifying which services have been modified in the current branch by performing a git diff and mapping the changed files to service paths defined in `.diverge.yaml`.
 - **Database Providers**: Pluggable interfaces to handle database provisioning dynamically according to the requested mode (e.g., creating schemas, restoring from snapshots, or providing fresh databases).
 - **Routing Engine**: Configures the underlying service mesh (e.g., Istio) to route traffic appropriately. In header-based mode, it generates Istio `VirtualService` and `DestinationRule` resources.
 - **Notifier**: (Optional) Sends status updates back to the Version Control System (like GitLab MR comments) regarding deployment progress and preview URLs.
+- **API Server** (Coming soon - Issue #12): A forthcoming gRPC/ConnectRPC API server for extended environment management and integration.
 
 ## CRD Design
 
@@ -60,7 +63,7 @@ The `EnvironmentStatus` tracks the observed state. The lifecycle of an environme
 
 ## Delta Deployment
 
-Diverge employs a Delta Deployment strategy to optimize resources. 
+Diverge employs a Delta Deployment strategy to optimize resources.
 When a change occurs, the Changeset Detector performs a `git diff` against the target branch. It compares modified file paths against a configured service path map located in the repository's `.diverge.yaml` file.
 Only the modified services are deployed to the Kubernetes cluster. Unmodified services fall back to a baseline environment (e.g., staging). This is powered heavily by the Routing Engine.
 
@@ -93,6 +96,6 @@ Diverge prevents cluster bloat through automated lifecycle management:
 
 Diverge seamlessly integrates into the modern cloud-native stack:
 - **VCS**: GitLab and GitHub webhooks drive the automation.
-- **CD**: Often pairs with Argo CD (e.g., via ApplicationSets) to apply manifests.
+- **CD**: Often pairs with Argo CD (e.g., via direct `Application` CRs) to apply manifests.
 - **Mesh**: Istio provides the underlying header-based routing fabric.
 - **Infrastructure**: Crossplane can be utilized by the Database Providers to dynamically provision cloud-managed databases (like RDS or Cloud SQL).

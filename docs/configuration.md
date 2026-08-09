@@ -73,7 +73,7 @@ Examples of label mappings:
 
 ## Helm Chart Values
 
-When deploying Diverge via Helm, you can customize its behavior using `values.yaml`. 
+When deploying Diverge via Helm, you can customize its behavior using `values.yaml`.
 
 Key parameters:
 
@@ -82,6 +82,8 @@ Key parameters:
 | `webhook.enabled` | `true` | Enable the VCS webhook listener. |
 | `webhook.secretName` | `""` | K8s Secret containing the webhook verification token. |
 | `controller.replicaCount` | `1` | Number of controller replicas. |
+| `proxy.enabled` | `true` | Enable the Diverge Proxy for advanced routing. |
+| `proxy.replicaCount` | `1` | Number of proxy replicas. |
 | `routing.defaultMode` | `header` | Default routing mode if not specified. |
 | `database.defaultMode` | `shared` | Default database mode if not specified. |
 
