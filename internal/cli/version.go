@@ -6,14 +6,15 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var versionCmd = &cobra.Command{
-	Use:   "version",
-	Short: "Print version info",
-	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("Diverge version: %s\nCommit: %s\nDate: %s\n", cliVersion, cliCommit, cliDate)
-	},
-}
+func newVersionCmd(app *App) *cobra.Command {
+	cmd := &cobra.Command{
 
-func init() {
-	rootCmd.AddCommand(versionCmd)
+		Use:   "version",
+		Short: "Print version info",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Printf("Diverge version: %s\nCommit: %s\nDate: %s\n", app.Version, app.Commit, app.Date)
+		},
+	}
+
+	return cmd
 }

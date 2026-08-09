@@ -16,65 +16,90 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 )
 
-var (
-	kubeconfig string
-	namespace  string
-	contextCtx string
-	noColor    bool
-
-	cliVersion string
-	cliCommit  string
-	cliDate    string
-)
-
-var rootCmd = &cobra.Command{
-	Use:   "diverge",
-	Short: "Diverge CLI manages preview environments",
-	Long:  `The developer's daily driver for interacting with Diverge environments.`,
+type App struct {
+	Kubeconfig string
+	Namespace  string
+	Context    string
+	NoColor    bool
+	Version    string
+	Commit     string
+	Date       string
 }
+
+var lazyRootCmd *cobra.Command
+var lazyApp *App
 
 // RootCmd returns the root cobra command. External modules (e.g.,
 // diverge-enterprise) use this to add enterprise subcommands.
 func RootCmd() *cobra.Command {
-	return rootCmd
+	if lazyRootCmd == nil {
+		lazyApp = &App{}
+		lazyRootCmd = NewRootCmd(lazyApp)
+	}
+	return lazyRootCmd
 }
 
 func Execute(version, commit, date string) {
-	cliVersion = version
-	cliCommit = commit
-	cliDate = date
+	if lazyApp == nil {
+		lazyApp = &App{}
+		lazyRootCmd = NewRootCmd(lazyApp)
+	}
+	lazyApp.Version = version
+	lazyApp.Commit = commit
+	lazyApp.Date = date
 
-	err := rootCmd.ExecuteContext(context.Background())
+	err := lazyRootCmd.ExecuteContext(context.Background())
 	if err != nil {
 		os.Exit(1)
 	}
 }
 
-func init() {
-	rootCmd.PersistentFlags().StringVar(&kubeconfig, "kubeconfig", "", "path to kubeconfig (default: ~/.kube/config)")
-	rootCmd.PersistentFlags().StringVarP(&namespace, "namespace", "n", "", "Kubernetes namespace (default: from kubeconfig context)")
-	rootCmd.PersistentFlags().StringVar(&contextCtx, "context", "", "Kubernetes context")
-	rootCmd.PersistentFlags().BoolVar(&noColor, "no-color", false, "disable color output")
+func NewRootCmd(app *App) *cobra.Command {
+	rootCmd := &cobra.Command{
+		Use:   "diverge",
+		Short: "Diverge CLI manages preview environments",
+		Long:  `The developer's daily driver for interacting with Diverge environments.`,
+	}
+
+	rootCmd.PersistentFlags().StringVar(&app.Kubeconfig, "kubeconfig", "", "path to kubeconfig (default: ~/.kube/config)")
+	rootCmd.PersistentFlags().StringVarP(&app.Namespace, "namespace", "n", "", "Kubernetes namespace (default: from kubeconfig context)")
+	rootCmd.PersistentFlags().StringVar(&app.Context, "context", "", "Kubernetes context")
+	rootCmd.PersistentFlags().BoolVar(&app.NoColor, "no-color", false, "disable color output")
+
+	addCommands(rootCmd, app)
+	return rootCmd
 }
 
-func getKubeClient() (client.Client, *kubernetes.Clientset, error) {
+func addCommands(root *cobra.Command, app *App) {
+	root.AddCommand(newCreateCmd(app))
+	root.AddCommand(newDeleteCmd(app))
+	root.AddCommand(newInitCmd(app))
+	root.AddCommand(newListCmd(app))
+	root.AddCommand(newLogsCmd(app))
+	root.AddCommand(newOpenCmd(app))
+	root.AddCommand(newStatusCmd(app))
+	root.AddCommand(newValidateCmd(app))
+	root.AddCommand(newVersionCmd(app))
+}
+
+func (app *App) KubeClient() (client.Client, *kubernetes.Clientset, error) {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-	if kubeconfig != "" {
-		loadingRules.ExplicitPath = kubeconfig
+	if app.Kubeconfig != "" {
+		loadingRules.ExplicitPath = app.Kubeconfig
 	}
 	configOverrides := &clientcmd.ConfigOverrides{
-		CurrentContext: contextCtx,
+		CurrentContext: app.Context,
 	}
-	if namespace != "" {
-		configOverrides.Context.Namespace = namespace
+	if app.Namespace != "" {
+		configOverrides.Context.Namespace = app.Namespace
 	}
 
 	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
 
-	if namespace == "" {
+	if app.Namespace == "" {
 		ns, _, err := kubeConfig.Namespace()
 		if err == nil {
-			namespace = ns
+			app.Namespace = ns
 		}
 	}
 
