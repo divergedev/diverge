@@ -88,7 +88,7 @@ func (g *GitLabNotifier) postOrUpdateComment(ctx context.Context, env *v1alpha1.
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("gitlab API returned status: %d", resp.StatusCode)
@@ -119,7 +119,7 @@ func buildTemplateData(env *v1alpha1.Environment, reason string) TemplateData {
 
 	expiryStr := "never"
 	if env.Status.ExpiresAt != nil {
-		expiryStr = env.Status.ExpiresAt.Time.Format(time.RFC3339)
+		expiryStr = env.Status.ExpiresAt.Format(time.RFC3339)
 	}
 
 	var conditions []ConditionData

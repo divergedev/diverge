@@ -39,11 +39,12 @@ var listCmd = &cobra.Command{
 			return fmt.Errorf("failed to list environments: %w", err)
 		}
 
-		if outputFormat == "json" {
+		switch outputFormat {
+		case "json":
 			b, _ := json.MarshalIndent(envList.Items, "", "  ")
 			fmt.Println(string(b))
 			return nil
-		} else if outputFormat == "yaml" {
+		case "yaml":
 			// for simplicity, just use JSON for now or import sigs.k8s.io/yaml
 			b, _ := json.Marshal(envList.Items)
 			fmt.Println(string(b))
@@ -51,7 +52,7 @@ var listCmd = &cobra.Command{
 		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(w, "NAME\tPHASE\tAGE\tURL\tMR\tSERVICES")
+		_, _ = fmt.Fprintln(w, "NAME\tPHASE\tAGE\tURL\tMR\tSERVICES")
 
 		for _, env := range envList.Items {
 			phase := string(env.Status.Phase)
@@ -67,7 +68,7 @@ var listCmd = &cobra.Command{
 			}
 
 			age := ""
-			if env.CreationTimestamp.Time.Unix() > 0 {
+			if env.CreationTimestamp.Unix() > 0 {
 				age = fmt.Sprintf("%v", env.CreationTimestamp.Time)
 			}
 			
@@ -75,7 +76,7 @@ var listCmd = &cobra.Command{
 			
 			mr := fmt.Sprintf("%d", env.Spec.Source.MR)
 
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
 				env.Name,
 				phase,
 				age,
@@ -84,7 +85,7 @@ var listCmd = &cobra.Command{
 				services,
 			)
 		}
-		w.Flush()
+		_ = w.Flush()
 		return nil
 	},
 }

@@ -15,7 +15,7 @@ var initCmd = &cobra.Command{
 		if _, err := os.Stat(yamlPath); err == nil {
 			var resp string
 			fmt.Printf("%s already exists. Overwrite? [y/N]: ", yamlPath)
-			fmt.Scanln(&resp)
+			_, _ = fmt.Scanln(&resp)
 			if resp != "y" && resp != "Y" {
 				fmt.Println("Cancelled")
 				return nil

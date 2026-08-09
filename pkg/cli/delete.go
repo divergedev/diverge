@@ -26,7 +26,7 @@ var deleteCmd = &cobra.Command{
 		if !deleteForce {
 			var resp string
 			fmt.Printf("Are you sure you want to delete environment %s? [y/N]: ", name)
-			fmt.Scanln(&resp)
+			_, _ = fmt.Scanln(&resp)
 			if resp != "y" && resp != "Y" {
 				fmt.Println("Cancelled")
 				return nil

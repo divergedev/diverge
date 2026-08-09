@@ -66,7 +66,7 @@ var logsCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("failed to get log stream: %w", err)
 		}
-		defer stream.Close()
+		defer func() { _ = stream.Close() }()
 
 		_, err = io.Copy(os.Stdout, stream)
 		return err

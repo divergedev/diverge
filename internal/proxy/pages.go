@@ -22,12 +22,12 @@ func renderNotFound(w http.ResponseWriter, envName string, activeEnvs []Environm
 		EnvName:    envName,
 		ActiveEnvs: activeEnvs,
 	}
-	tmpl.ExecuteTemplate(w, "404.html", data)
+	_ = tmpl.ExecuteTemplate(w, "404.html", data)
 }
 
 func renderLoading(w http.ResponseWriter, envInfo *EnvironmentInfo) {
 	w.WriteHeader(http.StatusServiceUnavailable)
-	tmpl.ExecuteTemplate(w, "loading.html", envInfo)
+	_ = tmpl.ExecuteTemplate(w, "loading.html", envInfo)
 }
 
 func renderError(w http.ResponseWriter, envInfo *EnvironmentInfo, errMsg string) {
@@ -39,5 +39,5 @@ func renderError(w http.ResponseWriter, envInfo *EnvironmentInfo, errMsg string)
 		Env:   envInfo,
 		Error: errMsg,
 	}
-	tmpl.ExecuteTemplate(w, "error.html", data)
+	_ = tmpl.ExecuteTemplate(w, "error.html", data)
 }

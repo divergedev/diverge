@@ -31,10 +31,10 @@ var statusCmd = &cobra.Command{
 		fmt.Printf("Phase:     %s\n", env.Status.Phase)
 		fmt.Printf("URL:       %s\n", env.Status.URL)
 		if env.Status.CreatedAt != nil {
-			fmt.Printf("Created:   %s\n", env.Status.CreatedAt.Time.String())
+			fmt.Printf("Created:   %s\n", env.Status.CreatedAt.String())
 		}
 		if env.Status.ExpiresAt != nil {
-			fmt.Printf("Expires:   %s\n", env.Status.ExpiresAt.Time.String())
+			fmt.Printf("Expires:   %s\n", env.Status.ExpiresAt.String())
 		}
 		
 		fmt.Println("\nConditions:")
