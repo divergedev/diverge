@@ -74,7 +74,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	handler := proxy.LoggingMiddleware(proxy.CORSMiddleware(server))
+	handler := proxy.LoggingMiddleware(proxy.CORSMiddleware(previewDomain, server))
 	addr := fmt.Sprintf(":%d", port)
 
 	srv := &http.Server{
