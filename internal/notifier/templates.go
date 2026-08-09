@@ -88,6 +88,7 @@ const teardownTmplStr = `## 🗑️ Diverge Preview Environment — Destroyed
 Environment ` + "`{{.Name | sanitize}}`" + ` has been cleaned up.
 **Reason:** {{.Reason | sanitize}}`
 
+// TemplateData holds the values passed to notification message templates.
 type TemplateData struct {
 	Name        string
 	Branch      string
@@ -104,6 +105,7 @@ type TemplateData struct {
 	Conditions  []ConditionData
 }
 
+// ConditionData represents a single status condition for template rendering.
 type ConditionData struct {
 	Icon    string
 	Type    string

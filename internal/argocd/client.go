@@ -1,3 +1,5 @@
+// Package argocd manages Argo CD Application custom resources for
+// environment deployments using server-side apply.
 package argocd
 
 import (
@@ -24,6 +26,8 @@ type Client struct {
 	namespace string
 }
 
+// NewClient creates an Argo CD client that manages Application custom resources
+// in the specified namespace using server-side apply via a controller-runtime client.
 func NewClient(k8sClient client.Client, namespace string) *Client {
 	return &Client{
 		k8sClient: k8sClient,

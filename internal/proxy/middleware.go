@@ -10,6 +10,8 @@ import (
 
 var mwLogger = ctrl.Log.WithName("proxy").WithName("middleware")
 
+// LoggingMiddleware wraps an http.Handler to log each request's method, path,
+// and duration using the structured logger.
 func LoggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()

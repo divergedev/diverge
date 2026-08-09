@@ -12,12 +12,17 @@ import (
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
 
+// GitHubNotifier implements Notifier by posting and updating issue comments
+// on GitHub pull requests via the REST API.
 type GitHubNotifier struct {
 	BaseURL    string
 	Token      string
 	HTTPClient *http.Client
 }
 
+// NewGitHubNotifier creates a Notifier that posts and updates deployment status
+// comments on GitHub pull requests via the GitHub REST API. If baseURL is empty,
+// it defaults to https://api.github.com.
 func NewGitHubNotifier(baseURL, token string) *GitHubNotifier {
 	if baseURL == "" {
 		baseURL = "https://api.github.com"
@@ -109,6 +114,7 @@ func (g *GitHubNotifier) postOrUpdateComment(ctx context.Context, env *v1alpha1.
 	return nil
 }
 
+// PostEnvironmentCreated posts a comment indicating a new environment is being provisioned.
 func (g *GitHubNotifier) PostEnvironmentCreated(ctx context.Context, env *v1alpha1.Environment) error {
 	data := buildTemplateData(env, "")
 	msg, err := renderTemplate(createdTemplate, data)
@@ -118,6 +124,7 @@ func (g *GitHubNotifier) PostEnvironmentCreated(ctx context.Context, env *v1alph
 	return g.postOrUpdateComment(ctx, env, msg)
 }
 
+// PostEnvironmentReady posts a comment indicating the environment is ready with its preview URL.
 func (g *GitHubNotifier) PostEnvironmentReady(ctx context.Context, env *v1alpha1.Environment) error {
 	data := buildTemplateData(env, "")
 	msg, err := renderTemplate(readyTemplate, data)
@@ -127,6 +134,7 @@ func (g *GitHubNotifier) PostEnvironmentReady(ctx context.Context, env *v1alpha1
 	return g.postOrUpdateComment(ctx, env, msg)
 }
 
+// PostEnvironmentFailed posts a comment indicating the environment deployment failed.
 func (g *GitHubNotifier) PostEnvironmentFailed(ctx context.Context, env *v1alpha1.Environment, reason string) error {
 	data := buildTemplateData(env, reason)
 	msg, err := renderTemplate(failedTemplate, data)
@@ -136,6 +144,7 @@ func (g *GitHubNotifier) PostEnvironmentFailed(ctx context.Context, env *v1alpha
 	return g.postOrUpdateComment(ctx, env, msg)
 }
 
+// PostEnvironmentTeardown posts a comment indicating the environment is being torn down.
 func (g *GitHubNotifier) PostEnvironmentTeardown(ctx context.Context, env *v1alpha1.Environment) error {
 	data := buildTemplateData(env, "Teardown requested")
 	msg, err := renderTemplate(teardownTemplate, data)
@@ -145,6 +154,7 @@ func (g *GitHubNotifier) PostEnvironmentTeardown(ctx context.Context, env *v1alp
 	return g.postOrUpdateComment(ctx, env, msg)
 }
 
+// UpdateEnvironmentStatus is a no-op for GitHub; status is conveyed via comments.
 func (g *GitHubNotifier) UpdateEnvironmentStatus(ctx context.Context, env *v1alpha1.Environment) error {
 	return nil
 }

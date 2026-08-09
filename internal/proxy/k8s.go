@@ -18,6 +18,8 @@ import (
 
 var k8sLogger = ctrl.Log.WithName("proxy").WithName("k8s")
 
+// ErrCacheNotSynced is returned when the informer cache has not yet completed
+// its initial sync with the Kubernetes API server.
 var ErrCacheNotSynced = fmt.Errorf("cache not synced")
 
 type ttlEntry struct {
@@ -25,6 +27,9 @@ type ttlEntry struct {
 	expiresAt time.Time
 }
 
+// K8sEnvironmentLister resolves preview environments by watching Environment
+// custom resources. It uses an informer cache for primary lookups, with an
+// optional TTL-based fallback for direct API calls.
 type K8sEnvironmentLister struct {
 	client    client.Client
 	namespace string
@@ -39,6 +44,9 @@ type K8sEnvironmentLister struct {
 	ttlCache map[string]*ttlEntry
 }
 
+// NewK8sEnvironmentLister creates a Kubernetes-backed EnvironmentLister that
+// watches Environment custom resources via an informer cache. If informer setup
+// fails, it falls back to direct API calls with a short TTL cache.
 func NewK8sEnvironmentLister(ctx context.Context, kubeconfig, namespace string, scheme *runtime.Scheme) (*K8sEnvironmentLister, error) {
 	var config *rest.Config
 	var err error
@@ -132,6 +140,8 @@ func NewK8sEnvironmentLister(ctx context.Context, kubeconfig, namespace string, 
 	return lister, nil
 }
 
+// HasSynced reports whether the informer cache has completed its initial list.
+// In fallback mode (no informer), it always returns true.
 func (l *K8sEnvironmentLister) HasSynced() bool {
 	if l.hasSynced == nil {
 		return true // Fallback mode
@@ -139,6 +149,9 @@ func (l *K8sEnvironmentLister) HasSynced() bool {
 	return l.hasSynced()
 }
 
+// GetEnvironment looks up a single environment by name. It returns the cached
+// entry if the informer is synced, falls back to a TTL-cached API call if in
+// fallback mode, or returns ErrCacheNotSynced if the cache is not ready.
 func (l *K8sEnvironmentLister) GetEnvironment(ctx context.Context, name string) (*EnvironmentInfo, error) {
 	if l.useFallback {
 		return l.getFallback(ctx, name)
@@ -187,6 +200,8 @@ func (l *K8sEnvironmentLister) getFallback(ctx context.Context, name string) (*E
 	return &info, nil
 }
 
+// ListEnvironments returns all known environments. In informer mode it reads
+// from the cache; in fallback mode it issues a List call to the Kubernetes API.
 func (l *K8sEnvironmentLister) ListEnvironments(ctx context.Context) ([]EnvironmentInfo, error) {
 	if l.useFallback {
 		var envList v1alpha1.EnvironmentList
