@@ -30,7 +30,7 @@
             gh
             jq
             yq-go
-            pre-commit
+            lefthook
 
             # Container
             docker-client
@@ -45,6 +45,7 @@
             echo "   kubectl: $(kubectl version --client -o json 2>/dev/null | jq -r '.clientVersion.gitVersion' 2>/dev/null || echo 'n/a')"
             echo "   helm:    $(helm version --short 2>/dev/null || echo 'n/a')"
             echo ""
+            lefthook install 2>/dev/null || true
           '';
         };
       }

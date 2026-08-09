@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Environment Not Found</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 3rem; color: #333; background: #f9f9f9; }
+.container { max-width: 600px; margin: 0 auto; background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+h1 { color: #d32f2f; }
+ul { list-style: none; padding: 0; }
+li { padding: 0.5rem 0; border-bottom: 1px solid #eee; }
+li:last-child { border-bottom: none; }
+</style>
+</head>
+<body>
+<div class="container">
+	<h1>Environment Not Found</h1>
+	<p>The preview environment <strong>{{.EnvName}}</strong> does not exist or has expired.</p>
+	
+	{{if .ActiveEnvs}}
+	<h2>Active Environments</h2>
+	<ul>
+		{{range .ActiveEnvs}}
+		<li>{{.Name}} <small style="color: #666;">({{.Phase}})</small></li>
+		{{end}}
+	</ul>
+	{{else}}
+	<p>There are no active preview environments at this time.</p>
+	{{end}}
+</div>
+</body>
+</html>

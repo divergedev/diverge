@@ -1,0 +1,150 @@
+package notifier
+
+import (
+	"testing"
+	"time"
+
+	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/stretchr/testify/assert"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+func TestRenderCreatedTemplate(t *testing.T) {
+	data := TemplateData{
+		Name:        "pr-123",
+		Branch:      "feature-x",
+		Mode:        "ephemeral",
+		RoutingMode: "header",
+		Services:    []string{"svc1", "svc2"},
+		TTL:         "24h",
+	}
+	res, err := renderTemplate(createdTemplate, data)
+	assert.NoError(t, err)
+	assert.Contains(t, res, "`pr-123`")
+	assert.Contains(t, res, "`feature-x`")
+	assert.Contains(t, res, "ephemeral")
+	assert.Contains(t, res, "header")
+	assert.Contains(t, res, "- ⏳ svc1")
+	assert.Contains(t, res, "- ⏳ svc2")
+	assert.Contains(t, res, "auto-expire in 24h")
+}
+
+func TestRenderReadyTemplate(t *testing.T) {
+	data := TemplateData{
+		Name:        "pr-123",
+		Branch:      "feature-x",
+		Mode:        "ephemeral",
+		URL:         "https://example.com/pr",
+		NumServices: 2,
+		Duration:    "2m",
+		Services:    []string{"svc1", "svc2"},
+		BaseURL:     "https://api.example.com",
+		ExpiryTime:  "2023-01-01T00:00:00Z",
+	}
+	res, err := renderTemplate(readyTemplate, data)
+	assert.NoError(t, err)
+	assert.Contains(t, res, "✅ Running")
+	assert.Contains(t, res, "[🔗 Open Preview](https://example.com/pr)")
+	assert.Contains(t, res, "`pr-123`")
+	assert.Contains(t, res, "`feature-x`")
+	assert.Contains(t, res, "ephemeral (2 services deployed)")
+	assert.Contains(t, res, "2m")
+	assert.Contains(t, res, "- ✅ svc1")
+	assert.Contains(t, res, "- ✅ svc2")
+	assert.Contains(t, res, "curl -H \"x-diverge-env: pr-123\" https://api.example.com")
+	assert.Contains(t, res, "Expires 2023-01-01T00:00:00Z")
+}
+
+func TestRenderFailedTemplate(t *testing.T) {
+	data := TemplateData{
+		Name:   "pr-123",
+		Reason: "Pod crashed",
+		Conditions: []ConditionData{
+			{Icon: "❌", Type: "Ready", Message: "OOMKilled"},
+		},
+	}
+	res, err := renderTemplate(failedTemplate, data)
+	assert.NoError(t, err)
+	assert.Contains(t, res, "❌ Failed")
+	assert.Contains(t, res, "`pr-123`")
+	assert.Contains(t, res, "Pod crashed")
+	assert.Contains(t, res, "- ❌ Ready: OOMKilled")
+	assert.Contains(t, res, "kubectl logs -l app=diverge-controller")
+}
+
+func TestRenderTeardownTemplate(t *testing.T) {
+	data := TemplateData{
+		Name:   "pr-123",
+		Reason: "Merged",
+	}
+	res, err := renderTemplate(teardownTemplate, data)
+	assert.NoError(t, err)
+	assert.Contains(t, res, "`pr-123`")
+	assert.Contains(t, res, "Merged")
+}
+
+func TestSanitizeMarkdown(t *testing.T) {
+	input := "hello | world `test` <script> @here"
+	expected := "hello \\| world \\`test\\` &lt;script&gt; @\u200bhere"
+	assert.Equal(t, expected, sanitizeMarkdown(input))
+}
+
+func TestSanitizeMarkdownMaliciousInput(t *testing.T) {
+	input := "<img src=x onerror=alert(1)> @everyone `rm -rf /` | grep secret"
+	expected := "&lt;img src=x onerror=alert(1)&gt; @\u200beveryone \\`rm -rf /\\` \\| grep secret"
+	assert.Equal(t, expected, sanitizeMarkdown(input))
+}
+
+func TestTemplateWithEmptyBaseURL(t *testing.T) {
+	data := TemplateData{
+		Name:        "pr-123",
+		Branch:      "feature-x",
+		Mode:        "ephemeral",
+		URL:         "https://example.com/pr",
+		NumServices: 2,
+		Duration:    "2m",
+		Services:    []string{"svc1", "svc2"},
+		BaseURL:     "",
+		ExpiryTime:  "2023-01-01T00:00:00Z",
+	}
+	res, err := renderTemplate(readyTemplate, data)
+	assert.NoError(t, err)
+	assert.NotContains(t, res, "curl -H")
+}
+
+// BuildTemplateData helpers
+func TestBuildTemplateData(t *testing.T) {
+	now := time.Now()
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-env",
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Source:  v1alpha1.EnvironmentSource{Branch: "main"},
+			Deploy:  v1alpha1.EnvironmentDeploy{Mode: "ephemeral", ChangedServices: []string{"s1", "s2"}},
+			Routing: v1alpha1.EnvironmentRouting{Mode: "subdomain"},
+		},
+		Status: v1alpha1.EnvironmentStatus{
+			CreatedAt: &metav1.Time{Time: now.Add(-2 * time.Minute)},
+			ExpiresAt: &metav1.Time{Time: now.Add(2 * time.Hour)},
+			Conditions: []metav1.Condition{
+				{Type: "Ready", Status: "True", Message: "All good"},
+			},
+		},
+	}
+	data := buildTemplateData(env, "reason")
+	assert.Equal(t, "test-env", data.Name)
+	assert.Equal(t, "main", data.Branch)
+	assert.Equal(t, "ephemeral", data.Mode)
+	assert.Equal(t, "subdomain", data.RoutingMode)
+	assert.Equal(t, []string{"s1", "s2"}, data.Services)
+	assert.Equal(t, "never", data.TTL)
+	assert.Equal(t, "", data.URL)
+	assert.Equal(t, 2, data.NumServices)
+	assert.Contains(t, data.Duration, "m")
+	assert.Equal(t, "https://test-env.preview.example.com", data.BaseURL)
+	assert.Equal(t, env.Status.ExpiresAt.Format(time.RFC3339), data.ExpiryTime)
+	assert.Equal(t, "reason", data.Reason)
+	assert.Len(t, data.Conditions, 1)
+	assert.Equal(t, "✅", data.Conditions[0].Icon)
+}

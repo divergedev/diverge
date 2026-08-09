@@ -1,0 +1,40 @@
+# Diverge lefthook config
+# https://github.com/evilmartians/lefthook
+
+pre-commit:
+  parallel: true
+  commands:
+    go-fmt:
+      glob: "*.go"
+      run: go fmt ./...
+      stage_fixed: true
+    go-vet:
+      glob: "*.go"
+      run: go vet ./...
+    trailing-whitespace:
+      run: |
+        if grep -rn ' $' {staged_files} 2>/dev/null; then
+          echo "Trailing whitespace found"
+          exit 1
+        fi
+    check-yaml:
+      glob: "*.{yaml,yml}"
+      run: |
+        for f in {staged_files}; do
+          yq '.' "$f" > /dev/null 2>&1 || { echo "Invalid YAML: $f"; exit 1; }
+        done
+    helm-lint:
+      glob: "charts/**"
+      run: helm lint charts/diverge
+
+pre-push:
+  parallel: true
+  commands:
+    golangci-lint:
+      glob: "*.go"
+      run: golangci-lint run
+    go-test:
+      glob: "*.go"
+      run: go test ./... -count=1 -short
+    go-build:
+      run: go build ./...
