@@ -31,6 +31,9 @@
             jq
             yq-go
             lefthook
+            buf
+            protoc-gen-go
+            protoc-gen-connect-go
 
             # Container
             docker-client
