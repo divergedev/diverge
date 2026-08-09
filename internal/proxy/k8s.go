@@ -3,7 +3,6 @@ package proxy
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -12,9 +11,12 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
+	ctrl "sigs.k8s.io/controller-runtime"
 	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+var k8sLogger = ctrl.Log.WithName("proxy").WithName("k8s")
 
 var ErrCacheNotSynced = fmt.Errorf("cache not synced")
 
@@ -37,7 +39,7 @@ type K8sEnvironmentLister struct {
 	ttlCache map[string]*ttlEntry
 }
 
-func NewK8sEnvironmentLister(kubeconfig, namespace string, scheme *runtime.Scheme) (*K8sEnvironmentLister, error) {
+func NewK8sEnvironmentLister(ctx context.Context, kubeconfig, namespace string, scheme *runtime.Scheme) (*K8sEnvironmentLister, error) {
 	var config *rest.Config
 	var err error
 
@@ -70,15 +72,14 @@ func NewK8sEnvironmentLister(kubeconfig, namespace string, scheme *runtime.Schem
 	}
 	k8sCache, err := ctrlcache.New(config, cacheOpts)
 	if err != nil {
-		log.Printf("Warning: Failed to create informer cache, falling back to direct API: %v", err)
+		k8sLogger.V(0).Info("Failed to create informer cache, falling back to direct API", "error", err)
 		lister.useFallback = true
 		return lister, nil
 	}
 
-	ctx := context.Background()
 	informer, err := k8sCache.GetInformer(ctx, &v1alpha1.Environment{})
 	if err != nil {
-		log.Printf("Warning: Failed to get informer, falling back to direct API: %v", err)
+		k8sLogger.V(0).Info("Failed to get informer, falling back to direct API", "error", err)
 		lister.useFallback = true
 		return lister, nil
 	}
@@ -115,7 +116,7 @@ func NewK8sEnvironmentLister(kubeconfig, namespace string, scheme *runtime.Schem
 			}
 		},
 	}); err != nil {
-		log.Printf("WARNING: failed to add event handler: %v, falling back to direct API", err)
+		k8sLogger.V(0).Info("Failed to add event handler, falling back to direct API", "error", err)
 		lister.useFallback = true
 		return lister, nil
 	}
@@ -124,11 +125,18 @@ func NewK8sEnvironmentLister(kubeconfig, namespace string, scheme *runtime.Schem
 
 	go func() {
 		if err := k8sCache.Start(ctx); err != nil {
-			log.Printf("Informer cache stopped: %v", err)
+			k8sLogger.V(0).Info("Informer cache stopped", "error", err)
 		}
 	}()
 
 	return lister, nil
+}
+
+func (l *K8sEnvironmentLister) HasSynced() bool {
+	if l.hasSynced == nil {
+		return true // Fallback mode
+	}
+	return l.hasSynced()
 }
 
 func (l *K8sEnvironmentLister) GetEnvironment(ctx context.Context, name string) (*EnvironmentInfo, error) {

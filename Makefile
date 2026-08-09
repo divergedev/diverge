@@ -40,7 +40,10 @@ test: manifests generate fmt vet ## Run tests.
 
 .PHONY: build
 build: manifests generate fmt vet ## Build manager binary.
-	go build -o bin/manager cmd/controller/main.go
+	go build -o bin/diverge-controller cmd/controller/main.go
+
+.PHONY: build-all
+build-all: build build-cli build-proxy ## Build all binaries.
 
 .PHONY: build-cli
 build-cli: fmt vet ## Build diverge CLI binary.

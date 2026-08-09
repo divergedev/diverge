@@ -3,6 +3,9 @@ project_name: diverge
 builds:
   - id: diverge-controller
     main: cmd/controller/main.go
+    binary: diverge-controller
+    flags:
+      - -trimpath
     goos:
       - linux
     goarch:
@@ -12,6 +15,9 @@ builds:
       - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
   - id: diverge
     main: cmd/diverge/main.go
+    binary: diverge
+    flags:
+      - -trimpath
     goos:
       - linux
       - darwin
@@ -23,6 +29,9 @@ builds:
       - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
   - id: diverge-proxy
     main: cmd/proxy/main.go
+    binary: diverge-proxy
+    flags:
+      - -trimpath
     goos:
       - linux
     goarch:
@@ -38,14 +47,26 @@ archives:
 dockers:
   - image_templates:
       - "ghcr.io/divergedev/diverge:{{ .Tag }}-amd64"
-    dockerfile: Dockerfile
+    dockerfile: Dockerfile.goreleaser
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/amd64"
     goos: linux
     goarch: amd64
+    extra_files:
+      - diverge-controller
+      - diverge-proxy
   - image_templates:
       - "ghcr.io/divergedev/diverge:{{ .Tag }}-arm64"
-    dockerfile: Dockerfile
+    dockerfile: Dockerfile.goreleaser
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/arm64"
     goos: linux
     goarch: arm64
+    extra_files:
+      - diverge-controller
+      - diverge-proxy
 docker_manifests:
   - name_template: "ghcr.io/divergedev/diverge:{{ .Tag }}"
     image_templates:

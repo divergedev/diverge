@@ -28,12 +28,17 @@ type Server struct {
 	config    Config
 	envLister EnvironmentLister
 	proxy     *httputil.ReverseProxy
+	readiness ReadinessChecker
 }
 
 // EnvironmentLister resolves environment names from the K8s API
 type EnvironmentLister interface {
 	GetEnvironment(ctx context.Context, name string) (*EnvironmentInfo, error)
 	ListEnvironments(ctx context.Context) ([]EnvironmentInfo, error)
+}
+
+type ReadinessChecker interface {
+	HasSynced() bool
 }
 
 type EnvironmentInfo struct {
@@ -64,10 +69,30 @@ func NewServer(cfg Config, lister EnvironmentLister) (*Server, error) {
 	if s.config.HeaderKey == "" {
 		s.config.HeaderKey = "x-diverge-env"
 	}
+	if r, ok := lister.(ReadinessChecker); ok {
+		s.readiness = r
+	}
 	return s, nil
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Health checks bypass domain validation
+	if r.URL.Path == "/-/healthz" {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+		return
+	}
+	if r.URL.Path == "/-/readyz" {
+		if s.readiness != nil && !s.readiness.HasSynced() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("cache not synced"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+		return
+	}
+
 	host := r.Host
 	if strings.Contains(host, ":") {
 		host = strings.Split(host, ":")[0]

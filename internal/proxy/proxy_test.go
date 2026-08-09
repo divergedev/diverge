@@ -193,3 +193,54 @@ func TestProxyListEnvironments(t *testing.T) {
 	assert.Len(t, envs, 1)
 	assert.Equal(t, "mr-42", envs[0].Name)
 }
+
+func TestHealthEndpoint(t *testing.T) {
+	server := &Server{
+		config: Config{PreviewDomain: "preview.example.com"},
+	}
+	req := httptest.NewRequest("GET", "http://localhost/-/healthz", nil)
+	rr := httptest.NewRecorder()
+	server.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, "ok", rr.Body.String())
+}
+
+type mockReadiness struct {
+	synced bool
+}
+
+func (m *mockReadiness) HasSynced() bool {
+	return m.synced
+}
+
+func TestReadyEndpointSynced(t *testing.T) {
+	server := &Server{
+		config:    Config{PreviewDomain: "preview.example.com"},
+		readiness: &mockReadiness{synced: true},
+	}
+	req := httptest.NewRequest("GET", "http://localhost/-/readyz", nil)
+	rr := httptest.NewRecorder()
+	server.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusOK, rr.Code)
+}
+
+func TestReadyEndpointNotSynced(t *testing.T) {
+	server := &Server{
+		config:    Config{PreviewDomain: "preview.example.com"},
+		readiness: &mockReadiness{synced: false},
+	}
+	req := httptest.NewRequest("GET", "http://localhost/-/readyz", nil)
+	rr := httptest.NewRecorder()
+	server.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
+}
+
+func TestReadyEndpointNoChecker(t *testing.T) {
+	server := &Server{
+		config: Config{PreviewDomain: "preview.example.com"},
+	}
+	req := httptest.NewRequest("GET", "http://localhost/-/readyz", nil)
+	rr := httptest.NewRecorder()
+	server.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusOK, rr.Code)
+}

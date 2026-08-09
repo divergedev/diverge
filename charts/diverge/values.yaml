@@ -38,3 +38,22 @@ podDisruptionBudget:
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+proxy:
+  enabled: false
+  replicaCount: 1
+  port: 8090
+  previewDomain: ""
+  upstream: ""
+  headerKey: "x-diverge-env"
+  resources:
+    limits:
+      cpu: 200m
+      memory: 128Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 8090
