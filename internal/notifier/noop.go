@@ -6,6 +6,8 @@ import (
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
 
+// NoopNotifier is a Notifier that silently discards all notifications.
+// It is used when no external notification platform is configured.
 type NoopNotifier struct{}
 
 func (n *NoopNotifier) PostEnvironmentCreated(ctx context.Context, env *v1alpha1.Environment) error {

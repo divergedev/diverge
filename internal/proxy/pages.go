@@ -11,6 +11,8 @@ var templatesFS embed.FS
 
 var tmpl = template.Must(template.ParseFS(templatesFS, "templates/*.html"))
 
+// NotFoundData is the template data for the 404 page, including the requested
+// environment name and a list of currently active environments.
 type NotFoundData struct {
 	EnvName    string
 	ActiveEnvs []EnvironmentInfo

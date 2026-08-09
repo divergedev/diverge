@@ -1,3 +1,5 @@
+// Package proxy implements the Diverge reverse proxy for subdomain-based
+// routing of requests to preview environments.
 package proxy
 
 import (
@@ -41,10 +43,14 @@ type EnvironmentLister interface {
 	ListEnvironments(ctx context.Context) ([]EnvironmentInfo, error)
 }
 
+// ReadinessChecker is optionally implemented by an EnvironmentLister to
+// indicate whether its internal cache has synced with the Kubernetes API.
 type ReadinessChecker interface {
 	HasSynced() bool
 }
 
+// EnvironmentInfo holds metadata about a resolved preview environment,
+// including its deployment phase and upstream target URL.
 type EnvironmentInfo struct {
 	Name      string
 	Phase     string
@@ -53,6 +59,10 @@ type EnvironmentInfo struct {
 	HeaderKey string
 }
 
+// NewServer creates a new reverse proxy Server. It parses the BaseURL from cfg,
+// configures an httputil.ReverseProxy director, and defaults the header key to
+// "x-diverge-env" if not set. If lister implements ReadinessChecker, readiness
+// probes will reflect cache sync state.
 func NewServer(cfg Config, lister EnvironmentLister) (*Server, error) {
 	targetURL, err := url.Parse(cfg.BaseURL)
 	if err != nil {
@@ -79,6 +89,9 @@ func NewServer(cfg Config, lister EnvironmentLister) (*Server, error) {
 	return s, nil
 }
 
+// ServeHTTP handles incoming HTTP requests. It serves health and readiness
+// probes, validates the host against the preview domain, resolves the target
+// environment, and either renders a status page or proxies to the upstream.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Health checks bypass domain validation
 	if r.URL.Path == "/-/healthz" {

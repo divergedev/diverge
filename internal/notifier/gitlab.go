@@ -13,12 +13,16 @@ import (
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
 
+// GitLabNotifier implements Notifier by posting and updating merge request
+// notes via the GitLab REST API v4.
 type GitLabNotifier struct {
 	BaseURL    string
 	Token      string
 	HTTPClient *http.Client
 }
 
+// NewGitLabNotifier creates a Notifier that posts and updates deployment status
+// notes on GitLab merge requests via the GitLab REST API v4.
 func NewGitLabNotifier(baseURL, token string) *GitLabNotifier {
 	return &GitLabNotifier{
 		BaseURL: baseURL,
@@ -159,6 +163,7 @@ func buildTemplateData(env *v1alpha1.Environment, reason string) TemplateData {
 	}
 }
 
+// PostEnvironmentCreated posts a note indicating a new environment is being provisioned.
 func (g *GitLabNotifier) PostEnvironmentCreated(ctx context.Context, env *v1alpha1.Environment) error {
 	data := buildTemplateData(env, "")
 	msg, err := renderTemplate(createdTemplate, data)
@@ -168,6 +173,7 @@ func (g *GitLabNotifier) PostEnvironmentCreated(ctx context.Context, env *v1alph
 	return g.postOrUpdateComment(ctx, env, msg)
 }
 
+// PostEnvironmentReady posts a note indicating the environment is ready with its preview URL.
 func (g *GitLabNotifier) PostEnvironmentReady(ctx context.Context, env *v1alpha1.Environment) error {
 	data := buildTemplateData(env, "")
 	msg, err := renderTemplate(readyTemplate, data)
@@ -177,6 +183,7 @@ func (g *GitLabNotifier) PostEnvironmentReady(ctx context.Context, env *v1alpha1
 	return g.postOrUpdateComment(ctx, env, msg)
 }
 
+// PostEnvironmentFailed posts a note indicating the environment deployment failed.
 func (g *GitLabNotifier) PostEnvironmentFailed(ctx context.Context, env *v1alpha1.Environment, reason string) error {
 	data := buildTemplateData(env, reason)
 	msg, err := renderTemplate(failedTemplate, data)
@@ -186,6 +193,7 @@ func (g *GitLabNotifier) PostEnvironmentFailed(ctx context.Context, env *v1alpha
 	return g.postOrUpdateComment(ctx, env, msg)
 }
 
+// PostEnvironmentTeardown posts a note indicating the environment is being torn down.
 func (g *GitLabNotifier) PostEnvironmentTeardown(ctx context.Context, env *v1alpha1.Environment) error {
 	data := buildTemplateData(env, "Teardown requested")
 	msg, err := renderTemplate(teardownTemplate, data)
@@ -195,6 +203,7 @@ func (g *GitLabNotifier) PostEnvironmentTeardown(ctx context.Context, env *v1alp
 	return g.postOrUpdateComment(ctx, env, msg)
 }
 
+// UpdateEnvironmentStatus re-renders and updates the existing note with current status.
 func (g *GitLabNotifier) UpdateEnvironmentStatus(ctx context.Context, env *v1alpha1.Environment) error {
 	data := buildTemplateData(env, "")
 	msg, err := renderTemplate(readyTemplate, data)

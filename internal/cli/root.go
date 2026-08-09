@@ -1,3 +1,5 @@
+// Package cli implements the diverge command-line interface, providing commands
+// for creating, listing, deleting, and managing preview environments.
 package cli
 
 import (
@@ -17,6 +19,8 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 )
 
+// App holds shared CLI state including Kubernetes connection details, version
+// metadata, and optional API clients supplied by tests.
 type App struct {
 	Kubeconfig string
 	Namespace  string
@@ -43,6 +47,8 @@ func RootCmd() *cobra.Command {
 	return lazyRootCmd
 }
 
+// Execute is the main entry point for the diverge CLI. It injects version metadata
+// into the App, initializes the root command if needed, and runs it.
 func Execute(version, commit, date string) {
 	if lazyApp == nil {
 		lazyApp = &App{}
@@ -58,6 +64,9 @@ func Execute(version, commit, date string) {
 	}
 }
 
+// NewRootCmd constructs the root cobra.Command with persistent flags for kubeconfig,
+// namespace, and context, and registers all subcommands (create, delete, init, list,
+// logs, open, status, validate, version).
 func NewRootCmd(app *App) *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:   "diverge",
@@ -112,6 +121,9 @@ func (app *App) ResolveNamespace() error {
 	return nil
 }
 
+// KubeClient returns a controller-runtime client and a kubernetes.Clientset.
+// It returns injected clients when app.Client is non-nil; otherwise it creates
+// both clients from kubeconfig.
 func (app *App) KubeClient() (client.Client, *kubernetes.Clientset, error) {
 	if app.Client != nil {
 		return app.Client, app.Clientset, nil

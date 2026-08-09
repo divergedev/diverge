@@ -6,6 +6,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
+// Applicator manages Argo CD Application custom resources for preview
+// environment deployments.
 type Applicator interface {
 	ApplyApplication(ctx context.Context, app *unstructured.Unstructured) error
 	ApplyApplications(ctx context.Context, apps []*unstructured.Unstructured) error
@@ -14,6 +16,8 @@ type Applicator interface {
 	GetSyncStatus(ctx context.Context, envName string) ([]ApplicationStatus, error)
 }
 
+// ServiceConfig describes a single service within a preview environment,
+// including its Helm chart path, values file, and container image.
 type ServiceConfig struct {
 	Name       string
 	ChartPath  string
@@ -22,6 +26,8 @@ type ServiceConfig struct {
 	Tag        string
 }
 
+// ApplicationStatus reports the sync and health state of an Argo CD
+// Application belonging to a Diverge environment.
 type ApplicationStatus struct {
 	Name       string
 	Service    string // the Diverge service this Application belongs to

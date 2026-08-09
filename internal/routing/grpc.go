@@ -19,6 +19,8 @@ type GRPCRouter struct {
 
 var _ Router = (*GRPCRouter)(nil)
 
+// NewGRPCRouter creates a Router that manages Gateway API GRPCRoute resources
+// for header-based traffic routing to preview environment services.
 func NewGRPCRouter(c client.Client, namespace string) *GRPCRouter {
 	return &GRPCRouter{
 		client:    c,
@@ -26,6 +28,8 @@ func NewGRPCRouter(c client.Client, namespace string) *GRPCRouter {
 	}
 }
 
+// Reconcile creates or updates GRPCRoute resources for each changed service
+// in the environment, configuring header-based routing rules.
 func (r *GRPCRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment) error {
 	headerKey := env.Spec.Routing.HeaderKey
 	if headerKey == "" {
@@ -97,6 +101,7 @@ func (r *GRPCRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment) e
 	return nil
 }
 
+// Teardown deletes all GRPCRoute resources associated with the environment.
 func (r *GRPCRouter) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
 	for _, svc := range env.Spec.Deploy.ChangedServices {
 		u := &unstructured.Unstructured{}
@@ -114,6 +119,8 @@ func (r *GRPCRouter) Teardown(ctx context.Context, env *v1alpha1.Environment) er
 	return nil
 }
 
+// GetExternalURL returns the environment's external URL by substituting
+// {env} in the routing template, or an empty string if none is configured.
 func (r *GRPCRouter) GetExternalURL(env *v1alpha1.Environment) string {
 	if env.Spec.Routing.ExternalURL != "" {
 		return strings.ReplaceAll(env.Spec.Routing.ExternalURL, "{env}", env.Name)
