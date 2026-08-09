@@ -1,17 +1,22 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/proxy"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
 var scheme = runtime.NewScheme()
@@ -22,6 +27,9 @@ func init() {
 }
 
 func main() {
+	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
+	logger := ctrl.Log.WithName("proxy")
+
 	var (
 		port          int
 		previewDomain string
@@ -53,22 +61,40 @@ func main() {
 
 	lister, err := proxy.NewK8sEnvironmentLister(kubeconfig, namespace, scheme)
 	if err != nil {
-		log.Fatalf("Failed to initialize K8s client: %v", err)
+		logger.Error(err, "Failed to initialize K8s client")
+		os.Exit(1)
 	}
 
 	server, err := proxy.NewServer(cfg, lister)
 	if err != nil {
-		log.Fatalf("Failed to initialize proxy server: %v", err)
+		logger.Error(err, "Failed to initialize proxy server")
+		os.Exit(1)
 	}
 
 	handler := proxy.LoggingMiddleware(proxy.CORSMiddleware(server))
-
 	addr := fmt.Sprintf(":%d", port)
-	log.Printf("Starting Magic URLs proxy on %s", addr)
-	log.Printf("Preview Domain: %s", previewDomain)
-	log.Printf("Upstream: %s", upstream)
 
-	if err := http.ListenAndServe(addr, handler); err != nil {
-		log.Fatalf("Server failed: %v", err)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	srv := &http.Server{Addr: addr, Handler: handler}
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error(err, "server failed")
+			os.Exit(1)
+		}
+	}()
+
+	logger.Info("proxy started", "addr", addr, "previewDomain", previewDomain, "upstream", upstream)
+	<-ctx.Done()
+	logger.Info("shutting down, draining in-flight requests...")
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		logger.Error(err, "forced shutdown")
+		os.Exit(1)
 	}
+	logger.Info("proxy stopped")
 }

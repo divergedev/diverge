@@ -19,6 +19,7 @@ pre-commit:
         fi
     check-yaml:
       glob: "*.{yaml,yml}"
+      exclude: "charts/*/templates/**"
       run: |
         for f in {staged_files}; do
           yq '.' "$f" > /dev/null 2>&1 || { echo "Invalid YAML: $f"; exit 1; }

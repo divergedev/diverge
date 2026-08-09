@@ -68,6 +68,13 @@ func NewServer(cfg Config, lister EnvironmentLister) (*Server, error) {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Health checks bypass domain validation
+	if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+		return
+	}
+
 	host := r.Host
 	if strings.Contains(host, ":") {
 		host = strings.Split(host, ":")[0]
