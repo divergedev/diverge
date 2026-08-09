@@ -1,6 +1,7 @@
 package argocd
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
@@ -25,10 +26,10 @@ func TestGenerate(t *testing.T) {
 		configs         map[string]ServiceConfig
 		wantErr         string
 		expectedApps    int
-		check           func(t *testing.T, apps []*unstructured.Unstructured)
+		check           func(t *testing.T, env *v1alpha1.Environment, apps []*unstructured.Unstructured)
 	}{
 		{
-			name: "single service",
+			name: "single service - default mode (same)",
 			env: &v1alpha1.Environment{
 				ObjectMeta: metav1.ObjectMeta{Name: "preview-mr-42", Namespace: "default", UID: "uid"},
 				Spec: v1alpha1.EnvironmentSpec{
@@ -40,7 +41,7 @@ func TestGenerate(t *testing.T) {
 				"api": {Name: "api", Tag: "abc123", ChartPath: "charts/api"},
 			},
 			expectedApps: 1,
-			check: func(t *testing.T, apps []*unstructured.Unstructured) {
+			check: func(t *testing.T, env *v1alpha1.Environment, apps []*unstructured.Unstructured) {
 				app := apps[0]
 				assert.Equal(t, "argoproj.io/v1alpha1", app.GetAPIVersion())
 				assert.Equal(t, "Application", app.GetKind())
@@ -78,9 +79,29 @@ func TestGenerate(t *testing.T) {
 				assert.Equal(t, "abc123", param["value"])
 
 				ns, _, _ := unstructured.NestedString(app.Object, "spec", "destination", "namespace")
-				assert.Equal(t, "diverge-preview-mr-42", ns)
+				assert.Equal(t, "default", ns)
 				srv, _, _ := unstructured.NestedString(app.Object, "spec", "destination", "server")
 				assert.Equal(t, "https://kubernetes.default.svc", srv)
+			},
+		},
+		{
+			name: "single service - create mode",
+			env: &v1alpha1.Environment{
+				ObjectMeta: metav1.ObjectMeta{Name: "preview-mr-42", Namespace: "default", UID: "uid"},
+				Spec: v1alpha1.EnvironmentSpec{
+					Deploy: v1alpha1.EnvironmentDeploy{Namespace: "create"},
+					Source: v1alpha1.EnvironmentSource{Branch: "feature-branch", MR: 42},
+				},
+			},
+			changedServices: []string{"api"},
+			configs: map[string]ServiceConfig{
+				"api": {Name: "api", Tag: "abc123", ChartPath: "charts/api"},
+			},
+			expectedApps: 1,
+			check: func(t *testing.T, env *v1alpha1.Environment, apps []*unstructured.Unstructured) {
+				app := apps[0]
+				ns, _, _ := unstructured.NestedString(app.Object, "spec", "destination", "namespace")
+				assert.Equal(t, env.PreviewNamespace(), ns)
 			},
 		},
 		{
@@ -95,7 +116,7 @@ func TestGenerate(t *testing.T) {
 				"worker": {Name: "worker", Tag: "v3.0.0", ChartPath: "charts/worker"},
 			},
 			expectedApps: 3,
-			check: func(t *testing.T, apps []*unstructured.Unstructured) {
+			check: func(t *testing.T, env *v1alpha1.Environment, apps []*unstructured.Unstructured) {
 				names := make(map[string]bool)
 				for _, app := range apps {
 					name := app.GetName()
@@ -121,7 +142,7 @@ func TestGenerate(t *testing.T) {
 				"worker": {Name: "worker", Tag: "v3.0.0", ChartPath: "charts/worker"},
 			},
 			expectedApps: 1,
-			check: func(t *testing.T, apps []*unstructured.Unstructured) {
+			check: func(t *testing.T, env *v1alpha1.Environment, apps []*unstructured.Unstructured) {
 				assert.Equal(t, "diverge-default-preview-mr-42-api", apps[0].GetName())
 			},
 		},
@@ -144,15 +165,36 @@ func TestGenerate(t *testing.T) {
 			wantErr:         "service config not found for \"missing\"",
 		},
 		{
-			name: "denied namespace",
+			name: "denied namespace - create mode",
 			env: &v1alpha1.Environment{
 				ObjectMeta: metav1.ObjectMeta{Name: "kube-system", Namespace: "default", UID: "uid"},
+				Spec: v1alpha1.EnvironmentSpec{
+					Deploy: v1alpha1.EnvironmentDeploy{Namespace: "create"},
+				},
 			},
 			changedServices: []string{"api"},
 			configs: map[string]ServiceConfig{
 				"api": {Name: "api", Tag: "v1", ChartPath: "charts/api"},
 			},
-			wantErr: "destination namespace \"diverge-kube-system\" is forbidden", // wait, only if namespace is exactly in denylist. Wait, if env.Name is "system" then namespace is "diverge-system" not in denylist. Wait, the denylist check is on destNamespace which is "diverge-" + env.Name. Wait! If the denylist is "kube-system", then to fail it destNamespace must be "kube-system". So env.Name must be "kube-system" but the prefix makes it "diverge-kube-system"! Wait, my code does: destNamespace := fmt.Sprintf("diverge-%s", env.Name); if deniedNamespaces[destNamespace]. Ah! So destNamespace would be "diverge-kube-system", which is NOT in the denylist unless the denylist has "diverge-kube-system"! Wait, no, the denylist has "kube-system". I need to fix `application.go` to check `env.Name` or I need to fix my denylist check in `application.go`!
+			wantErr: fmt.Sprintf("destination namespace %q is forbidden", (&v1alpha1.Environment{ObjectMeta: metav1.ObjectMeta{Name: "kube-system", Namespace: "default"}}).PreviewNamespace()),
+		},
+		{
+			name: "denied namespace - same mode allowed",
+			env: &v1alpha1.Environment{
+				ObjectMeta: metav1.ObjectMeta{Name: "kube-system", Namespace: "default", UID: "uid"},
+				Spec: v1alpha1.EnvironmentSpec{
+					Deploy: v1alpha1.EnvironmentDeploy{Namespace: "same"},
+				},
+			},
+			changedServices: []string{"api"},
+			configs: map[string]ServiceConfig{
+				"api": {Name: "api", Tag: "v1", ChartPath: "charts/api"},
+			},
+			expectedApps: 1,
+			check: func(t *testing.T, env *v1alpha1.Environment, apps []*unstructured.Unstructured) {
+				ns, _, _ := unstructured.NestedString(apps[0].Object, "spec", "destination", "namespace")
+				assert.Equal(t, "default", ns)
+			},
 		},
 	}
 
@@ -166,7 +208,7 @@ func TestGenerate(t *testing.T) {
 				require.NoError(t, err)
 				assert.Len(t, apps, tt.expectedApps)
 				if tt.check != nil {
-					tt.check(t, apps)
+					tt.check(t, tt.env, apps)
 				}
 			}
 		})
