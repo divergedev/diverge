@@ -51,7 +51,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	// 2. Handle deletion
-	if !env.ObjectMeta.DeletionTimestamp.IsZero() {
+	if !env.DeletionTimestamp.IsZero() {
 		return r.handleTeardown(ctx, &env)
 	}
 
