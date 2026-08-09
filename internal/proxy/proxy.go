@@ -11,6 +11,10 @@ import (
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
 
+// ResponseHeaderEnvironment is the HTTP response header that identifies which
+// preview environment served the request.
+const ResponseHeaderEnvironment = "X-Diverge-Environment"
+
 // Config holds proxy configuration
 type Config struct {
 	// BaseURL is the upstream URL (e.g., https://app.staging.example.com)
@@ -129,6 +133,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case string(v1alpha1.PhaseRunning):
 		r.Header.Set(s.config.HeaderKey, envInfo.Name)
+		w.Header().Set(ResponseHeaderEnvironment, envInfo.Name)
 		s.proxy.ServeHTTP(w, r)
 		return
 	default:
