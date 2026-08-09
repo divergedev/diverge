@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -12,6 +14,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/changeset"
 	"github.com/divergedev/diverge/internal/config"
 	"github.com/divergedev/diverge/internal/git"
 )
@@ -39,7 +42,7 @@ or branch name, unless overridden with --name.`,
 func runCreate(cmd *cobra.Command, _ []string) error {
 	// Load config
 	cfg, err := config.Load(configPath)
-	if err != nil && !os.IsNotExist(err) {
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
@@ -73,7 +76,10 @@ func runCreate(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Build the Environment CR
-	env := buildEnvironment(name, gitCtx, resolved, cfg)
+	env, err := buildEnvironment(name, gitCtx, resolved, cfg)
+	if err != nil {
+		return fmt.Errorf("failed to build environment: %w", err)
+	}
 
 	if dryRun {
 		return printDryRun(env)
@@ -97,14 +103,21 @@ func runCreate(cmd *cobra.Command, _ []string) error {
 }
 
 func generateEnvName(envType string, mr int, branch string) string {
+	var name string
 	if mr > 0 {
-		return fmt.Sprintf("%s-mr-%d", envType, mr)
+		name = fmt.Sprintf("%s-mr-%d", envType, mr)
+	} else {
+		slug := git.SlugifyBranch(branch)
+		name = fmt.Sprintf("%s-%s", envType, slug)
 	}
-	slug := git.SlugifyBranch(branch)
-	return fmt.Sprintf("%s-%s", envType, slug)
+	// K8s label values must be ≤63 characters
+	if len(name) > 63 {
+		name = strings.TrimRight(name[:63], "-")
+	}
+	return name
 }
 
-func buildEnvironment(name string, gitCtx *git.GitContext, resolved *config.ResolvedSettings, cfg *config.Config) *divergeiov1alpha1.Environment {
+func buildEnvironment(name string, gitCtx *git.GitContext, resolved *config.ResolvedSettings, cfg *config.Config) (*divergeiov1alpha1.Environment, error) {
 	env := &divergeiov1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -125,8 +138,9 @@ func buildEnvironment(name string, gitCtx *git.GitContext, resolved *config.Reso
 				Mode: resolved.Deploy.Mode,
 			},
 			Routing: divergeiov1alpha1.EnvironmentRouting{
-				Mode:      resolved.Routing.Mode,
-				HeaderKey: resolved.Routing.HeaderKey,
+				Mode:        resolved.Routing.Mode,
+				HeaderKey:   resolved.Routing.HeaderKey,
+				HeaderValue: name,
 			},
 			Database: divergeiov1alpha1.EnvironmentDatabase{
 				Mode:          resolved.Database.Mode,
@@ -139,9 +153,10 @@ func buildEnvironment(name string, gitCtx *git.GitContext, resolved *config.Reso
 	// Set TTL if configured
 	if resolved.Lifecycle.TTL != "" {
 		duration, err := parseDuration(resolved.Lifecycle.TTL)
-		if err == nil {
-			env.Spec.Lifecycle.TTL = duration
+		if err != nil {
+			return nil, fmt.Errorf("invalid TTL %q: %w", resolved.Lifecycle.TTL, err)
 		}
+		env.Spec.Lifecycle.TTL = duration
 	}
 
 	if resolved.Lifecycle.CleanupOnMerge != nil {
@@ -155,11 +170,25 @@ func buildEnvironment(name string, gitCtx *git.GitContext, resolved *config.Reso
 
 	// Detect changed services for delta mode
 	if resolved.Deploy.Mode == "delta" && cfg != nil {
-		var changedServices []string
-		for svcName := range cfg.Services {
-			changedServices = append(changedServices, svcName)
+		servicePaths := make(map[string][]string, len(cfg.Services))
+		for svcName, svc := range cfg.Services {
+			servicePaths[svcName] = svc.Paths
 		}
-		env.Spec.Deploy.ChangedServices = changedServices
+		detector := &changeset.GitChangeDetector{}
+		changed, err := detector.DetectChanges(context.TODO(), gitCtx.Project, gitCtx.Branch, "main", servicePaths)
+		if err != nil {
+			// Fall back to all services if detection fails
+			for svcName := range cfg.Services {
+				changed = append(changed, svcName)
+			}
+		}
+		if len(changed) == 0 {
+			// If detector returns empty (stub), include all services
+			for svcName := range cfg.Services {
+				changed = append(changed, svcName)
+			}
+		}
+		env.Spec.Deploy.ChangedServices = changed
 	}
 
 	// Set MR number in labels if available
@@ -167,7 +196,7 @@ func buildEnvironment(name string, gitCtx *git.GitContext, resolved *config.Reso
 		env.Labels["diverge.dev/mr"] = strconv.Itoa(mrNumber)
 	}
 
-	return env
+	return env, nil
 }
 
 func parseDuration(s string) (*metav1.Duration, error) {

@@ -3,15 +3,21 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+func projectRoot() string {
+	_, f, _, _ := runtime.Caller(0)
+	// internal/config/config_test.go → project root is ../../
+	return filepath.Join(filepath.Dir(f), "..", "..")
+}
+
 func TestLoadValidConfig(t *testing.T) {
-	// Need to point to the actual sample
-	path := "../../config/samples/diverge.yaml"
+	path := filepath.Join(projectRoot(), "config", "samples", "diverge.yaml")
 	c, err := Load(path)
 	require.NoError(t, err)
 

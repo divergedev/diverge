@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/divergedev/diverge/internal/config"
 	"github.com/divergedev/diverge/internal/git"
@@ -93,7 +94,8 @@ func TestBuildEnvironment(t *testing.T) {
 	namespace = "diverge-system"
 	mrNumber = 42
 
-	env := buildEnvironment("preview-mr-42", gitCtx, resolved, cfg)
+	env, err := buildEnvironment("preview-mr-42", gitCtx, resolved, cfg)
+	require.NoError(t, err)
 
 	// Verify metadata
 	assert.Equal(t, "preview-mr-42", env.Name)
@@ -115,6 +117,7 @@ func TestBuildEnvironment(t *testing.T) {
 	// Verify routing
 	assert.Equal(t, "header", env.Spec.Routing.Mode)
 	assert.Equal(t, "x-diverge-env", env.Spec.Routing.HeaderKey)
+	assert.Equal(t, "preview-mr-42", env.Spec.Routing.HeaderValue)
 	assert.Equal(t, "https://preview-mr-42.preview.example.com", env.Spec.Routing.ExternalURL)
 
 	// Verify database
@@ -142,7 +145,8 @@ func TestBuildEnvironmentNilConfig(t *testing.T) {
 	namespace = "default"
 	mrNumber = 0
 
-	env := buildEnvironment("staging-main", gitCtx, resolved, nil)
+	env, err := buildEnvironment("staging-main", gitCtx, resolved, nil)
+	require.NoError(t, err)
 
 	assert.Equal(t, "staging-main", env.Name)
 	assert.Equal(t, "full", env.Spec.Deploy.Mode)
@@ -178,9 +182,44 @@ func TestBuildEnvironmentLabelOverrides(t *testing.T) {
 	namespace = "preview"
 	mrNumber = 99
 
-	env := buildEnvironment("preview-mr-99", gitCtx, resolved, &config.Config{Version: "1"})
+	env, err := buildEnvironment("preview-mr-99", gitCtx, resolved, &config.Config{Version: "1"})
+	require.NoError(t, err)
 
 	assert.Equal(t, "full", env.Spec.Deploy.Mode)
 	assert.Equal(t, "fresh", env.Spec.Database.Mode)
 	assert.True(t, env.Spec.Lifecycle.CleanupOnMerge)
+}
+
+func TestBuildEnvironmentInvalidTTL(t *testing.T) {
+	gitCtx := &git.GitContext{
+		Provider: "github",
+		Project:  "org/repo",
+		Branch:   "main",
+	}
+
+	resolved := &config.ResolvedSettings{
+		EnvironmentSettings: config.EnvironmentSettings{
+			Deploy: config.DeploySettings{Mode: "full"},
+			Lifecycle: config.LifecycleSettings{
+				TTL: "72 hours", // invalid format
+			},
+		},
+	}
+
+	namespace = "default"
+	mrNumber = 0
+
+	_, err := buildEnvironment("test", gitCtx, resolved, nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid TTL")
+}
+
+func TestGenerateEnvNameTruncation(t *testing.T) {
+	// envType prefix + slug should be truncated to 63 chars
+	longBranch := "feat/this-is-a-very-long-branch-name-that-exceeds-the-kubernetes-label-limit"
+	name := generateEnvName("preview", 0, longBranch)
+	assert.LessOrEqual(t, len(name), 63)
+	assert.NotEmpty(t, name)
+	// Should not end with a hyphen
+	assert.NotEqual(t, '-', name[len(name)-1])
 }

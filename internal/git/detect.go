@@ -74,10 +74,17 @@ func ParseRemoteURL(rawURL string) (provider, project string, err error) {
 
 	path = strings.TrimSuffix(path, ".git")
 
-	if host == "github.com" {
+	switch host {
+	case "github.com":
 		provider = "github"
-	} else {
-		provider = "gitlab" // default for gitlab.com and self-hosted
+	case "gitlab.com":
+		provider = "gitlab"
+	case "bitbucket.org":
+		provider = "bitbucket"
+	default:
+		// Self-hosted instances: default to gitlab since it's the most
+		// common self-hosted Git platform. Users can override via config.
+		provider = "gitlab"
 	}
 
 	return provider, path, nil
