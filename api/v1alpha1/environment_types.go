@@ -36,7 +36,7 @@ type EnvironmentDeploy struct {
 // EnvironmentRouting defines the routing configuration
 type EnvironmentRouting struct {
 	// +kubebuilder:validation:Enum=header;namespace;subdomain
-	Mode        string `json:"mode,omitempty"` // header, namespace, subdomain
+	Mode string `json:"mode,omitempty"` // header, namespace, subdomain
 	// +kubebuilder:validation:Enum=istio;gateway
 	// +kubebuilder:default=gateway
 	Provider    string `json:"provider,omitempty"`

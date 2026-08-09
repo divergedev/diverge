@@ -28,7 +28,7 @@ func (g *ApplicationSetGenerator) GenerateApplicationSet(
 		if !ok {
 			return nil, fmt.Errorf("service config not found for %s", svcName)
 		}
-		
+
 		elements = append(elements, map[string]interface{}{
 			"service":   cfg.Name,
 			"image":     cfg.Tag,

@@ -13,7 +13,7 @@ func TestEnvironmentDeepCopy(t *testing.T) {
 			},
 		},
 	}
-	
+
 	copied := env.DeepCopy()
 	if copied.Spec.Source.Provider != env.Spec.Source.Provider {
 		t.Errorf("DeepCopy failed for Provider")

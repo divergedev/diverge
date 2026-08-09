@@ -5,10 +5,10 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
@@ -41,10 +41,10 @@ func TestGRPCRouter_Reconcile(t *testing.T) {
 	u.SetKind("GRPCRoute")
 	err = c.Get(context.Background(), client.ObjectKey{Name: "test-env-svc1", Namespace: "default"}, u)
 	assert.NoError(t, err)
-	
+
 	rules, _, _ := unstructured.NestedSlice(u.Object, "spec", "rules")
 	assert.Len(t, rules, 1)
-	
+
 	matches, _, _ := unstructured.NestedSlice(rules[0].(map[string]interface{}), "matches")
 	headers, _, _ := unstructured.NestedSlice(matches[0].(map[string]interface{}), "headers")
 	assert.Equal(t, "x-custom-env", headers[0].(map[string]interface{})["name"])

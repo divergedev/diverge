@@ -74,8 +74,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	envName := strings.TrimSuffix(host, "."+s.config.PreviewDomain)
-	if envName == host || envName == "" {
+	envName := extractEnvName(host, s.config.PreviewDomain)
+	if envName == "" {
 		http.Error(w, "Environment name not found in domain", http.StatusBadRequest)
 		return
 	}
@@ -106,4 +106,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		renderError(w, envInfo, "Unknown phase: "+envInfo.Phase)
 		return
 	}
+}
+
+func extractEnvName(host, previewDomain string) string {
+	envName := strings.TrimSuffix(host, "."+previewDomain)
+	if envName == host || envName == "" {
+		return ""
+	}
+	return envName
 }

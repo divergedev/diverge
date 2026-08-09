@@ -54,7 +54,7 @@ environments:
 		if err := os.WriteFile(yamlPath, []byte(content), 0644); err != nil {
 			return fmt.Errorf("failed to write %s: %w", yamlPath, err)
 		}
-		
+
 		fmt.Printf("Successfully created %s\n", yamlPath)
 		return nil
 	},

@@ -7,11 +7,17 @@ import (
 )
 
 func sanitizeMarkdown(s string) string {
+	s = strings.ReplaceAll(s, "\\|", "|")
+	s = strings.ReplaceAll(s, "\\`", "`")
+	s = strings.ReplaceAll(s, "&lt;", "<")
+	s = strings.ReplaceAll(s, "&gt;", ">")
+	s = strings.ReplaceAll(s, "@\u200b", "@")
+
 	s = strings.ReplaceAll(s, "|", "\\|")
 	s = strings.ReplaceAll(s, "`", "\\`")
 	s = strings.ReplaceAll(s, "<", "&lt;")
 	s = strings.ReplaceAll(s, ">", "&gt;")
-	s = strings.ReplaceAll(s, "@", "@\u200b") // zero-width space prevents mentions
+	s = strings.ReplaceAll(s, "@", "@\u200b")
 	return s
 }
 

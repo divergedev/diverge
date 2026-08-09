@@ -21,24 +21,44 @@ type DatabaseStatus struct {
 
 // SharedProvider provides a shared database connection
 type SharedProvider struct{}
-func (p *SharedProvider) Provision(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) { return &DatabaseStatus{}, nil }
+
+func (p *SharedProvider) Provision(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) {
+	return &DatabaseStatus{}, nil
+}
 func (p *SharedProvider) Teardown(ctx context.Context, env *v1alpha1.Environment) error { return nil }
-func (p *SharedProvider) Status(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) { return &DatabaseStatus{}, nil }
+func (p *SharedProvider) Status(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) {
+	return &DatabaseStatus{}, nil
+}
 
 // SchemaProvider creates a new logical schema within an existing database
 type SchemaProvider struct{}
-func (p *SchemaProvider) Provision(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) { return &DatabaseStatus{}, nil }
+
+func (p *SchemaProvider) Provision(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) {
+	return &DatabaseStatus{}, nil
+}
 func (p *SchemaProvider) Teardown(ctx context.Context, env *v1alpha1.Environment) error { return nil }
-func (p *SchemaProvider) Status(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) { return &DatabaseStatus{}, nil }
+func (p *SchemaProvider) Status(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) {
+	return &DatabaseStatus{}, nil
+}
 
 // FreshProvider provisions a completely new database instance
 type FreshProvider struct{}
-func (p *FreshProvider) Provision(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) { return &DatabaseStatus{}, nil }
+
+func (p *FreshProvider) Provision(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) {
+	return &DatabaseStatus{}, nil
+}
 func (p *FreshProvider) Teardown(ctx context.Context, env *v1alpha1.Environment) error { return nil }
-func (p *FreshProvider) Status(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) { return &DatabaseStatus{}, nil }
+func (p *FreshProvider) Status(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) {
+	return &DatabaseStatus{}, nil
+}
 
 // SnapshotProvider provisions a database from a snapshot
 type SnapshotProvider struct{}
-func (p *SnapshotProvider) Provision(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) { return &DatabaseStatus{}, nil }
+
+func (p *SnapshotProvider) Provision(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) {
+	return &DatabaseStatus{}, nil
+}
 func (p *SnapshotProvider) Teardown(ctx context.Context, env *v1alpha1.Environment) error { return nil }
-func (p *SnapshotProvider) Status(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) { return &DatabaseStatus{}, nil }
+func (p *SnapshotProvider) Status(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) {
+	return &DatabaseStatus{}, nil
+}

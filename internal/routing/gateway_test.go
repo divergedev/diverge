@@ -4,25 +4,26 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
 
-func TestGatewayRouterReconcile(t *testing.T) {
-	router := &GatewayRouter{}
+func TestGatewayRouter_Reconcile(t *testing.T) {
+	client := fake.NewClientBuilder().Build()
+	router := &GatewayRouter{Client: client}
+
 	env := &v1alpha1.Environment{}
-	
 	err := router.Reconcile(context.Background(), env)
-	if err != nil {
-		t.Errorf("Expected nil, got %v", err)
-	}
+	assert.NoError(t, err)
 }
 
-func TestGatewayRouterTeardown(t *testing.T) {
-	router := &GatewayRouter{}
+func TestGatewayRouter_Teardown(t *testing.T) {
+	client := fake.NewClientBuilder().Build()
+	router := &GatewayRouter{Client: client}
+
 	env := &v1alpha1.Environment{}
-	
 	err := router.Teardown(context.Background(), env)
-	if err != nil {
-		t.Errorf("Expected nil, got %v", err)
-	}
+	assert.NoError(t, err)
 }

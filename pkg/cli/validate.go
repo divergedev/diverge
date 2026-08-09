@@ -19,17 +19,17 @@ var validateCmd = &cobra.Command{
 		}
 
 		schemaLoader := gojsonschema.NewReferenceLoader("file://config/schema/diverge-config.schema.json")
-		
+
 		yamlData, err := os.ReadFile(yamlPath)
 		if err != nil {
 			return fmt.Errorf("failed to read %s: %w", yamlPath, err)
 		}
-		
+
 		jsonData, err := yaml.YAMLToJSON(yamlData)
 		if err != nil {
 			return fmt.Errorf("failed to convert YAML to JSON: %w", err)
 		}
-		
+
 		documentLoader := gojsonschema.NewBytesLoader(jsonData)
 
 		result, err := gojsonschema.Validate(schemaLoader, documentLoader)

@@ -76,7 +76,7 @@ func (r *GRPCRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment) e
 		existing := &unstructured.Unstructured{}
 		existing.SetAPIVersion("gateway.networking.k8s.io/v1")
 		existing.SetKind("GRPCRoute")
-		
+
 		err := r.client.Get(ctx, client.ObjectKey{Name: u.GetName(), Namespace: u.GetNamespace()}, existing)
 		if err != nil {
 			if client.IgnoreNotFound(err) != nil {
