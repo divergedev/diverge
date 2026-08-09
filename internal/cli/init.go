@@ -17,7 +17,7 @@ func newInitCmd(app *App) *cobra.Command {
 			if _, err := os.Stat(yamlPath); err == nil {
 				var resp string
 				cmd.Printf("%s already exists. Overwrite? [y/N]: ", yamlPath)
-				_, _ = fmt.Scanln(&resp)
+				_, _ = fmt.Fscanln(cmd.InOrStdin(), &resp)
 				if resp != "y" && resp != "Y" {
 					cmd.Println("Cancelled")
 					return nil

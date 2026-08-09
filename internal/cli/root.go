@@ -26,7 +26,8 @@ type App struct {
 	Commit     string
 	Date       string
 
-	Client client.Client // For testing
+	Client    client.Client         // For testing
+	Clientset *kubernetes.Clientset // For testing (logs needs CoreV1)
 }
 
 var lazyRootCmd *cobra.Command
@@ -113,7 +114,7 @@ func (app *App) ResolveNamespace() error {
 
 func (app *App) KubeClient() (client.Client, *kubernetes.Clientset, error) {
 	if app.Client != nil {
-		return app.Client, nil, nil
+		return app.Client, app.Clientset, nil
 	}
 
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()

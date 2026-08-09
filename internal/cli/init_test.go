@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -43,10 +44,7 @@ func TestInitWontOverwriteWithoutConfirm(t *testing.T) {
 	tmpDir := t.TempDir()
 	originalWD, err := os.Getwd()
 	require.NoError(t, err)
-	defer func() {
-		err := os.Chdir(originalWD)
-		require.NoError(t, err)
-	}()
+	t.Cleanup(func() { _ = os.Chdir(originalWD) })
 
 	err = os.Chdir(tmpDir)
 	require.NoError(t, err)
@@ -58,19 +56,8 @@ func TestInitWontOverwriteWithoutConfirm(t *testing.T) {
 	cmd := newInitCmd(app)
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
+	cmd.SetIn(strings.NewReader("n\n"))
 	cmd.SetArgs([]string{})
-
-	oldStdin := os.Stdin
-	defer func() { os.Stdin = oldStdin }()
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-	os.Stdin = r
-	go func() {
-		_, err := w.Write([]byte("n\n"))
-		require.NoError(t, err)
-		err = w.Close()
-		require.NoError(t, err)
-	}()
 
 	err = cmd.Execute()
 	require.NoError(t, err)
