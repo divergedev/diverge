@@ -80,6 +80,7 @@ func TestProxyRunningEnvironment(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "Proxied: mr-42", w.Body.String())
 	assert.Equal(t, "mr-42", w.Header().Get("X-Received-Env"))
+	assert.Equal(t, "mr-42", w.Header().Get(ResponseHeaderEnvironment))
 }
 
 func TestProxyDeployingEnvironment(t *testing.T) {
@@ -100,6 +101,7 @@ func TestProxyDeployingEnvironment(t *testing.T) {
 
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code) // renderLoading writes 503
 	assert.Contains(t, w.Body.String(), "mr-43")
+	assert.Nil(t, w.Header().Values(ResponseHeaderEnvironment))
 }
 
 func TestProxyNotFoundEnvironment(t *testing.T) {
@@ -115,6 +117,7 @@ func TestProxyNotFoundEnvironment(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
 	assert.Contains(t, w.Body.String(), "mr-44")
+	assert.Nil(t, w.Header().Values(ResponseHeaderEnvironment))
 }
 
 func TestProxyFailedEnvironment(t *testing.T) {
@@ -136,6 +139,7 @@ func TestProxyFailedEnvironment(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 	assert.Contains(t, w.Body.String(), "mr-45")
 	assert.Contains(t, w.Body.String(), "Deployment failed")
+	assert.Nil(t, w.Header().Values(ResponseHeaderEnvironment))
 }
 
 func TestProxyExtractEnvName(t *testing.T) {
