@@ -17,10 +17,12 @@ type Applicator interface {
 }
 
 // ServiceConfig describes a single service within a preview environment,
-// including its Helm chart path, values file, and container image.
+// including its source type (helm or kustomize), paths, and container image.
 type ServiceConfig struct {
 	Name       string
-	ChartPath  string
+	SourceType string // "helm" (default) | "kustomize"
+	ChartPath  string // helm: path to chart directory
+	Path       string // kustomize: path to overlay directory
 	ValuesFile string
 	Image      string
 	Tag        string
