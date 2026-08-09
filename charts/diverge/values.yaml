@@ -1,17 +1,40 @@
-image:
-  repository: divergedev/diverge
-  pullPolicy: IfNotPresent
-  tag: "latest"
-
 replicaCount: 1
 
-webhook:
-  port: 9443
+image:
+  repository: ghcr.io/divergedev/diverge
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+routingProvider: gateway  # gateway or istio
 
 resources:
   limits:
     cpu: 500m
-    memory: 128Mi
+    memory: 256Mi
   requests:
-    cpu: 10m
-    memory: 64Mi
+    cpu: 100m
+    memory: 128Mi
+
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: false
+    namespace: ""
+    interval: 30s
+
+webhook:
+  port: 9443
+  secretName: diverge-webhook-token
+
+serviceAccount:
+  create: true
+  name: diverge-controller
+  annotations: {}
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
