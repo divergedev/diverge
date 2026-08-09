@@ -11,14 +11,14 @@ services:
     helm:
       path: "charts/patient-api"
       values_file: "values-preview.yaml"
-      
+
   auth-service:
     paths:
       - "services/auth-service/**"
     image:
       repository: "registry.gitlab.com/invenero/engineering/patient-insights/auth-service"
       tag_template: "mr-{{.MR}}"
-      
+
   web-frontend:
     paths:
       - "apps/web-frontend/**"
@@ -39,6 +39,7 @@ services:
 defaults:
   deploy:
     mode: delta            # Only deploy changed services
+    namespace: same        # Deploy in the same namespace as CR
   routing:
     mode: header           # Use header-based routing against a baseline
     baseline_namespace: staging

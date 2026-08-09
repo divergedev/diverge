@@ -25,6 +25,7 @@ func TestLoadValidConfig(t *testing.T) {
 	assert.Len(t, c.Services, 4)
 	assert.NotNil(t, c.Services["patient-api"])
 	assert.Equal(t, "delta", c.Defaults.Deploy.Mode)
+	assert.Equal(t, "same", c.Defaults.Deploy.Namespace)
 	assert.Equal(t, "preview.patient-insights.example.com", c.Defaults.Routing.Domain)
 	assert.NotNil(t, c.Environments["preview"])
 	assert.Equal(t, "gitlab", c.Notifications.Provider)
@@ -61,12 +62,12 @@ func TestLoadInvalidYAML(t *testing.T) {
 func TestResolvePreviewDefaults(t *testing.T) {
 	c := &Config{
 		Defaults: EnvironmentSettings{
-			Deploy: DeploySettings{Mode: "delta"},
+			Deploy: DeploySettings{Mode: "delta", Namespace: "same"},
 		},
 		Environments: map[string]EnvironmentType{
 			"preview": {
 				EnvironmentSettings: EnvironmentSettings{
-					Deploy: DeploySettings{Mode: "full"},
+					Deploy: DeploySettings{Mode: "full", Namespace: "create"},
 				},
 			},
 		},
@@ -74,6 +75,7 @@ func TestResolvePreviewDefaults(t *testing.T) {
 
 	res := c.Resolve("preview", nil)
 	assert.Equal(t, "full", res.Deploy.Mode)
+	assert.Equal(t, "create", res.Deploy.Namespace)
 }
 
 func TestResolveLabelOverrides(t *testing.T) {

@@ -148,7 +148,8 @@ func buildEnvironment(name string, gitCtx *git.GitContext, resolved *config.Reso
 				MR:       mrNumber,
 			},
 			Deploy: divergeiov1alpha1.EnvironmentDeploy{
-				Mode: resolved.Deploy.Mode,
+				Mode:      resolved.Deploy.Mode,
+				Namespace: resolved.Deploy.Namespace,
 			},
 			Routing: divergeiov1alpha1.EnvironmentRouting{
 				Mode:        resolved.Routing.Mode,

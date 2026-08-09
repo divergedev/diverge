@@ -28,7 +28,10 @@ type EnvironmentSource struct {
 // EnvironmentDeploy defines the deployment configuration
 type EnvironmentDeploy struct {
 	// +kubebuilder:validation:Enum=delta;full
-	Mode            string   `json:"mode,omitempty"` // delta or full
+	Mode string `json:"mode,omitempty"` // delta or full
+	// +kubebuilder:validation:Enum=same;create
+	// +kubebuilder:default=same
+	Namespace       string   `json:"namespace,omitempty"` // same = deploy in CR's namespace, create = new diverge-* namespace
 	ChangedServices []string `json:"changedServices,omitempty"`
 	BaselineRef     string   `json:"baselineRef,omitempty"`
 }

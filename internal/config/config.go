@@ -40,7 +40,8 @@ type EnvironmentSettings struct {
 }
 
 type DeploySettings struct {
-	Mode string `yaml:"mode"` // delta | full
+	Mode      string `yaml:"mode"`      // delta | full
+	Namespace string `yaml:"namespace"` // same | create
 }
 
 type RoutingSettings struct {
@@ -128,6 +129,9 @@ func mergeSettings(dst, src *EnvironmentSettings) {
 	// Deploy
 	if src.Deploy.Mode != "" {
 		dst.Deploy.Mode = src.Deploy.Mode
+	}
+	if src.Deploy.Namespace != "" {
+		dst.Deploy.Namespace = src.Deploy.Namespace
 	}
 
 	// Routing

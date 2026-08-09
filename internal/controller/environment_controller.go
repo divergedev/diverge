@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
@@ -198,6 +200,17 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 			return ctrl.Result{}, fmt.Errorf("failed to teardown database: %w", err)
 		}
 
+		if env.Spec.Deploy.Namespace == "create" {
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: fmt.Sprintf("diverge-%s", env.Name),
+				},
+			}
+			if err := r.Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, fmt.Errorf("failed to delete namespace: %w", err)
+			}
+		}
+
 		controllerutil.RemoveFinalizer(env, environmentFinalizer)
 		if err := r.Update(ctx, env); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to remove finalizer: %w", err)
@@ -209,7 +222,23 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 }
 
 func (r *EnvironmentReconciler) ensureNamespace(ctx context.Context, env *divergeiov1alpha1.Environment) error {
-	// Stub
+	if env.Spec.Deploy.Namespace == "create" {
+		ns := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: fmt.Sprintf("diverge-%s", env.Name),
+				Labels: map[string]string{
+					"diverge.io/environment": env.Name,
+					"diverge.io/managed-by":  "diverge",
+				},
+			},
+		}
+		if err := r.Create(ctx, ns); err != nil {
+			if !apierrors.IsAlreadyExists(err) {
+				return fmt.Errorf("failed to create namespace: %w", err)
+			}
+		}
+	}
+	// "same" mode: namespace already exists (it's where the CR lives), nothing to do
 	return nil
 }
 
