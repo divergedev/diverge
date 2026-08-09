@@ -66,3 +66,34 @@ func TestInitWontOverwriteWithoutConfirm(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "existing content", string(content))
 }
+
+func TestInitOverwriteWithConfirm(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalWD, err := os.Getwd()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.Chdir(originalWD) })
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	err = os.WriteFile(".diverge.yaml", []byte("old content"), 0644)
+	require.NoError(t, err)
+
+	app := &App{}
+	cmd := newInitCmd(app)
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetIn(strings.NewReader("y\n"))
+	cmd.SetArgs([]string{})
+
+	err = cmd.Execute()
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(".diverge.yaml")
+	require.NoError(t, err)
+
+	yamlStr := string(content)
+	assert.NotEqual(t, "old content", yamlStr, "file should be overwritten")
+	assert.Contains(t, yamlStr, "version: \"1\"")
+	assert.Contains(t, buf.String(), "Successfully created")
+}
