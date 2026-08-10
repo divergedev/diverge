@@ -71,15 +71,30 @@ func (d *DirectDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) 
 			obj.SetOwnerReferences([]metav1.OwnerReference{ownerRef})
 		}
 
-		// Apply via Server-Side Apply
-		patch := client.Apply
-		opts := []client.PatchOption{
-			client.FieldOwner("diverge-direct-deployer"),
-			client.ForceOwnership,
-		}
-		if err := d.Client.Patch(ctx, obj, patch, opts...); err != nil {
-			return fmt.Errorf("failed to apply %s %s/%s: %w",
-				obj.GetKind(), obj.GetNamespace(), obj.GetName(), err)
+		// Apply via Server-Side Apply (create-or-patch)
+		existing := obj.DeepCopy()
+		err = d.Client.Get(ctx, client.ObjectKeyFromObject(obj), existing)
+		if err != nil {
+			if client.IgnoreNotFound(err) != nil {
+				return fmt.Errorf("failed to check existing %s %s/%s: %w",
+					obj.GetKind(), obj.GetNamespace(), obj.GetName(), err)
+			}
+			// Resource doesn't exist, create it
+			if err := d.Client.Create(ctx, obj); err != nil {
+				return fmt.Errorf("failed to create %s %s/%s: %w",
+					obj.GetKind(), obj.GetNamespace(), obj.GetName(), err)
+			}
+		} else {
+			// Resource exists, patch via SSA
+			patch := client.Apply
+			opts := []client.PatchOption{
+				client.FieldOwner("diverge-direct-deployer"),
+				client.ForceOwnership,
+			}
+			if err := d.Client.Patch(ctx, obj, patch, opts...); err != nil {
+				return fmt.Errorf("failed to apply %s %s/%s: %w",
+					obj.GetKind(), obj.GetNamespace(), obj.GetName(), err)
+			}
 		}
 
 		logger.V(1).Info("Applied resource",

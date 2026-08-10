@@ -27,3 +27,4 @@ result
 
 # OS
 .DS_Store
+.go/

@@ -36,7 +36,7 @@ func (f *URLFetcher) Fetch(ctx context.Context, env *v1alpha1.Environment) ([]un
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch manifests from %s: %w", env.Spec.Deploy.Manifests.URL, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status %d fetching manifests from %s", resp.StatusCode, env.Spec.Deploy.Manifests.URL)
