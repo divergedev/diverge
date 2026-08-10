@@ -16,13 +16,15 @@ var tmpl = template.Must(template.ParseFS(templatesFS, "templates/*.html"))
 type NotFoundData struct {
 	EnvName    string
 	ActiveEnvs []EnvironmentInfo
+	HideList   bool
 }
 
-func renderNotFound(w http.ResponseWriter, envName string, activeEnvs []EnvironmentInfo) {
+func renderNotFound(w http.ResponseWriter, envName string, activeEnvs []EnvironmentInfo, hideList bool) {
 	w.WriteHeader(http.StatusNotFound)
 	data := NotFoundData{
 		EnvName:    envName,
 		ActiveEnvs: activeEnvs,
+		HideList:   hideList,
 	}
 	_ = tmpl.ExecuteTemplate(w, "404.html", data)
 }

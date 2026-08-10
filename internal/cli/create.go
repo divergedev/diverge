@@ -108,7 +108,7 @@ func runCreate(cmd *cobra.Command, _ []string, app *App, configPath, envName, en
 		return fmt.Errorf("failed to create environment: %w", err)
 	}
 
-	fmt.Printf("✅ Environment %q created in namespace %q\n", env.Name, env.Namespace)
+	fmt.Printf("✅ Environment requested. Run 'diverge status %s' to monitor deployment progress.\n", env.Name)
 	if resolved.Routing.Domain != "" {
 		fmt.Printf("🌐 URL: https://%s.%s\n", name, resolved.Routing.Domain)
 	}

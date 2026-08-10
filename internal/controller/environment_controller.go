@@ -7,6 +7,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
@@ -67,8 +68,11 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			return ctrl.Result{}, fmt.Errorf("failed to add finalizer: %w", err)
 		}
 		if r.Notifier != nil {
-			if err := r.Notifier.PostEnvironmentCreated(ctx, &env); err != nil {
+			tCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			if err := r.Notifier.PostEnvironmentCreated(tCtx, &env); err != nil {
 				logger.Error(err, "failed to post environment created notification")
+				r.Recorder.Event(&env, "Warning", "NotificationFailed", err.Error())
 			}
 		}
 		r.Recorder.Event(&env, "Normal", "Created", "Environment created")
@@ -80,60 +84,123 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// 5. Ensure namespace
 	if err := r.ensureNamespace(ctx, &env); err != nil {
-		setCondition(&env, "NamespaceReady", metav1.ConditionFalse, "NamespaceProvisionFailed", err.Error())
+		meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+			Type:    "NamespaceReady",
+			Status:  metav1.ConditionFalse,
+			Reason:  "NamespaceProvisionFailed",
+			Message: err.Error(),
+		})
 		if r.Notifier != nil {
-			if notifyErr := r.Notifier.PostEnvironmentFailed(ctx, &env, err.Error()); notifyErr != nil {
+			tCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			if notifyErr := r.Notifier.PostEnvironmentFailed(tCtx, &env, err.Error()); notifyErr != nil {
 				logger.Error(notifyErr, "failed to post environment failed notification")
+				r.Recorder.Event(&env, "Warning", "NotificationFailed", notifyErr.Error())
 			}
 		}
 		return r.updateStatusWithRequeue(ctx, &env, err, 0)
 	}
-	setCondition(&env, "NamespaceReady", metav1.ConditionTrue, "NamespaceProvisioned", "Namespace is ready")
+	meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+		Type:    "NamespaceReady",
+		Status:  metav1.ConditionTrue,
+		Reason:  "NamespaceProvisioned",
+		Message: "Namespace is ready",
+	})
 
 	// 6. Ensure database
-	dbStatus, err := r.DatabaseProvider.Provision(ctx, &env)
+	tCtxDB, cancelDB := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelDB()
+	dbStatus, err := r.DatabaseProvider.Provision(tCtxDB, &env)
 	if err != nil {
-		setCondition(&env, "DatabaseReady", metav1.ConditionFalse, "DatabaseProvisionFailed", err.Error())
+		meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+			Type:    "DatabaseReady",
+			Status:  metav1.ConditionFalse,
+			Reason:  "DatabaseProvisionFailed",
+			Message: err.Error(),
+		})
 		if r.Notifier != nil {
-			if notifyErr := r.Notifier.PostEnvironmentFailed(ctx, &env, err.Error()); notifyErr != nil {
+			tCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			if notifyErr := r.Notifier.PostEnvironmentFailed(tCtx, &env, err.Error()); notifyErr != nil {
 				logger.Error(notifyErr, "failed to post environment failed notification")
+				r.Recorder.Event(&env, "Warning", "NotificationFailed", notifyErr.Error())
 			}
 		}
 		return r.updateStatusWithRequeue(ctx, &env, err, 0)
 	}
 	if dbStatus != nil && dbStatus.Ready {
-		setCondition(&env, "DatabaseReady", metav1.ConditionTrue, "DatabaseProvisioned", "Database is ready")
+		meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+			Type:    "DatabaseReady",
+			Status:  metav1.ConditionTrue,
+			Reason:  "DatabaseProvisioned",
+			Message: "Database is ready",
+		})
 		env.Status.DatabaseStatus = dbStatus.Message
 	} else {
-		setCondition(&env, "DatabaseReady", metav1.ConditionFalse, "DatabaseProvisioning", "Database is provisioning")
+		meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+			Type:    "DatabaseReady",
+			Status:  metav1.ConditionFalse,
+			Reason:  "DatabaseProvisioning",
+			Message: "Database is provisioning",
+		})
 	}
 
 	// 7. Ensure routing
-	if err := r.Router.Reconcile(ctx, &env); err != nil {
-		setCondition(&env, "RoutingReady", metav1.ConditionFalse, "RoutingProvisionFailed", err.Error())
+	tCtxR, cancelR := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelR()
+	if err := r.Router.Reconcile(tCtxR, &env); err != nil {
+		meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+			Type:    "RoutingReady",
+			Status:  metav1.ConditionFalse,
+			Reason:  "RoutingProvisionFailed",
+			Message: err.Error(),
+		})
 		if r.Notifier != nil {
-			if notifyErr := r.Notifier.PostEnvironmentFailed(ctx, &env, err.Error()); notifyErr != nil {
+			tCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			if notifyErr := r.Notifier.PostEnvironmentFailed(tCtx, &env, err.Error()); notifyErr != nil {
 				logger.Error(notifyErr, "failed to post environment failed notification")
+				r.Recorder.Event(&env, "Warning", "NotificationFailed", notifyErr.Error())
 			}
 		}
 		return r.updateStatusWithRequeue(ctx, &env, err, 0)
 	}
-	setCondition(&env, "RoutingReady", metav1.ConditionTrue, "RoutingProvisioned", "Routing is ready")
+	meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+		Type:    "RoutingReady",
+		Status:  metav1.ConditionTrue,
+		Reason:  "RoutingProvisioned",
+		Message: "Routing is ready",
+	})
 	env.Status.URL = r.Router.GetExternalURL(&env)
 
 	// 8. Deploy services
 	if r.Deployer != nil {
-		if err := r.Deployer.Deploy(ctx, &env); err != nil {
-			setCondition(&env, "ServicesReady", metav1.ConditionFalse, "DeployFailed", err.Error())
+		tCtxD, cancelD := context.WithTimeout(ctx, 30*time.Second)
+		defer cancelD()
+		if err := r.Deployer.Deploy(tCtxD, &env); err != nil {
+			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+				Type:    "ServicesReady",
+				Status:  metav1.ConditionFalse,
+				Reason:  "DeployFailed",
+				Message: err.Error(),
+			})
 			if r.Notifier != nil {
-				if notifyErr := r.Notifier.PostEnvironmentFailed(ctx, &env, err.Error()); notifyErr != nil {
+				tCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+				defer cancel()
+				if notifyErr := r.Notifier.PostEnvironmentFailed(tCtx, &env, err.Error()); notifyErr != nil {
 					logger.Error(notifyErr, "failed to post environment failed notification")
+					r.Recorder.Event(&env, "Warning", "NotificationFailed", notifyErr.Error())
 				}
 			}
 			return r.updateStatusWithRequeue(ctx, &env, err, 0)
 		}
 	}
-	setCondition(&env, "ServicesReady", metav1.ConditionTrue, "ServicesDeployed", "Services deployed successfully")
+	meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+		Type:    "ServicesReady",
+		Status:  metav1.ConditionTrue,
+		Reason:  "ServicesDeployed",
+		Message: "Services deployed successfully",
+	})
 
 	// 10. Derive phase
 	newPhase := derivePhase(env.Status.Conditions)
@@ -165,12 +232,18 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if r.Notifier != nil && oldPhase != newPhase {
 		switch newPhase {
 		case divergeiov1alpha1.PhaseRunning:
-			if err := r.Notifier.PostEnvironmentReady(ctx, &env); err != nil {
+			tCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			if err := r.Notifier.PostEnvironmentReady(tCtx, &env); err != nil {
 				logger.Error(err, "failed to post environment ready notification")
+				r.Recorder.Event(&env, "Warning", "NotificationFailed", err.Error())
 			}
 		case divergeiov1alpha1.PhaseFailed:
-			if err := r.Notifier.PostEnvironmentFailed(ctx, &env, "Environment failed to deploy"); err != nil {
+			tCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			if err := r.Notifier.PostEnvironmentFailed(tCtx, &env, "Environment failed to deploy"); err != nil {
 				logger.Error(err, "failed to post environment failed notification")
+				r.Recorder.Event(&env, "Warning", "NotificationFailed", err.Error())
 			}
 		}
 	}
@@ -184,22 +257,31 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		r.Recorder.Event(env, "Normal", "Terminating", "Teardown started")
 
 		if r.Notifier != nil {
-			if err := r.Notifier.PostEnvironmentTeardown(ctx, env); err != nil {
+			tCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			if err := r.Notifier.PostEnvironmentTeardown(tCtx, env); err != nil {
 				log.FromContext(ctx).Error(err, "failed to post environment teardown notification")
+				r.Recorder.Event(env, "Warning", "NotificationFailed", err.Error())
 			}
 		}
 
 		if r.Deployer != nil {
-			if err := r.Deployer.Teardown(ctx, env); err != nil {
+			tCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			if err := r.Deployer.Teardown(tCtx, env); err != nil {
 				return ctrl.Result{}, fmt.Errorf("failed to teardown deployments: %w", err)
 			}
 		}
 
-		if err := r.Router.Teardown(ctx, env); err != nil {
+		tCtxR, cancelR := context.WithTimeout(ctx, 30*time.Second)
+		defer cancelR()
+		if err := r.Router.Teardown(tCtxR, env); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to teardown routing: %w", err)
 		}
 
-		if err := r.DatabaseProvider.Teardown(ctx, env); err != nil {
+		tCtxDB, cancelDB := context.WithTimeout(ctx, 30*time.Second)
+		defer cancelDB()
+		if err := r.DatabaseProvider.Teardown(tCtxDB, env); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to teardown database: %w", err)
 		}
 
@@ -209,7 +291,9 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		// have resources-finalizer.argocd.argoproj.io.
 		if env.Spec.Deploy.Namespace == "create" {
 			if r.Deployer != nil {
-				status, err := r.Deployer.Status(ctx, env)
+				tCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+				defer cancel()
+				status, err := r.Deployer.Status(tCtx, env)
 				if err != nil {
 					return ctrl.Result{}, fmt.Errorf("failed to check deployer status during teardown: %w", err)
 				}
@@ -273,27 +357,6 @@ func (r *EnvironmentReconciler) updateStatusWithRequeue(ctx context.Context, env
 		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
 	return ctrl.Result{}, nil
-}
-
-func setCondition(env *divergeiov1alpha1.Environment, condType string, status metav1.ConditionStatus, reason, message string) {
-	for i, c := range env.Status.Conditions {
-		if c.Type == condType {
-			if c.Status != status || c.Reason != reason || c.Message != message {
-				env.Status.Conditions[i].Status = status
-				env.Status.Conditions[i].Reason = reason
-				env.Status.Conditions[i].Message = message
-				env.Status.Conditions[i].LastTransitionTime = metav1.Now()
-			}
-			return
-		}
-	}
-	env.Status.Conditions = append(env.Status.Conditions, metav1.Condition{
-		Type:               condType,
-		Status:             status,
-		Reason:             reason,
-		Message:            message,
-		LastTransitionTime: metav1.Now(),
-	})
 }
 
 func derivePhase(conditions []metav1.Condition) divergeiov1alpha1.EnvironmentPhase {

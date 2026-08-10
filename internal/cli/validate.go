@@ -14,14 +14,15 @@ import (
 var schemaFS embed.FS
 
 func newValidateCmd(app *App) *cobra.Command {
+	var configPath string
+
 	cmd := &cobra.Command{
 
 		Use:   "validate",
 		Short: "Validate .diverge.yaml against the JSON Schema",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			yamlPath := ".diverge.yaml"
-			if _, err := os.Stat(yamlPath); os.IsNotExist(err) {
-				return fmt.Errorf("no %s found in current directory", yamlPath)
+			if _, err := os.Stat(configPath); os.IsNotExist(err) {
+				return fmt.Errorf("no %s found in current directory", configPath)
 			}
 
 			schemaBytes, err := schemaFS.ReadFile("schema/diverge-config.schema.json")
@@ -31,9 +32,9 @@ func newValidateCmd(app *App) *cobra.Command {
 
 			schemaLoader := gojsonschema.NewBytesLoader(schemaBytes)
 
-			yamlData, err := os.ReadFile(yamlPath)
+			yamlData, err := os.ReadFile(configPath)
 			if err != nil {
-				return fmt.Errorf("failed to read %s: %w", yamlPath, err)
+				return fmt.Errorf("failed to read %s: %w", configPath, err)
 			}
 
 			jsonData, err := yaml.YAMLToJSON(yamlData)
@@ -61,6 +62,8 @@ func newValidateCmd(app *App) *cobra.Command {
 			return fmt.Errorf("config validation failed with %d error(s)", len(result.Errors()))
 		},
 	}
+
+	cmd.Flags().StringVarP(&configPath, "config", "c", ".diverge.yaml", "Path to config file")
 
 	return cmd
 }

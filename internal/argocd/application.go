@@ -2,6 +2,7 @@ package argocd
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"regexp"
@@ -21,8 +22,9 @@ func sanitizeName(name string, maxLen int) string {
 	if len(name) <= maxLen {
 		return name
 	}
-	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(name)))[:8]
-	return name[:maxLen-9] + "-" + hash
+	hash := sha256.Sum256([]byte(name))
+	hashStr := hex.EncodeToString(hash[:])[:8]
+	return name[:maxLen-9] + "-" + hashStr
 }
 
 // Generator creates Argo CD Application resources for environments.
