@@ -21,6 +21,7 @@ import (
 	"github.com/divergedev/diverge/internal/changeset"
 	"github.com/divergedev/diverge/internal/database"
 	"github.com/divergedev/diverge/internal/deployer"
+	"github.com/divergedev/diverge/internal/metrics"
 	"github.com/divergedev/diverge/internal/notifier"
 	"github.com/divergedev/diverge/internal/routing"
 )
@@ -57,6 +58,26 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err := r.Get(ctx, req.NamespacedName, &env); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+
+	// Track reconcile outcome
+	defer func() {
+		// Update active environments gauge
+		metrics.EnvironmentsActive.WithLabelValues(
+			string(env.Status.Phase),
+			env.Spec.Source.Provider,
+		).Set(1) // Will be corrected by periodic list
+
+		// Update TTL gauge if applicable
+		if env.Status.ExpiresAt != nil {
+			remaining := time.Until(env.Status.ExpiresAt.Time).Seconds()
+			if remaining < 0 {
+				remaining = 0
+			}
+			metrics.EnvironmentTTLRemaining.WithLabelValues(
+				env.Name, env.Namespace,
+			).Set(remaining)
+		}
+	}()
 
 	// Capture a pre-mutation baseline for status patch diffs
 	statusBase := env.DeepCopy()
@@ -221,6 +242,12 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	newPhase := derivePhase(env.Status.Conditions)
 	oldPhase := env.Status.Phase
 	env.Status.Phase = newPhase
+
+	if oldPhase != newPhase {
+		metrics.EnvironmentTransitions.WithLabelValues(
+			string(oldPhase), string(newPhase), env.Spec.Source.Provider,
+		).Inc()
+	}
 
 	if env.Status.Phase == divergeiov1alpha1.PhaseRunning {
 		r.Recorder.Event(&env, "Normal", "Running", "Environment is up and running")
@@ -388,14 +415,18 @@ func (r *EnvironmentReconciler) ensureNamespace(ctx context.Context, env *diverg
 func (r *EnvironmentReconciler) updateStatusWithRequeue(ctx context.Context, env *divergeiov1alpha1.Environment, statusBase *divergeiov1alpha1.Environment, err error, requeueAfter time.Duration) (ctrl.Result, error) {
 	patch := client.MergeFrom(statusBase)
 	if updateErr := r.Status().Patch(ctx, env, patch); updateErr != nil {
+		metrics.ReconcileOutcomes.WithLabelValues("error").Inc()
 		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
 	}
 	if err != nil {
+		metrics.ReconcileOutcomes.WithLabelValues("error").Inc()
 		return ctrl.Result{}, err
 	}
 	if requeueAfter > 0 {
+		metrics.ReconcileOutcomes.WithLabelValues("success").Inc()
 		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
+	metrics.ReconcileOutcomes.WithLabelValues("success").Inc()
 	return ctrl.Result{}, nil
 }
 

@@ -24,6 +24,7 @@ import (
 	"github.com/divergedev/diverge/internal/controller"
 	"github.com/divergedev/diverge/internal/database"
 	"github.com/divergedev/diverge/internal/deployer"
+	_ "github.com/divergedev/diverge/internal/metrics"
 	"github.com/divergedev/diverge/internal/notifier"
 	"github.com/divergedev/diverge/internal/routing"
 	"github.com/divergedev/diverge/internal/webhook"
@@ -102,6 +103,9 @@ func main() {
 		routerImpl = &routing.GatewayRouter{Client: mgr.GetClient()}
 	}
 
+	// Wrap with metrics
+	routerImpl = &routing.InstrumentedRouter{Inner: routerImpl, Mode: routingProvider}
+
 	var dbProviderImpl database.DatabaseProvider
 	switch databaseProvider {
 	case "shared", "":
@@ -125,6 +129,9 @@ func main() {
 		setupLog.Error(fmt.Errorf("unsupported database provider: %q", databaseProvider), "invalid --database-provider")
 		os.Exit(1)
 	}
+
+	// Wrap with metrics
+	dbProviderImpl = &database.InstrumentedDatabaseProvider{Inner: dbProviderImpl, Mode: databaseProvider}
 	detectorImpl := &changeset.GitChangeDetector{}
 
 	var notifierImpl notifier.Notifier
@@ -169,6 +176,9 @@ func main() {
 		setupLog.Error(fmt.Errorf("unsupported deploy provider: %q", deployProvider), "invalid --deploy-provider")
 		os.Exit(1)
 	}
+
+	// Wrap with metrics
+	deployerImpl = &deployer.InstrumentedDeployer{Inner: deployerImpl, Name: deployProvider}
 
 	if err = (&controller.EnvironmentReconciler{
 		Client:           mgr.GetClient(),
