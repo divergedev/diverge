@@ -3,7 +3,9 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -68,6 +70,9 @@ func main() {
 	flag.StringVar(&argoRepoURL, "argo-repo-url", "", "Repository URL for Argo CD Application sources")
 	flag.StringVar(&notifierProvider, "notifier-provider", "noop", "Notification provider (gitlab|github|noop)")
 	flag.StringVar(&webhookSecretToken, "webhook-secret-token", "", "The secret token for authenticating webhooks (prefer DIVERGE_WEBHOOK_SECRET env var).")
+
+	var manifestSourceType string
+	flag.StringVar(&manifestSourceType, "manifest-source-type", "configmap", "Manifest source type for direct deployer (configmap|url)")
 
 	opts := zap.Options{
 		Development: true,
@@ -180,6 +185,22 @@ func main() {
 			Project:           "default",
 		}
 		deployerImpl = deployer.NewArgoDeployer(argoClient, argoGenerator, nil)
+	case "direct":
+		var fetcher deployer.ManifestFetcher
+		switch manifestSourceType {
+		case "url":
+			manifestToken := os.Getenv("DIVERGE_MANIFEST_TOKEN")
+			fetcher = &deployer.URLFetcher{
+				HTTPClient: &http.Client{Timeout: 60 * time.Second},
+				AuthToken:  manifestToken,
+			}
+		default:
+			fetcher = &deployer.ConfigMapFetcher{Client: mgr.GetClient()}
+		}
+		deployerImpl = &deployer.DirectDeployer{
+			Client:  mgr.GetClient(),
+			Fetcher: fetcher,
+		}
 	case "noop", "":
 		deployerImpl = &deployer.NoopDeployer{}
 	default:
