@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strconv"
 	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
@@ -41,22 +40,11 @@ func (g *GitLabNotifier) getProjectAndMR(env *v1alpha1.Environment) (string, int
 }
 
 func (g *GitLabNotifier) getCommentID(env *v1alpha1.Environment) int {
-	if env.Annotations == nil {
-		return 0
-	}
-	idStr := env.Annotations["diverge.io/gitlab-mr-comment-id"]
-	if idStr == "" {
-		return 0
-	}
-	id, _ := strconv.Atoi(idStr)
-	return id
+	return env.Status.CommentID
 }
 
 func (g *GitLabNotifier) setCommentID(env *v1alpha1.Environment, id int) {
-	if env.Annotations == nil {
-		env.Annotations = make(map[string]string)
-	}
-	env.Annotations["diverge.io/gitlab-mr-comment-id"] = strconv.Itoa(id)
+	env.Status.CommentID = id
 }
 
 func (g *GitLabNotifier) postOrUpdateComment(ctx context.Context, env *v1alpha1.Environment, body string) error {

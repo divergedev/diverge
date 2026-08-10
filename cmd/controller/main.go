@@ -106,6 +106,19 @@ func main() {
 	switch databaseProvider {
 	case "shared", "":
 		dbProviderImpl = &database.SharedProvider{}
+	case "schema":
+		// Read database configuration for schema provider (Executor will be implemented later)
+		_ = os.Getenv("DIVERGE_DB_HOST")
+		_ = os.Getenv("DIVERGE_DB_PORT")
+		_ = os.Getenv("DIVERGE_DB_USER")
+		_ = os.Getenv("DIVERGE_DB_PASSWORD")
+		_ = os.Getenv("DIVERGE_DB_NAME")
+		_ = os.Getenv("DIVERGE_DB_SSLMODE")
+
+		dbProviderImpl = &database.SchemaProvider{
+			Executor: nil,
+			Client:   mgr.GetClient(),
+		}
 	case "noop":
 		dbProviderImpl = &database.NoopProvider{}
 	default:
@@ -115,6 +128,7 @@ func main() {
 	detectorImpl := &changeset.GitChangeDetector{}
 
 	var notifierImpl notifier.Notifier
+	var statusReporterImpl notifier.StatusReporter
 	switch notifierProvider {
 	case "gitlab":
 		if notifierToken == "" {
@@ -122,14 +136,17 @@ func main() {
 			os.Exit(1)
 		}
 		notifierImpl = notifier.NewGitLabNotifier("", notifierToken)
+		statusReporterImpl = notifier.NewGitLabStatusReporter("", notifierToken)
 	case "github":
 		if notifierToken == "" {
 			setupLog.Error(fmt.Errorf("DIVERGE_NOTIFIER_TOKEN is required for --notifier-provider=github"), "missing token")
 			os.Exit(1)
 		}
 		notifierImpl = notifier.NewGitHubNotifier("", notifierToken)
+		statusReporterImpl = notifier.NewGitHubStatusReporter("", notifierToken)
 	case "noop", "":
 		notifierImpl = &notifier.NoopNotifier{}
+		statusReporterImpl = &notifier.NoopStatusReporter{}
 	default:
 		setupLog.Error(fmt.Errorf("unsupported notifier provider: %q", notifierProvider), "invalid --notifier-provider")
 		os.Exit(1)
@@ -161,6 +178,7 @@ func main() {
 		DatabaseProvider: dbProviderImpl,
 		ChangeDetector:   detectorImpl,
 		Notifier:         notifierImpl,
+		StatusReporter:   statusReporterImpl,
 		Deployer:         deployerImpl,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Environment")

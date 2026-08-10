@@ -42,7 +42,7 @@ func TestGitLabNotifierPostComment(t *testing.T) {
 
 	err := notifier.postOrUpdateComment(context.Background(), env, "test message")
 	assert.NoError(t, err)
-	assert.Equal(t, "12345", env.Annotations["diverge.io/gitlab-mr-comment-id"])
+	assert.Equal(t, 12345, env.Status.CommentID)
 }
 
 func TestGitLabNotifierUpdateComment(t *testing.T) {
@@ -100,7 +100,7 @@ func TestGitHubNotifierPostComment(t *testing.T) {
 
 	err := notifier.postOrUpdateComment(context.Background(), env, "test message")
 	assert.NoError(t, err)
-	assert.Equal(t, "54321", env.Annotations["diverge.io/github-pr-comment-id"])
+	assert.Equal(t, 54321, env.Status.CommentID)
 }
 
 func TestNoopNotifier(t *testing.T) {
@@ -123,11 +123,13 @@ func TestCommentIDAnnotation(t *testing.T) {
 	g.setCommentID(env, 123)
 	assert.Equal(t, 123, g.getCommentID(env))
 
+	// Both notifiers now share env.Status.CommentID (migrated from annotations)
 	gh := &GitHubNotifier{}
-	assert.Equal(t, 0, gh.getCommentID(env))
+	assert.Equal(t, 123, gh.getCommentID(env), "GitHub should see the same CommentID set by GitLab")
 
 	gh.setCommentID(env, 456)
 	assert.Equal(t, 456, gh.getCommentID(env))
+	assert.Equal(t, 456, g.getCommentID(env), "GitLab should see the CommentID set by GitHub")
 }
 
 func TestGitHubNotifierProjectPathSplit(t *testing.T) {
