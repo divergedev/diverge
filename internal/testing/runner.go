@@ -22,6 +22,6 @@ type TestRunner interface {
 	Trigger(ctx context.Context, env *v1alpha1.Environment) (runID string, err error)
 
 	// Status polls for the current state of a previously triggered test run.
-	// Returns nil result if the run is still in progress.
+	// Returns a TestResult with State=TestStateRunning while the run is in progress.
 	Status(ctx context.Context, env *v1alpha1.Environment, runID string) (*TestResult, error)
 }

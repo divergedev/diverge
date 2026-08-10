@@ -285,28 +285,6 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				logger.Error(err, "failed to post environment ready notification")
 				r.Recorder.Event(&env, "Warning", "NotificationFailed", err.Error())
 			}
-
-			// Trigger tests if configured
-			if r.TestRunner != nil && env.Spec.Testing != nil && env.Spec.Testing.Enabled {
-				tCtxT, cancelT := context.WithTimeout(ctx, 30*time.Second)
-				defer cancelT()
-				runID, err := r.TestRunner.Trigger(tCtxT, &env)
-				if err != nil {
-					logger.Error(err, "failed to trigger tests")
-					r.Recorder.Event(&env, "Warning", "TestTriggerFailed", err.Error())
-				} else {
-					now := metav1.Now()
-					env.Status.TestStatus = &divergeiov1alpha1.TestStatus{
-						State:     divergeiov1alpha1.TestStatePending,
-						RunID:     runID,
-						StartedAt: &now,
-					}
-					r.Recorder.Event(&env, "Normal", "TestsTriggered", "Test run triggered")
-					if r.StatusReporter != nil {
-						_ = r.StatusReporter.PostCommitStatus(ctx, &env, "pending", "Tests running...")
-					}
-				}
-			}
 		case divergeiov1alpha1.PhaseFailed:
 			if r.StatusReporter != nil {
 				if err := r.StatusReporter.PostCommitStatus(ctx, &env, "failed", "Preview environment failed"); err != nil {
@@ -318,6 +296,30 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			if err := r.Notifier.PostEnvironmentFailed(tCtx, &env, "Environment failed to deploy"); err != nil {
 				logger.Error(err, "failed to post environment failed notification")
 				r.Recorder.Event(&env, "Warning", "NotificationFailed", err.Error())
+			}
+		}
+	}
+
+	// Trigger tests independently of notifier (CR1: notifier may be noop)
+	if oldPhase != newPhase && newPhase == divergeiov1alpha1.PhaseRunning {
+		if r.TestRunner != nil && env.Spec.Testing != nil && env.Spec.Testing.Enabled {
+			tCtxT, cancelT := context.WithTimeout(ctx, 30*time.Second)
+			defer cancelT()
+			runID, err := r.TestRunner.Trigger(tCtxT, &env)
+			if err != nil {
+				logger.Error(err, "failed to trigger tests")
+				r.Recorder.Event(&env, "Warning", "TestTriggerFailed", err.Error())
+			} else {
+				now := metav1.Now()
+				env.Status.TestStatus = &divergeiov1alpha1.TestStatus{
+					State:     divergeiov1alpha1.TestStatePending,
+					RunID:     runID,
+					StartedAt: &now,
+				}
+				r.Recorder.Event(&env, "Normal", "TestsTriggered", "Test run triggered")
+				if r.StatusReporter != nil {
+					_ = r.StatusReporter.PostCommitStatus(ctx, &env, "pending", "Tests running...")
+				}
 			}
 		}
 	}

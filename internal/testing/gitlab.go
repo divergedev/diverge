@@ -1,6 +1,7 @@
 package testing
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -55,7 +56,7 @@ func (r *GitLabPipelineRunner) Trigger(ctx context.Context, env *v1alpha1.Enviro
 		return "", fmt.Errorf("failed to marshal pipeline payload: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, strings.NewReader(string(body)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("failed to create trigger request: %w", err)
 	}
@@ -92,7 +93,7 @@ func (r *GitLabPipelineRunner) Status(ctx context.Context, env *v1alpha1.Environ
 	apiURL := fmt.Sprintf("%s/api/v4/projects/%s/pipelines/%s",
 		strings.TrimRight(r.BaseURL, "/"),
 		url.PathEscape(project),
-		runID,
+		url.PathEscape(runID),
 	)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)

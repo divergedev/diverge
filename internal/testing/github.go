@@ -1,6 +1,7 @@
 package testing
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -57,7 +58,7 @@ func (r *GitHubActionsRunner) Trigger(ctx context.Context, env *v1alpha1.Environ
 		return "", fmt.Errorf("failed to marshal dispatch payload: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, strings.NewReader(string(body)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("failed to create dispatch request: %w", err)
 	}
