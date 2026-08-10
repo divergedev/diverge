@@ -67,8 +67,9 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			metrics.ReconcileOutcomes.WithLabelValues("success").Inc()
 		}
 
-		// Update TTL gauge if applicable
-		if env.Status.ExpiresAt != nil {
+		// Update TTL gauge if applicable.
+		// Skip on deletion path — handleTeardown already deleted the series.
+		if env.DeletionTimestamp.IsZero() && env.Status.ExpiresAt != nil {
 			remaining := time.Until(env.Status.ExpiresAt.Time).Seconds()
 			if remaining < 0 {
 				remaining = 0
@@ -250,6 +251,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	// 11. Check TTL expiry and set timestamps
+	var requeueAfter time.Duration
 	if env.Spec.Lifecycle.TTL != nil && env.Status.CreatedAt != nil {
 		expiryTime := env.Status.CreatedAt.Add(env.Spec.Lifecycle.TTL.Duration)
 		env.Status.ExpiresAt = &metav1.Time{Time: expiryTime}
@@ -261,7 +263,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			return ctrl.Result{}, nil
 		}
 		// C1: Requeue when TTL expires so the controller wakes up to delete
-		return r.updateStatusWithRequeue(ctx, &env, statusBase, nil, time.Until(expiryTime))
+		requeueAfter = time.Until(expiryTime)
 	} else if env.Status.CreatedAt == nil {
 		now := metav1.Now()
 		env.Status.CreatedAt = &now
@@ -296,8 +298,8 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 	}
 
-	// 12. Update status
-	res, err := r.updateStatusWithRequeue(ctx, &env, statusBase, nil, 0)
+	// 12. Update status (requeueAfter is non-zero when TTL is active)
+	res, err := r.updateStatusWithRequeue(ctx, &env, statusBase, nil, requeueAfter)
 	if err == nil && oldPhase != newPhase {
 		metrics.EnvironmentTransitions.WithLabelValues(
 			string(oldPhase), string(newPhase), env.Spec.Source.Provider,
@@ -318,13 +320,6 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *divergeiov1alpha1.Environment) (ctrl.Result, error) {
 	// Clean up per-environment TTL gauge to prevent cardinality leak
 	metrics.EnvironmentTTLRemaining.DeleteLabelValues(env.Name, env.Namespace)
-
-	// Decrement active environments gauge for the current phase
-	if env.Status.Phase != "" {
-		metrics.EnvironmentsActive.WithLabelValues(
-			string(env.Status.Phase), env.Spec.Source.Provider,
-		).Dec()
-	}
 
 	if controllerutil.ContainsFinalizer(env, environmentFinalizer) {
 		r.Recorder.Event(env, "Normal", "Terminating", "Teardown started")
@@ -394,6 +389,15 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		controllerutil.RemoveFinalizer(env, environmentFinalizer)
 		if err := r.Update(ctx, env); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to remove finalizer: %w", err)
+		}
+
+		// Decrement active environments gauge after successful finalizer
+		// removal — this is idempotent because the finalizer is gone,
+		// so subsequent reconciles skip this block entirely.
+		if env.Status.Phase != "" {
+			metrics.EnvironmentsActive.WithLabelValues(
+				string(env.Status.Phase), env.Spec.Source.Provider,
+			).Dec()
 		}
 
 		r.Recorder.Event(env, "Normal", "Terminated", "Teardown complete")
