@@ -70,16 +70,10 @@ func (g *GitHubNotifier) postOrUpdateComment(ctx context.Context, env *v1alpha1.
 		return err
 	}
 
-	// H2: Split owner/repo and escape each segment independently so the
-	// separator remains unencoded while preventing path traversal.
-	parts := strings.SplitN(project, "/", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return fmt.Errorf("invalid project format %q: expected owner/repo", project)
+	escapedProject, err := escapeProjectPath(project)
+	if err != nil {
+		return err
 	}
-	if parts[0] == "." || parts[0] == ".." || parts[1] == "." || parts[1] == ".." {
-		return fmt.Errorf("invalid project format %q: path traversal not allowed", project)
-	}
-	escapedProject := url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1])
 
 	commentID := g.getCommentID(env)
 
@@ -170,4 +164,19 @@ func (g *GitHubNotifier) PostEnvironmentTeardown(ctx context.Context, env *v1alp
 // UpdateEnvironmentStatus is a no-op for GitHub; status is conveyed via comments.
 func (g *GitHubNotifier) UpdateEnvironmentStatus(ctx context.Context, env *v1alpha1.Environment) error {
 	return nil
+}
+
+// escapeProjectPath splits an "owner/repo" project string, validates both
+// segments, and returns a URL-safe path with each segment independently escaped.
+// H2: Prevents API path traversal by rejecting "." and ".." segments and
+// encoding special characters within each segment.
+func escapeProjectPath(project string) (string, error) {
+	parts := strings.SplitN(project, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", fmt.Errorf("invalid project format %q: expected owner/repo", project)
+	}
+	if parts[0] == "." || parts[0] == ".." || parts[1] == "." || parts[1] == ".." {
+		return "", fmt.Errorf("invalid project format %q: path traversal not allowed", project)
+	}
+	return url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1]), nil
 }
