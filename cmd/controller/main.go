@@ -103,6 +103,11 @@ func main() {
 		routerImpl = &routing.GatewayRouter{Client: mgr.GetClient()}
 	}
 
+	// Normalize label for metrics
+	if routingProvider != "istio" {
+		routingProvider = "gateway"
+	}
+
 	// Wrap with metrics
 	routerImpl = &routing.InstrumentedRouter{Inner: routerImpl, Mode: routingProvider}
 
@@ -128,6 +133,11 @@ func main() {
 	default:
 		setupLog.Error(fmt.Errorf("unsupported database provider: %q", databaseProvider), "invalid --database-provider")
 		os.Exit(1)
+	}
+
+	// Normalize label for metrics
+	if databaseProvider == "" {
+		databaseProvider = "shared"
 	}
 
 	// Wrap with metrics
@@ -175,6 +185,11 @@ func main() {
 	default:
 		setupLog.Error(fmt.Errorf("unsupported deploy provider: %q", deployProvider), "invalid --deploy-provider")
 		os.Exit(1)
+	}
+
+	// Normalize label for metrics
+	if deployProvider == "" {
+		deployProvider = "noop"
 	}
 
 	// Wrap with metrics

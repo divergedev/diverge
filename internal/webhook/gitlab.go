@@ -75,7 +75,7 @@ func (h *GitLabWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	action = payload.ObjectAttributes.Action
+	action = normalizeGitLabAction(payload.ObjectAttributes.Action)
 
 	logger.Info("Received GitLab MR event", "mr", payload.ObjectAttributes.IID, "action", payload.ObjectAttributes.Action)
 
@@ -83,4 +83,15 @@ func (h *GitLabWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	// Read labels from MR to determine deploy mode and DB strategy
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// normalizeGitLabAction maps webhook actions to a bounded set of known values
+// to prevent unbounded Prometheus label cardinality.
+func normalizeGitLabAction(action string) string {
+	switch action {
+	case "open", "reopen", "update", "merge", "close", "approved", "unapproved":
+		return action
+	default:
+		return "other"
+	}
 }

@@ -51,7 +51,7 @@ type EnvironmentReconciler struct {
 // +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=argoproj.io,resources=applications,verbs=get;list;watch;create;update;patch;delete
 
-func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, retErr error) {
 	logger := log.FromContext(ctx)
 
 	var env divergeiov1alpha1.Environment
@@ -59,13 +59,13 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Track reconcile outcome
+	// Track reconcile outcome — single defer covers all return paths
 	defer func() {
-		// Update active environments gauge
-		metrics.EnvironmentsActive.WithLabelValues(
-			string(env.Status.Phase),
-			env.Spec.Source.Provider,
-		).Set(1) // Will be corrected by periodic list
+		if retErr != nil {
+			metrics.ReconcileOutcomes.WithLabelValues("error").Inc()
+		} else {
+			metrics.ReconcileOutcomes.WithLabelValues("success").Inc()
+		}
 
 		// Update TTL gauge if applicable
 		if env.Status.ExpiresAt != nil {
@@ -243,11 +243,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	oldPhase := env.Status.Phase
 	env.Status.Phase = newPhase
 
-	if oldPhase != newPhase {
-		metrics.EnvironmentTransitions.WithLabelValues(
-			string(oldPhase), string(newPhase), env.Spec.Source.Provider,
-		).Inc()
-	}
+	// Note: transition counter is recorded after successful status persist below
 
 	if env.Status.Phase == divergeiov1alpha1.PhaseRunning {
 		r.Recorder.Event(&env, "Normal", "Running", "Environment is up and running")
@@ -301,10 +297,35 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	// 12. Update status
-	return r.updateStatusWithRequeue(ctx, &env, statusBase, nil, 0)
+	res, err := r.updateStatusWithRequeue(ctx, &env, statusBase, nil, 0)
+	if err == nil && oldPhase != newPhase {
+		metrics.EnvironmentTransitions.WithLabelValues(
+			string(oldPhase), string(newPhase), env.Spec.Source.Provider,
+		).Inc()
+		// Update active environments gauge: decrement old phase, increment new
+		if oldPhase != "" {
+			metrics.EnvironmentsActive.WithLabelValues(
+				string(oldPhase), env.Spec.Source.Provider,
+			).Dec()
+		}
+		metrics.EnvironmentsActive.WithLabelValues(
+			string(newPhase), env.Spec.Source.Provider,
+		).Inc()
+	}
+	return res, err
 }
 
 func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *divergeiov1alpha1.Environment) (ctrl.Result, error) {
+	// Clean up per-environment TTL gauge to prevent cardinality leak
+	metrics.EnvironmentTTLRemaining.DeleteLabelValues(env.Name, env.Namespace)
+
+	// Decrement active environments gauge for the current phase
+	if env.Status.Phase != "" {
+		metrics.EnvironmentsActive.WithLabelValues(
+			string(env.Status.Phase), env.Spec.Source.Provider,
+		).Dec()
+	}
+
 	if controllerutil.ContainsFinalizer(env, environmentFinalizer) {
 		r.Recorder.Event(env, "Normal", "Terminating", "Teardown started")
 
@@ -415,18 +436,14 @@ func (r *EnvironmentReconciler) ensureNamespace(ctx context.Context, env *diverg
 func (r *EnvironmentReconciler) updateStatusWithRequeue(ctx context.Context, env *divergeiov1alpha1.Environment, statusBase *divergeiov1alpha1.Environment, err error, requeueAfter time.Duration) (ctrl.Result, error) {
 	patch := client.MergeFrom(statusBase)
 	if updateErr := r.Status().Patch(ctx, env, patch); updateErr != nil {
-		metrics.ReconcileOutcomes.WithLabelValues("error").Inc()
 		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
 	}
 	if err != nil {
-		metrics.ReconcileOutcomes.WithLabelValues("error").Inc()
 		return ctrl.Result{}, err
 	}
 	if requeueAfter > 0 {
-		metrics.ReconcileOutcomes.WithLabelValues("success").Inc()
 		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
-	metrics.ReconcileOutcomes.WithLabelValues("success").Inc()
 	return ctrl.Result{}, nil
 }
 

@@ -1,3 +1,6 @@
+// Package metrics defines and registers Prometheus metrics for all Diverge
+// subsystems. Metrics use the "diverge_" prefix and are registered with
+// controller-runtime's default registry (exposed on :8080/metrics).
 package metrics
 
 import (
