@@ -48,11 +48,11 @@ func main() {
 	var webhookPort int
 	var routingProvider string
 	var deployProvider string
+	var databaseProvider string
 	var argoNamespace string
 	var webhookSecretToken string
 	var argoRepoURL string
 	var notifierProvider string
-	var notifierToken string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -62,17 +62,23 @@ func main() {
 	flag.IntVar(&webhookPort, "webhook-port", 9443, "The port the webhook server binds to.")
 	flag.StringVar(&routingProvider, "routing-provider", "gateway", "The routing provider to use (istio|gateway).")
 	flag.StringVar(&deployProvider, "deploy-provider", "noop", "Deployment provider (argocd|noop)")
+	flag.StringVar(&databaseProvider, "database-provider", "shared", "Database provider (shared|noop)")
 	flag.StringVar(&argoNamespace, "argo-namespace", "argocd", "Namespace where Argo CD is installed")
 	flag.StringVar(&argoRepoURL, "argo-repo-url", "", "Repository URL for Argo CD Application sources")
 	flag.StringVar(&notifierProvider, "notifier-provider", "noop", "Notification provider (gitlab|github|noop)")
-	flag.StringVar(&notifierToken, "notifier-token", "", "API token for the notification provider")
-	flag.StringVar(&webhookSecretToken, "webhook-secret-token", "", "The secret token for authenticating webhooks.")
+	flag.StringVar(&webhookSecretToken, "webhook-secret-token", "", "The secret token for authenticating webhooks (prefer DIVERGE_WEBHOOK_SECRET env var).")
 
 	opts := zap.Options{
 		Development: true,
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
+
+	// C2: Read secrets from environment variables (take precedence over flags)
+	notifierToken := os.Getenv("DIVERGE_NOTIFIER_TOKEN")
+	if envSecret := os.Getenv("DIVERGE_WEBHOOK_SECRET"); envSecret != "" {
+		webhookSecretToken = envSecret
+	}
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
@@ -96,15 +102,32 @@ func main() {
 		routerImpl = &routing.GatewayRouter{Client: mgr.GetClient()}
 	}
 
-	dbProviderImpl := &database.SharedProvider{}
+	var dbProviderImpl database.DatabaseProvider
+	switch databaseProvider {
+	case "shared", "":
+		dbProviderImpl = &database.SharedProvider{}
+	case "noop":
+		dbProviderImpl = &database.NoopProvider{}
+	default:
+		setupLog.Error(fmt.Errorf("unsupported database provider: %q", databaseProvider), "invalid --database-provider")
+		os.Exit(1)
+	}
 	detectorImpl := &changeset.GitChangeDetector{}
 
 	var notifierImpl notifier.Notifier
 	switch notifierProvider {
 	case "gitlab":
-		notifierImpl = &notifier.GitLabNotifier{Token: notifierToken}
+		if notifierToken == "" {
+			setupLog.Error(fmt.Errorf("DIVERGE_NOTIFIER_TOKEN is required for --notifier-provider=gitlab"), "missing token")
+			os.Exit(1)
+		}
+		notifierImpl = notifier.NewGitLabNotifier("", notifierToken)
 	case "github":
-		notifierImpl = &notifier.GitHubNotifier{Token: notifierToken}
+		if notifierToken == "" {
+			setupLog.Error(fmt.Errorf("DIVERGE_NOTIFIER_TOKEN is required for --notifier-provider=github"), "missing token")
+			os.Exit(1)
+		}
+		notifierImpl = notifier.NewGitHubNotifier("", notifierToken)
 	case "noop", "":
 		notifierImpl = &notifier.NoopNotifier{}
 	default:

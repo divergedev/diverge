@@ -4,6 +4,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httputil"
@@ -17,6 +18,9 @@ import (
 // preview environment served the request.
 const ResponseHeaderEnvironment = "X-Diverge-Environment"
 
+// ErrEnvironmentNotFound is returned when an environment cannot be found.
+var ErrEnvironmentNotFound = errors.New("environment not found")
+
 // Config holds proxy configuration
 type Config struct {
 	// BaseURL is the upstream URL (e.g., https://app.staging.example.com)
@@ -27,6 +31,8 @@ type Config struct {
 	PreviewDomain string
 	// Port to listen on
 	Port int
+	// HideEnvironmentList hides active environments on 404
+	HideEnvironmentList bool
 }
 
 // Server is the Magic URL reverse proxy server
@@ -128,9 +134,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	envInfo, err := s.envLister.GetEnvironment(r.Context(), envName)
 	if err != nil {
-		if err.Error() == "environment not found" {
+		if errors.Is(err, ErrEnvironmentNotFound) {
 			envs, _ := s.envLister.ListEnvironments(r.Context())
-			renderNotFound(w, envName, envs)
+			renderNotFound(w, envName, envs, s.config.HideEnvironmentList)
 			return
 		}
 		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)

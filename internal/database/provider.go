@@ -62,3 +62,14 @@ func (p *SnapshotProvider) Teardown(ctx context.Context, env *v1alpha1.Environme
 func (p *SnapshotProvider) Status(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) {
 	return &DatabaseStatus{}, nil
 }
+
+// NoopProvider is a dummy provider that does nothing
+type NoopProvider struct{}
+
+func (p *NoopProvider) Provision(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) {
+	return &DatabaseStatus{Ready: true, Message: "Noop provider"}, nil
+}
+func (p *NoopProvider) Teardown(ctx context.Context, env *v1alpha1.Environment) error { return nil }
+func (p *NoopProvider) Status(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) {
+	return &DatabaseStatus{Ready: true, Message: "Noop provider"}, nil
+}

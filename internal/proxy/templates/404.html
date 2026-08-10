@@ -17,6 +17,7 @@ li:last-child { border-bottom: none; }
 	<h1>Environment Not Found</h1>
 	<p>The preview environment <strong>{{.EnvName}}</strong> does not exist or has expired.</p>
 	
+	{{if not .HideList}}
 	{{if .ActiveEnvs}}
 	<h2>Active Environments</h2>
 	<ul>
@@ -26,6 +27,7 @@ li:last-child { border-bottom: none; }
 	</ul>
 	{{else}}
 	<p>There are no active preview environments at this time.</p>
+	{{end}}
 	{{end}}
 </div>
 </body>

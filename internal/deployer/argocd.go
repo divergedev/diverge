@@ -45,3 +45,8 @@ func (d *ArgoDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) er
 func (d *ArgoDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
 	return d.client.DeleteApplicationsForEnvironment(ctx, env.Name, env.Namespace)
 }
+
+// Status returns the sync status of ArgoCD Applications for this environment.
+func (d *ArgoDeployer) Status(ctx context.Context, env *v1alpha1.Environment) ([]argocd.ApplicationStatus, error) {
+	return d.client.GetSyncStatus(ctx, env.Name, env.Namespace)
+}
