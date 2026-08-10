@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"errors"
 	"fmt"
 	"regexp"
@@ -38,6 +39,27 @@ type SQLExecutor interface {
 
 type Row interface {
 	Scan(dest ...any) error
+}
+
+type PgExecutor struct {
+	db *sql.DB
+}
+
+func NewPgExecutor(db *sql.DB) *PgExecutor {
+	return &PgExecutor{db: db}
+}
+
+func (p *PgExecutor) ExecContext(ctx context.Context, query string, args ...any) error {
+	_, err := p.db.ExecContext(ctx, query, args...)
+	return err
+}
+
+func (p *PgExecutor) QueryRowContext(ctx context.Context, query string, args ...any) Row {
+	return p.db.QueryRowContext(ctx, query, args...)
+}
+
+func (p *PgExecutor) Close() error {
+	return p.db.Close()
 }
 
 // SchemaName generates a sanitized PostgreSQL schema name for an environment.
@@ -179,7 +201,10 @@ func (p *SchemaProvider) Status(ctx context.Context, env *v1alpha1.Environment) 
 		var name string
 		err := p.Executor.QueryRowContext(ctx, "SELECT schema_name FROM information_schema.schemata WHERE schema_name = $1", schemaName).Scan(&name)
 		if err != nil {
-			return &DatabaseStatus{Ready: false, Message: "Schema not found", SchemaName: schemaName}, nil
+			if errors.Is(err, sql.ErrNoRows) {
+				return &DatabaseStatus{Ready: false, Message: "schema not found"}, nil
+			}
+			return &DatabaseStatus{}, fmt.Errorf("checking schema status: %w", err)
 		}
 	}
 

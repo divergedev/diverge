@@ -40,6 +40,9 @@ func (g *GitHubStatusReporter) PostCommitStatus(ctx context.Context, env *v1alph
 	if sha == "" {
 		return nil
 	}
+	if err := validateSHA(sha); err != nil {
+		return err
+	}
 
 	// Map states
 	// GitHub uses pending/success/failure/error

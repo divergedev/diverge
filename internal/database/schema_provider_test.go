@@ -2,12 +2,13 @@ package database
 
 import (
 	"context"
-	"errors"
+	"database/sql"
 	"testing"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -72,7 +73,7 @@ func TestSchemaName(t *testing.T) {
 			if tt.wantError {
 				assert.Error(t, err)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Regexp(t, "^[a-z][a-z0-9_]{0,62}$", got)
 			}
 		})
@@ -106,7 +107,8 @@ func TestSchemaProvider_Provision(t *testing.T) {
 
 	status, err := provider.Provision(ctx, env)
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	require.NotNil(t, status)
 	assert.True(t, status.Ready)
 	assert.Equal(t, schemaName, status.SchemaName)
 	assert.Equal(t, schemaName, status.Message)
@@ -117,7 +119,7 @@ func TestSchemaProvider_Provision(t *testing.T) {
 	// check secret created
 	secret := &corev1.Secret{}
 	err = fakeClient.Get(ctx, client.ObjectKey{Name: status.ConnectionSecret, Namespace: env.PreviewNamespace()}, secret)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 }
 
 func TestSchemaProvider_Teardown(t *testing.T) {
@@ -141,7 +143,7 @@ func TestSchemaProvider_Teardown(t *testing.T) {
 	mockExec.On("ExecContext", ctx, "DROP SCHEMA IF EXISTS "+schemaName+" CASCADE", mock.Anything).Return(nil)
 
 	err := provider.Teardown(ctx, env)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	mockExec.AssertExpectations(t)
 }
 
@@ -169,7 +171,8 @@ func TestSchemaProvider_Status(t *testing.T) {
 	})
 
 	status, err := provider.Status(ctx, env)
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	require.NotNil(t, status)
 	assert.True(t, status.Ready)
 	assert.Equal(t, schemaName, status.SchemaName)
 }
@@ -192,9 +195,10 @@ func TestSchemaProvider_StatusNotFound(t *testing.T) {
 	mockRowObj := new(mockRow)
 	mockExec.On("QueryRowContext", ctx, "SELECT schema_name FROM information_schema.schemata WHERE schema_name = $1", []any{schemaName}).Return(mockRowObj)
 
-	mockRowObj.On("Scan", mock.Anything).Return(errors.New("not found"))
+	mockRowObj.On("Scan", mock.Anything).Return(sql.ErrNoRows)
 
 	status, err := provider.Status(ctx, env)
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	require.NotNil(t, status)
 	assert.False(t, status.Ready)
 }

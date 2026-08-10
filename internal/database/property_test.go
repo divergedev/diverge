@@ -1,19 +1,18 @@
 package database
 
 import (
-	"regexp"
-	"strings"
 	"testing"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/stretchr/testify/assert"
+	"hegel.dev/go/hegel"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"pgregory.net/rapid"
 )
 
 func TestSchemaNameIsDNSSafe(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		name := rapid.String().Draw(t, "name")
-		ns := rapid.String().Draw(t, "ns")
+	hegel.Test(t, func(ht *hegel.T) {
+		name := hegel.Draw(ht, hegel.Text())
+		ns := hegel.Draw(ht, hegel.Text())
 
 		env := &v1alpha1.Environment{
 			ObjectMeta: metav1.ObjectMeta{
@@ -24,17 +23,15 @@ func TestSchemaNameIsDNSSafe(t *testing.T) {
 
 		schema, err := SchemaName(env)
 		if err == nil {
-			if !regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`).MatchString(schema) {
-				t.Fatalf("schema name %q does not match requirements", schema)
-			}
+			assert.Regexp(ht, "^[a-z][a-z0-9_]{0,62}$", schema, "schema name should match DNS requirements")
 		}
 	})
 }
 
 func TestSchemaNameIsInjectionSafe(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		name := rapid.String().Draw(t, "name")
-		ns := rapid.String().Draw(t, "ns")
+	hegel.Test(t, func(ht *hegel.T) {
+		name := hegel.Draw(ht, hegel.Text())
+		ns := hegel.Draw(ht, hegel.Text())
 
 		env := &v1alpha1.Environment{
 			ObjectMeta: metav1.ObjectMeta{
@@ -47,9 +44,7 @@ func TestSchemaNameIsInjectionSafe(t *testing.T) {
 		if err == nil {
 			unsafeChars := []string{";", "'", "--", "/*", "*/", "\"", "`"}
 			for _, char := range unsafeChars {
-				if strings.Contains(schema, char) {
-					t.Fatalf("schema name %q contains unsafe character %q", schema, char)
-				}
+				assert.NotContains(ht, schema, char, "schema name contains unsafe character")
 			}
 		}
 	})

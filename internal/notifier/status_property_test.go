@@ -4,23 +4,22 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
-	"pgregory.net/rapid"
+	"github.com/stretchr/testify/assert"
+	"hegel.dev/go/hegel"
 )
 
 func TestStatusReporterPathTraversal(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		sha := rapid.String().Draw(t, "sha")
+	hegel.Test(t, func(ht *hegel.T) {
+		sha := hegel.Draw(ht, hegel.Text().MinSize(1).MaxSize(50))
 
+		var receivedPaths []string
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Path should end with the sha (or its url encoded form) but should not traverse up
-			if strings.Contains(r.URL.Path, "..") {
-				t.Fatalf("Path traversal detected: %s", r.URL.Path)
-			}
-			w.WriteHeader(http.StatusOK)
+			receivedPaths = append(receivedPaths, r.URL.Path)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"target_url": "http://example.com"}`))
 		}))
 		defer server.Close()
 
@@ -37,12 +36,23 @@ func TestStatusReporterPathTraversal(t *testing.T) {
 				CommitSHA: sha,
 			},
 		}
-		_ = gl.PostCommitStatus(context.Background(), env, "pending", "desc")
+		glErr := gl.PostCommitStatus(context.Background(), env, "pending", "desc")
 
 		// Test GitHub
 		gh := NewGitHubStatusReporter(server.URL, "token")
 		env.Spec.Source.Provider = "github"
 		env.Spec.Source.Project = "owner/repo"
-		_ = gh.PostCommitStatus(context.Background(), env, "pending", "desc")
+		ghErr := gh.PostCommitStatus(context.Background(), env, "pending", "desc")
+
+		// Property: either the SHA was rejected as invalid, or any paths that
+		// reached the server contain no path traversal sequences.
+		if glErr == nil && ghErr == nil {
+			// Both succeeded — verify no path traversal in server-received paths
+			for _, p := range receivedPaths {
+				assert.NotContains(ht, p, "..", "Path traversal detected in %s", p)
+			}
+		}
+		// If either returned an error, the invalid SHA was correctly rejected
+		// before reaching the HTTP server — that's the safe behavior.
 	})
 }

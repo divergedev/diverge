@@ -37,6 +37,9 @@ func (g *GitLabStatusReporter) PostCommitStatus(ctx context.Context, env *v1alph
 	if sha == "" {
 		return nil
 	}
+	if err := validateSHA(sha); err != nil {
+		return err
+	}
 
 	// Reusing GitLabNotifier's getProjectAndMR for URL escaping logic
 	notifier := &GitLabNotifier{}

@@ -29,7 +29,7 @@ func TestGitLabStatusReporter(t *testing.T) {
 				if r.Method != http.MethodPost {
 					t.Errorf("Expected POST, got %s", r.Method)
 				}
-				if r.URL.Path != "/api/v4/projects/my/project/statuses/mysha" {
+				if r.URL.Path != "/api/v4/projects/my/project/statuses/abc123def456" {
 					t.Errorf("Unexpected path %s (RawPath: %s)", r.URL.Path, r.URL.RawPath)
 				}
 				var payload map[string]string
@@ -52,7 +52,7 @@ func TestGitLabStatusReporter(t *testing.T) {
 					},
 				},
 				Status: v1alpha1.EnvironmentStatus{
-					CommitSHA: "mysha",
+					CommitSHA: "abc123def456",
 					URL:       "http://preview.url",
 				},
 			}
@@ -85,7 +85,7 @@ func TestGitHubStatusReporter(t *testing.T) {
 				if r.Method != http.MethodPost {
 					t.Errorf("Expected POST, got %s", r.Method)
 				}
-				if r.URL.Path != "/repos/owner/repo/statuses/mysha" {
+				if r.URL.Path != "/repos/owner/repo/statuses/abc123def456" {
 					t.Errorf("Unexpected path %s", r.URL.Path)
 				}
 				var payload map[string]string
@@ -108,7 +108,7 @@ func TestGitHubStatusReporter(t *testing.T) {
 					},
 				},
 				Status: v1alpha1.EnvironmentStatus{
-					CommitSHA: "mysha",
+					CommitSHA: "abc123def456",
 					URL:       "http://preview.url",
 				},
 			}

@@ -66,6 +66,11 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return r.handleTeardown(ctx, &env)
 	}
 
+	// Copy CommitSHA from spec to status early
+	if env.Spec.Source.CommitSHA != "" && env.Status.CommitSHA == "" {
+		env.Status.CommitSHA = env.Spec.Source.CommitSHA
+	}
+
 	// 3. Add finalizer
 	if !controllerutil.ContainsFinalizer(&env, environmentFinalizer) {
 		controllerutil.AddFinalizer(&env, environmentFinalizer)
@@ -91,10 +96,6 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// 4. Set ObservedGeneration
 	env.Status.ObservedGeneration = env.Generation
-
-	if env.Status.CommitSHA == "" && env.Spec.Source.CommitSHA != "" {
-		env.Status.CommitSHA = env.Spec.Source.CommitSHA
-	}
 
 	// 5. Ensure namespace
 	if err := r.ensureNamespace(ctx, &env); err != nil {
