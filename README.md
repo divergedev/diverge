@@ -20,7 +20,14 @@ Documentation: [https://divergedev.com](https://divergedev.com)
 *   **Header-Based Routing**: Leverages Istio and the Diverge Proxy to route traffic seamlessly using HTTP headers.
 *   **Configurable DB Modes**: Options for shared, schema, snapshot, or fresh databases for your environments.
 *   **MR-Triggered Lifecycle**: Environments spin up when a Merge Request opens and tear down upon merge/close.
-*   **Argo CD Integration**: Direct `Application` CR creation for GitOps deployment sync.
+*   **Argo CD Integration**: Direct `Application` CR creation for GitOps deployment sync, supporting both Helm charts and Kustomize overlays.
+*   **Security Hardened**: Webhook secret constant-time comparison, RFC 7230 header validation, path traversal prevention, strict YAML unmarshaling.
+*   **Finalizer-Based Lifecycle**: Kubernetes finalizers ensure clean teardown of all resources (routing, database, ArgoCD apps) even during force-deletes.
+*   **TTL Auto-Expiry**: Automatic environment cleanup after configurable TTL with requeue-based expiry.
+*   **Multi-SCM Notifiers**: GitLab MR comments and GitHub PR comments with status updates.
+
+## Security
+Diverge takes security seriously. The platform features strict CRD OpenAPI validation, context timeouts on all external calls, and prevention mechanisms for shell/markdown injection in templates. The controller uses RBAC-scoped clients to ensure it only has the permissions it needs. Webhook interactions are secured using constant-time comparisons for secrets and RFC 7230 compliant header validation.
 
 ## Architecture
 
@@ -62,19 +69,22 @@ Diverge requires Go 1.26+. The project uses Nix to manage development dependenci
 nix develop
 
 # Apply CRDs and run locally
-make install
-make run
+nix develop -c make install
+nix develop -c make run
 ```
 
-Currently, the project contains **117 tests** utilizing table-driven tests and `testify/assert`.
+Currently, the project contains **147 tests** utilizing table-driven tests, `testify/assert`, and Property-Based Testing (PBT) using the Hegel framework (`hegel.dev/go/hegel`).
 
 ## Roadmap
 
+- [x] **CI Actions Node 22 Bump** (#25) — Migrate GitHub Actions to Node 22 runtime
+- [x] **Godoc Coverage** (#26) — Complete documentation for all exported functions
 - [ ] **WebSocket Support** (#6) — Full WebSocket proxying for real-time preview environments
 - [ ] **Controller EnvTest + E2E** (#9) — Comprehensive controller integration tests with envtest
 - [ ] **Environment Proto + ConnectRPC API** (#12) — gRPC/ConnectRPC API server for environment management
-- [ ] **CI Actions Node 22 Bump** (#25) — Migrate GitHub Actions to Node 22 runtime
-- [ ] **Godoc Coverage** (#26) — Complete documentation for all exported functions
+- [ ] **GitLab Commit Statuses** — Merge gating based on preview environment statuses
+- [ ] **KNative Router** — Preview routing for KNative Serving
+- [ ] **Schema-per-Environment** — Database isolation using individual schemas per environment
 
 ## License
 Apache 2.0

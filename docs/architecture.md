@@ -9,7 +9,7 @@ Instead of deploying full duplicates of complex microservice architectures, Dive
 
 ```mermaid
 flowchart TD
-    A[Developer opens MR] --> B[GitLab Webhook Event]
+    A[Developer opens MR] --> B[GitLab/GitHub Webhook Event]
     B --> C[Diverge Webhook Handler]
     C -->|Creates/Updates| D[Environment CR]
     D --> E[Diverge Controller]
@@ -18,11 +18,13 @@ flowchart TD
         E --> F[Changeset Detector]
         E --> G[Database Provider]
         E --> H[Routing Engine]
+        E --> N[Notifier]
     end
 
     F -->|Analyzes .diverge.yaml| I[Argo CD Application CRs / Deployments]
     G -->|Provisions DB| J[Database Instances]
     H -->|Creates VirtualService| K[Istio Ingress & Diverge Proxy]
+    N -->|Status Feedback| B
 
     I --> L[Changed Services]
     K -->|Header Routing| L
@@ -38,7 +40,8 @@ flowchart TD
 - **Changeset Detector**: Responsible for identifying which services have been modified in the current branch by performing a git diff and mapping the changed files to service paths defined in `.diverge.yaml`.
 - **Database Providers**: Pluggable interfaces to handle database provisioning dynamically according to the requested mode (e.g., creating schemas, restoring from snapshots, or providing fresh databases).
 - **Routing Engine**: Configures the underlying service mesh (e.g., Istio) to route traffic appropriately. In header-based mode, it generates Istio `VirtualService` and `DestinationRule` resources.
-- **Notifier**: (Optional) Sends status updates back to the Version Control System (like GitLab MR comments) regarding deployment progress and preview URLs.
+- **ArgoCD Deployer**: Generates and manages Argo CD `Application` CRs, supporting both Helm and Kustomize source types.
+- **Notifier**: (Optional) Sends status updates back to the Version Control System (like GitLab/GitHub MR/PR comments) regarding deployment progress and preview URLs.
 - **API Server** (Coming soon - Issue #12): A forthcoming gRPC/ConnectRPC API server for extended environment management and integration.
 
 ## CRD Design
@@ -54,12 +57,14 @@ The `EnvironmentSpec` dictates the desired state:
 - `Lifecycle`: Time-to-Live (TTL) and cleanup behaviors.
 
 ### Status & State Machine
-The `EnvironmentStatus` tracks the observed state. The lifecycle of an environment moves through specific phases:
+The `EnvironmentStatus` tracks the observed state. Environments use the `diverge.io/finalizer` to ensure a clean teardown of external resources during deletion. The lifecycle of an environment moves through specific phases:
 - `Pending`: The environment resource has been created but no action has taken place.
 - `Deploying`: The controller is currently provisioning databases, deploying services, and configuring routing rules.
 - `Running`: The environment is healthy and actively serving traffic.
 - `Failed`: An error occurred during the provisioning or deployment phase.
 - `Terminating`: The environment is being dismantled (e.g., after an MR is closed/merged or TTL expiry).
+
+Phase transitions are driven by standard Kubernetes `metav1.Condition` types that track sub-system readiness, specifically: `NamespaceReady`, `DatabaseReady`, `RoutingReady`, and `DeployReady`.
 
 ## Delta Deployment
 
@@ -99,3 +104,16 @@ Diverge seamlessly integrates into the modern cloud-native stack:
 - **CD**: Often pairs with Argo CD (e.g., via direct `Application` CRs) to apply manifests.
 - **Mesh**: Istio provides the underlying header-based routing fabric.
 - **Infrastructure**: Crossplane can be utilized by the Database Providers to dynamically provision cloud-managed databases (like RDS or Cloud SQL).
+
+## Security Architecture
+
+Diverge incorporates secure-by-default design principles:
+- **Webhook Security**: Employs constant-time token validation to prevent timing attacks.
+- **Input Validation**: Enforces strict YAML parsing (disallowing unknown fields) and validates `HeaderKey` values against RFC 7230 token format constraints.
+- **Path Traversal Prevention**: Ensures GitHub/GitLab notifier providers are safeguarded against path traversal vulnerabilities.
+- **Resource Constraints**: Applies context timeouts on all external network and API calls to prevent hanging routines.
+- **Least Privilege**: The controller runs with strictly RBAC-scoped permissions, acquiring only the access necessary for its operational scope.
+
+## Observability
+
+The controller provides rich observability by emitting standard Kubernetes events (`Normal` and `Warning`) during all key lifecycle transitions, failures, and teardowns, ensuring tight integration with existing cluster monitoring tools.
