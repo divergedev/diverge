@@ -85,7 +85,7 @@ func TestGitHubNotifierFullLifecycle(t *testing.T) {
 	assert.Contains(t, requests[0].Body["body"], "test-env")
 
 	// check if comment ID was set
-	assert.Equal(t, "123", env.Annotations["diverge.io/github-pr-comment-id"])
+	assert.Equal(t, 123, env.Status.CommentID)
 
 	// GitHubNotifier.UpdateEnvironmentStatus returns nil immediately without doing anything.
 	err = n.UpdateEnvironmentStatus(ctx, env)

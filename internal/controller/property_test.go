@@ -3,8 +3,13 @@ package controller
 import (
 	"testing"
 
+	"context"
 	"hegel.dev/go/hegel"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"strings"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 )
@@ -71,6 +76,75 @@ func TestDerivePhase(t *testing.T) {
 		} else {
 			if phase1 != divergeiov1alpha1.PhasePending {
 				ht.Fatalf("Expected PhasePending when conditions are empty, got %v", phase1)
+			}
+		}
+	})
+}
+
+func TestEnsureNamespaceLabels(t *testing.T) {
+	hegel.Test(t, func(ht *hegel.T) {
+		seedStr := hegel.Draw(ht, hegel.Text())
+		labelCount := len(seedStr) % 5
+		userLabels := make(map[string]string)
+		for i := 0; i < labelCount; i++ {
+			// Basic random strings for keys and values
+			key := hegel.Draw(ht, hegel.Text())
+			// Kubernetes label keys can't be empty and must follow some rules,
+			// but for this unit test our controller doesn't validate them,
+			// just passes them to the client. Let's make sure key is not empty to be safe if k8s fake client validates it.
+			if key == "" {
+				key = "k"
+			}
+			val := hegel.Draw(ht, hegel.Text())
+			userLabels[key] = val
+		}
+
+		ctx := context.Background()
+		client := fake.NewClientBuilder().Build()
+		r := &EnvironmentReconciler{Client: client}
+
+		env := &divergeiov1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-env", Namespace: "default"},
+			Spec: divergeiov1alpha1.EnvironmentSpec{
+				Deploy: divergeiov1alpha1.EnvironmentDeploy{
+					Namespace:       "create",
+					NamespaceLabels: userLabels,
+				},
+			},
+		}
+
+		err := r.ensureNamespace(ctx, env)
+		if err != nil {
+			ht.Fatalf("ensureNamespace failed: %v", err)
+		}
+
+		ns := &corev1.Namespace{}
+		err = client.Get(ctx, types.NamespacedName{Name: env.PreviewNamespace()}, ns)
+		if err != nil {
+			ht.Fatalf("failed to get namespace: %v", err)
+		}
+
+		// Check diverge.io labels are preserved and correct
+		if ns.Labels["diverge.io/environment"] != "test-env" {
+			ht.Fatalf("expected diverge.io/environment=test-env")
+		}
+		if ns.Labels["diverge.io/managed-by"] != "diverge" {
+			ht.Fatalf("expected diverge.io/managed-by=diverge")
+		}
+
+		// Check user labels are merged correctly, except diverge.io/* which should be dropped
+		for k, v := range userLabels {
+			if strings.HasPrefix(k, "diverge.io/") {
+				if k == "diverge.io/environment" || k == "diverge.io/managed-by" {
+					continue
+				}
+				if _, ok := ns.Labels[k]; ok {
+					ht.Fatalf("user label %s should have been dropped", k)
+				}
+			} else {
+				if ns.Labels[k] != v {
+					ht.Fatalf("expected user label %s=%s, got %s", k, v, ns.Labels[k])
+				}
 			}
 		}
 	})

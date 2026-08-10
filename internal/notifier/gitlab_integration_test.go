@@ -84,7 +84,7 @@ func TestGitLabNotifierFullLifecycle(t *testing.T) {
 	assert.Contains(t, requests[0].Body["body"], "test-env")
 
 	// check if comment ID was set
-	assert.Equal(t, "123", env.Annotations["diverge.io/gitlab-mr-comment-id"])
+	assert.Equal(t, 123, env.Status.CommentID)
 
 	// UpdateEnvironmentStatus -> PUT
 	err = n.UpdateEnvironmentStatus(ctx, env)

@@ -16,8 +16,15 @@ help: ## Display this help.
 manifests: ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	echo "Mocking manifests..."
 
+.PHONY: proto
+proto: ## Generate protobuf Go types, ConnectRPC stubs, and domain types.
+	buf generate
+	buf generate --template buf.gen.domain.yaml
+	@# Remove domain types for diverge/v1 (propagation.proto uses non-module import path)
+	rm -rf gen/domain/diverge/v1
+
 .PHONY: generate
-generate: ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
+generate: proto ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
 	echo "Mocking generate..."
 
 .PHONY: fmt

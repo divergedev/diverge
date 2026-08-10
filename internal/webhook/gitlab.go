@@ -29,6 +29,9 @@ type GitLabMRPayload struct {
 		SourceBranch string `json:"source_branch"`
 		State        string `json:"state"`
 		Action       string `json:"action"`
+		LastCommit   struct {
+			ID string `json:"id"`
+		} `json:"last_commit"`
 	} `json:"object_attributes"`
 	Project struct {
 		Name              string `json:"name"`

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -46,22 +45,11 @@ func (g *GitHubNotifier) getProjectAndPR(env *v1alpha1.Environment) (string, int
 }
 
 func (g *GitHubNotifier) getCommentID(env *v1alpha1.Environment) int {
-	if env.Annotations == nil {
-		return 0
-	}
-	idStr := env.Annotations["diverge.io/github-pr-comment-id"]
-	if idStr == "" {
-		return 0
-	}
-	id, _ := strconv.Atoi(idStr)
-	return id
+	return env.Status.CommentID
 }
 
 func (g *GitHubNotifier) setCommentID(env *v1alpha1.Environment, id int) {
-	if env.Annotations == nil {
-		env.Annotations = make(map[string]string)
-	}
-	env.Annotations["diverge.io/github-pr-comment-id"] = strconv.Itoa(id)
+	env.Status.CommentID = id
 }
 
 func (g *GitHubNotifier) postOrUpdateComment(ctx context.Context, env *v1alpha1.Environment, body string) error {

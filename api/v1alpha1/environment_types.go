@@ -30,7 +30,8 @@ type EnvironmentSource struct {
 	Project string `json:"project"`
 	MR      int    `json:"mr,omitempty"`
 	// +kubebuilder:validation:Required
-	Branch string `json:"branch"`
+	Branch    string `json:"branch"`
+	CommitSHA string `json:"commitSHA,omitempty"`
 }
 
 // EnvironmentDeploy defines the deployment configuration
@@ -39,9 +40,11 @@ type EnvironmentDeploy struct {
 	Mode string `json:"mode,omitempty"` // delta or full
 	// +kubebuilder:validation:Enum=same;create
 	// +kubebuilder:default=same
-	Namespace       string   `json:"namespace,omitempty"` // same = deploy in CR's namespace, create = new diverge-* namespace
-	ChangedServices []string `json:"changedServices,omitempty"`
-	BaselineRef     string   `json:"baselineRef,omitempty"`
+	Namespace string `json:"namespace,omitempty"` // same = deploy in CR's namespace, create = new diverge-* namespace
+	// +optional
+	NamespaceLabels map[string]string `json:"namespaceLabels,omitempty"`
+	ChangedServices []string          `json:"changedServices,omitempty"`
+	BaselineRef     string            `json:"baselineRef,omitempty"`
 }
 
 // EnvironmentRouting defines the routing configuration
@@ -101,6 +104,9 @@ type EnvironmentStatus struct {
 	ExpiresAt          *metav1.Time       `json:"expiresAt,omitempty"`
 	ObservedGeneration int64              `json:"observedGeneration,omitempty"`
 	Conditions         []metav1.Condition `json:"conditions,omitempty"`
+	CommitSHA          string             `json:"commitSHA,omitempty"`
+	CommentID          int                `json:"commentID,omitempty"`
+	CommitStatusURL    string             `json:"commitStatusURL,omitempty"`
 }
 
 // +kubebuilder:object:root=true

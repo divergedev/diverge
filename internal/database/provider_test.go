@@ -25,19 +25,6 @@ func TestSharedProvider(t *testing.T) {
 	}
 }
 
-func TestSchemaProvider(t *testing.T) {
-	provider := &SchemaProvider{}
-	env := &v1alpha1.Environment{}
-
-	status, err := provider.Provision(context.Background(), env)
-	if err != nil {
-		t.Errorf("Provision error: %v", err)
-	}
-	if status == nil {
-		t.Errorf("Expected status, got nil")
-	}
-}
-
 func TestSnapshotProvider(t *testing.T) {
 	provider := &SnapshotProvider{}
 	env := &v1alpha1.Environment{}

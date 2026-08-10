@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -35,6 +36,7 @@ type EnvironmentReconciler struct {
 	DatabaseProvider database.DatabaseProvider
 	ChangeDetector   changeset.ChangeDetector
 	Notifier         notifier.Notifier
+	StatusReporter   notifier.StatusReporter
 	Deployer         deployer.Deployer
 }
 
@@ -78,12 +80,21 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				r.Recorder.Event(&env, "Warning", "NotificationFailed", err.Error())
 			}
 		}
+		if r.StatusReporter != nil {
+			if err := r.StatusReporter.PostCommitStatus(ctx, &env, "pending", "Preview environment provisioning"); err != nil {
+				logger.Error(err, "failed to post commit status")
+			}
+		}
 		r.Recorder.Event(&env, "Normal", "Created", "Environment created")
 		return ctrl.Result{}, nil
 	}
 
 	// 4. Set ObservedGeneration
 	env.Status.ObservedGeneration = env.Generation
+
+	if env.Status.CommitSHA == "" && env.Spec.Source.CommitSHA != "" {
+		env.Status.CommitSHA = env.Spec.Source.CommitSHA
+	}
 
 	// 5. Ensure namespace
 	if err := r.ensureNamespace(ctx, &env); err != nil {
@@ -235,6 +246,11 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if r.Notifier != nil && oldPhase != newPhase {
 		switch newPhase {
 		case divergeiov1alpha1.PhaseRunning:
+			if r.StatusReporter != nil {
+				if err := r.StatusReporter.PostCommitStatus(ctx, &env, "success", "Preview environment ready"); err != nil {
+					logger.Error(err, "failed to post commit status")
+				}
+			}
 			tCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 			if err := r.Notifier.PostEnvironmentReady(tCtx, &env); err != nil {
@@ -242,6 +258,11 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				r.Recorder.Event(&env, "Warning", "NotificationFailed", err.Error())
 			}
 		case divergeiov1alpha1.PhaseFailed:
+			if r.StatusReporter != nil {
+				if err := r.StatusReporter.PostCommitStatus(ctx, &env, "failed", "Preview environment failed"); err != nil {
+					logger.Error(err, "failed to post commit status")
+				}
+			}
 			tCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 			if err := r.Notifier.PostEnvironmentFailed(tCtx, &env, "Environment failed to deploy"); err != nil {
@@ -258,6 +279,12 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *divergeiov1alpha1.Environment) (ctrl.Result, error) {
 	if controllerutil.ContainsFinalizer(env, environmentFinalizer) {
 		r.Recorder.Event(env, "Normal", "Terminating", "Teardown started")
+
+		if r.StatusReporter != nil {
+			if err := r.StatusReporter.PostCommitStatus(ctx, env, "canceled", "Preview environment torn down"); err != nil {
+				log.FromContext(ctx).Error(err, "failed to post commit status")
+			}
+		}
 
 		if r.Notifier != nil {
 			tCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -327,19 +354,28 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 
 func (r *EnvironmentReconciler) ensureNamespace(ctx context.Context, env *divergeiov1alpha1.Environment) error {
 	if env.Spec.Deploy.Namespace == "create" {
+		labels := map[string]string{
+			"diverge.io/environment": env.Name,
+			"diverge.io/managed-by":  "diverge",
+		}
+		// Merge user-defined labels; diverge.io/* labels take precedence
+		for k, v := range env.Spec.Deploy.NamespaceLabels {
+			if !strings.HasPrefix(k, "diverge.io/") {
+				labels[k] = v
+			}
+		}
+
 		ns := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: env.PreviewNamespace(),
-				Labels: map[string]string{
-					"diverge.io/environment": env.Name,
-					"diverge.io/managed-by":  "diverge",
-				},
 			},
 		}
-		if err := r.Create(ctx, ns); err != nil {
-			if !apierrors.IsAlreadyExists(err) {
-				return fmt.Errorf("failed to create namespace: %w", err)
-			}
+		_, err := controllerutil.CreateOrUpdate(ctx, r.Client, ns, func() error {
+			ns.Labels = labels
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create or update namespace: %w", err)
 		}
 	}
 	// "same" mode: namespace already exists (it's where the CR lives), nothing to do

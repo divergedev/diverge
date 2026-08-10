@@ -23,6 +23,7 @@ type GitHubPRPayload struct {
 		Number int `json:"number"`
 		Head   struct {
 			Ref string `json:"ref"`
+			SHA string `json:"sha"`
 		} `json:"head"`
 		Base struct {
 			Ref string `json:"ref"`
