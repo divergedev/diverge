@@ -327,6 +327,9 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// Poll test status if a test run is active
 	if r.TestRunner != nil && env.Status.TestStatus != nil {
 		ts := env.Status.TestStatus
+		// Determine if test failures should block merge
+		testRequired := env.Spec.Testing != nil && env.Spec.Testing.Required
+
 		if ts.State == divergeiov1alpha1.TestStatePending || ts.State == divergeiov1alpha1.TestStateRunning {
 			// Check for timeout
 			testTimeout := 30 * time.Minute // default
@@ -341,7 +344,11 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				logger.Info("Test run timed out", "runID", ts.RunID)
 				r.Recorder.Event(&env, "Warning", "TestsTimedOut", "Test run timed out")
 				if r.StatusReporter != nil {
-					_ = r.StatusReporter.PostCommitStatus(ctx, &env, "failed", "Tests timed out")
+					commitState := "failed"
+					if !testRequired {
+						commitState = "success" // non-blocking: don't prevent merge
+					}
+					_ = r.StatusReporter.PostCommitStatus(ctx, &env, commitState, "Tests timed out")
 				}
 			} else {
 				// Poll CI for status
@@ -370,7 +377,11 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 						ts.CompletedAt = &now
 						r.Recorder.Event(&env, "Warning", "TestsFailed", result.Summary)
 						if r.StatusReporter != nil {
-							_ = r.StatusReporter.PostCommitStatus(ctx, &env, "failed", result.Summary)
+							commitState := "failed"
+							if !testRequired {
+								commitState = "success" // non-blocking
+							}
+							_ = r.StatusReporter.PostCommitStatus(ctx, &env, commitState, result.Summary)
 						}
 					}
 				}
