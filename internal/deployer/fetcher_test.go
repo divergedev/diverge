@@ -127,7 +127,8 @@ func TestURLFetcher_FetchesAndParses(t *testing.T) {
 	defer ts.Close()
 
 	fetcher := &URLFetcher{
-		HTTPClient: ts.Client(),
+		HTTPClient:        ts.Client(),
+		SkipURLValidation: true, // httptest uses localhost
 	}
 
 	env := &v1alpha1.Environment{
@@ -157,8 +158,9 @@ func TestURLFetcher_AuthHeader(t *testing.T) {
 	defer ts.Close()
 
 	fetcher := &URLFetcher{
-		HTTPClient: ts.Client(),
-		AuthToken:  "secret-token",
+		HTTPClient:        ts.Client(),
+		AuthToken:         "secret-token",
+		SkipURLValidation: true,
 	}
 
 	env := &v1alpha1.Environment{
@@ -184,7 +186,8 @@ func TestURLFetcher_HTTPError(t *testing.T) {
 	defer ts.Close()
 
 	fetcher := &URLFetcher{
-		HTTPClient: ts.Client(),
+		HTTPClient:        ts.Client(),
+		SkipURLValidation: true,
 	}
 
 	env := &v1alpha1.Environment{
@@ -220,4 +223,89 @@ func TestURLFetcher_MissingURL(t *testing.T) {
 	_, err := fetcher.Fetch(context.Background(), env)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "manifest URL not specified")
+}
+
+// CR1: Validate that non-HTTPS URLs are rejected
+func TestURLFetcher_RejectsHTTPURL(t *testing.T) {
+	fetcher := &URLFetcher{
+		HTTPClient: http.DefaultClient,
+	}
+
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-env", Namespace: "test-ns"},
+		Spec: v1alpha1.EnvironmentSpec{
+			Deploy: v1alpha1.EnvironmentDeploy{
+				Manifests: &v1alpha1.ManifestSource{
+					URL: "http://example.com/manifests.yaml",
+				},
+			},
+		},
+	}
+
+	_, err := fetcher.Fetch(context.Background(), env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scheme must be https")
+}
+
+// CR1: Validate URL function directly
+func TestValidateManifestURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		url     string
+		wantErr string
+	}{
+		{
+			name:    "HTTP rejected",
+			url:     "http://example.com/manifests.yaml",
+			wantErr: "scheme must be https",
+		},
+		{
+			name:    "FTP rejected",
+			url:     "ftp://example.com/manifests.yaml",
+			wantErr: "scheme must be https",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateManifestURL(tt.url)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+// CR5: Response body size limit
+func TestURLFetcher_RejectsOversizedResponse(t *testing.T) {
+	// Create a server that returns more than maxManifestSize bytes
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		// Write maxManifestSize + 100 bytes
+		data := make([]byte, maxManifestSize+100)
+		for i := range data {
+			data[i] = 'x'
+		}
+		_, _ = w.Write(data)
+	}))
+	defer ts.Close()
+
+	fetcher := &URLFetcher{
+		HTTPClient:        ts.Client(),
+		SkipURLValidation: true,
+	}
+
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-env", Namespace: "test-ns"},
+		Spec: v1alpha1.EnvironmentSpec{
+			Deploy: v1alpha1.EnvironmentDeploy{
+				Manifests: &v1alpha1.ManifestSource{
+					URL: ts.URL,
+				},
+			},
+		},
+	}
+
+	_, err := fetcher.Fetch(context.Background(), env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds maximum size")
 }

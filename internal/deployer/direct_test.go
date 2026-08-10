@@ -219,8 +219,9 @@ func TestDirectDeployer_Status_HealthyDeployment(t *testing.T) {
 
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "web",
-			Namespace: "test-ns",
+			Name:       "web",
+			Namespace:  "test-ns",
+			Generation: 1,
 			Labels: map[string]string{
 				"diverge.io/environment": "test-env",
 				"diverge.io/managed-by":  "diverge",
@@ -231,8 +232,9 @@ func TestDirectDeployer_Status_HealthyDeployment(t *testing.T) {
 			Replicas: ptr(int32(2)),
 		},
 		Status: appsv1.DeploymentStatus{
-			AvailableReplicas: 2,
-			UpdatedReplicas:   2,
+			ObservedGeneration: 1,
+			AvailableReplicas:  2,
+			UpdatedReplicas:    2,
 		},
 	}
 
@@ -314,4 +316,102 @@ func TestDirectDeployer_Teardown_IsNoop(t *testing.T) {
 	env := testEnv("test-env", "test-ns", "same")
 	err := d.Teardown(context.Background(), env)
 	require.NoError(t, err)
+}
+
+// CR2: Cross-namespace manifests should be rejected
+func TestDirectDeployer_Deploy_RejectsCrossNamespace(t *testing.T) {
+	s := testScheme()
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+
+	// Create a manifest targeting a different namespace
+	obj := testDeploymentUnstructured("dep1", "other-ns")
+
+	fetcher := &mockFetcher{
+		objects: []unstructured.Unstructured{obj},
+	}
+
+	d := &DirectDeployer{
+		Client:  c,
+		Fetcher: fetcher,
+	}
+
+	env := testEnv("test-env", "test-ns", "same")
+	err := d.Deploy(context.Background(), env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cross-namespace manifests are not allowed")
+}
+
+// CR3: Unobserved generation should report Progressing, not Healthy
+func TestDirectDeployer_Status_UnobservedGeneration(t *testing.T) {
+	s := testScheme()
+
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "web",
+			Namespace:  "test-ns",
+			Generation: 2,
+			Labels: map[string]string{
+				"diverge.io/environment": "test-env",
+				"diverge.io/managed-by":  "diverge",
+			},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: ptr(int32(1)),
+		},
+		Status: appsv1.DeploymentStatus{
+			ObservedGeneration: 1, // Behind Generation
+			AvailableReplicas:  1,
+			UpdatedReplicas:    1,
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(dep).WithStatusSubresource(&appsv1.Deployment{}).Build()
+
+	d := &DirectDeployer{Client: c}
+	env := testEnv("test-env", "test-ns", "same")
+	status, err := d.Status(context.Background(), env)
+	require.NoError(t, err)
+
+	require.Len(t, status, 1)
+	assert.Equal(t, "Progressing", status[0].Health, "should be Progressing when ObservedGeneration < Generation")
+}
+
+// CR3: Terminal rollout failure should report Degraded
+func TestDirectDeployer_Status_TerminalFailure(t *testing.T) {
+	s := testScheme()
+
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "web",
+			Namespace:  "test-ns",
+			Generation: 1,
+			Labels: map[string]string{
+				"diverge.io/environment": "test-env",
+				"diverge.io/managed-by":  "diverge",
+			},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: ptr(int32(2)),
+		},
+		Status: appsv1.DeploymentStatus{
+			ObservedGeneration: 1,
+			AvailableReplicas:  0,
+			Conditions: []appsv1.DeploymentCondition{
+				{
+					Type:   appsv1.DeploymentProgressing,
+					Status: "False",
+				},
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(dep).WithStatusSubresource(&appsv1.Deployment{}).Build()
+
+	d := &DirectDeployer{Client: c}
+	env := testEnv("test-env", "test-ns", "same")
+	status, err := d.Status(context.Background(), env)
+	require.NoError(t, err)
+
+	require.Len(t, status, 1)
+	assert.Equal(t, "Degraded", status[0].Health, "should be Degraded when Progressing condition is False")
 }

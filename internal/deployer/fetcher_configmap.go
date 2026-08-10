@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -41,8 +42,15 @@ func (f *ConfigMapFetcher) Fetch(ctx context.Context, env *v1alpha1.Environment)
 
 	var result []unstructured.Unstructured
 	for _, cm := range cmList.Items {
-		for key, data := range cm.Data {
-			objs, err := parseMultiDocYAML([]byte(data))
+		// CR4: Sort keys for deterministic apply order across reconciliations
+		keys := make([]string, 0, len(cm.Data))
+		for key := range cm.Data {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+
+		for _, key := range keys {
+			objs, err := parseMultiDocYAML([]byte(cm.Data[key]))
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse YAML from ConfigMap %s key %s: %w", cm.Name, key, err)
 			}

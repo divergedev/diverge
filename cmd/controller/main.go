@@ -194,8 +194,11 @@ func main() {
 				HTTPClient: &http.Client{Timeout: 60 * time.Second},
 				AuthToken:  manifestToken,
 			}
-		default:
+		case "configmap", "":
 			fetcher = &deployer.ConfigMapFetcher{Client: mgr.GetClient()}
+		default:
+			setupLog.Error(fmt.Errorf("unsupported manifest source type: %q", manifestSourceType), "invalid --manifest-source-type")
+			os.Exit(1)
 		}
 		deployerImpl = &deployer.DirectDeployer{
 			Client:  mgr.GetClient(),

@@ -45,10 +45,14 @@ func (d *DirectDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) 
 	for i := range objects {
 		obj := &objects[i]
 
-		// Set target namespace for namespaced resources
-		if obj.GetNamespace() == "" {
-			obj.SetNamespace(targetNS)
+		// CR2: Enforce namespace scope — reject or override any namespace
+		// that doesn't match targetNS to prevent cross-namespace writes.
+		objNS := obj.GetNamespace()
+		if objNS != "" && objNS != targetNS {
+			return fmt.Errorf("manifest %s %s/%s targets namespace %q, but environment targets %q; cross-namespace manifests are not allowed",
+				obj.GetKind(), objNS, obj.GetName(), objNS, targetNS)
 		}
+		obj.SetNamespace(targetNS)
 
 		// Inject Diverge labels
 		existingLabels := obj.GetLabels()
@@ -59,9 +63,11 @@ func (d *DirectDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) 
 		existingLabels["diverge.io/managed-by"] = "diverge"
 		obj.SetLabels(existingLabels)
 
-		// Set OwnerReference for 'same' namespace mode
-		// (enables automatic GC when Environment CR is deleted)
-		if env.Spec.Deploy.Namespace != "create" {
+		// Set OwnerReference for 'same' namespace mode only.
+		// CR2: Only set OwnerReferences when the object is in the same
+		// namespace as the Environment CR (required by K8s GC).
+		// In 'create' mode, namespace deletion handles cleanup.
+		if env.Spec.Deploy.Namespace != "create" && obj.GetNamespace() == env.Namespace {
 			ownerRef := metav1.OwnerReference{
 				APIVersion: env.APIVersion,
 				Kind:       env.Kind,
@@ -176,26 +182,47 @@ func (d *DirectDeployer) Status(ctx context.Context, env *v1alpha1.Environment) 
 }
 
 // deploymentHealth determines the health of a Deployment based on its rollout status.
+// CR3: Checks ObservedGeneration and terminal failure conditions.
 func deploymentHealth(dep *appsv1.Deployment) string {
 	desired := int32(1)
 	if dep.Spec.Replicas != nil {
 		desired = *dep.Spec.Replicas
 	}
+
+	// Check for terminal rollout failure conditions first
+	for _, cond := range dep.Status.Conditions {
+		if cond.Type == appsv1.DeploymentReplicaFailure && cond.Status == "True" {
+			return "Degraded"
+		}
+		if cond.Type == appsv1.DeploymentProgressing && cond.Status == "False" {
+			return "Degraded"
+		}
+	}
+
+	// Don't report healthy if the controller hasn't observed the latest generation
+	if dep.Status.ObservedGeneration < dep.Generation {
+		return "Progressing"
+	}
+
 	if dep.Status.AvailableReplicas >= desired && dep.Status.UpdatedReplicas >= desired {
 		return "Healthy"
-	}
-	if dep.Status.AvailableReplicas == 0 && dep.Generation > 1 {
-		return "Degraded"
 	}
 	return "Progressing"
 }
 
 // statefulSetHealth determines the health of a StatefulSet.
+// CR3: Checks ObservedGeneration before declaring healthy.
 func statefulSetHealth(sts *appsv1.StatefulSet) string {
 	desired := int32(1)
 	if sts.Spec.Replicas != nil {
 		desired = *sts.Spec.Replicas
 	}
+
+	// Don't report healthy if the controller hasn't observed the latest generation
+	if sts.Status.ObservedGeneration < sts.Generation {
+		return "Progressing"
+	}
+
 	if sts.Status.ReadyReplicas >= desired && sts.Status.UpdatedReplicas >= desired {
 		return "Healthy"
 	}
