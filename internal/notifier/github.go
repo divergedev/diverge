@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
@@ -69,8 +70,13 @@ func (g *GitHubNotifier) postOrUpdateComment(ctx context.Context, env *v1alpha1.
 		return err
 	}
 
-	// H2: Escape project path to prevent API path traversal
-	escapedProject := url.PathEscape(project)
+	// H2: Split owner/repo and escape each segment independently so the
+	// separator remains unencoded while preventing path traversal.
+	parts := strings.SplitN(project, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return fmt.Errorf("invalid project format %q: expected owner/repo", project)
+	}
+	escapedProject := url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1])
 
 	commentID := g.getCommentID(env)
 

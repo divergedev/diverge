@@ -74,10 +74,10 @@ func main() {
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
-	// C2: Read secrets from environment variables, falling back to flags for local dev
+	// C2: Read secrets from environment variables (take precedence over flags)
 	notifierToken := os.Getenv("DIVERGE_NOTIFIER_TOKEN")
-	if webhookSecretToken == "" {
-		webhookSecretToken = os.Getenv("DIVERGE_WEBHOOK_SECRET")
+	if envSecret := os.Getenv("DIVERGE_WEBHOOK_SECRET"); envSecret != "" {
+		webhookSecretToken = envSecret
 	}
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
@@ -121,7 +121,7 @@ func main() {
 			setupLog.Error(fmt.Errorf("DIVERGE_NOTIFIER_TOKEN is required for --notifier-provider=gitlab"), "missing token")
 			os.Exit(1)
 		}
-		notifierImpl = &notifier.GitLabNotifier{Token: notifierToken}
+		notifierImpl = notifier.NewGitLabNotifier("", notifierToken)
 	case "github":
 		if notifierToken == "" {
 			setupLog.Error(fmt.Errorf("DIVERGE_NOTIFIER_TOKEN is required for --notifier-provider=github"), "missing token")

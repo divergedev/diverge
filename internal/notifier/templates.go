@@ -2,9 +2,21 @@ package notifier
 
 import (
 	"bytes"
+	"regexp"
 	"strings"
 	"text/template"
 )
+
+// validHeaderKey matches RFC 7230 token characters (alphanumeric + -)
+var validHeaderKey = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*$`)
+
+// sanitizeHeaderKey validates and returns a safe header key name.
+func sanitizeHeaderKey(key string) string {
+	if !validHeaderKey.MatchString(key) {
+		return "x-diverge-env"
+	}
+	return key
+}
 
 func sanitizeMarkdown(s string) string {
 	s = strings.ReplaceAll(s, "\\|", "|")
@@ -61,9 +73,9 @@ const readyTmplStr = `## 🟢 Diverge Preview Environment — Ready!
 {{range .Services}}- ✅ {{. | sanitize}}
 {{end}}
 {{if .BaseURL}}### Quick Access
-` + "```\n" + `curl -H "{{.HeaderKey}}: {{.Name | sanitize}}" {{.BaseURL}}
+` + "```\n" + `curl -H "{{.HeaderKey | sanitize}}: {{.Name | sanitize}}" {{.BaseURL}}
 ` + "```\n" + `
-> 💡 **Tip:** Use the Diverge browser extension or add the header ` + "`{{.HeaderKey}}: {{.Name | sanitize}}`" + ` to route traffic to this preview.
+> 💡 **Tip:** Use the Diverge browser extension or add the header ` + "`{{.HeaderKey | sanitize}}: {{.Name | sanitize}}`" + ` to route traffic to this preview.
 {{end}}
 ---
 _Powered by [Diverge](https://github.com/divergedev/diverge) • Expires {{.ExpiryTime}}_`

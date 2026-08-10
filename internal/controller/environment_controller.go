@@ -56,6 +56,9 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// Capture a pre-mutation baseline for status patch diffs
+	statusBase := env.DeepCopy()
+
 	// 2. Handle deletion
 	if !env.DeletionTimestamp.IsZero() {
 		return r.handleTeardown(ctx, &env)
@@ -98,7 +101,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				r.Recorder.Event(&env, "Warning", "NotificationFailed", notifyErr.Error())
 			}
 		}
-		return r.updateStatusWithRequeue(ctx, &env, err, 0)
+		return r.updateStatusWithRequeue(ctx, &env, statusBase, err, 0)
 	}
 	meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 		Type:    "NamespaceReady",
@@ -126,7 +129,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				r.Recorder.Event(&env, "Warning", "NotificationFailed", notifyErr.Error())
 			}
 		}
-		return r.updateStatusWithRequeue(ctx, &env, err, 0)
+		return r.updateStatusWithRequeue(ctx, &env, statusBase, err, 0)
 	}
 	if dbStatus != nil && dbStatus.Ready {
 		meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
@@ -163,7 +166,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				r.Recorder.Event(&env, "Warning", "NotificationFailed", notifyErr.Error())
 			}
 		}
-		return r.updateStatusWithRequeue(ctx, &env, err, 0)
+		return r.updateStatusWithRequeue(ctx, &env, statusBase, err, 0)
 	}
 	meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 		Type:    "RoutingReady",
@@ -192,7 +195,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 					r.Recorder.Event(&env, "Warning", "NotificationFailed", notifyErr.Error())
 				}
 			}
-			return r.updateStatusWithRequeue(ctx, &env, err, 0)
+			return r.updateStatusWithRequeue(ctx, &env, statusBase, err, 0)
 		}
 	}
 	meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
@@ -223,7 +226,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			return ctrl.Result{}, nil
 		}
 		// C1: Requeue when TTL expires so the controller wakes up to delete
-		return r.updateStatusWithRequeue(ctx, &env, nil, time.Until(expiryTime))
+		return r.updateStatusWithRequeue(ctx, &env, statusBase, nil, time.Until(expiryTime))
 	} else if env.Status.CreatedAt == nil {
 		now := metav1.Now()
 		env.Status.CreatedAt = &now
@@ -249,7 +252,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	// 12. Update status
-	return r.updateStatusWithRequeue(ctx, &env, nil, 0)
+	return r.updateStatusWithRequeue(ctx, &env, statusBase, nil, 0)
 }
 
 func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *divergeiov1alpha1.Environment) (ctrl.Result, error) {
@@ -343,10 +346,10 @@ func (r *EnvironmentReconciler) ensureNamespace(ctx context.Context, env *diverg
 	return nil
 }
 
-// H3: Use Status().Patch() instead of Update() to avoid 409 conflicts
-func (r *EnvironmentReconciler) updateStatusWithRequeue(ctx context.Context, env *divergeiov1alpha1.Environment, err error, requeueAfter time.Duration) (ctrl.Result, error) {
-	base := env.DeepCopy()
-	patch := client.MergeFrom(base)
+// H3: Use Status().Patch() instead of Update() to avoid 409 conflicts.
+// statusBase must be a DeepCopy captured before any mutations to env.
+func (r *EnvironmentReconciler) updateStatusWithRequeue(ctx context.Context, env *divergeiov1alpha1.Environment, statusBase *divergeiov1alpha1.Environment, err error, requeueAfter time.Duration) (ctrl.Result, error) {
+	patch := client.MergeFrom(statusBase)
 	if updateErr := r.Status().Patch(ctx, env, patch); updateErr != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
 	}

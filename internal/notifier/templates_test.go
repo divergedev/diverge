@@ -1,6 +1,7 @@
 package notifier
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -30,30 +31,40 @@ func TestRenderCreatedTemplate(t *testing.T) {
 }
 
 func TestRenderReadyTemplate(t *testing.T) {
-	data := TemplateData{
-		Name:        "pr-123",
-		Branch:      "feature-x",
-		Mode:        "ephemeral",
-		URL:         "https://example.com/pr",
-		NumServices: 2,
-		Duration:    "2m",
-		Services:    []string{"svc1", "svc2"},
-		BaseURL:     "https://api.example.com",
-		ExpiryTime:  "2023-01-01T00:00:00Z",
-		HeaderKey:   "x-diverge-env",
+	tests := []struct {
+		name      string
+		headerKey string
+	}{
+		{"default header key", "x-diverge-env"},
+		{"custom header key", "x-preview-env"},
 	}
-	res, err := renderTemplate(readyTemplate, data)
-	assert.NoError(t, err)
-	assert.Contains(t, res, "✅ Running")
-	assert.Contains(t, res, "[🔗 Open Preview](https://example.com/pr)")
-	assert.Contains(t, res, "`pr-123`")
-	assert.Contains(t, res, "`feature-x`")
-	assert.Contains(t, res, "ephemeral (2 services deployed)")
-	assert.Contains(t, res, "2m")
-	assert.Contains(t, res, "- ✅ svc1")
-	assert.Contains(t, res, "- ✅ svc2")
-	assert.Contains(t, res, "curl -H \"x-diverge-env: pr-123\" https://api.example.com")
-	assert.Contains(t, res, "Expires 2023-01-01T00:00:00Z")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := TemplateData{
+				Name:        "pr-123",
+				Branch:      "feature-x",
+				Mode:        "ephemeral",
+				URL:         "https://example.com/pr",
+				NumServices: 2,
+				Duration:    "2m",
+				Services:    []string{"svc1", "svc2"},
+				BaseURL:     "https://api.example.com",
+				ExpiryTime:  "2023-01-01T00:00:00Z",
+				HeaderKey:   tt.headerKey,
+			}
+			res, err := renderTemplate(readyTemplate, data)
+			assert.NoError(t, err)
+			assert.Contains(t, res, "✅ Running")
+			assert.Contains(t, res, "[🔗 Open Preview](https://example.com/pr)")
+			assert.Contains(t, res, "`pr-123`")
+			assert.Contains(t, res, "`feature-x`")
+			assert.Contains(t, res, "ephemeral (2 services deployed)")
+			assert.Contains(t, res, "- ✅ svc1")
+			assert.Contains(t, res, fmt.Sprintf("curl -H \"%s: pr-123\" https://api.example.com", tt.headerKey))
+			assert.Contains(t, res, fmt.Sprintf("`%s: pr-123`", tt.headerKey))
+			assert.Contains(t, res, "Expires 2023-01-01T00:00:00Z")
+		})
+	}
 }
 
 func TestRenderFailedTemplate(t *testing.T) {

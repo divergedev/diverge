@@ -148,7 +148,7 @@ func buildTemplateData(env *v1alpha1.Environment, reason string) TemplateData {
 
 	headerKey := "x-diverge-env"
 	if env.Spec.Routing.HeaderKey != "" {
-		headerKey = env.Spec.Routing.HeaderKey
+		headerKey = sanitizeHeaderKey(env.Spec.Routing.HeaderKey)
 	}
 
 	return TemplateData{
