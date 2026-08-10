@@ -51,7 +51,24 @@ func (f *URLFetcher) Fetch(ctx context.Context, env *v1alpha1.Environment) ([]un
 		req.Header.Set("Authorization", "Bearer "+f.AuthToken)
 	}
 
-	resp, err := f.HTTPClient.Do(req)
+	// Use a per-request client copy that validates redirect targets
+	// to prevent SSRF via open redirects (e.g., HTTPS → HTTP loopback).
+	httpClient := f.HTTPClient
+	if !f.SkipURLValidation {
+		clientCopy := *f.HTTPClient
+		clientCopy.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			if err := validateManifestURL(req.URL.String()); err != nil {
+				return fmt.Errorf("redirect to %q blocked: %w", req.URL.String(), err)
+			}
+			return nil
+		}
+		httpClient = &clientCopy
+	}
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch manifests from %s: %w", manifestURL, err)
 	}
