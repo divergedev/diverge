@@ -165,13 +165,17 @@ func TestGatewayRouter_Teardown_DeletesHTTPRoutes(t *testing.T) {
 		},
 	}
 
-	// Pre-create HTTPRoutes
+	// Pre-create labeled HTTPRoutes (as Reconcile would)
 	for _, svc := range []string{"web", "api"} {
 		u := &unstructured.Unstructured{}
 		u.SetAPIVersion("gateway.networking.k8s.io/v1")
 		u.SetKind("HTTPRoute")
 		u.SetName("test-env-" + svc)
 		u.SetNamespace("default")
+		u.SetLabels(map[string]string{
+			"diverge.io/environment": "test-env",
+			"diverge.io/managed-by":  "diverge",
+		})
 		require.NoError(t, c.Create(context.Background(), u))
 	}
 
@@ -204,9 +208,53 @@ func TestGatewayRouter_Teardown_IgnoresNotFound(t *testing.T) {
 		},
 	}
 
-	// Should not error when routes don't exist
+	// Should not error when no labeled routes exist
 	err := r.Teardown(context.Background(), env)
 	require.NoError(t, err)
+}
+
+// CR1 regression: Teardown must clean up stale routes from removed services.
+// Scenario: services go from [web, api] to [web] — the "api" route must be deleted.
+func TestGatewayRouter_Teardown_CleansStaleRoutes(t *testing.T) {
+	c := fake.NewClientBuilder().Build()
+	r := &GatewayRouter{Client: c, Namespace: "default"}
+
+	// Step 1: Reconcile with [web, api]
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-env",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Deploy: v1alpha1.EnvironmentDeploy{
+				ChangedServices: []string{"web", "api"},
+			},
+		},
+	}
+	require.NoError(t, r.Reconcile(context.Background(), env))
+
+	// Verify both routes exist
+	for _, svc := range []string{"web", "api"} {
+		u := &unstructured.Unstructured{}
+		u.SetAPIVersion("gateway.networking.k8s.io/v1")
+		u.SetKind("HTTPRoute")
+		err := c.Get(context.Background(), client.ObjectKey{Name: "test-env-" + svc, Namespace: "default"}, u)
+		require.NoError(t, err, "HTTPRoute for %s should exist after reconcile", svc)
+	}
+
+	// Step 2: Teardown with only [web] in ChangedServices.
+	// Label-based teardown should still delete BOTH routes.
+	env.Spec.Deploy.ChangedServices = []string{"web"}
+	require.NoError(t, r.Teardown(context.Background(), env))
+
+	// Verify BOTH routes are deleted (including stale "api")
+	for _, svc := range []string{"web", "api"} {
+		u := &unstructured.Unstructured{}
+		u.SetAPIVersion("gateway.networking.k8s.io/v1")
+		u.SetKind("HTTPRoute")
+		err := c.Get(context.Background(), client.ObjectKey{Name: "test-env-" + svc, Namespace: "default"}, u)
+		assert.Error(t, err, "HTTPRoute for %s should be deleted by label-based teardown", svc)
+	}
 }
 
 func TestGatewayRouter_GetExternalURL(t *testing.T) {

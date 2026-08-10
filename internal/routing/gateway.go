@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -48,6 +49,10 @@ func (r *GatewayRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment
 		u.SetKind("HTTPRoute")
 		u.SetName(routeName)
 		u.SetNamespace(ns)
+		u.SetLabels(map[string]string{
+			"diverge.io/environment": env.Name,
+			"diverge.io/managed-by":  "diverge",
+		})
 
 		spec := map[string]interface{}{
 			"parentRefs": []interface{}{
@@ -108,28 +113,40 @@ func (r *GatewayRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment
 	return nil
 }
 
-// Teardown deletes all HTTPRoute resources associated with the environment.
+// Teardown deletes all HTTPRoute resources associated with the environment
+// by selecting on the diverge.io/environment label. This ensures stale routes
+// from removed services are cleaned up.
 func (r *GatewayRouter) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
 	logger := log.FromContext(ctx).WithName("gateway-router")
 	ns := r.namespace(env)
 
-	for _, svc := range env.Spec.Deploy.ChangedServices {
-		u := &unstructured.Unstructured{}
-		u.SetAPIVersion("gateway.networking.k8s.io/v1")
-		u.SetKind("HTTPRoute")
-		u.SetName(fmt.Sprintf("%s-%s", env.Name, svc))
-		u.SetNamespace(ns)
+	selector := labels.SelectorFromSet(map[string]string{
+		"diverge.io/environment": env.Name,
+		"diverge.io/managed-by":  "diverge",
+	})
 
-		if err := r.Client.Delete(ctx, u); err != nil {
+	var routeList unstructured.UnstructuredList
+	routeList.SetAPIVersion("gateway.networking.k8s.io/v1")
+	routeList.SetKind("HTTPRouteList")
+
+	if err := r.Client.List(ctx, &routeList,
+		client.InNamespace(ns),
+		client.MatchingLabelsSelector{Selector: selector},
+	); err != nil {
+		return fmt.Errorf("failed to list HTTPRoutes for environment %s: %w", env.Name, err)
+	}
+
+	for i := range routeList.Items {
+		if err := r.Client.Delete(ctx, &routeList.Items[i]); err != nil {
 			if client.IgnoreNotFound(err) != nil {
-				return fmt.Errorf("failed to delete HTTPRoute for %s: %w", svc, err)
+				return fmt.Errorf("failed to delete HTTPRoute %s: %w", routeList.Items[i].GetName(), err)
 			}
 		}
 	}
 
 	logger.Info("Tore down HTTPRoutes",
 		"environment", env.Name,
-		"services", len(env.Spec.Deploy.ChangedServices),
+		"deleted", len(routeList.Items),
 	)
 	return nil
 }
