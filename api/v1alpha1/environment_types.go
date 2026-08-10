@@ -23,11 +23,14 @@ type MigrationJobSpec struct {
 
 // EnvironmentSource defines the source code origin for the environment
 type EnvironmentSource struct {
+	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Enum=gitlab;github
-	Provider string `json:"provider,omitempty"` // e.g., gitlab
-	Project  string `json:"project,omitempty"`
-	MR       int    `json:"mr,omitempty"`
-	Branch   string `json:"branch,omitempty"`
+	Provider string `json:"provider"` // e.g., gitlab
+	// +kubebuilder:validation:Required
+	Project string `json:"project"`
+	MR      int    `json:"mr,omitempty"`
+	// +kubebuilder:validation:Required
+	Branch string `json:"branch"`
 }
 
 // EnvironmentDeploy defines the deployment configuration

@@ -48,6 +48,7 @@ func main() {
 	var webhookPort int
 	var routingProvider string
 	var deployProvider string
+	var databaseProvider string
 	var argoNamespace string
 	var webhookSecretToken string
 	var argoRepoURL string
@@ -61,6 +62,7 @@ func main() {
 	flag.IntVar(&webhookPort, "webhook-port", 9443, "The port the webhook server binds to.")
 	flag.StringVar(&routingProvider, "routing-provider", "gateway", "The routing provider to use (istio|gateway).")
 	flag.StringVar(&deployProvider, "deploy-provider", "noop", "Deployment provider (argocd|noop)")
+	flag.StringVar(&databaseProvider, "database-provider", "shared", "Database provider (shared|noop)")
 	flag.StringVar(&argoNamespace, "argo-namespace", "argocd", "Namespace where Argo CD is installed")
 	flag.StringVar(&argoRepoURL, "argo-repo-url", "", "Repository URL for Argo CD Application sources")
 	flag.StringVar(&notifierProvider, "notifier-provider", "noop", "Notification provider (gitlab|github|noop)")
@@ -100,7 +102,16 @@ func main() {
 		routerImpl = &routing.GatewayRouter{Client: mgr.GetClient()}
 	}
 
-	dbProviderImpl := &database.SharedProvider{}
+	var dbProviderImpl database.DatabaseProvider
+	switch databaseProvider {
+	case "shared", "":
+		dbProviderImpl = &database.SharedProvider{}
+	case "noop":
+		dbProviderImpl = &database.NoopProvider{}
+	default:
+		setupLog.Error(fmt.Errorf("unsupported database provider: %q", databaseProvider), "invalid --database-provider")
+		os.Exit(1)
+	}
 	detectorImpl := &changeset.GitChangeDetector{}
 
 	var notifierImpl notifier.Notifier

@@ -3,7 +3,6 @@ package proxy
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -25,7 +24,7 @@ func (m *mockEnvironmentLister) GetEnvironment(ctx context.Context, name string)
 	if env, ok := m.envs[name]; ok {
 		return env, nil
 	}
-	return nil, fmt.Errorf("environment not found")
+	return nil, ErrEnvironmentNotFound
 }
 
 func (m *mockEnvironmentLister) ListEnvironments(ctx context.Context) ([]EnvironmentInfo, error) {
