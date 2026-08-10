@@ -29,6 +29,7 @@ import (
 	_ "github.com/divergedev/diverge/internal/metrics"
 	"github.com/divergedev/diverge/internal/notifier"
 	"github.com/divergedev/diverge/internal/routing"
+	divtesting "github.com/divergedev/diverge/internal/testing"
 	"github.com/divergedev/diverge/internal/webhook"
 )
 
@@ -219,6 +220,24 @@ func main() {
 	// Wrap with metrics
 	deployerImpl = &deployer.InstrumentedDeployer{Inner: deployerImpl, Name: deployProvider}
 
+	// Configure test runner (reuses notifier credentials)
+	var testRunnerImpl divtesting.TestRunner
+	switch notifierProvider {
+	case "gitlab":
+		testRunnerImpl = &divtesting.GitLabPipelineRunner{
+			BaseURL:    "",
+			Token:      notifierToken,
+			HTTPClient: &http.Client{Timeout: 30 * time.Second},
+		}
+	case "github":
+		testRunnerImpl = &divtesting.GitHubActionsRunner{
+			Token:      notifierToken,
+			HTTPClient: &http.Client{Timeout: 30 * time.Second},
+		}
+	default:
+		testRunnerImpl = &divtesting.NoopTestRunner{}
+	}
+
 	if err = (&controller.EnvironmentReconciler{
 		Client:           mgr.GetClient(),
 		Scheme:           mgr.GetScheme(),
@@ -229,6 +248,7 @@ func main() {
 		Notifier:         notifierImpl,
 		StatusReporter:   statusReporterImpl,
 		Deployer:         deployerImpl,
+		TestRunner:       testRunnerImpl,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Environment")
 		os.Exit(1)

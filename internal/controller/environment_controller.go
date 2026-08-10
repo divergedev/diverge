@@ -24,6 +24,7 @@ import (
 	"github.com/divergedev/diverge/internal/metrics"
 	"github.com/divergedev/diverge/internal/notifier"
 	"github.com/divergedev/diverge/internal/routing"
+	divtesting "github.com/divergedev/diverge/internal/testing"
 )
 
 const environmentFinalizer = "diverge.io/environment-protection"
@@ -39,6 +40,7 @@ type EnvironmentReconciler struct {
 	Notifier         notifier.Notifier
 	StatusReporter   notifier.StatusReporter
 	Deployer         deployer.Deployer
+	TestRunner       divtesting.TestRunner
 }
 
 // +kubebuilder:rbac:groups=diverge.io,resources=environments,verbs=get;list;watch;create;update;patch;delete
@@ -283,6 +285,28 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				logger.Error(err, "failed to post environment ready notification")
 				r.Recorder.Event(&env, "Warning", "NotificationFailed", err.Error())
 			}
+
+			// Trigger tests if configured
+			if r.TestRunner != nil && env.Spec.Testing != nil && env.Spec.Testing.Enabled {
+				tCtxT, cancelT := context.WithTimeout(ctx, 30*time.Second)
+				defer cancelT()
+				runID, err := r.TestRunner.Trigger(tCtxT, &env)
+				if err != nil {
+					logger.Error(err, "failed to trigger tests")
+					r.Recorder.Event(&env, "Warning", "TestTriggerFailed", err.Error())
+				} else {
+					now := metav1.Now()
+					env.Status.TestStatus = &divergeiov1alpha1.TestStatus{
+						State:     divergeiov1alpha1.TestStatePending,
+						RunID:     runID,
+						StartedAt: &now,
+					}
+					r.Recorder.Event(&env, "Normal", "TestsTriggered", "Test run triggered")
+					if r.StatusReporter != nil {
+						_ = r.StatusReporter.PostCommitStatus(ctx, &env, "pending", "Tests running...")
+					}
+				}
+			}
 		case divergeiov1alpha1.PhaseFailed:
 			if r.StatusReporter != nil {
 				if err := r.StatusReporter.PostCommitStatus(ctx, &env, "failed", "Preview environment failed"); err != nil {
@@ -294,6 +318,67 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			if err := r.Notifier.PostEnvironmentFailed(tCtx, &env, "Environment failed to deploy"); err != nil {
 				logger.Error(err, "failed to post environment failed notification")
 				r.Recorder.Event(&env, "Warning", "NotificationFailed", err.Error())
+			}
+		}
+	}
+
+	// Poll test status if a test run is active
+	if r.TestRunner != nil && env.Status.TestStatus != nil {
+		ts := env.Status.TestStatus
+		if ts.State == divergeiov1alpha1.TestStatePending || ts.State == divergeiov1alpha1.TestStateRunning {
+			// Check for timeout
+			testTimeout := 30 * time.Minute // default
+			if env.Spec.Testing != nil && env.Spec.Testing.Timeout != nil {
+				testTimeout = env.Spec.Testing.Timeout.Duration
+			}
+			if ts.StartedAt != nil && time.Since(ts.StartedAt.Time) > testTimeout {
+				now := metav1.Now()
+				ts.State = divergeiov1alpha1.TestStateTimedOut
+				ts.Summary = "Tests timed out"
+				ts.CompletedAt = &now
+				logger.Info("Test run timed out", "runID", ts.RunID)
+				r.Recorder.Event(&env, "Warning", "TestsTimedOut", "Test run timed out")
+				if r.StatusReporter != nil {
+					_ = r.StatusReporter.PostCommitStatus(ctx, &env, "failed", "Tests timed out")
+				}
+			} else {
+				// Poll CI for status
+				tCtxP, cancelP := context.WithTimeout(ctx, 15*time.Second)
+				defer cancelP()
+				result, err := r.TestRunner.Status(tCtxP, &env, ts.RunID)
+				if err != nil {
+					logger.Error(err, "failed to poll test status", "runID", ts.RunID)
+				} else if result != nil {
+					ts.State = result.State
+					ts.Summary = result.Summary
+					if result.URL != "" {
+						ts.URL = result.URL
+					}
+
+					switch result.State {
+					case divergeiov1alpha1.TestStatePassed:
+						now := metav1.Now()
+						ts.CompletedAt = &now
+						r.Recorder.Event(&env, "Normal", "TestsPassed", result.Summary)
+						if r.StatusReporter != nil {
+							_ = r.StatusReporter.PostCommitStatus(ctx, &env, "success", result.Summary)
+						}
+					case divergeiov1alpha1.TestStateFailed:
+						now := metav1.Now()
+						ts.CompletedAt = &now
+						r.Recorder.Event(&env, "Warning", "TestsFailed", result.Summary)
+						if r.StatusReporter != nil {
+							_ = r.StatusReporter.PostCommitStatus(ctx, &env, "failed", result.Summary)
+						}
+					}
+				}
+
+				// Requeue to poll again if still running
+				if ts.State == divergeiov1alpha1.TestStateRunning || ts.State == divergeiov1alpha1.TestStatePending {
+					if requeueAfter == 0 || requeueAfter > 30*time.Second {
+						requeueAfter = 30 * time.Second
+					}
+				}
 			}
 		}
 	}
