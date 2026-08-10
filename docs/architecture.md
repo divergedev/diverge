@@ -64,7 +64,7 @@ The `EnvironmentStatus` tracks the observed state. Environments use the `diverge
 - `Failed`: An error occurred during the provisioning or deployment phase.
 - `Terminating`: The environment is being dismantled (e.g., after an MR is closed/merged or TTL expiry).
 
-Phase transitions are driven by standard Kubernetes `metav1.Condition` types that track sub-system readiness, specifically: `NamespaceReady`, `DatabaseReady`, `RoutingReady`, and `DeployReady`.
+Phase transitions are driven by standard Kubernetes `metav1.Condition` types that track sub-system readiness, specifically: `NamespaceReady`, `DatabaseReady`, `RoutingReady`, and `ServicesReady`.
 
 ## Delta Deployment
 

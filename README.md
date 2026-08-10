@@ -27,7 +27,7 @@ Documentation: [https://divergedev.com](https://divergedev.com)
 *   **Multi-SCM Notifiers**: GitLab MR comments and GitHub PR comments with status updates.
 
 ## Security
-Diverge takes security seriously. The platform features strict CRD OpenAPI validation, context timeouts on all external calls, and prevention mechanisms for shell/markdown injection in templates. The controller uses RBAC-scoped clients to ensure it only has the permissions it needs. Webhook interactions are secured using constant-time comparisons for secrets and RFC 7230 compliant header validation.
+Diverge takes security seriously. The platform features strict CRD OpenAPI validation, context timeouts on all external calls, and prevention mechanisms for shell/markdown injection in templates. The controller uses RBAC-scoped clients to ensure it only has the permissions it needs. Webhook interactions are secured using constant-time comparisons for secrets and RFC 7230-compliant header validation.
 
 ## Architecture
 

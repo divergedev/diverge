@@ -59,7 +59,7 @@ The project consists of three main binaries:
 - Context timeouts on all external calls
 - Constant-time secret comparison for webhooks
 - HeaderKey validation against RFC 7230
-- Path traversal prevention in API paths
+- Path traversal prevention in notifier API paths
 - Strict YAML unmarshaling (DisallowUnknownFields)
 - DeepCopy baseline before status mutations
 
