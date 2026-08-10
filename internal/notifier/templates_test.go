@@ -40,6 +40,7 @@ func TestRenderReadyTemplate(t *testing.T) {
 		Services:    []string{"svc1", "svc2"},
 		BaseURL:     "https://api.example.com",
 		ExpiryTime:  "2023-01-01T00:00:00Z",
+		HeaderKey:   "x-diverge-env",
 	}
 	res, err := renderTemplate(readyTemplate, data)
 	assert.NoError(t, err)

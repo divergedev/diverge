@@ -61,9 +61,9 @@ const readyTmplStr = `## 🟢 Diverge Preview Environment — Ready!
 {{range .Services}}- ✅ {{. | sanitize}}
 {{end}}
 {{if .BaseURL}}### Quick Access
-` + "```\n" + `curl -H "x-diverge-env: {{.Name | sanitize}}" {{.BaseURL}}
+` + "```\n" + `curl -H "{{.HeaderKey}}: {{.Name | sanitize}}" {{.BaseURL}}
 ` + "```\n" + `
-> 💡 **Tip:** Use the Diverge browser extension or add the header ` + "`x-diverge-env: {{.Name | sanitize}}`" + ` to route traffic to this preview.
+> 💡 **Tip:** Use the Diverge browser extension or add the header ` + "`{{.HeaderKey}}: {{.Name | sanitize}}`" + ` to route traffic to this preview.
 {{end}}
 ---
 _Powered by [Diverge](https://github.com/divergedev/diverge) • Expires {{.ExpiryTime}}_`
@@ -102,6 +102,7 @@ type TemplateData struct {
 	BaseURL     string
 	ExpiryTime  string
 	Reason      string
+	HeaderKey   string // routing header key (defaults to x-diverge-env)
 	Conditions  []ConditionData
 }
 

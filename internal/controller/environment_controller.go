@@ -45,6 +45,7 @@ type EnvironmentReconciler struct {
 // +kubebuilder:rbac:groups=networking.istio.io,resources=virtualservices;destinationrules,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=argoproj.io,resources=applications,verbs=get;list;watch;create;update;patch;delete
 
 func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -85,7 +86,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				logger.Error(notifyErr, "failed to post environment failed notification")
 			}
 		}
-		return r.updateStatus(ctx, &env, err)
+		return r.updateStatusWithRequeue(ctx, &env, err, 0)
 	}
 	setCondition(&env, "NamespaceReady", metav1.ConditionTrue, "NamespaceProvisioned", "Namespace is ready")
 
@@ -98,7 +99,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				logger.Error(notifyErr, "failed to post environment failed notification")
 			}
 		}
-		return r.updateStatus(ctx, &env, err)
+		return r.updateStatusWithRequeue(ctx, &env, err, 0)
 	}
 	if dbStatus != nil && dbStatus.Ready {
 		setCondition(&env, "DatabaseReady", metav1.ConditionTrue, "DatabaseProvisioned", "Database is ready")
@@ -115,7 +116,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				logger.Error(notifyErr, "failed to post environment failed notification")
 			}
 		}
-		return r.updateStatus(ctx, &env, err)
+		return r.updateStatusWithRequeue(ctx, &env, err, 0)
 	}
 	setCondition(&env, "RoutingReady", metav1.ConditionTrue, "RoutingProvisioned", "Routing is ready")
 	env.Status.URL = r.Router.GetExternalURL(&env)
@@ -129,7 +130,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 					logger.Error(notifyErr, "failed to post environment failed notification")
 				}
 			}
-			return r.updateStatus(ctx, &env, err)
+			return r.updateStatusWithRequeue(ctx, &env, err, 0)
 		}
 	}
 	setCondition(&env, "ServicesReady", metav1.ConditionTrue, "ServicesDeployed", "Services deployed successfully")
@@ -154,6 +155,8 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			}
 			return ctrl.Result{}, nil
 		}
+		// C1: Requeue when TTL expires so the controller wakes up to delete
+		return r.updateStatusWithRequeue(ctx, &env, nil, time.Until(expiryTime))
 	} else if env.Status.CreatedAt == nil {
 		now := metav1.Now()
 		env.Status.CreatedAt = &now
@@ -173,7 +176,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	// 12. Update status
-	return r.updateStatus(ctx, &env, nil)
+	return r.updateStatusWithRequeue(ctx, &env, nil, 0)
 }
 
 func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *divergeiov1alpha1.Environment) (ctrl.Result, error) {
@@ -200,7 +203,21 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 			return ctrl.Result{}, fmt.Errorf("failed to teardown database: %w", err)
 		}
 
+		// C4: Wait for ArgoCD Applications to be fully deleted before
+		// deleting the namespace, preventing finalizer deadlocks where
+		// the namespace enters Terminating but ArgoCD resources still
+		// have resources-finalizer.argocd.argoproj.io.
 		if env.Spec.Deploy.Namespace == "create" {
+			if r.Deployer != nil {
+				status, err := r.Deployer.Status(ctx, env)
+				if err != nil {
+					return ctrl.Result{}, fmt.Errorf("failed to check deployer status during teardown: %w", err)
+				}
+				if len(status) > 0 {
+					log.FromContext(ctx).Info("Waiting for deployer resources to be fully deleted", "remaining", len(status))
+					return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+				}
+			}
 			ns := &corev1.Namespace{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: env.PreviewNamespace(),
@@ -242,12 +259,18 @@ func (r *EnvironmentReconciler) ensureNamespace(ctx context.Context, env *diverg
 	return nil
 }
 
-func (r *EnvironmentReconciler) updateStatus(ctx context.Context, env *divergeiov1alpha1.Environment, err error) (ctrl.Result, error) {
-	if updateErr := r.Status().Update(ctx, env); updateErr != nil {
+// H3: Use Status().Patch() instead of Update() to avoid 409 conflicts
+func (r *EnvironmentReconciler) updateStatusWithRequeue(ctx context.Context, env *divergeiov1alpha1.Environment, err error, requeueAfter time.Duration) (ctrl.Result, error) {
+	base := env.DeepCopy()
+	patch := client.MergeFrom(base)
+	if updateErr := r.Status().Patch(ctx, env, patch); updateErr != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
 	}
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+	if requeueAfter > 0 {
+		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
 	return ctrl.Result{}, nil
 }

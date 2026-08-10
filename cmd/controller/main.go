@@ -52,7 +52,6 @@ func main() {
 	var webhookSecretToken string
 	var argoRepoURL string
 	var notifierProvider string
-	var notifierToken string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -65,14 +64,19 @@ func main() {
 	flag.StringVar(&argoNamespace, "argo-namespace", "argocd", "Namespace where Argo CD is installed")
 	flag.StringVar(&argoRepoURL, "argo-repo-url", "", "Repository URL for Argo CD Application sources")
 	flag.StringVar(&notifierProvider, "notifier-provider", "noop", "Notification provider (gitlab|github|noop)")
-	flag.StringVar(&notifierToken, "notifier-token", "", "API token for the notification provider")
-	flag.StringVar(&webhookSecretToken, "webhook-secret-token", "", "The secret token for authenticating webhooks.")
+	flag.StringVar(&webhookSecretToken, "webhook-secret-token", "", "The secret token for authenticating webhooks (prefer DIVERGE_WEBHOOK_SECRET env var).")
 
 	opts := zap.Options{
 		Development: true,
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
+
+	// C2: Read secrets from environment variables, falling back to flags for local dev
+	notifierToken := os.Getenv("DIVERGE_NOTIFIER_TOKEN")
+	if webhookSecretToken == "" {
+		webhookSecretToken = os.Getenv("DIVERGE_WEBHOOK_SECRET")
+	}
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
@@ -102,9 +106,17 @@ func main() {
 	var notifierImpl notifier.Notifier
 	switch notifierProvider {
 	case "gitlab":
+		if notifierToken == "" {
+			setupLog.Error(fmt.Errorf("DIVERGE_NOTIFIER_TOKEN is required for --notifier-provider=gitlab"), "missing token")
+			os.Exit(1)
+		}
 		notifierImpl = &notifier.GitLabNotifier{Token: notifierToken}
 	case "github":
-		notifierImpl = &notifier.GitHubNotifier{Token: notifierToken}
+		if notifierToken == "" {
+			setupLog.Error(fmt.Errorf("DIVERGE_NOTIFIER_TOKEN is required for --notifier-provider=github"), "missing token")
+			os.Exit(1)
+		}
+		notifierImpl = notifier.NewGitHubNotifier("", notifierToken)
 	case "noop", "":
 		notifierImpl = &notifier.NoopNotifier{}
 	default:

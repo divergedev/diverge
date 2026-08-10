@@ -146,6 +146,11 @@ func buildTemplateData(env *v1alpha1.Environment, reason string) TemplateData {
 		baseURL = fmt.Sprintf("https://%s.preview.example.com", env.Name) // domain not fully known here, assume logic
 	}
 
+	headerKey := "x-diverge-env"
+	if env.Spec.Routing.HeaderKey != "" {
+		headerKey = env.Spec.Routing.HeaderKey
+	}
+
 	return TemplateData{
 		Name:        env.Name,
 		Branch:      env.Spec.Source.Branch,
@@ -159,6 +164,7 @@ func buildTemplateData(env *v1alpha1.Environment, reason string) TemplateData {
 		BaseURL:     baseURL,
 		ExpiryTime:  expiryStr,
 		Reason:      reason,
+		HeaderKey:   headerKey,
 		Conditions:  conditions,
 	}
 }

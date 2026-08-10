@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -63,10 +64,13 @@ func (g *GitHubNotifier) setCommentID(env *v1alpha1.Environment, id int) {
 }
 
 func (g *GitHubNotifier) postOrUpdateComment(ctx context.Context, env *v1alpha1.Environment, body string) error {
-	project, pr, err := g.getProjectAndPR(env) // project format: owner/repo
+	project, pr, err := g.getProjectAndPR(env)
 	if err != nil {
 		return err
 	}
+
+	// H2: Escape project path to prevent API path traversal
+	escapedProject := url.PathEscape(project)
 
 	commentID := g.getCommentID(env)
 
@@ -77,10 +81,10 @@ func (g *GitHubNotifier) postOrUpdateComment(ctx context.Context, env *v1alpha1.
 	var method string
 
 	if commentID != 0 {
-		reqURL = fmt.Sprintf("%s/repos/%s/issues/comments/%d", g.BaseURL, project, commentID)
+		reqURL = fmt.Sprintf("%s/repos/%s/issues/comments/%d", g.BaseURL, escapedProject, commentID)
 		method = http.MethodPatch
 	} else {
-		reqURL = fmt.Sprintf("%s/repos/%s/issues/%d/comments", g.BaseURL, project, pr)
+		reqURL = fmt.Sprintf("%s/repos/%s/issues/%d/comments", g.BaseURL, escapedProject, pr)
 		method = http.MethodPost
 	}
 

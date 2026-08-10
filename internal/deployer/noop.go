@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/argocd"
 )
 
 // NoopDeployer is a Deployer that does nothing.
@@ -18,4 +19,9 @@ func (n *NoopDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) er
 // Teardown does nothing.
 func (n *NoopDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
 	return nil
+}
+
+// Status returns no active deployments.
+func (n *NoopDeployer) Status(ctx context.Context, env *v1alpha1.Environment) ([]argocd.ApplicationStatus, error) {
+	return nil, nil
 }
