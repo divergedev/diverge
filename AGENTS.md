@@ -18,23 +18,26 @@ The project consists of three main binaries:
 - `cmd/`: Entrypoints for the three binaries.
 - `internal/cli/`: Implementation of the Cobra CLI commands.
 - `internal/controller/`: K8s operator reconciliation loop
-- `internal/notifier/`: GitLab/GitHub MR/PR comment notifications
+- `internal/notifier/`: GitLab/GitHub MR/PR comment notifications and commit status reporting
 - `internal/webhook/`: Webhook handlers for GitLab/GitHub events
 - `internal/proxy/`: Reverse proxy with header-based routing
 - `internal/routing/`: Istio VirtualService and Gateway API routing
 - `internal/argocd/`: ArgoCD Application generation (Helm + Kustomize)
-- `internal/database/`: Database provisioning (shared, schema, snapshot, fresh)
+- `internal/database/`: Database provisioning (shared, schema, snapshot, fresh) with SchemaProvider
 - `internal/deployer/`: Deployer interface and ArgoCD deployer
 - `internal/config/`: .diverge.yaml parsing with strict validation
 - `internal/changeset/`: Git diff → changed service detection
 - `api/v1alpha1/`: CRD types with OpenAPI validation
+- `proto/diverge/v1alpha1/`: Protobuf definitions (environment.proto, service.proto)
+- `gen/`: Generated protobuf-go, ConnectRPC stubs, and proto2type domain types
 - `pkg/sdk/`: SDK for programmatic environment management
 - `charts/diverge/`: The Helm chart for deploying Diverge.
 
 ## Build System
 
 - **Nix**: We use Nix for managing development environments (`flake.nix`). **All terminal commands must be run inside the Nix dev shell by prefixing with `nix develop -c`.**
-- **Make**: Standard targets include `make install` (install CRDs), `make run` (run operator locally), `make test`, and `make build`.
+- **Make**: Standard targets include `make install` (install CRDs), `make run` (run operator locally), `make test`, `make build`, and `make proto` (generate protobuf/ConnectRPC/domain types).
+- **Proto**: Uses `buf` for protobuf generation and `proto2type` for domain type generation. Run `make proto` after editing `.proto` files.
 - **Go**: Version 1.26.
 
 ## Test Patterns
@@ -43,7 +46,7 @@ The project consists of three main binaries:
 - We favor **table-driven tests** for comprehensive coverage.
 - We use `httptest` for testing HTTP servers/clients.
 - We use Property-Based Testing (PBT) using `hegel` (`hegel.dev/go/hegel`) where specified or appropriate.
-- Packages with property tests: `notifier`, `proxy`, `webhook`, `controller`, `routing`, `argocd`, `api/v1alpha1`.
+- Packages with property tests: `notifier`, `proxy`, `webhook`, `controller`, `routing`, `argocd`, `api/v1alpha1`, `database`.
 - Currently passing 147 tests.
 
 ## Conventions
@@ -59,7 +62,10 @@ The project consists of three main binaries:
 - Context timeouts on all external calls
 - Constant-time secret comparison for webhooks
 - HeaderKey validation against RFC 7230
+- SHA validation (hex-only regex) for commit status URLs
 - Path traversal prevention in notifier API paths
+- Label key/value validation using `k8s.io/apimachinery/pkg/util/validation`
+- SQL injection prevention via regex-gated schema names (no parameterized DDL)
 - Strict YAML unmarshaling (DisallowUnknownFields)
 - DeepCopy baseline before status mutations
 
@@ -70,6 +76,6 @@ The project consists of three main binaries:
 
 ## Open Issues / Coming Next
 
-- **KNative Router** — Support for KNative-based routing
-- **GitLab commit statuses** — Report environment deployment status to GitLab commits
-- **SchemaProvider** — Database schema provider enhancements
+- **ConnectRPC API Server** (#12) — gRPC/ConnectRPC API server for environment management
+- **WebSocket Support** (#6) — Full WebSocket proxying for real-time preview environments
+- **Controller EnvTest + E2E** (#9) — Comprehensive controller integration tests with envtest

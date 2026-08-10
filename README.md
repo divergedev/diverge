@@ -19,12 +19,16 @@ Documentation: [https://divergedev.com](https://divergedev.com)
 *   **Delta Deployment**: Only deploy what changed, falling back to a baseline for unmodified services.
 *   **Header-Based Routing**: Leverages Istio and the Diverge Proxy to route traffic seamlessly using HTTP headers.
 *   **Configurable DB Modes**: Options for shared, schema, snapshot, or fresh databases for your environments.
+*   **Schema-per-Environment**: SQL-based schema provisioning with regex-validated naming and injection prevention.
 *   **MR-Triggered Lifecycle**: Environments spin up when a Merge Request opens and tear down upon merge/close.
+*   **Merge Gating**: GitLab/GitHub commit status checks (`diverge/preview`) block merges until environments are healthy.
 *   **Argo CD Integration**: Direct `Application` CR creation for GitOps deployment sync, supporting both Helm charts and Kustomize overlays.
-*   **Security Hardened**: Webhook secret constant-time comparison, RFC 7230 header validation, path traversal prevention, strict YAML unmarshaling.
+*   **Namespace Labels**: Custom labels on preview namespaces (e.g., `istio.io/dataplane-mode: ambient` for zero-trust mTLS).
+*   **Security Hardened**: Webhook secret constant-time comparison, RFC 7230 header validation, SHA validation, path traversal prevention, strict YAML unmarshaling.
 *   **Finalizer-Based Lifecycle**: Kubernetes finalizers ensure clean teardown of all resources (routing, database, ArgoCD apps) even during force-deletes.
 *   **TTL Auto-Expiry**: Automatic environment cleanup after configurable TTL with requeue-based expiry.
 *   **Multi-SCM Notifiers**: GitLab MR comments and GitHub PR comments with status updates.
+*   **Proto Foundation**: Protobuf-defined domain types with ConnectRPC service definition for future API server.
 
 ## Security
 Diverge takes security seriously. The platform features strict CRD OpenAPI validation, context timeouts on all external calls, and prevention mechanisms for shell/markdown injection in templates. The controller uses RBAC-scoped clients to ensure it only has the permissions it needs. Webhook interactions are secured using constant-time comparisons for secrets and RFC 7230-compliant header validation.
@@ -79,12 +83,13 @@ Currently, the project contains **147 tests** utilizing table-driven tests, `tes
 
 - [x] **CI Actions Node 22 Bump** (#25) — Migrate GitHub Actions to Node 22 runtime
 - [x] **Godoc Coverage** (#26) — Complete documentation for all exported functions
+- [x] **GitLab/GitHub Commit Statuses** — Merge gating via `diverge/preview` commit status checks
+- [x] **Schema-per-Environment** — SQL-based schema provisioning with SchemaProvider
+- [x] **Namespace Labels** — Custom labels on preview namespaces (Istio Ambient mTLS)
+- [x] **Proto Foundation** — Protobuf domain types + ConnectRPC service definition
 - [ ] **WebSocket Support** (#6) — Full WebSocket proxying for real-time preview environments
 - [ ] **Controller EnvTest + E2E** (#9) — Comprehensive controller integration tests with envtest
-- [ ] **Environment Proto + ConnectRPC API** (#12) — gRPC/ConnectRPC API server for environment management
-- [ ] **GitLab Commit Statuses** — Merge gating based on preview environment statuses
-- [ ] **KNative Router** — Preview routing for KNative Serving
-- [ ] **Schema-per-Environment** — Database isolation using individual schemas per environment
+- [ ] **ConnectRPC API Server** (#12) — gRPC/ConnectRPC API server for environment management
 
 ## License
 Apache 2.0
