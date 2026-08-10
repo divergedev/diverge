@@ -17,6 +17,18 @@ The project consists of three main binaries:
 
 - `cmd/`: Entrypoints for the three binaries.
 - `internal/cli/`: Implementation of the Cobra CLI commands.
+- `internal/controller/`: K8s operator reconciliation loop
+- `internal/notifier/`: GitLab/GitHub MR/PR comment notifications
+- `internal/webhook/`: Webhook handlers for GitLab/GitHub events
+- `internal/proxy/`: Reverse proxy with header-based routing
+- `internal/routing/`: Istio VirtualService and Gateway API routing
+- `internal/argocd/`: ArgoCD Application generation (Helm + Kustomize)
+- `internal/database/`: Database provisioning (shared, schema, snapshot, fresh)
+- `internal/deployer/`: Deployer interface and ArgoCD deployer
+- `internal/config/`: .diverge.yaml parsing with strict validation
+- `internal/changeset/`: Git diff → changed service detection
+- `api/v1alpha1/`: CRD types with OpenAPI validation
+- `pkg/sdk/`: SDK for programmatic environment management
 - `charts/diverge/`: The Helm chart for deploying Diverge.
 
 ## Build System
@@ -30,8 +42,9 @@ The project consists of three main binaries:
 - We use `testify/assert` and `testify/require` for assertions.
 - We favor **table-driven tests** for comprehensive coverage.
 - We use `httptest` for testing HTTP servers/clients.
-- We use Property-Based Testing (PBT) using `rapid` where specified or appropriate.
-- Currently passing 117 tests.
+- We use Property-Based Testing (PBT) using `hegel` (`hegel.dev/go/hegel`) where specified or appropriate.
+- Packages with property tests: `notifier`, `proxy`, `webhook`, `controller`, `routing`, `argocd`, `api/v1alpha1`.
+- Currently passing 147 tests.
 
 ## Conventions
 
@@ -40,6 +53,16 @@ The project consists of three main binaries:
 - **Hooks**: We use `lefthook` for pre-commit hooks.
 - **Idiomatic Go**: Write standard, idiomatic Go code with proper error handling.
 
+## Security Conventions
+
+- Sentinel errors (e.g., `ErrEnvironmentNotFound`)
+- Context timeouts on all external calls
+- Constant-time secret comparison for webhooks
+- HeaderKey validation against RFC 7230
+- Path traversal prevention in notifier API paths
+- Strict YAML unmarshaling (DisallowUnknownFields)
+- DeepCopy baseline before status mutations
+
 ## CI/CD
 
 - **GitHub Actions**: Workflows defined in `.github/workflows/` (e.g., `ci.yml`).
@@ -47,8 +70,6 @@ The project consists of three main binaries:
 
 ## Open Issues / Coming Next
 
-- **WebSocket Support** (#6) — Full WebSocket proxying for real-time preview environments
-- **Controller EnvTest + E2E** (#9) — Comprehensive controller integration tests with envtest
-- **Environment Proto + ConnectRPC API** (#12) — gRPC/ConnectRPC API server for environment management
-- **CI Actions Node 22 Bump** (#25) — Migrate GitHub Actions to Node 22 runtime
-- **Godoc Coverage** (#26) — Complete documentation for all exported functions
+- **KNative Router** — Support for KNative-based routing
+- **GitLab commit statuses** — Report environment deployment status to GitLab commits
+- **SchemaProvider** — Database schema provider enhancements
