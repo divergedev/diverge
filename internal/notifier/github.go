@@ -76,6 +76,9 @@ func (g *GitHubNotifier) postOrUpdateComment(ctx context.Context, env *v1alpha1.
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return fmt.Errorf("invalid project format %q: expected owner/repo", project)
 	}
+	if parts[0] == "." || parts[0] == ".." || parts[1] == "." || parts[1] == ".." {
+		return fmt.Errorf("invalid project format %q: path traversal not allowed", project)
+	}
 	escapedProject := url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1])
 
 	commentID := g.getCommentID(env)
