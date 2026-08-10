@@ -88,6 +88,67 @@ type ManifestSource struct {
 	URL string `json:"url,omitempty"`
 }
 
+// TestTriggerType defines how tests are triggered.
+type TestTriggerType string
+
+const (
+	TestTriggerGitLabPipeline TestTriggerType = "gitlab-pipeline"
+	TestTriggerGitHubDispatch TestTriggerType = "github-dispatch"
+	TestTriggerWebhook        TestTriggerType = "webhook"
+)
+
+// TestTriggerSpec defines how to trigger a test run.
+type TestTriggerSpec struct {
+	// +kubebuilder:validation:Enum=gitlab-pipeline;github-dispatch;webhook
+	Type TestTriggerType `json:"type"`
+	// Project is the CI project to trigger (e.g., "team/e2e-tests").
+	// Used by gitlab-pipeline and github-dispatch triggers.
+	Project string `json:"project,omitempty"`
+	// Ref is the git ref to trigger tests against (e.g., "main").
+	Ref string `json:"ref,omitempty"`
+	// EventType is the GitHub repository dispatch event type.
+	// Used by github-dispatch trigger only.
+	EventType string `json:"eventType,omitempty"`
+	// WebhookURL is the URL to POST to for webhook triggers.
+	WebhookURL string `json:"webhookURL,omitempty"`
+	// SecretRef references a Kubernetes Secret containing the trigger token.
+	SecretRef string `json:"secretRef,omitempty"`
+}
+
+// TestingSpec defines the test integration configuration.
+type TestingSpec struct {
+	// Enabled controls whether tests are triggered for this environment.
+	Enabled bool `json:"enabled,omitempty"`
+	// Trigger defines how tests are triggered.
+	Trigger TestTriggerSpec `json:"trigger"`
+	// Timeout is how long to wait for test results before timing out.
+	// +optional
+	Timeout *metav1.Duration `json:"timeout,omitempty"`
+	// Required controls whether test results block the diverge/tests commit status.
+	Required bool `json:"required,omitempty"`
+}
+
+// TestState represents the current state of a test run.
+type TestState string
+
+const (
+	TestStatePending  TestState = "pending"
+	TestStateRunning  TestState = "running"
+	TestStatePassed   TestState = "passed"
+	TestStateFailed   TestState = "failed"
+	TestStateTimedOut TestState = "timed-out"
+)
+
+// TestStatus represents the observed state of a test run.
+type TestStatus struct {
+	State       TestState    `json:"state,omitempty"`
+	Summary     string       `json:"summary,omitempty"`
+	URL         string       `json:"url,omitempty"`
+	RunID       string       `json:"runID,omitempty"`
+	StartedAt   *metav1.Time `json:"startedAt,omitempty"`
+	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
+}
+
 // EnvironmentSpec defines the desired state of Environment
 type EnvironmentSpec struct {
 	Source    EnvironmentSource    `json:"source,omitempty"`
@@ -95,6 +156,9 @@ type EnvironmentSpec struct {
 	Routing   EnvironmentRouting   `json:"routing,omitempty"`
 	Database  EnvironmentDatabase  `json:"database,omitempty"`
 	Lifecycle EnvironmentLifecycle `json:"lifecycle,omitempty"`
+	// Testing configures automated test integration.
+	// +optional
+	Testing *TestingSpec `json:"testing,omitempty"`
 }
 
 // EnvironmentPhase defines the phases an Environment can be in
@@ -121,6 +185,9 @@ type EnvironmentStatus struct {
 	CommitSHA          string             `json:"commitSHA,omitempty"`
 	CommentID          int                `json:"commentID,omitempty"`
 	CommitStatusURL    string             `json:"commitStatusURL,omitempty"`
+	// TestStatus tracks the state of the test run for this environment.
+	// +optional
+	TestStatus *TestStatus `json:"testStatus,omitempty"`
 }
 
 // +kubebuilder:object:root=true
