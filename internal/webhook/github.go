@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"time"
 
+	"github.com/divergedev/diverge/internal/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -38,6 +40,12 @@ type GitHubPRPayload struct {
 func (h *GitHubWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	logger := log.FromContext(ctx).WithName("github-webhook")
+
+	start := time.Now()
+	action := "unknown"
+	defer func() {
+		metrics.WebhookProcessDuration.WithLabelValues("github", action).Observe(time.Since(start).Seconds())
+	}()
 
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -79,9 +87,22 @@ func (h *GitHubWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	action = normalizeGitHubAction(payload.Action)
+
 	logger.Info("Received GitHub PR event", "pr", payload.PullRequest.Number, "action", payload.Action)
 
 	// Same Environment CR creation logic as GitLab handler
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// normalizeGitHubAction maps webhook actions to a bounded set of known values
+// to prevent unbounded Prometheus label cardinality.
+func normalizeGitHubAction(action string) string {
+	switch action {
+	case "opened", "synchronize", "closed", "reopened", "edited", "ready_for_review":
+		return action
+	default:
+		return "other"
+	}
 }

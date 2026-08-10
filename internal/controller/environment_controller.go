@@ -21,6 +21,7 @@ import (
 	"github.com/divergedev/diverge/internal/changeset"
 	"github.com/divergedev/diverge/internal/database"
 	"github.com/divergedev/diverge/internal/deployer"
+	"github.com/divergedev/diverge/internal/metrics"
 	"github.com/divergedev/diverge/internal/notifier"
 	"github.com/divergedev/diverge/internal/routing"
 )
@@ -50,13 +51,34 @@ type EnvironmentReconciler struct {
 // +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=argoproj.io,resources=applications,verbs=get;list;watch;create;update;patch;delete
 
-func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, retErr error) {
 	logger := log.FromContext(ctx)
 
 	var env divergeiov1alpha1.Environment
 	if err := r.Get(ctx, req.NamespacedName, &env); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+
+	// Track reconcile outcome — single defer covers all return paths
+	defer func() {
+		if retErr != nil {
+			metrics.ReconcileOutcomes.WithLabelValues("error").Inc()
+		} else {
+			metrics.ReconcileOutcomes.WithLabelValues("success").Inc()
+		}
+
+		// Update TTL gauge if applicable.
+		// Skip on deletion path — handleTeardown already deleted the series.
+		if env.DeletionTimestamp.IsZero() && env.Status.ExpiresAt != nil {
+			remaining := time.Until(env.Status.ExpiresAt.Time).Seconds()
+			if remaining < 0 {
+				remaining = 0
+			}
+			metrics.EnvironmentTTLRemaining.WithLabelValues(
+				env.Name, env.Namespace,
+			).Set(remaining)
+		}
+	}()
 
 	// Capture a pre-mutation baseline for status patch diffs
 	statusBase := env.DeepCopy()
@@ -222,11 +244,14 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	oldPhase := env.Status.Phase
 	env.Status.Phase = newPhase
 
+	// Note: transition counter is recorded after successful status persist below
+
 	if env.Status.Phase == divergeiov1alpha1.PhaseRunning {
 		r.Recorder.Event(&env, "Normal", "Running", "Environment is up and running")
 	}
 
 	// 11. Check TTL expiry and set timestamps
+	var requeueAfter time.Duration
 	if env.Spec.Lifecycle.TTL != nil && env.Status.CreatedAt != nil {
 		expiryTime := env.Status.CreatedAt.Add(env.Spec.Lifecycle.TTL.Duration)
 		env.Status.ExpiresAt = &metav1.Time{Time: expiryTime}
@@ -238,7 +263,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			return ctrl.Result{}, nil
 		}
 		// C1: Requeue when TTL expires so the controller wakes up to delete
-		return r.updateStatusWithRequeue(ctx, &env, statusBase, nil, time.Until(expiryTime))
+		requeueAfter = time.Until(expiryTime)
 	} else if env.Status.CreatedAt == nil {
 		now := metav1.Now()
 		env.Status.CreatedAt = &now
@@ -273,11 +298,29 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 	}
 
-	// 12. Update status
-	return r.updateStatusWithRequeue(ctx, &env, statusBase, nil, 0)
+	// 12. Update status (requeueAfter is non-zero when TTL is active)
+	res, err := r.updateStatusWithRequeue(ctx, &env, statusBase, nil, requeueAfter)
+	if err == nil && oldPhase != newPhase {
+		metrics.EnvironmentTransitions.WithLabelValues(
+			string(oldPhase), string(newPhase), env.Spec.Source.Provider,
+		).Inc()
+		// Update active environments gauge: decrement old phase, increment new
+		if oldPhase != "" {
+			metrics.EnvironmentsActive.WithLabelValues(
+				string(oldPhase), env.Spec.Source.Provider,
+			).Dec()
+		}
+		metrics.EnvironmentsActive.WithLabelValues(
+			string(newPhase), env.Spec.Source.Provider,
+		).Inc()
+	}
+	return res, err
 }
 
 func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *divergeiov1alpha1.Environment) (ctrl.Result, error) {
+	// Clean up per-environment TTL gauge to prevent cardinality leak
+	metrics.EnvironmentTTLRemaining.DeleteLabelValues(env.Name, env.Namespace)
+
 	if controllerutil.ContainsFinalizer(env, environmentFinalizer) {
 		r.Recorder.Event(env, "Normal", "Terminating", "Teardown started")
 
@@ -346,6 +389,15 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		controllerutil.RemoveFinalizer(env, environmentFinalizer)
 		if err := r.Update(ctx, env); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to remove finalizer: %w", err)
+		}
+
+		// Decrement active environments gauge after successful finalizer
+		// removal — this is idempotent because the finalizer is gone,
+		// so subsequent reconciles skip this block entirely.
+		if env.Status.Phase != "" {
+			metrics.EnvironmentsActive.WithLabelValues(
+				string(env.Status.Phase), env.Spec.Source.Provider,
+			).Dec()
 		}
 
 		r.Recorder.Event(env, "Normal", "Terminated", "Teardown complete")

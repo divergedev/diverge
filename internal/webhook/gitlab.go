@@ -4,7 +4,9 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"net/http"
+	"time"
 
+	"github.com/divergedev/diverge/internal/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -43,6 +45,12 @@ func (h *GitLabWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	ctx := r.Context()
 	logger := log.FromContext(ctx).WithName("gitlab-webhook")
 
+	start := time.Now()
+	action := "unknown"
+	defer func() {
+		metrics.WebhookProcessDuration.WithLabelValues("gitlab", action).Observe(time.Since(start).Seconds())
+	}()
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -67,10 +75,23 @@ func (h *GitLabWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	action = normalizeGitLabAction(payload.ObjectAttributes.Action)
+
 	logger.Info("Received GitLab MR event", "mr", payload.ObjectAttributes.IID, "action", payload.ObjectAttributes.Action)
 
 	// Create/Update/Delete Environment CRs based on action (open, update, merge, close)
 	// Read labels from MR to determine deploy mode and DB strategy
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// normalizeGitLabAction maps webhook actions to a bounded set of known values
+// to prevent unbounded Prometheus label cardinality.
+func normalizeGitLabAction(action string) string {
+	switch action {
+	case "open", "reopen", "update", "merge", "close", "approved", "unapproved":
+		return action
+	default:
+		return "other"
+	}
 }
