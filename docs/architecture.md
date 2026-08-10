@@ -19,6 +19,7 @@ flowchart TD
         E --> G[Database Provider]
         E --> H[Routing Engine]
         E --> N[Notifier]
+        E --> S[Status Reporter]
     end
 
     F -->|Analyzes .diverge.yaml| I[Argo CD Application CRs / Deployments]
@@ -42,7 +43,8 @@ flowchart TD
 - **Routing Engine**: Configures the underlying service mesh (e.g., Istio) to route traffic appropriately. In header-based mode, it generates Istio `VirtualService` and `DestinationRule` resources.
 - **ArgoCD Deployer**: Generates and manages Argo CD `Application` CRs, supporting both Helm and Kustomize source types.
 - **Notifier**: (Optional) Sends status updates back to the Version Control System (like GitLab/GitHub MR/PR comments) regarding deployment progress and preview URLs.
-- **API Server** (Coming soon - Issue #12): A forthcoming gRPC/ConnectRPC API server for extended environment management and integration.
+- **Status Reporter**: Posts commit status checks to GitLab/GitHub for merge gating. Supports `pending`, `running`, `success`, `failed`, and `canceled` states with platform-specific mapping. Includes SHA validation (hex-only regex) to prevent path traversal.
+- **API Server** (Coming soon - Issue #12): A forthcoming gRPC/ConnectRPC API server for extended environment management and integration. Proto definitions are in `proto/diverge/v1alpha1/`.
 
 ## CRD Design
 
@@ -51,13 +53,13 @@ The core of Diverge is the `Environment` Custom Resource Definition (CRD).
 ### Spec
 The `EnvironmentSpec` dictates the desired state:
 - `Source`: Provider (e.g., gitlab), Project name, MR ID, and Branch.
-- `Deploy`: Deployment mode (`delta` or `full`), list of changed services, and a baseline reference.
+- `Deploy`: Deployment mode (`delta` or `full`), list of changed services, baseline reference, and `namespaceLabels` (custom labels applied to the preview namespace, e.g., `istio.io/dataplane-mode: ambient`).
 - `Routing`: Routing mode, header key/value pair, and external URL.
 - `Database`: DB mode (`shared`, `schema`, `snapshot`, `fresh`), connection string, and migration commands.
 - `Lifecycle`: Time-to-Live (TTL) and cleanup behaviors.
 
 ### Status & State Machine
-The `EnvironmentStatus` tracks the observed state. Environments use the `diverge.io/finalizer` to ensure a clean teardown of external resources during deletion. The lifecycle of an environment moves through specific phases:
+The `EnvironmentStatus` tracks the observed state. Environments use the `diverge.io/finalizer` to ensure a clean teardown of external resources during deletion. Status includes `CommitSHA`, `CommentID`, and `CommitStatusURL` for merge gating integration. The lifecycle of an environment moves through specific phases:
 - `Pending`: The environment resource has been created but no action has taken place.
 - `Deploying`: The controller is currently provisioning databases, deploying services, and configuring routing rules.
 - `Running`: The environment is healthy and actively serving traffic.
@@ -110,7 +112,10 @@ Diverge seamlessly integrates into the modern cloud-native stack:
 Diverge incorporates secure-by-default design principles:
 - **Webhook Security**: Employs constant-time token validation to prevent timing attacks.
 - **Input Validation**: Enforces strict YAML parsing (disallowing unknown fields) and validates `HeaderKey` values against RFC 7230 token format constraints.
-- **Path Traversal Prevention**: Ensures GitHub/GitLab notifier providers are safeguarded against path traversal vulnerabilities.
+- **SHA Validation**: Commit SHAs are validated against a hex-only regex (`^[0-9a-fA-F]{4,64}$`) before use in API URLs, preventing path traversal via crafted SHA values.
+- **Path Traversal Prevention**: Ensures GitHub/GitLab notifier providers are safeguarded against path traversal vulnerabilities in project paths and commit SHAs.
+- **Label Validation**: Namespace label keys and values are validated using `k8s.io/apimachinery/pkg/util/validation` before being applied to preview namespaces. `diverge.io/*` labels are protected from user override.
+- **SQL Injection Prevention**: Schema names are validated against a strict regex (`^[a-z][a-z0-9_]{0,62}$`) before use in DDL statements, since parameterized queries cannot be used for schema operations.
 - **Resource Constraints**: Applies context timeouts on all external network and API calls to prevent hanging routines.
 - **Least Privilege**: The controller runs with strictly RBAC-scoped permissions, acquiring only the access necessary for its operational scope.
 

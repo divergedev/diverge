@@ -28,6 +28,10 @@ Before you begin, ensure you have the following installed:
    nix develop -c make build
    nix develop -c make test
    ```
+4. If editing `.proto` files, regenerate types:
+   ```bash
+   nix develop -c make proto
+   ```
 
 ## Making Changes
 1. Fork the repository.
