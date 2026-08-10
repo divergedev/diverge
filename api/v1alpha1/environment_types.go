@@ -45,6 +45,10 @@ type EnvironmentDeploy struct {
 	NamespaceLabels map[string]string `json:"namespaceLabels,omitempty"`
 	ChangedServices []string          `json:"changedServices,omitempty"`
 	BaselineRef     string            `json:"baselineRef,omitempty"`
+	// Manifests specifies where pre-rendered manifests are stored.
+	// Required when using the direct deployer.
+	// +optional
+	Manifests *ManifestSource `json:"manifests,omitempty"`
 }
 
 // EnvironmentRouting defines the routing configuration
@@ -72,6 +76,16 @@ type EnvironmentDatabase struct {
 type EnvironmentLifecycle struct {
 	TTL            *metav1.Duration `json:"ttl,omitempty"`
 	CleanupOnMerge bool             `json:"cleanupOnMerge,omitempty"`
+}
+
+// ManifestSource specifies how pre-rendered manifests are provided
+// to the DirectDeployer.
+type ManifestSource struct {
+	// Type is the manifest source type: "configmap" or "url".
+	// +kubebuilder:validation:Enum=configmap;url
+	Type string `json:"type"`
+	// URL for HTTP-based manifest fetching (when type=url).
+	URL string `json:"url,omitempty"`
 }
 
 // EnvironmentSpec defines the desired state of Environment

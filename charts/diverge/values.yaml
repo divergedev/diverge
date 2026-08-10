@@ -30,6 +30,10 @@ webhook:
   port: 9443
   secretName: diverge-webhook-token
 
+deploy:
+  provider: "noop"  # argocd | direct | noop
+  manifestSourceType: "configmap"  # configmap | url (for direct deployer)
+
 serviceAccount:
   create: true
   name: diverge-controller

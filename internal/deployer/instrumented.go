@@ -6,7 +6,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
-	"github.com/divergedev/diverge/internal/argocd"
 	"github.com/divergedev/diverge/internal/metrics"
 )
 
@@ -34,7 +33,7 @@ func (d *InstrumentedDeployer) Teardown(ctx context.Context, env *v1alpha1.Envir
 	return err
 }
 
-func (d *InstrumentedDeployer) Status(ctx context.Context, env *v1alpha1.Environment) ([]argocd.ApplicationStatus, error) {
+func (d *InstrumentedDeployer) Status(ctx context.Context, env *v1alpha1.Environment) ([]ServiceStatus, error) {
 	status, err := d.Inner.Status(ctx, env)
 	if err != nil {
 		metrics.SubsystemErrors.WithLabelValues("deployer", "status").Inc()

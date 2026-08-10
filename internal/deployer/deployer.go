@@ -5,7 +5,6 @@ import (
 	"context"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
-	"github.com/divergedev/diverge/internal/argocd"
 )
 
 // Deployer deploys and tears down services for a preview environment.
@@ -14,5 +13,5 @@ type Deployer interface {
 	Teardown(ctx context.Context, env *v1alpha1.Environment) error
 	// Status returns the current deployment status for the environment.
 	// An empty slice indicates no active deployments remain.
-	Status(ctx context.Context, env *v1alpha1.Environment) ([]argocd.ApplicationStatus, error)
+	Status(ctx context.Context, env *v1alpha1.Environment) ([]ServiceStatus, error)
 }

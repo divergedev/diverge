@@ -46,7 +46,21 @@ func (d *ArgoDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment) 
 	return d.client.DeleteApplicationsForEnvironment(ctx, env.Name, env.Namespace)
 }
 
-// Status returns the sync status of ArgoCD Applications for this environment.
-func (d *ArgoDeployer) Status(ctx context.Context, env *v1alpha1.Environment) ([]argocd.ApplicationStatus, error) {
-	return d.client.GetSyncStatus(ctx, env.Name, env.Namespace)
+// Status returns the sync status of ArgoCD Applications for this environment,
+// mapped to the deployer-agnostic ServiceStatus type.
+func (d *ArgoDeployer) Status(ctx context.Context, env *v1alpha1.Environment) ([]ServiceStatus, error) {
+	argoStatuses, err := d.client.GetSyncStatus(ctx, env.Name, env.Namespace)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]ServiceStatus, len(argoStatuses))
+	for i, s := range argoStatuses {
+		result[i] = ServiceStatus{
+			Name:       s.Name,
+			Service:    s.Service,
+			SyncStatus: s.SyncStatus,
+			Health:     s.Health,
+		}
+	}
+	return result, nil
 }
