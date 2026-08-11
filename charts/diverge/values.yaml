@@ -43,7 +43,8 @@ database:
   port: 5432
   user: "postgres"
   name: "diverge_preview"
-  sslMode: "disable"
+  # SSL mode for PostgreSQL. Use 'require' for production, 'disable' for local development.
+  sslMode: "require"
   # Reference to existing K8s Secret containing the database password
   passwordSecretName: ""
   passwordSecretKey: "password"

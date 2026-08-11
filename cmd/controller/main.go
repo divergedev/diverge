@@ -155,7 +155,9 @@ func main() {
 			os.Exit(1)
 		}
 		// Verify connectivity
-		if err := db.PingContext(context.Background()); err != nil {
+		pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer pingCancel()
+		if err := db.PingContext(pingCtx); err != nil {
 			setupLog.Error(err, "failed to ping database", "host", dbHost, "port", dbPort)
 			os.Exit(1)
 		}
@@ -165,6 +167,7 @@ func main() {
 			Executor: database.NewPgExecutor(db),
 			Client:   mgr.GetClient(),
 			BaseURL:  dsn,
+			Runner:   &database.MigrationRunner{Client: mgr.GetClient()},
 		}
 	case "noop":
 		dbProviderImpl = &database.NoopProvider{}

@@ -150,15 +150,33 @@ func (p *SchemaProvider) Provision(ctx context.Context, env *v1alpha1.Environmen
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      secretName,
 				Namespace: namespace,
+				Labels: map[string]string{
+					"diverge.io/environment": env.Name,
+					"diverge.io/managed-by":  "diverge",
+				},
 			},
 			StringData: map[string]string{
 				"DATABASE_URL": dbURL,
 			},
 		}
 
-		err = p.Client.Create(ctx, secret)
-		if err != nil && !apierrors.IsAlreadyExists(err) {
-			return nil, fmt.Errorf("failed to create connection secret: %w", err)
+		var existing corev1.Secret
+		err = p.Client.Get(ctx, client.ObjectKeyFromObject(secret), &existing)
+		if apierrors.IsNotFound(err) {
+			err = p.Client.Create(ctx, secret)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create connection secret: %w", err)
+			}
+		} else if err != nil {
+			return nil, fmt.Errorf("failed to get connection secret: %w", err)
+		} else {
+			// Update if DATABASE_URL changed
+			if string(existing.Data["DATABASE_URL"]) != dbURL {
+				existing.StringData = map[string]string{"DATABASE_URL": dbURL}
+				if err := p.Client.Update(ctx, &existing); err != nil {
+					return nil, fmt.Errorf("failed to update connection secret: %w", err)
+				}
+			}
 		}
 	}
 
