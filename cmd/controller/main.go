@@ -1,11 +1,16 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"flag"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -124,17 +129,42 @@ func main() {
 	case "shared", "":
 		dbProviderImpl = &database.SharedProvider{}
 	case "schema":
-		// Read database configuration for schema provider (Executor will be implemented later)
-		_ = os.Getenv("DIVERGE_DB_HOST")
-		_ = os.Getenv("DIVERGE_DB_PORT")
-		_ = os.Getenv("DIVERGE_DB_USER")
-		_ = os.Getenv("DIVERGE_DB_PASSWORD")
-		_ = os.Getenv("DIVERGE_DB_NAME")
-		_ = os.Getenv("DIVERGE_DB_SSLMODE")
+		dbHost := os.Getenv("DIVERGE_DB_HOST")
+		dbPort := os.Getenv("DIVERGE_DB_PORT")
+		dbUser := os.Getenv("DIVERGE_DB_USER")
+		dbPassword := os.Getenv("DIVERGE_DB_PASSWORD")
+		dbName := os.Getenv("DIVERGE_DB_NAME")
+		dbSSLMode := os.Getenv("DIVERGE_DB_SSLMODE")
+		if dbSSLMode == "" {
+			dbSSLMode = "disable"
+		}
+		if dbPort == "" {
+			dbPort = "5432"
+		}
+
+		if dbHost == "" {
+			setupLog.Error(fmt.Errorf("DIVERGE_DB_HOST is required for --database-provider=schema"), "missing database host")
+			os.Exit(1)
+		}
+
+		dsn := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s",
+			dbUser, url.QueryEscape(dbPassword), dbHost, dbPort, dbName, dbSSLMode)
+		db, err := sql.Open("pgx", dsn)
+		if err != nil {
+			setupLog.Error(err, "failed to open database connection")
+			os.Exit(1)
+		}
+		// Verify connectivity
+		if err := db.PingContext(context.Background()); err != nil {
+			setupLog.Error(err, "failed to ping database", "host", dbHost, "port", dbPort)
+			os.Exit(1)
+		}
+		setupLog.Info("Connected to database", "host", dbHost, "port", dbPort, "database", dbName)
 
 		dbProviderImpl = &database.SchemaProvider{
-			Executor: nil,
+			Executor: database.NewPgExecutor(db),
 			Client:   mgr.GetClient(),
+			BaseURL:  dsn,
 		}
 	case "noop":
 		dbProviderImpl = &database.NoopProvider{}

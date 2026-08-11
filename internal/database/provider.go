@@ -105,6 +105,7 @@ func (p *SharedProvider) Status(ctx context.Context, env *v1alpha1.Environment) 
 type SchemaProvider struct {
 	Executor SQLExecutor
 	Client   client.Client // K8s client for secret management
+	BaseURL  string        // Base DSN without search_path, used to construct per-schema DATABASE_URL
 }
 
 func (p *SchemaProvider) Provision(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) {
@@ -131,7 +132,18 @@ func (p *SchemaProvider) Provision(ctx context.Context, env *v1alpha1.Environmen
 	if p.Client != nil {
 		// In a real implementation we would generate the DATABASE_URL with actual connection string
 		// including the schema name, user, etc. We use a placeholder here for the Secret.
-		dbURL := fmt.Sprintf("postgres://user:pass@host:5432/dbname?search_path=%s", schemaName)
+		var dbURL string
+		if p.BaseURL != "" {
+			// Parse the base URL and add search_path
+			baseURL := p.BaseURL
+			if strings.Contains(baseURL, "?") {
+				dbURL = baseURL + "&search_path=" + schemaName
+			} else {
+				dbURL = baseURL + "?search_path=" + schemaName
+			}
+		} else {
+			dbURL = fmt.Sprintf("postgres://user:pass@host:5432/dbname?search_path=%s", schemaName)
+		}
 
 		secret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
@@ -221,22 +233,26 @@ func (p *SchemaProvider) Status(ctx context.Context, env *v1alpha1.Environment) 
 type FreshProvider struct{}
 
 func (p *FreshProvider) Provision(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) {
-	return &DatabaseStatus{}, nil
+	return nil, fmt.Errorf("database mode \"fresh\" is not yet supported; use \"schema\" or \"shared\"")
 }
-func (p *FreshProvider) Teardown(ctx context.Context, env *v1alpha1.Environment) error { return nil }
+func (p *FreshProvider) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
+	return fmt.Errorf("database mode \"fresh\" is not yet supported")
+}
 func (p *FreshProvider) Status(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) {
-	return &DatabaseStatus{}, nil
+	return nil, fmt.Errorf("database mode \"fresh\" is not yet supported")
 }
 
 // SnapshotProvider provisions a database from a snapshot
 type SnapshotProvider struct{}
 
 func (p *SnapshotProvider) Provision(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) {
-	return &DatabaseStatus{}, nil
+	return nil, fmt.Errorf("database mode \"snapshot\" is not yet supported; use \"schema\" or \"shared\"")
 }
-func (p *SnapshotProvider) Teardown(ctx context.Context, env *v1alpha1.Environment) error { return nil }
+func (p *SnapshotProvider) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
+	return fmt.Errorf("database mode \"snapshot\" is not yet supported")
+}
 func (p *SnapshotProvider) Status(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) {
-	return &DatabaseStatus{}, nil
+	return nil, fmt.Errorf("database mode \"snapshot\" is not yet supported")
 }
 
 // NoopProvider is a dummy provider that does nothing

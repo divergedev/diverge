@@ -30,11 +30,11 @@ func TestSnapshotProvider(t *testing.T) {
 	env := &v1alpha1.Environment{}
 
 	status, err := provider.Provision(context.Background(), env)
-	if err != nil {
-		t.Errorf("Provision error: %v", err)
+	if err == nil {
+		t.Errorf("Expected Provision error, got nil")
 	}
-	if status == nil {
-		t.Errorf("Expected status, got nil")
+	if status != nil {
+		t.Errorf("Expected nil status, got %v", status)
 	}
 }
 
@@ -43,10 +43,10 @@ func TestFreshProvider(t *testing.T) {
 	env := &v1alpha1.Environment{}
 
 	status, err := provider.Provision(context.Background(), env)
-	if err != nil {
-		t.Errorf("Provision error: %v", err)
+	if err == nil {
+		t.Errorf("Expected Provision error, got nil")
 	}
-	if status == nil {
-		t.Errorf("Expected status, got nil")
+	if status != nil {
+		t.Errorf("Expected nil status, got %v", status)
 	}
 }

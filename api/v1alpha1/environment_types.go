@@ -163,6 +163,9 @@ type ServicePreviewConfig struct {
 	// ImagePullPolicy overrides the container image pull policy.
 	// Valid values: Always, Never, IfNotPresent. Defaults to IfNotPresent.
 	ImagePullPolicy string `json:"imagePullPolicy,omitempty"`
+	// DatabaseEnvKey is the environment variable name for the database connection URL.
+	// Defaults to DATABASE_URL.
+	DatabaseEnvKey string `json:"databaseEnvKey,omitempty"`
 	// ParentRef is the Gateway API parentRef name (e.g., Istio Waypoint proxy).
 	// If empty, defaults to "diverge-gateway".
 	ParentRef string `json:"parentRef,omitempty"`
