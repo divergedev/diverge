@@ -59,7 +59,7 @@ func TestMigrationRunner_RunOrCheck_CreatesJob(t *testing.T) {
 
 	assert.Equal(t, "arigaio/atlas:latest", job.Spec.Template.Spec.Containers[0].Image)
 	assert.Equal(t, []string{"migrate", "apply"}, job.Spec.Template.Spec.Containers[0].Args)
-	assert.Equal(t, "test-secret", job.Spec.Template.Spec.Containers[0].Env[0].ValueFrom.SecretKeyRef.LocalObjectReference.Name)
+	assert.Equal(t, "test-secret", job.Spec.Template.Spec.Containers[0].Env[0].ValueFrom.SecretKeyRef.Name)
 	assert.Equal(t, int64(60), *job.Spec.ActiveDeadlineSeconds)
 	assert.Contains(t, job.Labels, "diverge.io/environment")
 	assert.Equal(t, "test-env", job.OwnerReferences[0].Name)

@@ -7,6 +7,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/database"
 )
 
 // ServiceConfigFetcher generates Kubernetes Deployment and Service manifests
@@ -55,6 +56,17 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 		})
 	}
 
+	// Build envFrom for database secret injection
+	var containerEnvFrom []interface{}
+	dbSecretName := resolveDBSecret(env)
+	if dbSecretName != "" {
+		containerEnvFrom = append(containerEnvFrom, map[string]interface{}{
+			"secretRef": map[string]interface{}{
+				"name": dbSecretName,
+			},
+		})
+	}
+
 	// Deployment
 	deploy := unstructured.Unstructured{
 		Object: map[string]interface{}{
@@ -98,7 +110,8 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 										"containerPort": int64(cfg.Port),
 									},
 								},
-								"env": containerEnv,
+								"env":     containerEnv,
+								"envFrom": containerEnvFrom,
 								"readinessProbe": map[string]interface{}{
 									"httpGet": map[string]interface{}{
 										"path": "/health",
@@ -143,4 +156,29 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 	}
 
 	return []unstructured.Unstructured{deploy, svc}, nil
+}
+
+// resolveDBSecret determines the database connection Secret name for a preview pod.
+// Priority:
+//  1. connectionRef (user's pre-existing Secret — the primary path)
+//  2. Auto-provisioned Secret from SchemaProvider (diverge-db-<schemaName>)
+//  3. Empty string (no database injection)
+func resolveDBSecret(env *v1alpha1.Environment) string {
+	db := env.Spec.Database
+
+	// Primary path: user-provided connection secret
+	if db.ConnectionRef != "" {
+		return db.ConnectionRef
+	}
+
+	// Auto-provisioned: schema mode creates diverge-db-<schemaName>
+	if db.Mode == "schema" {
+		schemaName, err := database.SchemaName(env)
+		if err != nil {
+			return ""
+		}
+		return fmt.Sprintf("diverge-db-%s", schemaName)
+	}
+
+	return ""
 }

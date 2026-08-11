@@ -199,9 +199,7 @@ func (p *SchemaProvider) Teardown(ctx context.Context, env *v1alpha1.Environment
 
 	// Clean up migration job first
 	if p.Runner != nil {
-		if err := p.Runner.Cleanup(ctx, env); err != nil {
-			// Log but don't fail teardown
-		}
+		_ = p.Runner.Cleanup(ctx, env) // best-effort: don't fail teardown
 	}
 
 	if p.Executor != nil {
