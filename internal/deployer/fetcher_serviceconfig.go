@@ -36,6 +36,12 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 	previewName := fmt.Sprintf("%s-%s", env.Name, cfg.ServiceName)
 	previewID := env.Name
 
+	// Default imagePullPolicy to IfNotPresent
+	pullPolicy := cfg.ImagePullPolicy
+	if pullPolicy == "" {
+		pullPolicy = "IfNotPresent"
+	}
+
 	// Build env vars
 	var containerEnv []interface{}
 	containerEnv = append(containerEnv, map[string]interface{}{
@@ -84,8 +90,9 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 					"spec": map[string]interface{}{
 						"containers": []interface{}{
 							map[string]interface{}{
-								"name":  cfg.ServiceName,
-								"image": cfg.Image,
+								"name":            cfg.ServiceName,
+								"image":           cfg.Image,
+								"imagePullPolicy": pullPolicy,
 								"ports": []interface{}{
 									map[string]interface{}{
 										"containerPort": int64(cfg.Port),
