@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"hegel.dev/go/hegel"
+	"pgregory.net/rapid"
 )
 
 func TestGitLabWebhookAlwaysValidatesToken(t *testing.T) {
@@ -27,6 +28,32 @@ func TestGitLabWebhookAlwaysValidatesToken(t *testing.T) {
 			if rr.Code != http.StatusUnauthorized {
 				t.Errorf("Expected 401 for token %q, got %d", token, rr.Code)
 			}
+		}
+	})
+}
+
+func TestNormalizeGitLabAction_Property(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		action := rapid.String().Draw(t, "action")
+		normalized := normalizeGitLabAction(action)
+		switch normalized {
+		case "open", "reopen", "update", "merge", "close", "approved", "unapproved", "other":
+			// valid
+		default:
+			t.Fatalf("unexpected normalized action: %s", normalized)
+		}
+	})
+}
+
+func TestNormalizeGitHubAction_Property(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		action := rapid.String().Draw(t, "action")
+		normalized := normalizeGitHubAction(action)
+		switch normalized {
+		case "opened", "synchronize", "closed", "reopened", "edited", "ready_for_review", "other":
+			// valid
+		default:
+			t.Fatalf("unexpected normalized action: %s", normalized)
 		}
 	})
 }
