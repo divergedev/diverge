@@ -102,6 +102,7 @@ func TestServiceConfigFetcher_WithConnectionRef_InjectsEnvFrom(t *testing.T) {
 	require.True(t, found)
 	container := containers[0].(map[string]interface{})
 	envFrom := container["envFrom"].([]interface{})
+	require.Len(t, envFrom, 1)
 	ref := envFrom[0].(map[string]interface{})
 	secretRef := ref["secretRef"].(map[string]interface{})
 	assert.Equal(t, "my-db-secret", secretRef["name"])

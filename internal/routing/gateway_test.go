@@ -2,6 +2,7 @@ package routing
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
@@ -417,4 +419,43 @@ func TestGatewayRouter_Reconcile_ServiceConfigOverrides(t *testing.T) {
 			assert.Equal(t, tt.wantHeaderKey, headers[0].(map[string]interface{})["name"])
 		})
 	}
+}
+
+func TestGatewayRouter_Reconcile_Errors(t *testing.T) {
+	c := fake.NewClientBuilder().WithInterceptorFuncs(interceptor.Funcs{
+		Get: func(ctx context.Context, client client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			return errors.New("get error")
+		},
+	}).Build()
+	r := &GatewayRouter{Client: c, Namespace: "default"}
+
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-env", Namespace: "default"},
+		Spec: v1alpha1.EnvironmentSpec{
+			Deploy: v1alpha1.EnvironmentDeploy{
+				ChangedServices: []string{"web"},
+			},
+		},
+	}
+
+	err := r.Reconcile(context.Background(), env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "get error")
+}
+
+func TestGatewayRouter_Teardown_Errors(t *testing.T) {
+	c := fake.NewClientBuilder().WithInterceptorFuncs(interceptor.Funcs{
+		List: func(ctx context.Context, client client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			return errors.New("list error")
+		},
+	}).Build()
+	r := &GatewayRouter{Client: c, Namespace: "default"}
+
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-env", Namespace: "default"},
+	}
+
+	err := r.Teardown(context.Background(), env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "list error")
 }

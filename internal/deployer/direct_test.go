@@ -14,6 +14,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
@@ -414,4 +415,116 @@ func TestDirectDeployer_Status_TerminalFailure(t *testing.T) {
 
 	require.Len(t, status, 1)
 	assert.Equal(t, "Degraded", status[0].Health, "should be Degraded when Progressing condition is False")
+}
+
+func TestDirectDeployer_Status_StatefulSetHealth(t *testing.T) {
+	s := testScheme()
+
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "db",
+			Namespace:  "test-ns",
+			Generation: 1,
+			Labels: map[string]string{
+				"diverge.io/environment": "test-env",
+				"diverge.io/managed-by":  "diverge",
+			},
+		},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas: ptr(int32(1)),
+		},
+		Status: appsv1.StatefulSetStatus{
+			ObservedGeneration: 1,
+			ReadyReplicas:      1,
+			UpdatedReplicas:    1,
+		},
+	}
+
+	stsProgressing := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "db-progressing",
+			Namespace:  "test-ns",
+			Generation: 2,
+			Labels: map[string]string{
+				"diverge.io/environment": "test-env",
+				"diverge.io/managed-by":  "diverge",
+			},
+		},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas: ptr(int32(1)),
+		},
+		Status: appsv1.StatefulSetStatus{
+			ObservedGeneration: 1,
+		},
+	}
+
+	stsDegraded := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "db-degraded",
+			Namespace:  "test-ns",
+			Generation: 2,
+			Labels: map[string]string{
+				"diverge.io/environment": "test-env",
+				"diverge.io/managed-by":  "diverge",
+			},
+		},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas: ptr(int32(1)),
+		},
+		Status: appsv1.StatefulSetStatus{
+			ObservedGeneration: 2,
+			ReadyReplicas:      0,
+			UpdatedReplicas:    0,
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(sts, stsProgressing, stsDegraded).WithStatusSubresource(&appsv1.StatefulSet{}).Build()
+	d := &DirectDeployer{Client: c}
+	env := testEnv("test-env", "test-ns", "same")
+	status, err := d.Status(context.Background(), env)
+	require.NoError(t, err)
+
+	require.Len(t, status, 3)
+
+	statusMap := make(map[string]ServiceStatus)
+	for _, st := range status {
+		statusMap[st.Name] = st
+	}
+
+	assert.Equal(t, "Healthy", statusMap["db"].Health)
+	assert.Equal(t, "Progressing", statusMap["db-progressing"].Health)
+	assert.Equal(t, "Degraded", statusMap["db-degraded"].Health)
+}
+
+func TestDirectDeployer_Deploy_UpdatesExisting(t *testing.T) {
+	s := testScheme()
+
+	// Pre-existing deployment
+	existingDep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "dep1",
+			Namespace: "test-ns",
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(existingDep).WithInterceptorFuncs(interceptor.Funcs{
+		Patch: func(ctx context.Context, client client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			return nil
+		},
+	}).Build()
+
+	fetcher := &mockFetcher{
+		objects: []unstructured.Unstructured{
+			testDeploymentUnstructured("dep1", ""),
+		},
+	}
+
+	d := &DirectDeployer{
+		Client:  c,
+		Fetcher: fetcher,
+	}
+
+	env := testEnv("test-env", "test-ns", "same")
+	err := d.Deploy(context.Background(), env)
+	require.NoError(t, err)
 }
