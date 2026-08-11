@@ -15,14 +15,20 @@ Environment-as-a-service engine for Kubernetes. Diverge creates ephemeral previe
 
 Documentation: [https://divergedev.com](https://divergedev.com)
 
+## Try It
+
+> **[5-minute demo →](https://github.com/divergedev/demo)** — Multi-repo preview environments with k3d + Envoy Gateway
+
 ## Key Features
 *   **Delta Deployment**: Only deploy what changed, falling back to a baseline for unmodified services.
-*   **Header-Based Routing**: Leverages Istio and the Diverge Proxy to route traffic seamlessly using HTTP headers.
+*   **Header-Based Routing & Gateway API**: Leverages Gateway API, Istio, and the Diverge Proxy to route traffic seamlessly using HTTP headers.
 *   **Configurable DB Modes**: Options for shared, schema, snapshot, or fresh databases for your environments.
 *   **Schema-per-Environment**: SQL-based schema provisioning with regex-validated naming and injection prevention.
 *   **MR-Triggered Lifecycle**: Environments spin up when a Merge Request opens and tear down upon merge/close.
 *   **Merge Gating**: GitLab/GitHub commit status checks (`diverge/preview`) block merges until environments are healthy.
-*   **Argo CD Integration**: Direct `Application` CR creation for GitOps deployment sync, supporting both Helm charts and Kustomize overlays.
+*   **Argo CD & Direct Deploy**: Argo CD GitOps (`Application` CRs) and No-ArgoCD mode (`DirectDeployer`) for Helm charts and Kustomize overlays.
+*   **Test Integration**: CI trigger and polling support to run automated tests against preview environments.
+*   **Prometheus Metrics**: Exposes metrics for environment lifecycles and controller health monitoring.
 *   **Namespace Labels**: Custom labels on preview namespaces (e.g., `istio.io/dataplane-mode: ambient` for zero-trust mTLS).
 *   **Security Hardened**: Webhook secret constant-time comparison, RFC 7230 header validation, SHA validation, path traversal prevention, strict YAML unmarshaling.
 *   **Finalizer-Based Lifecycle**: Kubernetes finalizers ensure clean teardown of all resources (routing, database, ArgoCD apps) even during force-deletes.
