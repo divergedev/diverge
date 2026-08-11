@@ -16,9 +16,10 @@ type SecretRef struct {
 }
 
 type MigrationJobSpec struct {
-	Image   string      `json:"image,omitempty"`
-	Args    []string    `json:"args,omitempty"`
-	EnvFrom []SecretRef `json:"envFrom,omitempty"`
+	Image          string      `json:"image,omitempty"`
+	Args           []string    `json:"args,omitempty"`
+	EnvFrom        []SecretRef `json:"envFrom,omitempty"`
+	TimeoutSeconds int32       `json:"timeoutSeconds,omitempty"` // Default 120
 }
 
 // EnvironmentSource defines the source code origin for the environment

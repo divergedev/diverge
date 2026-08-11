@@ -104,8 +104,9 @@ func (p *SharedProvider) Status(ctx context.Context, env *v1alpha1.Environment) 
 // SchemaProvider creates a new logical schema within an existing database
 type SchemaProvider struct {
 	Executor SQLExecutor
-	Client   client.Client // K8s client for secret management
-	BaseURL  string        // Base DSN without search_path, used to construct per-schema DATABASE_URL
+	Client   client.Client    // K8s client for secret management
+	BaseURL  string           // Base DSN without search_path, used to construct per-schema DATABASE_URL
+	Runner   *MigrationRunner // optional: runs migrations after schema creation
 }
 
 func (p *SchemaProvider) Provision(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) {
@@ -161,6 +162,27 @@ func (p *SchemaProvider) Provision(ctx context.Context, env *v1alpha1.Environmen
 		}
 	}
 
+	// Run migrations if configured
+	if p.Runner != nil && env.Spec.Database.MigrationJob != nil {
+		completed, err := p.Runner.RunOrCheck(ctx, env, secretName)
+		if err != nil {
+			return &DatabaseStatus{
+				Ready:            false,
+				ConnectionSecret: secretName,
+				Message:          fmt.Sprintf("migration failed: %v", err),
+				SchemaName:       schemaName,
+			}, err
+		}
+		if !completed {
+			return &DatabaseStatus{
+				Ready:            false,
+				ConnectionSecret: secretName,
+				Message:          "migration running",
+				SchemaName:       schemaName,
+			}, nil
+		}
+	}
+
 	return &DatabaseStatus{
 		Ready:            true,
 		ConnectionSecret: secretName,
@@ -173,6 +195,13 @@ func (p *SchemaProvider) Teardown(ctx context.Context, env *v1alpha1.Environment
 	schemaName, err := SchemaName(env)
 	if err != nil {
 		return err
+	}
+
+	// Clean up migration job first
+	if p.Runner != nil {
+		if err := p.Runner.Cleanup(ctx, env); err != nil {
+			// Log but don't fail teardown
+		}
 	}
 
 	if p.Executor != nil {
