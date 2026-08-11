@@ -327,3 +327,94 @@ func TestGatewayRouter_Reconcile_UsesEnvNamespace(t *testing.T) {
 	err = c.Get(context.Background(), client.ObjectKey{Name: "test-env-web", Namespace: "my-ns"}, u)
 	require.NoError(t, err, "should use env.Namespace when GatewayRouter.Namespace is empty")
 }
+
+func TestGatewayRouter_Reconcile_ServiceConfigOverrides(t *testing.T) {
+	tests := []struct {
+		name          string
+		serviceConfig *v1alpha1.ServicePreviewConfig
+		wantParentRef string
+		wantPort      int64
+		wantHeaderKey string
+	}{
+		{
+			name:          "defaults without ServiceConfig",
+			serviceConfig: nil,
+			wantParentRef: "diverge-gateway",
+			wantPort:      8080,
+			wantHeaderKey: "x-diverge-env",
+		},
+		{
+			name: "custom parentRef",
+			serviceConfig: &v1alpha1.ServicePreviewConfig{
+				ParentRef: "banking-waypoint",
+			},
+			wantParentRef: "banking-waypoint",
+			wantPort:      8080,
+			wantHeaderKey: "x-diverge-env",
+		},
+		{
+			name: "custom port",
+			serviceConfig: &v1alpha1.ServicePreviewConfig{
+				Port: 9090,
+			},
+			wantParentRef: "diverge-gateway",
+			wantPort:      9090,
+			wantHeaderKey: "x-diverge-env",
+		},
+		{
+			name: "custom headerKey",
+			serviceConfig: &v1alpha1.ServicePreviewConfig{
+				HeaderKey: "x-preview-id",
+			},
+			wantParentRef: "diverge-gateway",
+			wantPort:      8080,
+			wantHeaderKey: "x-preview-id",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := fake.NewClientBuilder().Build()
+			r := &GatewayRouter{Client: c, Namespace: "default"}
+
+			env := &v1alpha1.Environment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-env",
+					Namespace: "default",
+				},
+				Spec: v1alpha1.EnvironmentSpec{
+					Deploy: v1alpha1.EnvironmentDeploy{
+						ChangedServices: []string{"web"},
+					},
+					Routing: v1alpha1.EnvironmentRouting{
+						HeaderKey:   "x-diverge-env",
+						HeaderValue: "test-env",
+					},
+					ServiceConfig: tt.serviceConfig,
+				},
+			}
+
+			err := r.Reconcile(context.Background(), env)
+			require.NoError(t, err)
+
+			u := &unstructured.Unstructured{}
+			u.SetAPIVersion("gateway.networking.k8s.io/v1")
+			u.SetKind("HTTPRoute")
+			err = c.Get(context.Background(), client.ObjectKey{Name: "test-env-web", Namespace: "default"}, u)
+			require.NoError(t, err)
+
+			parents, _, _ := unstructured.NestedSlice(u.Object, "spec", "parentRefs")
+			require.Len(t, parents, 1)
+			assert.Equal(t, tt.wantParentRef, parents[0].(map[string]interface{})["name"])
+
+			rules, _, _ := unstructured.NestedSlice(u.Object, "spec", "rules")
+			backends, _, _ := unstructured.NestedSlice(rules[0].(map[string]interface{}), "backendRefs")
+			require.Len(t, backends, 1)
+			assert.Equal(t, tt.wantPort, backends[0].(map[string]interface{})["port"])
+
+			matches, _, _ := unstructured.NestedSlice(rules[0].(map[string]interface{}), "matches")
+			headers, _, _ := unstructured.NestedSlice(matches[0].(map[string]interface{}), "headers")
+			assert.Equal(t, tt.wantHeaderKey, headers[0].(map[string]interface{})["name"])
+		})
+	}
+}

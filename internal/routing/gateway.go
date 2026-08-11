@@ -39,6 +39,20 @@ func (r *GatewayRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment
 		headerValue = env.Name
 	}
 
+	parentRefName := "diverge-gateway"
+	backendPort := int64(8080)
+	if cfg := env.Spec.ServiceConfig; cfg != nil {
+		if cfg.ParentRef != "" {
+			parentRefName = cfg.ParentRef
+		}
+		if cfg.Port > 0 {
+			backendPort = int64(cfg.Port)
+		}
+		if cfg.HeaderKey != "" {
+			headerKey = cfg.HeaderKey
+		}
+	}
+
 	ns := r.namespace(env)
 
 	for _, svc := range env.Spec.Deploy.ChangedServices {
@@ -57,7 +71,7 @@ func (r *GatewayRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment
 		spec := map[string]interface{}{
 			"parentRefs": []interface{}{
 				map[string]interface{}{
-					"name": "diverge-gateway",
+					"name": parentRefName,
 				},
 			},
 			"rules": []interface{}{
@@ -76,7 +90,7 @@ func (r *GatewayRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment
 					"backendRefs": []interface{}{
 						map[string]interface{}{
 							"name": fmt.Sprintf("%s-%s", env.Name, svc),
-							"port": int64(8080),
+							"port": backendPort,
 						},
 					},
 				},

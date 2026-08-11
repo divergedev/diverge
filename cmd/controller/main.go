@@ -57,6 +57,7 @@ func main() {
 	var webhookSecretToken string
 	var argoRepoURL string
 	var notifierProvider string
+	var defaultNamespace string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -71,6 +72,7 @@ func main() {
 	flag.StringVar(&argoRepoURL, "argo-repo-url", "", "Repository URL for Argo CD Application sources")
 	flag.StringVar(&notifierProvider, "notifier-provider", "noop", "Notification provider (gitlab|github|noop)")
 	flag.StringVar(&webhookSecretToken, "webhook-secret-token", "", "The secret token for authenticating webhooks (prefer DIVERGE_WEBHOOK_SECRET env var).")
+	flag.StringVar(&defaultNamespace, "default-namespace", "default", "Default namespace to create environments in")
 
 	var manifestSourceType string
 	flag.StringVar(&manifestSourceType, "manifest-source-type", "configmap", "Manifest source type for direct deployer (configmap|url)")
@@ -195,6 +197,8 @@ func main() {
 				HTTPClient: &http.Client{Timeout: 60 * time.Second},
 				AuthToken:  manifestToken,
 			}
+		case "serviceconfig":
+			fetcher = &deployer.ServiceConfigFetcher{}
 		case "configmap", "":
 			fetcher = &deployer.ConfigMapFetcher{Client: mgr.GetClient()}
 		default:
@@ -257,8 +261,34 @@ func main() {
 
 	// Setup webhook server for GitLab events
 	webhookConfig := webhook.WebhookConfig{SecretToken: webhookSecretToken}
-	mgr.GetWebhookServer().Register("/gitlab-webhook", &webhook.GitLabWebhookHandler{Client: mgr.GetClient(), Config: webhookConfig})
-	mgr.GetWebhookServer().Register("/github-webhook", &webhook.GitHubWebhookHandler{Client: mgr.GetClient(), Config: webhookConfig})
+
+	var glConfigFetcher webhook.ConfigFetcher
+	if notifierProvider == "gitlab" && notifierToken != "" {
+		glConfigFetcher = &webhook.GitLabConfigFetcher{
+			Token:      notifierToken,
+			HTTPClient: &http.Client{Timeout: 15 * time.Second},
+		}
+	}
+	mgr.GetWebhookServer().Register("/gitlab-webhook", &webhook.GitLabWebhookHandler{
+		Client:        mgr.GetClient(),
+		Config:        webhookConfig,
+		ConfigFetcher: glConfigFetcher,
+		DefaultNS:     defaultNamespace,
+	})
+
+	var ghConfigFetcher webhook.ConfigFetcher
+	if notifierProvider == "github" && notifierToken != "" {
+		ghConfigFetcher = &webhook.GitHubConfigFetcher{
+			Token:      notifierToken,
+			HTTPClient: &http.Client{Timeout: 15 * time.Second},
+		}
+	}
+	mgr.GetWebhookServer().Register("/github-webhook", &webhook.GitHubWebhookHandler{
+		Client:        mgr.GetClient(),
+		Config:        webhookConfig,
+		ConfigFetcher: ghConfigFetcher,
+		DefaultNS:     defaultNamespace,
+	})
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")

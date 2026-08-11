@@ -149,6 +149,32 @@ type TestStatus struct {
 	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
 }
 
+// ServicePreviewConfig holds per-service preview configuration,
+// read from the .diverge.yaml file in the service repository.
+type ServicePreviewConfig struct {
+	// ServiceName is the Kubernetes Service name to shadow.
+	ServiceName string `json:"serviceName"`
+	// Namespace is the namespace where the baseline service runs.
+	Namespace string `json:"namespace,omitempty"`
+	// Port is the container port the service listens on.
+	Port int32 `json:"port"`
+	// Image is the container image for the preview pod (set by CI).
+	Image string `json:"image"`
+	// ParentRef is the Gateway API parentRef name (e.g., Istio Waypoint proxy).
+	// If empty, defaults to "diverge-gateway".
+	ParentRef string `json:"parentRef,omitempty"`
+	// HeaderKey overrides the routing header key.
+	HeaderKey string `json:"headerKey,omitempty"`
+	// Env is additional environment variables for the preview container.
+	Env []EnvVar `json:"env,omitempty"`
+}
+
+// EnvVar represents an environment variable for a preview container.
+type EnvVar struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
 // EnvironmentSpec defines the desired state of Environment
 type EnvironmentSpec struct {
 	Source    EnvironmentSource    `json:"source,omitempty"`
@@ -159,6 +185,11 @@ type EnvironmentSpec struct {
 	// Testing configures automated test integration.
 	// +optional
 	Testing *TestingSpec `json:"testing,omitempty"`
+	// ServiceConfig holds preview configuration for multi-repo mode.
+	// When set, the controller deploys a single preview pod based on
+	// this config rather than using ManifestFetcher.
+	// +optional
+	ServiceConfig *ServicePreviewConfig `json:"serviceConfig,omitempty"`
 }
 
 // EnvironmentPhase defines the phases an Environment can be in
