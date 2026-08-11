@@ -160,6 +160,9 @@ type ServicePreviewConfig struct {
 	Port int32 `json:"port"`
 	// Image is the container image for the preview pod (set by CI).
 	Image string `json:"image"`
+	// ImagePullPolicy overrides the container image pull policy.
+	// Valid values: Always, Never, IfNotPresent. Defaults to IfNotPresent.
+	ImagePullPolicy string `json:"imagePullPolicy,omitempty"`
 	// ParentRef is the Gateway API parentRef name (e.g., Istio Waypoint proxy).
 	// If empty, defaults to "diverge-gateway".
 	ParentRef string `json:"parentRef,omitempty"`
