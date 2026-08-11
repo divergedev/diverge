@@ -2,12 +2,14 @@ package deployer
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/database"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -41,8 +43,10 @@ func TestResolveDBSecret_ConnectionRef(t *testing.T) {
 func TestResolveDBSecret_SchemaMode(t *testing.T) {
 	env := testEnvWithDB("preview-42", "schema", "", "")
 	secret := resolveDBSecret(env)
-	assert.NotEmpty(t, secret)
-	assert.Contains(t, secret, "diverge-db-")
+	schemaName, err := database.SchemaName(env)
+	require.NoError(t, err)
+	expected := fmt.Sprintf("diverge-db-%s", schemaName)
+	assert.Equal(t, expected, secret)
 }
 
 func TestResolveDBSecret_NoDatabase(t *testing.T) {
@@ -82,7 +86,9 @@ func TestServiceConfigFetcher_WithSchemaDB_InjectsEnvFrom(t *testing.T) {
 
 	ref := envFrom[0].(map[string]interface{})
 	secretRef := ref["secretRef"].(map[string]interface{})
-	assert.Contains(t, secretRef["name"], "diverge-db-")
+	schemaName, err := database.SchemaName(env)
+	require.NoError(t, err)
+	assert.Equal(t, fmt.Sprintf("diverge-db-%s", schemaName), secretRef["name"])
 }
 
 func TestServiceConfigFetcher_WithConnectionRef_InjectsEnvFrom(t *testing.T) {
@@ -131,18 +137,18 @@ func TestServiceConfigFetcher_CustomDatabaseEnvKey(t *testing.T) {
 
 	// Should have the custom env key mapped from the secret
 	envVars := container["env"].([]interface{})
-	var found_custom bool
+	var foundCustom bool
 	for _, ev := range envVars {
 		e := ev.(map[string]interface{})
 		if e["name"] == "SPRING_DATASOURCE_URL" {
-			found_custom = true
+			foundCustom = true
 			valueFrom := e["valueFrom"].(map[string]interface{})
 			secretKeyRef := valueFrom["secretKeyRef"].(map[string]interface{})
 			assert.Equal(t, "my-db-secret", secretKeyRef["name"])
 			assert.Equal(t, "DATABASE_URL", secretKeyRef["key"])
 		}
 	}
-	assert.True(t, found_custom, "SPRING_DATASOURCE_URL env var should exist")
+	assert.True(t, foundCustom, "SPRING_DATASOURCE_URL env var should exist")
 }
 
 // Helper to access nested slices in unstructured objects
