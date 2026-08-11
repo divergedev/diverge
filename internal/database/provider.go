@@ -104,7 +104,9 @@ func (p *SharedProvider) Status(ctx context.Context, env *v1alpha1.Environment) 
 // SchemaProvider creates a new logical schema within an existing database
 type SchemaProvider struct {
 	Executor SQLExecutor
-	Client   client.Client // K8s client for secret management
+	Client   client.Client    // K8s client for secret management
+	BaseURL  string           // Base DSN without search_path, used to construct per-schema DATABASE_URL
+	Runner   *MigrationRunner // optional: runs migrations after schema creation
 }
 
 func (p *SchemaProvider) Provision(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) {
@@ -131,21 +133,71 @@ func (p *SchemaProvider) Provision(ctx context.Context, env *v1alpha1.Environmen
 	if p.Client != nil {
 		// In a real implementation we would generate the DATABASE_URL with actual connection string
 		// including the schema name, user, etc. We use a placeholder here for the Secret.
-		dbURL := fmt.Sprintf("postgres://user:pass@host:5432/dbname?search_path=%s", schemaName)
+		var dbURL string
+		if p.BaseURL != "" {
+			// Parse the base URL and add search_path
+			baseURL := p.BaseURL
+			if strings.Contains(baseURL, "?") {
+				dbURL = baseURL + "&search_path=" + schemaName
+			} else {
+				dbURL = baseURL + "?search_path=" + schemaName
+			}
+		} else {
+			dbURL = fmt.Sprintf("postgres://user:pass@host:5432/dbname?search_path=%s", schemaName)
+		}
 
 		secret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      secretName,
 				Namespace: namespace,
+				Labels: map[string]string{
+					"diverge.io/environment": env.Name,
+					"diverge.io/managed-by":  "diverge",
+				},
 			},
 			StringData: map[string]string{
 				"DATABASE_URL": dbURL,
 			},
 		}
 
-		err = p.Client.Create(ctx, secret)
-		if err != nil && !apierrors.IsAlreadyExists(err) {
-			return nil, fmt.Errorf("failed to create connection secret: %w", err)
+		var existing corev1.Secret
+		err = p.Client.Get(ctx, client.ObjectKeyFromObject(secret), &existing)
+		if apierrors.IsNotFound(err) {
+			err = p.Client.Create(ctx, secret)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create connection secret: %w", err)
+			}
+		} else if err != nil {
+			return nil, fmt.Errorf("failed to get connection secret: %w", err)
+		} else {
+			// Update if DATABASE_URL changed
+			if string(existing.Data["DATABASE_URL"]) != dbURL {
+				existing.StringData = map[string]string{"DATABASE_URL": dbURL}
+				if err := p.Client.Update(ctx, &existing); err != nil {
+					return nil, fmt.Errorf("failed to update connection secret: %w", err)
+				}
+			}
+		}
+	}
+
+	// Run migrations if configured
+	if p.Runner != nil && env.Spec.Database.MigrationJob != nil {
+		completed, err := p.Runner.RunOrCheck(ctx, env, secretName)
+		if err != nil {
+			return &DatabaseStatus{
+				Ready:            false,
+				ConnectionSecret: secretName,
+				Message:          fmt.Sprintf("migration failed: %v", err),
+				SchemaName:       schemaName,
+			}, err
+		}
+		if !completed {
+			return &DatabaseStatus{
+				Ready:            false,
+				ConnectionSecret: secretName,
+				Message:          "migration running",
+				SchemaName:       schemaName,
+			}, nil
 		}
 	}
 
@@ -161,6 +213,11 @@ func (p *SchemaProvider) Teardown(ctx context.Context, env *v1alpha1.Environment
 	schemaName, err := SchemaName(env)
 	if err != nil {
 		return err
+	}
+
+	// Clean up migration job first
+	if p.Runner != nil {
+		_ = p.Runner.Cleanup(ctx, env) // best-effort: don't fail teardown
 	}
 
 	if p.Executor != nil {
@@ -221,22 +278,26 @@ func (p *SchemaProvider) Status(ctx context.Context, env *v1alpha1.Environment) 
 type FreshProvider struct{}
 
 func (p *FreshProvider) Provision(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) {
-	return &DatabaseStatus{}, nil
+	return nil, fmt.Errorf("database mode \"fresh\" is not yet supported; use \"schema\" or \"shared\"")
 }
-func (p *FreshProvider) Teardown(ctx context.Context, env *v1alpha1.Environment) error { return nil }
+func (p *FreshProvider) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
+	return fmt.Errorf("database mode \"fresh\" is not yet supported")
+}
 func (p *FreshProvider) Status(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) {
-	return &DatabaseStatus{}, nil
+	return nil, fmt.Errorf("database mode \"fresh\" is not yet supported")
 }
 
 // SnapshotProvider provisions a database from a snapshot
 type SnapshotProvider struct{}
 
 func (p *SnapshotProvider) Provision(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) {
-	return &DatabaseStatus{}, nil
+	return nil, fmt.Errorf("database mode \"snapshot\" is not yet supported; use \"schema\" or \"shared\"")
 }
-func (p *SnapshotProvider) Teardown(ctx context.Context, env *v1alpha1.Environment) error { return nil }
+func (p *SnapshotProvider) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
+	return fmt.Errorf("database mode \"snapshot\" is not yet supported")
+}
 func (p *SnapshotProvider) Status(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) {
-	return &DatabaseStatus{}, nil
+	return nil, fmt.Errorf("database mode \"snapshot\" is not yet supported")
 }
 
 // NoopProvider is a dummy provider that does nothing

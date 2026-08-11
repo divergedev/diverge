@@ -34,6 +34,21 @@ deploy:
   provider: "noop"  # argocd | direct | noop
   manifestSourceType: "configmap"  # configmap | url (for direct deployer)
 
+# Database configuration for preview schema isolation
+database:
+  # Database provider: noop (disabled), shared (shared DB), schema (per-preview schemas)
+  provider: "noop"
+  # PostgreSQL connection settings (required when provider is 'schema')
+  host: ""
+  port: 5432
+  user: "postgres"
+  name: "diverge_preview"
+  # SSL mode for PostgreSQL. Use 'require' for production, 'disable' for local development.
+  sslMode: "require"
+  # Reference to existing K8s Secret containing the database password
+  passwordSecretName: ""
+  passwordSecretKey: "password"
+
 serviceAccount:
   create: true
   name: diverge-controller

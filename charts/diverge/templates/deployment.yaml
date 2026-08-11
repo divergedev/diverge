@@ -24,6 +24,23 @@ spec:
         - --routing-provider={{ .Values.routingProvider }}
         - --leader-elect
         - --webhook-port={{ .Values.webhook.port }}
+        {{- if .Values.database }}
+        - --database-provider={{ .Values.database.provider | default "noop" }}
+        {{- end }}
+        {{- if .Values.deploy }}
+        - --deploy-provider={{ .Values.deploy.provider | default "noop" }}
+        {{- if eq (.Values.deploy.provider | default "noop") "direct" }}
+        - --manifest-source-type={{ .Values.deploy.manifestSourceType | default "configmap" }}
+        {{- end }}
+        {{- end }}
+        {{- if .Values.defaultNamespace }}
+        - --default-namespace={{ .Values.defaultNamespace }}
+        {{- end }}
+        {{- if .Values.notifierProvider }}
+        - --notifier-provider={{ .Values.notifierProvider }}
+        {{- else if .Values.notifier }}
+        - --notifier-provider={{ .Values.notifier.provider | default "noop" }}
+        {{- end }}
         command:
         - /diverge-controller
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
@@ -31,6 +48,26 @@ spec:
         securityContext:
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
+        {{- if and .Values.database (ne .Values.database.provider "noop") }}
+        env:
+        - name: DIVERGE_DB_HOST
+          value: {{ .Values.database.host | quote }}
+        - name: DIVERGE_DB_PORT
+          value: {{ .Values.database.port | default 5432 | quote }}
+        - name: DIVERGE_DB_USER
+          value: {{ .Values.database.user | quote }}
+        - name: DIVERGE_DB_NAME
+          value: {{ .Values.database.name | quote }}
+        - name: DIVERGE_DB_SSLMODE
+          value: {{ .Values.database.sslMode | default "disable" | quote }}
+        {{- if .Values.database.passwordSecretName }}
+        - name: DIVERGE_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.database.passwordSecretName }}
+              key: {{ .Values.database.passwordSecretKey | default "password" }}
+        {{- end }}
+        {{- end }}
         ports:
         - containerPort: {{ .Values.webhook.port }}
           name: webhook-server

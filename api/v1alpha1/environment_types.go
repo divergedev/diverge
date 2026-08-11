@@ -16,9 +16,10 @@ type SecretRef struct {
 }
 
 type MigrationJobSpec struct {
-	Image   string      `json:"image,omitempty"`
-	Args    []string    `json:"args,omitempty"`
-	EnvFrom []SecretRef `json:"envFrom,omitempty"`
+	Image          string      `json:"image,omitempty"`
+	Args           []string    `json:"args,omitempty"`
+	EnvFrom        []SecretRef `json:"envFrom,omitempty"`
+	TimeoutSeconds int32       `json:"timeoutSeconds,omitempty"` // Default 120
 }
 
 // EnvironmentSource defines the source code origin for the environment
@@ -163,6 +164,9 @@ type ServicePreviewConfig struct {
 	// ImagePullPolicy overrides the container image pull policy.
 	// Valid values: Always, Never, IfNotPresent. Defaults to IfNotPresent.
 	ImagePullPolicy string `json:"imagePullPolicy,omitempty"`
+	// DatabaseEnvKey is the environment variable name for the database connection URL.
+	// Defaults to DATABASE_URL.
+	DatabaseEnvKey string `json:"databaseEnvKey,omitempty"`
 	// ParentRef is the Gateway API parentRef name (e.g., Istio Waypoint proxy).
 	// If empty, defaults to "diverge-gateway".
 	ParentRef string `json:"parentRef,omitempty"`

@@ -4,6 +4,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
 
@@ -12,17 +15,11 @@ func TestSharedProvider(t *testing.T) {
 	env := &v1alpha1.Environment{}
 
 	status, err := provider.Provision(context.Background(), env)
-	if err != nil {
-		t.Errorf("Provision error: %v", err)
-	}
-	if status == nil {
-		t.Errorf("Expected status, got nil")
-	}
+	require.NoError(t, err)
+	assert.NotNil(t, status)
 
 	err = provider.Teardown(context.Background(), env)
-	if err != nil {
-		t.Errorf("Teardown error: %v", err)
-	}
+	require.NoError(t, err)
 }
 
 func TestSnapshotProvider(t *testing.T) {
@@ -30,12 +27,8 @@ func TestSnapshotProvider(t *testing.T) {
 	env := &v1alpha1.Environment{}
 
 	status, err := provider.Provision(context.Background(), env)
-	if err != nil {
-		t.Errorf("Provision error: %v", err)
-	}
-	if status == nil {
-		t.Errorf("Expected status, got nil")
-	}
+	require.Error(t, err)
+	assert.Nil(t, status)
 }
 
 func TestFreshProvider(t *testing.T) {
@@ -43,10 +36,6 @@ func TestFreshProvider(t *testing.T) {
 	env := &v1alpha1.Environment{}
 
 	status, err := provider.Provision(context.Background(), env)
-	if err != nil {
-		t.Errorf("Provision error: %v", err)
-	}
-	if status == nil {
-		t.Errorf("Expected status, got nil")
-	}
+	require.Error(t, err)
+	assert.Nil(t, status)
 }
