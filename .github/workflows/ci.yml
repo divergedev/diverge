@@ -62,18 +62,14 @@ jobs:
         run: |
           go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
           go install connectrpc.com/connect/cmd/protoc-gen-connect-go@latest
-          go install github.com/divergedev/proto2type/cmd/protoc-gen-proto2type@latest
       - name: Run code generation
-        run: |
-          buf generate
-          buf generate --template buf.gen.domain.yaml
-          rm -rf gen/domain/diverge/v1
+        run: buf generate
       - name: Check for stale generated files
         run: |
-          if ! git diff --quiet gen/; then
-            echo "❌ Generated files are stale!"
+          if ! git diff --quiet gen/diverge/; then
+            echo "❌ Generated protobuf/connect files are stale!"
             echo ""
-            git diff --stat gen/
+            git diff --stat gen/diverge/
             echo ""
             echo "Run 'make proto' and commit the updated gen/ directory."
             exit 1
