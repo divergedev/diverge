@@ -39,3 +39,6 @@ pre-push:
       run: go test ./... -count=1 -short
     go-build:
       run: go build ./...
+    check-generated-stale:
+      glob: "*.{proto,go}"
+      run: ./scripts/check-gen.sh

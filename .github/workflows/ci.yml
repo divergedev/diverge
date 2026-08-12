@@ -45,3 +45,38 @@ jobs:
       - uses: actions/checkout@v5
       - name: Lint Helm Chart
         run: helm lint charts/diverge
+
+  check-generated:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Install buf
+        uses: bufbuild/buf-setup-action@v1
+        with:
+          github_token: ${{ github.token }}
+      - name: Install protoc plugins
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@$(grep google.golang.org/protobuf go.mod | awk '{print $2}')
+          go install connectrpc.com/connect/cmd/protoc-gen-connect-go@$(grep connectrpc.com/connect go.mod | awk '{print $2}')
+      - name: Run code generation
+        run: buf generate
+      - name: Check for stale generated files
+        run: |
+          DIFF=$(git diff --stat gen/diverge/ 2>/dev/null || true)
+          UNTRACKED=$(git ls-files --others --exclude-standard -- gen/diverge/ 2>/dev/null || true)
+          if [[ -n "$DIFF" || -n "$UNTRACKED" ]]; then
+            echo "❌ Generated protobuf/connect files are stale!"
+            echo ""
+            [[ -n "$DIFF" ]] && echo "Modified:" && echo "$DIFF"
+            [[ -n "$UNTRACKED" ]] && echo "Untracked:" && echo "$UNTRACKED"
+            echo ""
+            echo "Run 'make proto' and commit the updated gen/ directory."
+            exit 1
+          fi
+          echo "✅ Generated files are up-to-date"
