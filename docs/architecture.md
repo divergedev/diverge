@@ -80,7 +80,7 @@ Only the modified services are deployed to the Kubernetes cluster. Unmodified se
 Diverge supports multiple routing strategies depending on cluster configuration:
 
 - **Header-based (Istio VirtualService)**: The default and most efficient mode. It creates an Istio `VirtualService` that inspects incoming HTTP requests. If the request contains a specific header (e.g., `x-diverge-env: mr-123`), it routes traffic to the delta-deployed services. Otherwise, it falls back to the baseline environment.
-- **Gateway API**: Generates Gateway API `HTTPRoute` resources for header-based routing. It combines header matching with a `pathPrefix` match, scoping the preview route to specific API paths to avoid unintentionally shadowing the entire baseline service.
+- **Gateway API**: Generates Gateway API `HTTPRoute` resources for header-based routing. When `ServicePreviewConfig.PathPrefix` is set, the generated route combines header matching with a `PathPrefix` path match, scoping it to specific API paths (e.g., `/api/payments`) to avoid unintentionally shadowing the entire baseline service.
 - **Namespace isolation**: Deploys the entire environment into a dedicated, isolated Kubernetes namespace.
 - **Subdomain**: Exposes the environment via a unique subdomain (e.g., `mr-123.preview.example.com`).
 
@@ -110,12 +110,16 @@ Diverge prevents cluster bloat through automated lifecycle management:
 
 ## Preview Labels
 
-Diverge employs a standardized labeling strategy on all generated resources (Deployments, Services, Jobs, HTTPRoutes) to ensure proper routing and traceability:
-- `app`: The unique preview app name (e.g., `preview-mr-1-frontend`).
-- `diverge.io/service`: The baseline service being shadowed (e.g., `frontend`).
-- `diverge.io/environment`: The name of the `Environment` CR.
-- `diverge.io/role`: Resource role, typically `preview`.
-- `diverge.io/preview-id`: Unique identifier for the preview (usually the CR name), used primarily in label selectors.
+Diverge employs a labeling strategy on generated resources for routing and traceability. Not all labels are present on every resource type:
+
+| Label | Deployments | Services | Jobs | HTTPRoutes |
+|-------|:-----------:|:--------:|:----::|:----------:|
+| `app` (preview name) | ✅ | ✅ | — | — |
+| `diverge.io/service` (baseline name) | ✅ | — | — | — |
+| `diverge.io/environment` | ✅ | ✅ | ✅ | ✅ |
+| `diverge.io/managed-by` | ✅ | ✅ | ✅ | ✅ |
+| `diverge.io/role` | ✅ | ✅ | — | — |
+| `diverge.io/preview-id` | ✅ | ✅ | — | — |
 
 ## Integration Points
 

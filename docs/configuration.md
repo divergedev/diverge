@@ -65,11 +65,11 @@ The `Environment` Custom Resource represents a single preview environment in Kub
 |---|---|
 | `serviceName` | **Required**. The Kubernetes Service name to shadow. |
 | `namespace` | The namespace where the baseline service runs. |
-| `port` | The container port the service listens on. Default is 8080. |
+| `port` | **Required**. The container port the service listens on. |
 | `image` | **Required**. The container image for the preview pod. |
 | `imagePullPolicy` | Overrides the container image pull policy. Default is `IfNotPresent`. |
 | `parentRef` | The Gateway API parentRef name. Default is `diverge-gateway`. |
-| `headerKey` | Overrides the routing header key. Default is `x-preview-id`. |
+| `headerKey` | Overrides the routing header key. Default is `x-diverge-env`. |
 | `pathPrefix` | Scopes the preview HTTPRoute to a specific path prefix. |
 | `databaseEnvKey` | The environment variable name for the database connection URL. Default is `DATABASE_URL`. |
 | `env` | Additional environment variables for the preview container (list of EnvVar). |

@@ -488,11 +488,25 @@ func TestGatewayRouter_Reconcile_PathPrefix(t *testing.T) {
 	err = c.Get(context.Background(), client.ObjectKey{Name: "test-env-web", Namespace: "default"}, u)
 	require.NoError(t, err)
 
-	rules, _, _ := unstructured.NestedSlice(u.Object, "spec", "rules")
-	matches, _, _ := unstructured.NestedSlice(rules[0].(map[string]interface{}), "matches")
+	rules, found, err := unstructured.NestedSlice(u.Object, "spec", "rules")
+	require.NoError(t, err)
+	require.True(t, found, "spec.rules should exist")
+	require.NotEmpty(t, rules)
+
+	rule, ok := rules[0].(map[string]interface{})
+	require.True(t, ok, "rule should be a map")
+	matches, found, err := unstructured.NestedSlice(rule, "matches")
+	require.NoError(t, err)
+	require.True(t, found, "matches should exist")
+	require.NotEmpty(t, matches)
+
+	match, ok := matches[0].(map[string]interface{})
+	require.True(t, ok, "match should be a map")
 
 	// Verify path match
-	pathMatch, _, _ := unstructured.NestedMap(matches[0].(map[string]interface{}), "path")
+	pathMatch, found, err := unstructured.NestedMap(match, "path")
+	require.NoError(t, err)
+	require.True(t, found, "path match should exist")
 	assert.Equal(t, "/api/test", pathMatch["value"])
 	assert.Equal(t, "PathPrefix", pathMatch["type"])
 }
