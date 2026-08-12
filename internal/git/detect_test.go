@@ -120,3 +120,23 @@ func TestSlugifyBranch(t *testing.T) {
 		})
 	}
 }
+
+func TestParseRemoteURL_Invalid(t *testing.T) {
+	_, _, err := ParseRemoteURL("just-some-string")
+	assert.Error(t, err)
+
+	provider, project, err := ParseRemoteURL("https://bitbucket.org/myorg/myrepo")
+	assert.NoError(t, err)
+	assert.Equal(t, "bitbucket", provider)
+	assert.Equal(t, "myorg/myrepo", project)
+}
+
+func TestDetect(t *testing.T) {
+	// Assuming this test runs in a valid git repository
+	ctx, err := Detect()
+	assert.NoError(t, err)
+	assert.NotEmpty(t, ctx.Branch)
+	assert.NotEmpty(t, ctx.RemoteURL)
+	assert.NotEmpty(t, ctx.Provider)
+	assert.NotEmpty(t, ctx.Project)
+}

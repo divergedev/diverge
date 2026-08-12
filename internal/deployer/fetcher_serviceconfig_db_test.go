@@ -2,7 +2,6 @@ package deployer
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -45,7 +44,7 @@ func TestResolveDBSecret_SchemaMode(t *testing.T) {
 	secret := resolveDBSecret(env)
 	schemaName, err := database.SchemaName(env)
 	require.NoError(t, err)
-	expected := fmt.Sprintf("diverge-db-%s", schemaName)
+	expected := database.SecretName(schemaName)
 	assert.Equal(t, expected, secret)
 }
 
@@ -88,7 +87,7 @@ func TestServiceConfigFetcher_WithSchemaDB_InjectsEnvFrom(t *testing.T) {
 	secretRef := ref["secretRef"].(map[string]interface{})
 	schemaName, err := database.SchemaName(env)
 	require.NoError(t, err)
-	assert.Equal(t, fmt.Sprintf("diverge-db-%s", schemaName), secretRef["name"])
+	assert.Equal(t, database.SecretName(schemaName), secretRef["name"])
 }
 
 func TestServiceConfigFetcher_WithConnectionRef_InjectsEnvFrom(t *testing.T) {
@@ -102,6 +101,7 @@ func TestServiceConfigFetcher_WithConnectionRef_InjectsEnvFrom(t *testing.T) {
 	require.True(t, found)
 	container := containers[0].(map[string]interface{})
 	envFrom := container["envFrom"].([]interface{})
+	require.Len(t, envFrom, 1)
 	ref := envFrom[0].(map[string]interface{})
 	secretRef := ref["secretRef"].(map[string]interface{})
 	assert.Equal(t, "my-db-secret", secretRef["name"])

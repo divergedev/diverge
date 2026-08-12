@@ -68,6 +68,25 @@ func (r *GatewayRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment
 			"diverge.io/managed-by":  "diverge",
 		})
 
+		// Build the match criteria: header + optional path prefix
+		matchRule := map[string]interface{}{
+			"headers": []interface{}{
+				map[string]interface{}{
+					"type":  "Exact",
+					"name":  headerKey,
+					"value": headerValue,
+				},
+			},
+		}
+		// Scope the route to the service's path prefix (e.g., /api/payments)
+		// Without this, the preview route matches all paths and shadows baseline
+		if cfg := env.Spec.ServiceConfig; cfg != nil && cfg.PathPrefix != "" {
+			matchRule["path"] = map[string]interface{}{
+				"type":  "PathPrefix",
+				"value": cfg.PathPrefix,
+			}
+		}
+
 		spec := map[string]interface{}{
 			"parentRefs": []interface{}{
 				map[string]interface{}{
@@ -77,15 +96,7 @@ func (r *GatewayRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment
 			"rules": []interface{}{
 				map[string]interface{}{
 					"matches": []interface{}{
-						map[string]interface{}{
-							"headers": []interface{}{
-								map[string]interface{}{
-									"type":  "Exact",
-									"name":  headerKey,
-									"value": headerValue,
-								},
-							},
-						},
+						matchRule,
 					},
 					"backendRefs": []interface{}{
 						map[string]interface{}{

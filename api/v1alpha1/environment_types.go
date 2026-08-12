@@ -172,6 +172,9 @@ type ServicePreviewConfig struct {
 	ParentRef string `json:"parentRef,omitempty"`
 	// HeaderKey overrides the routing header key.
 	HeaderKey string `json:"headerKey,omitempty"`
+	// PathPrefix scopes the preview HTTPRoute to a specific path prefix (e.g., "/api/payments").
+	// Without this, the route matches all paths which can shadow the baseline.
+	PathPrefix string `json:"pathPrefix,omitempty"`
 	// Env is additional environment variables for the preview container.
 	Env []EnvVar `json:"env,omitempty"`
 }

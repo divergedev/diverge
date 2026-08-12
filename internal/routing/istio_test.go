@@ -27,3 +27,10 @@ func TestIstioRouter_Teardown(t *testing.T) {
 	err := router.Teardown(context.Background(), env)
 	assert.NoError(t, err)
 }
+
+func TestIstioRouter_GetExternalURL(t *testing.T) {
+	router := &IstioRouter{}
+	env := &v1alpha1.Environment{}
+	url := router.GetExternalURL(env)
+	assert.Equal(t, "", url)
+}
