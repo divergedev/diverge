@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package diverge.v1;
+
+option go_package = "diverge/v1;divergev1";
+
+// PropagationContext defines the metadata propagated between services
+// via HTTP headers for environment-aware routing.
+//
+// This is the wire protocol for the Diverge SDK. Interceptors in Go,
+// Python, TypeScript, and Java serialize this message and inject it
+// into outgoing requests, allowing downstream services to participate
+// in the correct preview environment.
+message PropagationContext {
+  // The environment name (e.g., "preview-mr-42").
+  string environment = 1;
+
+  // The routing mode used by the Diverge proxy.
+  RoutingMode routing_mode = 2;
+
+  // The HTTP header key carrying the environment name.
+  // Default: "x-diverge-env". Can be overridden per-environment.
+  string header_key = 3;
+}
+
+// RoutingMode defines how traffic is routed to preview environments.
+enum RoutingMode {
+  ROUTING_MODE_UNSPECIFIED = 0;
+
+  // Header-based routing: a shared namespace with header-based
+  // traffic splitting against a baseline deployment.
+  ROUTING_MODE_HEADER = 1;
+
+  // Namespace-based routing: each environment gets its own
+  // Kubernetes namespace with full resource isolation.
+  ROUTING_MODE_NAMESPACE = 2;
+
+  // Subdomain-based routing: each environment gets a unique
+  // subdomain (e.g., mr-42.preview.example.com).
+  ROUTING_MODE_SUBDOMAIN = 3;
+}

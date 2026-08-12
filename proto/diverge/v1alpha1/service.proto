@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package diverge.v1alpha1;
+
+option go_package = "github.com/divergedev/diverge/gen/diverge/v1alpha1;divergev1alpha1";
+
+import "google/protobuf/empty.proto";
+import "diverge/v1alpha1/environment.proto";
+
+// --- ConnectRPC Service (foundation for issue #12) ---
+
+message CreateEnvironmentRequest {
+  string namespace = 1;
+  EnvironmentSpec spec = 2;
+}
+
+message GetEnvironmentRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+message ListEnvironmentsRequest {
+  string namespace = 1;
+  // Optional filters
+  EnvironmentPhase phase = 2;
+  string branch = 3;
+}
+
+message ListEnvironmentsResponse {
+  repeated Environment environments = 1;
+}
+
+message DeleteEnvironmentRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// EnvironmentService provides programmatic environment management.
+// This is the foundation for issue #12 (ConnectRPC API server).
+service EnvironmentService {
+  rpc CreateEnvironment(CreateEnvironmentRequest) returns (Environment);
+  rpc GetEnvironment(GetEnvironmentRequest) returns (Environment);
+  rpc ListEnvironments(ListEnvironmentsRequest) returns (ListEnvironmentsResponse);
+  rpc DeleteEnvironment(DeleteEnvironmentRequest) returns (google.protobuf.Empty);
+}
