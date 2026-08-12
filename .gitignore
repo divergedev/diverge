@@ -18,8 +18,8 @@
 
 # Binaries
 bin/
-diverge
-manager
+/diverge
+/manager
 
 # Nix / direnv
 .direnv/
