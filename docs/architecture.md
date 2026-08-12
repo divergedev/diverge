@@ -35,6 +35,7 @@ flowchart TD
 ## Components
 
 - **Controller**: The Kubernetes controller (reconciler) that watches `Environment` Custom Resources (CRs). It orchestrates the entire deployment lifecycle, executing state transitions.
+  - **Controller Watches**: The controller uses `Owns()` to watch child resources such as `Job` (migrations), `Deployment`, and `Service` (preview pods). This ensures that if child resources are modified or deleted, the controller automatically re-reconciles to restore the desired state.
 - **Proxy**: A reverse proxy that assists with header-based routing, seamlessly directing traffic to the correct preview environment.
 - **CLI**: A command-line tool (`diverge`) allowing developers to interact with and manage preview environments directly from their terminal.
 - **Webhook Handler**: An HTTP server that listens to GitLab/GitHub webhook events (e.g., MR open, update, merge, close). It translates these events into Kubernetes `Environment` CRs, applying labels for configuration overrides based on MR details.
@@ -79,6 +80,7 @@ Only the modified services are deployed to the Kubernetes cluster. Unmodified se
 Diverge supports multiple routing strategies depending on cluster configuration:
 
 - **Header-based (Istio VirtualService)**: The default and most efficient mode. It creates an Istio `VirtualService` that inspects incoming HTTP requests. If the request contains a specific header (e.g., `x-diverge-env: mr-123`), it routes traffic to the delta-deployed services. Otherwise, it falls back to the baseline environment.
+- **Gateway API**: Generates Gateway API `HTTPRoute` resources for header-based routing. It combines header matching with a `pathPrefix` match, scoping the preview route to specific API paths to avoid unintentionally shadowing the entire baseline service.
 - **Namespace isolation**: Deploys the entire environment into a dedicated, isolated Kubernetes namespace.
 - **Subdomain**: Exposes the environment via a unique subdomain (e.g., `mr-123.preview.example.com`).
 
@@ -91,6 +93,13 @@ Database handling is critical for isolated testing. Diverge offers several modes
 - **Snapshot**: Provisions a new database cloned from a recent production or staging snapshot. Ideal for realistic testing.
 - **Fresh**: Provisions an entirely new, empty database instance and optionally runs seed scripts.
 
+## Database Schema Isolation
+
+When using `schema` mode for PostgreSQL, Diverge ensures isolation by:
+1. **Schema Creation**: Provisioning a unique, sanitized schema specific to the preview environment.
+2. **Search Path Injection**: Automatically generating a connection Secret with a `DATABASE_URL` that includes the schema in the `search_path` (e.g., `?search_path=diverge_env_mr_1`).
+3. **Migration Job Lifecycle**: Dispatched a Kubernetes `Job` to run database migrations against the new schema. The controller watches this Job via `Owns()`, holding the `DatabaseReady` condition until the migration completes successfully.
+
 ## Lifecycle Management
 
 Diverge prevents cluster bloat through automated lifecycle management:
@@ -98,6 +107,15 @@ Diverge prevents cluster bloat through automated lifecycle management:
 - **Cleanup on merge/close**: When an MR is merged or closed, the webhook handler signals the controller to change the CR phase to `Terminating`, triggering teardown.
 - **TTL**: Environments can have a configured Time-To-Live (e.g., 7 days) to ensure stale environments are automatically garbage-collected.
 - **Garbage Collection**: Reaps orphaned resources that no longer have a corresponding active MR.
+
+## Preview Labels
+
+Diverge employs a standardized labeling strategy on all generated resources (Deployments, Services, Jobs, HTTPRoutes) to ensure proper routing and traceability:
+- `app`: The unique preview app name (e.g., `preview-mr-1-frontend`).
+- `diverge.io/service`: The baseline service being shadowed (e.g., `frontend`).
+- `diverge.io/environment`: The name of the `Environment` CR.
+- `diverge.io/role`: Resource role, typically `preview`.
+- `diverge.io/preview-id`: Unique identifier for the preview (usually the CR name), used primarily in label selectors.
 
 ## Integration Points
 
