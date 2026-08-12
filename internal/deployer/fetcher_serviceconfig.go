@@ -73,7 +73,7 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 	}
 
 	// If DatabaseEnvKey is set and differs from DATABASE_URL, add explicit mapping
-	if dbSecretName != "" && cfg.DatabaseEnvKey != "" && cfg.DatabaseEnvKey != "DATABASE_URL" {
+	if dbSecretName != "" && cfg.DatabaseEnvKey != "" && !seen[cfg.DatabaseEnvKey] {
 		containerEnv = append(containerEnv, map[string]interface{}{
 			"name": cfg.DatabaseEnvKey,
 			"valueFrom": map[string]interface{}{

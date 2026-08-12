@@ -2,6 +2,11 @@
 # Generate test coverage report
 set -euo pipefail
 
+# Re-exec inside nix develop if available and not already in it
+if [ -f flake.nix ] && [ -z "${IN_NIX_SHELL:-}" ] && command -v nix >/dev/null 2>&1; then
+  exec nix develop -c "$0" "$@"
+fi
+
 COVER_DIR="coverage"
 mkdir -p "$COVER_DIR"
 

@@ -182,6 +182,8 @@ type ServicePreviewConfig struct {
 	// HeaderKey overrides the routing header key.
 	HeaderKey string `json:"headerKey,omitempty"`
 	// PathPrefix scopes HTTPRoute matching to a specific path prefix (e.g., "/api/payments") to avoid shadowing the baseline.
+	// +kubebuilder:validation:Pattern=`^/.*$`
+	// +optional
 	PathPrefix string `json:"pathPrefix,omitempty"`
 	// Env is additional environment variables for the preview container.
 	Env []EnvVar `json:"env,omitempty"`

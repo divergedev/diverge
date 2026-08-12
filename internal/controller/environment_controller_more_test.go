@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
@@ -87,6 +88,26 @@ func getTestScheme() *runtime.Scheme {
 	return s
 }
 
+func newTestReconciler(t *testing.T, env *divergeiov1alpha1.Environment, dbStatus *database.DatabaseStatus, url string) (*EnvironmentReconciler, client.Client, *mockDeployer, *mockRouter, *mockDB) {
+	t.Helper()
+	client := fake.NewClientBuilder().WithScheme(getTestScheme()).WithStatusSubresource(&divergeiov1alpha1.Environment{}).WithObjects(env).Build()
+
+	dep := &mockDeployer{}
+	rot := &mockRouter{url: url}
+	db := &mockDB{provisionStatus: dbStatus}
+
+	r := &EnvironmentReconciler{
+		Client:           client,
+		Scheme:           getTestScheme(),
+		Recorder:         record.NewFakeRecorder(10),
+		Deployer:         dep,
+		Router:           rot,
+		DatabaseProvider: db,
+	}
+
+	return r, client, dep, rot, db
+}
+
 func TestReconcile_SuccessfulProvision(t *testing.T) {
 	env := &divergeiov1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -100,20 +121,7 @@ func TestReconcile_SuccessfulProvision(t *testing.T) {
 			},
 		},
 	}
-	client := fake.NewClientBuilder().WithScheme(getTestScheme()).WithStatusSubresource(&divergeiov1alpha1.Environment{}).WithObjects(env).Build()
-
-	dep := &mockDeployer{}
-	rot := &mockRouter{url: "https://test.com"}
-	db := &mockDB{provisionStatus: &database.DatabaseStatus{Ready: true}}
-
-	r := &EnvironmentReconciler{
-		Client:           client,
-		Scheme:           getTestScheme(),
-		Recorder:         record.NewFakeRecorder(10),
-		Deployer:         dep,
-		Router:           rot,
-		DatabaseProvider: db,
-	}
+	r, client, dep, rot, db := newTestReconciler(t, env, &database.DatabaseStatus{Ready: true}, "https://test.com")
 
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-env", Namespace: "default"}}
 	res, err := r.Reconcile(context.Background(), req)
@@ -146,20 +154,7 @@ func TestReconcile_Teardown(t *testing.T) {
 			},
 		},
 	}
-	client := fake.NewClientBuilder().WithScheme(getTestScheme()).WithStatusSubresource(&divergeiov1alpha1.Environment{}).WithObjects(env).Build()
-
-	dep := &mockDeployer{}
-	rot := &mockRouter{}
-	db := &mockDB{}
-
-	r := &EnvironmentReconciler{
-		Client:           client,
-		Scheme:           getTestScheme(),
-		Recorder:         record.NewFakeRecorder(10),
-		Deployer:         dep,
-		Router:           rot,
-		DatabaseProvider: db,
-	}
+	r, client, dep, rot, db := newTestReconciler(t, env, nil, "")
 
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-env", Namespace: "default"}}
 	res, err := r.Reconcile(context.Background(), req)
@@ -193,20 +188,7 @@ func TestReconcile_TTL(t *testing.T) {
 			CreatedAt: &metav1.Time{Time: time.Now().Add(-2 * time.Hour)}, // expired
 		},
 	}
-	client := fake.NewClientBuilder().WithScheme(getTestScheme()).WithStatusSubresource(&divergeiov1alpha1.Environment{}).WithObjects(env).Build()
-
-	dep := &mockDeployer{}
-	rot := &mockRouter{}
-	db := &mockDB{provisionStatus: &database.DatabaseStatus{Ready: true}}
-
-	r := &EnvironmentReconciler{
-		Client:           client,
-		Scheme:           getTestScheme(),
-		Recorder:         record.NewFakeRecorder(10),
-		Deployer:         dep,
-		Router:           rot,
-		DatabaseProvider: db,
-	}
+	r, client, _, _, _ := newTestReconciler(t, env, &database.DatabaseStatus{Ready: true}, "")
 
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-env", Namespace: "default"}}
 	res, err := r.Reconcile(context.Background(), req)

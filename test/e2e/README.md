@@ -13,7 +13,8 @@ End-to-end tests require a running Kubernetes cluster (k3d recommended).
 
 ```bash
 # Use the bank demo as the e2e test suite
-cd ../demo/bank-demo
+# Note: these commands should be run from the repo root inside nix develop.
+cd demo/bank-demo
 ./scripts/setup.sh
 ./scripts/verify.sh
 ./scripts/setup.sh teardown

@@ -459,3 +459,40 @@ func TestGatewayRouter_Teardown_Errors(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "list error")
 }
+
+func TestGatewayRouter_Reconcile_PathPrefix(t *testing.T) {
+	c := fake.NewClientBuilder().Build()
+	r := &GatewayRouter{Client: c, Namespace: "default"}
+
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-env",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Deploy: v1alpha1.EnvironmentDeploy{
+				ChangedServices: []string{"web"},
+			},
+			ServiceConfig: &v1alpha1.ServicePreviewConfig{
+				PathPrefix: "/api/test",
+			},
+		},
+	}
+
+	err := r.Reconcile(context.Background(), env)
+	require.NoError(t, err)
+
+	u := &unstructured.Unstructured{}
+	u.SetAPIVersion("gateway.networking.k8s.io/v1")
+	u.SetKind("HTTPRoute")
+	err = c.Get(context.Background(), client.ObjectKey{Name: "test-env-web", Namespace: "default"}, u)
+	require.NoError(t, err)
+
+	rules, _, _ := unstructured.NestedSlice(u.Object, "spec", "rules")
+	matches, _, _ := unstructured.NestedSlice(rules[0].(map[string]interface{}), "matches")
+
+	// Verify path match
+	pathMatch, _, _ := unstructured.NestedMap(matches[0].(map[string]interface{}), "path")
+	assert.Equal(t, "/api/test", pathMatch["value"])
+	assert.Equal(t, "PathPrefix", pathMatch["type"])
+}
