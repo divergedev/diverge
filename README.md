@@ -17,13 +17,13 @@ Documentation: [https://divergedev.com](https://divergedev.com)
 
 ## Try It
 
-> **[5-minute demo →](https://github.com/divergedev/demo)** — Multi-repo preview environments with k3d + Envoy Gateway
+> **[5-minute demo →](https://github.com/divergedev/demo)** — Multi-repo preview environments with k3d + Envoy Gateway. Features a complete hands-on bank-demo showcasing database schema isolation and automated migration jobs!
 
 ## Key Features
 *   **Delta Deployment**: Only deploy what changed, falling back to a baseline for unmodified services.
 *   **Header-Based Routing & Gateway API**: Leverages Gateway API, Istio, and the Diverge Proxy to route traffic seamlessly using HTTP headers.
 *   **Configurable DB Modes**: Options for shared, schema, snapshot, or fresh databases for your environments.
-*   **Schema-per-Environment**: SQL-based schema provisioning with regex-validated naming and injection prevention.
+*   **Schema-per-Environment**: SQL-based schema provisioning with regex-validated naming, injection prevention, and automated migration Jobs.
 *   **MR-Triggered Lifecycle**: Environments spin up when a Merge Request opens and tear down upon merge/close.
 *   **Merge Gating**: GitLab/GitHub commit status checks (`diverge/preview`) block merges until environments are healthy.
 *   **Argo CD & Direct Deploy**: Argo CD GitOps (`Application` CRs) and No-ArgoCD mode (`DirectDeployer`) for Helm charts and Kustomize overlays.

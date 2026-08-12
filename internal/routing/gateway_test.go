@@ -459,3 +459,54 @@ func TestGatewayRouter_Teardown_Errors(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "list error")
 }
+
+func TestGatewayRouter_Reconcile_PathPrefix(t *testing.T) {
+	c := fake.NewClientBuilder().Build()
+	r := &GatewayRouter{Client: c, Namespace: "default"}
+
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-env",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Deploy: v1alpha1.EnvironmentDeploy{
+				ChangedServices: []string{"web"},
+			},
+			ServiceConfig: &v1alpha1.ServicePreviewConfig{
+				PathPrefix: "/api/test",
+			},
+		},
+	}
+
+	err := r.Reconcile(context.Background(), env)
+	require.NoError(t, err)
+
+	u := &unstructured.Unstructured{}
+	u.SetAPIVersion("gateway.networking.k8s.io/v1")
+	u.SetKind("HTTPRoute")
+	err = c.Get(context.Background(), client.ObjectKey{Name: "test-env-web", Namespace: "default"}, u)
+	require.NoError(t, err)
+
+	rules, found, err := unstructured.NestedSlice(u.Object, "spec", "rules")
+	require.NoError(t, err)
+	require.True(t, found, "spec.rules should exist")
+	require.NotEmpty(t, rules)
+
+	rule, ok := rules[0].(map[string]interface{})
+	require.True(t, ok, "rule should be a map")
+	matches, found, err := unstructured.NestedSlice(rule, "matches")
+	require.NoError(t, err)
+	require.True(t, found, "matches should exist")
+	require.NotEmpty(t, matches)
+
+	match, ok := matches[0].(map[string]interface{})
+	require.True(t, ok, "match should be a map")
+
+	// Verify path match
+	pathMatch, found, err := unstructured.NestedMap(match, "path")
+	require.NoError(t, err)
+	require.True(t, found, "path match should exist")
+	assert.Equal(t, "/api/test", pathMatch["value"])
+	assert.Equal(t, "PathPrefix", pathMatch["type"])
+}

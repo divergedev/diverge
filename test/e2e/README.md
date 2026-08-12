@@ -4,19 +4,20 @@ End-to-end tests require a running Kubernetes cluster (k3d recommended).
 
 ## Prerequisites
 
-- k3d
-- kubectl
-- helm
+- [Nix](https://nixos.org/download.html) (the repo's `flake.nix` provides all tools)
 - Docker
 
 ## Run
 
+All commands run from the **repository root** inside `nix develop`:
+
 ```bash
-# Use the bank demo as the e2e test suite
-cd ../demo/bank-demo
-./scripts/setup.sh
-./scripts/verify.sh
-./scripts/setup.sh teardown
+nix develop -c bash -c '
+  cd demo/bank-demo
+  ./scripts/setup.sh
+  ./scripts/verify.sh
+  ./scripts/setup.sh teardown
+'
 ```
 
 ## What's tested

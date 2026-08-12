@@ -45,9 +45,34 @@ The `Environment` Custom Resource represents a single preview environment in Kub
 | `database.mode` | Database provisioning strategy: `shared`, `schema`, `snapshot`, `fresh`. |
 | `database.connectionRef` | Reference to a Secret containing the database connection string. |
 | `database.seedSource` | Path or reference to database seeding scripts. |
-| `database.migrationCommand` | The command to run database migrations against the provisioned DB. |
+| `database.migrationJob` | Configuration for a Kubernetes Job to run migrations against the provisioned DB. |
 | `lifecycle.ttl` | Time-to-Live duration string (e.g., `72h`). Environment is deleted after this duration. |
 | `lifecycle.cleanupOnMerge` | Boolean. If true, the environment is destroyed when the MR is merged. |
+| `serviceConfig` | Configuration for a single preview pod in multi-repo mode. |
+
+### `MigrationJobSpec`
+
+| Field | Description |
+|---|---|
+| `image` | **Required**. Container image to use for the migration job. |
+| `args` | Command arguments to run in the container. |
+| `envFrom` | List of Secret references to inject as environment variables. |
+| `timeoutSeconds` | Timeout for the migration job. Default is 120. |
+
+### `ServicePreviewConfig`
+
+| Field | Description |
+|---|---|
+| `serviceName` | **Required**. The Kubernetes Service name to shadow. |
+| `namespace` | The namespace where the baseline service runs. |
+| `port` | **Required**. The container port the service listens on. |
+| `image` | **Required**. The container image for the preview pod. |
+| `imagePullPolicy` | Overrides the container image pull policy. Default is `IfNotPresent`. |
+| `parentRef` | The Gateway API parentRef name. Default is `diverge-gateway`. |
+| `headerKey` | Overrides the routing header key. Default is `x-diverge-env`. |
+| `pathPrefix` | Scopes the preview HTTPRoute to a specific path prefix. |
+| `databaseEnvKey` | The environment variable name for the database connection URL. Default is `DATABASE_URL`. |
+| `env` | Additional environment variables for the preview container (list of EnvVar). |
 
 ### `EnvironmentStatus`
 

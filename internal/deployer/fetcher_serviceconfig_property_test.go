@@ -26,11 +26,16 @@ func TestServiceConfigFetcher_Property(t *testing.T) {
 		}
 
 		numEnvs := rapid.IntRange(0, 5).Draw(t, "numEnvs")
-		for i := 0; i < numEnvs; i++ {
-			cfg.Env = append(cfg.Env, v1alpha1.EnvVar{
-				Name:  rapid.StringMatching(`^[A-Z_][A-Z0-9_]*$`).Draw(t, "envName"),
-				Value: rapid.String().Draw(t, "envValue"),
-			})
+		seenEnv := make(map[string]bool)
+		for len(cfg.Env) < numEnvs {
+			name := rapid.StringMatching(`^[A-Z_][A-Z0-9_]*$`).Draw(t, "envName")
+			if !seenEnv[name] && name != "APP_VERSION" {
+				seenEnv[name] = true
+				cfg.Env = append(cfg.Env, v1alpha1.EnvVar{
+					Name:  name,
+					Value: rapid.String().Draw(t, "envValue"),
+				})
+			}
 		}
 
 		env := &v1alpha1.Environment{

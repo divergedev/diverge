@@ -33,6 +33,9 @@ make install
 make run
 ```
 
+## Try the Bank Demo
+For a complete hands-on demo with database schema isolation, see the [bank-demo](https://github.com/divergedev/demo).
+
 ## Configure Your Repo
 
 Diverge relies on a configuration file inside your application repository to understand how your project is structured.
@@ -90,7 +93,16 @@ spec:
     headerKey: x-diverge-env
     headerValue: mr-1
   database:
-    mode: shared
+    mode: schema
+    migrationJob:
+      image: registry.gitlab.com/my-org/my-app/migrate:latest
+      args: ["up"]
+      timeoutSeconds: 120
+  serviceConfig:
+    serviceName: frontend
+    port: 3000
+    image: registry.gitlab.com/my-org/my-app/frontend:mr-1
+    pathPrefix: /api
   lifecycle:
     ttl: 24h
 ```

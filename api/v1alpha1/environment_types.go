@@ -9,17 +9,26 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// SecretRef references a specific key within a Kubernetes Secret.
 type SecretRef struct {
+	// Namespace is the namespace of the Secret.
 	Namespace string `json:"namespace,omitempty"`
-	Name      string `json:"name,omitempty"`
-	Key       string `json:"key,omitempty"`
+	// Name is the name of the Secret.
+	Name string `json:"name,omitempty"`
+	// Key is the specific key in the Secret to reference.
+	Key string `json:"key,omitempty"`
 }
 
+// MigrationJobSpec configures a Kubernetes Job for database migrations.
 type MigrationJobSpec struct {
-	Image          string      `json:"image,omitempty"`
-	Args           []string    `json:"args,omitempty"`
-	EnvFrom        []SecretRef `json:"envFrom,omitempty"`
-	TimeoutSeconds int32       `json:"timeoutSeconds,omitempty"` // Default 120
+	// Image is the container image to use for the migration job.
+	Image string `json:"image,omitempty"`
+	// Args specifies the arguments to pass to the migration job container.
+	Args []string `json:"args,omitempty"`
+	// EnvFrom specifies environment variables to inject from Secrets.
+	EnvFrom []SecretRef `json:"envFrom,omitempty"`
+	// TimeoutSeconds is the maximum duration the migration job can run before being terminated.
+	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"` // Default 120
 }
 
 // EnvironmentSource defines the source code origin for the environment
@@ -150,7 +159,7 @@ type TestStatus struct {
 	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
 }
 
-// ServicePreviewConfig holds per-service preview configuration,
+// ServicePreviewConfig defines how preview pods are deployed for multi-repo services,
 // read from the .diverge.yaml file in the service repository.
 type ServicePreviewConfig struct {
 	// ServiceName is the Kubernetes Service name to shadow.
@@ -172,8 +181,9 @@ type ServicePreviewConfig struct {
 	ParentRef string `json:"parentRef,omitempty"`
 	// HeaderKey overrides the routing header key.
 	HeaderKey string `json:"headerKey,omitempty"`
-	// PathPrefix scopes the preview HTTPRoute to a specific path prefix (e.g., "/api/payments").
-	// Without this, the route matches all paths which can shadow the baseline.
+	// PathPrefix scopes HTTPRoute matching to a specific path prefix (e.g., "/api/payments") to avoid shadowing the baseline.
+	// +kubebuilder:validation:Pattern=`^/.*$`
+	// +optional
 	PathPrefix string `json:"pathPrefix,omitempty"`
 	// Env is additional environment variables for the preview container.
 	Env []EnvVar `json:"env,omitempty"`
