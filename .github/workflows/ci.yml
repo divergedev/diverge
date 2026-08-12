@@ -45,3 +45,37 @@ jobs:
       - uses: actions/checkout@v5
       - name: Lint Helm Chart
         run: helm lint charts/diverge
+
+  check-generated:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Install buf
+        uses: bufbuild/buf-setup-action@v1
+        with:
+          github_token: ${{ github.token }}
+      - name: Install protoc plugins
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+          go install connectrpc.com/connect/cmd/protoc-gen-connect-go@latest
+          go install github.com/divergedev/proto2type/cmd/protoc-gen-proto2type@latest
+      - name: Run code generation
+        run: |
+          buf generate
+          buf generate --template buf.gen.domain.yaml
+          rm -rf gen/domain/diverge/v1
+      - name: Check for stale generated files
+        run: |
+          if ! git diff --quiet gen/; then
+            echo "❌ Generated files are stale!"
+            echo ""
+            git diff --stat gen/
+            echo ""
+            echo "Run 'make proto' and commit the updated gen/ directory."
+            exit 1
+          fi
+          echo "✅ Generated files are up-to-date"
