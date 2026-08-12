@@ -131,10 +131,12 @@ func (r *MigrationRunner) buildJob(
 			},
 			OwnerReferences: []metav1.OwnerReference{
 				{
-					APIVersion: "diverge.io/v1alpha1",
-					Kind:       "Environment",
-					Name:       env.Name,
-					UID:        env.UID,
+					APIVersion:         "diverge.io/v1alpha1",
+					Kind:               "Environment",
+					Name:               env.Name,
+					UID:                env.UID,
+					Controller:         boolPtr(true),
+					BlockOwnerDeletion: boolPtr(true),
 				},
 			},
 		},
@@ -153,11 +155,12 @@ func (r *MigrationRunner) buildJob(
 					RestartPolicy: corev1.RestartPolicyOnFailure,
 					Containers: []corev1.Container{
 						{
-							Name:    "migrate",
-							Image:   spec.Image,
-							Args:    spec.Args,
-							Env:     envVars,
-							EnvFrom: envFromRefs,
+							Name:            "migrate",
+							Image:           spec.Image,
+							ImagePullPolicy: corev1.PullIfNotPresent,
+							Args:            spec.Args,
+							Env:             envVars,
+							EnvFrom:         envFromRefs,
 						},
 					},
 				},
@@ -187,4 +190,8 @@ func (r *MigrationRunner) Cleanup(ctx context.Context, env *v1alpha1.Environment
 		return fmt.Errorf("failed to delete migration job: %w", err)
 	}
 	return nil
+}
+
+func boolPtr(b bool) *bool {
+	return &b
 }

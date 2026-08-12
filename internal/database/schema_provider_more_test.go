@@ -116,7 +116,7 @@ func TestSchemaProvider_Provision_UpdatesSecret(t *testing.T) {
 		},
 	}
 	schemaName, _ := SchemaName(env)
-	secretName := "diverge-db-" + schemaName
+	secretName := SecretName(schemaName)
 
 	existingSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{

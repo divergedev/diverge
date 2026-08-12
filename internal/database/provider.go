@@ -90,6 +90,12 @@ func SchemaName(env *v1alpha1.Environment) (string, error) {
 	return raw, nil
 }
 
+// SecretName returns a valid K8s secret name derived from the Postgres schema name.
+// Postgres schemas use underscores, but K8s names require hyphens.
+func SecretName(schemaName string) string {
+	return "diverge-db-" + strings.ReplaceAll(schemaName, "_", "-")
+}
+
 // SharedProvider provides a shared database connection
 type SharedProvider struct{}
 
@@ -124,7 +130,7 @@ func (p *SchemaProvider) Provision(ctx context.Context, env *v1alpha1.Environmen
 		}
 	}
 
-	secretName := fmt.Sprintf("diverge-db-%s", schemaName)
+	secretName := SecretName(schemaName)
 	namespace := env.Namespace
 	if env.Spec.Deploy.Namespace == "create" {
 		namespace = env.PreviewNamespace()
@@ -228,7 +234,7 @@ func (p *SchemaProvider) Teardown(ctx context.Context, env *v1alpha1.Environment
 	}
 
 	if p.Client != nil {
-		secretName := fmt.Sprintf("diverge-db-%s", schemaName)
+		secretName := SecretName(schemaName)
 		namespace := env.Namespace
 		if env.Spec.Deploy.Namespace == "create" {
 			namespace = env.PreviewNamespace()
@@ -265,7 +271,7 @@ func (p *SchemaProvider) Status(ctx context.Context, env *v1alpha1.Environment) 
 		}
 	}
 
-	secretName := fmt.Sprintf("diverge-db-%s", schemaName)
+	secretName := SecretName(schemaName)
 	return &DatabaseStatus{
 		Ready:            true,
 		ConnectionSecret: secretName,

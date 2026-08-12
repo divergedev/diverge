@@ -43,13 +43,18 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 		pullPolicy = "IfNotPresent"
 	}
 
-	// Build env vars
+	// Build env vars — auto-inject APP_VERSION, then add user-provided (skipping dupes)
+	seen := map[string]bool{"APP_VERSION": true}
 	var containerEnv []interface{}
 	containerEnv = append(containerEnv, map[string]interface{}{
 		"name":  "APP_VERSION",
 		"value": previewID,
 	})
 	for _, e := range cfg.Env {
+		if seen[e.Name] {
+			continue
+		}
+		seen[e.Name] = true
 		containerEnv = append(containerEnv, map[string]interface{}{
 			"name":  e.Name,
 			"value": e.Value,
@@ -88,7 +93,8 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 			"metadata": map[string]interface{}{
 				"name": previewName,
 				"labels": map[string]interface{}{
-					"app":                    cfg.ServiceName,
+					"app":                    previewName,
+					"diverge.io/service":     cfg.ServiceName,
 					"diverge.io/role":        "preview",
 					"diverge.io/preview-id":  previewID,
 					"diverge.io/environment": env.Name,
@@ -99,14 +105,15 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 				"replicas": int64(1),
 				"selector": map[string]interface{}{
 					"matchLabels": map[string]interface{}{
-						"app":                   cfg.ServiceName,
+						"app":                   previewName,
 						"diverge.io/preview-id": previewID,
 					},
 				},
 				"template": map[string]interface{}{
 					"metadata": map[string]interface{}{
 						"labels": map[string]interface{}{
-							"app":                    cfg.ServiceName,
+							"app":                    previewName,
+							"diverge.io/service":     cfg.ServiceName,
 							"diverge.io/role":        "preview",
 							"diverge.io/preview-id":  previewID,
 							"diverge.io/environment": env.Name,
@@ -155,7 +162,7 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 			},
 			"spec": map[string]interface{}{
 				"selector": map[string]interface{}{
-					"app":                   cfg.ServiceName,
+					"app":                   previewName,
 					"diverge.io/preview-id": previewID,
 				},
 				"ports": []interface{}{
@@ -190,7 +197,7 @@ func resolveDBSecret(env *v1alpha1.Environment) string {
 		if err != nil {
 			return ""
 		}
-		return fmt.Sprintf("diverge-db-%s", schemaName)
+		return database.SecretName(schemaName)
 	}
 
 	return ""
