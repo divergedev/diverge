@@ -8,6 +8,8 @@ import (
 
 type NoopDatabaseProvider struct{}
 
+var _ DatabaseProvider = (*NoopDatabaseProvider)(nil)
+
 func (p *NoopDatabaseProvider) Provision(ctx context.Context, env *v1alpha1.Environment) (*DatabaseResult, error) {
 	return &DatabaseResult{
 		Ready:   true,

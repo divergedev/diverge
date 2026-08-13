@@ -171,9 +171,11 @@ func main() {
 		defer pingCancel()
 		if err := db.PingContext(pingCtx); err != nil {
 			setupLog.Error(err, "failed to ping database", "host", dbHost, "port", dbPort)
+			_ = db.Close()
 			os.Exit(1)
 		}
 		setupLog.Info("Connected to database", "host", dbHost, "port", dbPort, "database", dbName)
+		_ = db.Close() // Close probe handle; SchemaDatabaseProvider opens its own connections
 
 		dbProviderImpl = &database.SchemaDatabaseProvider{
 			AdminDSN: dsn,

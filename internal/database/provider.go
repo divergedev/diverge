@@ -16,14 +16,19 @@ type DatabaseProvider interface {
 	Status(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error)
 }
 
+// DatabaseResult is the outcome of a Provision call.
 type DatabaseResult struct {
 	DSN      string            // Connection string for the preview
 	EnvVars  map[string]string // Env vars to inject into preview pod
 	SetupSQL string            // SQL to run to initialize the database
-	Ready    bool
-	Message  string
+	// Ready reports that the provider finished its own work. It does not
+	// guarantee that SetupSQL has been executed; callers must run SetupSQL
+	// separately if non-empty.
+	Ready   bool
+	Message string
 }
 
+// DatabaseStatus is the observed state of a preview database context.
 type DatabaseStatus struct {
 	Provisioned bool
 	SchemaName  string

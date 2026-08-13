@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -12,18 +14,14 @@ import (
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 )
 
-func TestDevCmd(t *testing.T) {
+func TestDevCmd_InterceptAndRelease(t *testing.T) {
 	s := runtime.NewScheme()
 	_ = divergeiov1alpha1.AddToScheme(s)
 
 	c := fake.NewClientBuilder().WithScheme(s).Build()
 	app := &App{Client: c}
 
-	// Intercept test
-	cmd := newPreviewInterceptCmd(app)
-	cmd.SetArgs([]string{"my-service", "--group", "dev-test", "--endpoint", "10.0.0.1:8080"})
-
-	// Need a PreviewGroup first
+	// Create a PreviewGroup first
 	pg := &divergeiov1alpha1.PreviewGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: "dev-test"},
 		Spec: divergeiov1alpha1.PreviewGroupSpec{
@@ -32,34 +30,49 @@ func TestDevCmd(t *testing.T) {
 			},
 		},
 	}
-	_ = c.Create(context.Background(), pg)
+	require.NoError(t, c.Create(context.Background(), pg))
 
-	err := cmd.Execute()
-	if err != nil {
-		t.Fatalf("Intercept failed: %v", err)
-	}
+	// Intercept test
+	cmd := newPreviewInterceptCmd(app)
+	cmd.SetArgs([]string{"my-service", "--group", "dev-test", "--endpoint", "10.0.0.1:8080"})
+	require.NoError(t, cmd.Execute())
 
-	_ = c.Get(context.Background(), types.NamespacedName{Name: "dev-test"}, pg)
-	if pg.Spec.Services[0].Mode != divergeiov1alpha1.ServiceModeLocal {
-		t.Errorf("Expected Local mode, got %v", pg.Spec.Services[0].Mode)
-	}
-	if pg.Spec.Services[0].Endpoint != "10.0.0.1:8080" {
-		t.Errorf("Expected endpoint 10.0.0.1:8080, got %v", pg.Spec.Services[0].Endpoint)
-	}
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "dev-test"}, pg))
+	assert.Equal(t, divergeiov1alpha1.ServiceModeLocal, pg.Spec.Services[0].Mode)
+	assert.Equal(t, "10.0.0.1:8080", pg.Spec.Services[0].Endpoint)
 
 	// Release test
 	releaseCmd := newPreviewReleaseCmd(app)
 	releaseCmd.SetArgs([]string{"my-service", "--group", "dev-test"})
-	err = releaseCmd.Execute()
-	if err != nil {
-		t.Fatalf("Release failed: %v", err)
-	}
+	require.NoError(t, releaseCmd.Execute())
 
-	_ = c.Get(context.Background(), types.NamespacedName{Name: "dev-test"}, pg)
-	if pg.Spec.Services[0].Mode != divergeiov1alpha1.ServiceModeImage {
-		t.Errorf("Expected Image mode, got %v", pg.Spec.Services[0].Mode)
-	}
-	if pg.Spec.Services[0].Endpoint != "" {
-		t.Errorf("Expected empty endpoint, got %v", pg.Spec.Services[0].Endpoint)
-	}
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "dev-test"}, pg))
+	assert.Equal(t, divergeiov1alpha1.ServiceModeImage, pg.Spec.Services[0].Mode)
+	assert.Empty(t, pg.Spec.Services[0].Endpoint)
+}
+
+func TestDevCmd_Intercept_MissingGroup(t *testing.T) {
+	s := runtime.NewScheme()
+	_ = divergeiov1alpha1.AddToScheme(s)
+
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+	app := &App{Client: c}
+
+	cmd := newPreviewInterceptCmd(app)
+	cmd.SetArgs([]string{"my-service", "--group", "nonexistent", "--endpoint", "10.0.0.1:8080"})
+	err := cmd.Execute()
+	assert.Error(t, err, "intercept should fail for nonexistent group")
+}
+
+func TestDevCmd_Release_MissingGroup(t *testing.T) {
+	s := runtime.NewScheme()
+	_ = divergeiov1alpha1.AddToScheme(s)
+
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+	app := &App{Client: c}
+
+	cmd := newPreviewReleaseCmd(app)
+	cmd.SetArgs([]string{"my-service", "--group", "nonexistent"})
+	err := cmd.Execute()
+	assert.Error(t, err, "release should fail for nonexistent group")
 }

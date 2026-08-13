@@ -33,7 +33,7 @@ func (m *mockDatabaseProvider) Teardown(ctx context.Context, env *divergeiov1alp
 }
 
 func (m *mockDatabaseProvider) Status(ctx context.Context, env *divergeiov1alpha1.Environment) (*database.DatabaseStatus, error) {
-	return nil, nil
+	return &database.DatabaseStatus{}, nil
 }
 
 func TestPreviewGroupReconciler_DB_Provision_InjectsEnvVars(t *testing.T) {
