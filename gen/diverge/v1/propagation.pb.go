@@ -94,7 +94,7 @@ type PropagationContext struct {
 	// The routing mode used by the Diverge proxy.
 	RoutingMode RoutingMode `protobuf:"varint,2,opt,name=routing_mode,json=routingMode,proto3,enum=diverge.v1.RoutingMode" json:"routing_mode,omitempty"`
 	// The HTTP header key carrying the environment name.
-	// Default: "x-diverge-env". Can be overridden per-environment.
+	// Default: "x-preview-env". Can be overridden per-environment.
 	HeaderKey     string `protobuf:"bytes,3,opt,name=header_key,json=headerKey,proto3" json:"header_key,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

@@ -6,7 +6,6 @@ option go_package = "github.com/divergedev/diverge/gen/diverge/v1alpha1;divergev
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/duration.proto";
-import "google/protobuf/empty.proto";
 
 // EnvironmentPhase represents the lifecycle state of a preview environment.
 enum EnvironmentPhase {
