@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/database"
 	"github.com/divergedev/diverge/internal/notifier"
 )
 
@@ -38,11 +39,12 @@ const (
 // Environment CRs for each service in the group.
 type PreviewGroupReconciler struct {
 	client.Client
-	Scheme         *runtime.Scheme
-	Recorder       record.EventRecorder
-	Notifier       notifier.PreviewGroupNotifier
-	StatusReporter notifier.StatusReporter
-	EnableGAMMA    bool // Enable GAMMA mesh routing (requires Istio Ambient)
+	Scheme           *runtime.Scheme
+	Recorder         record.EventRecorder
+	Notifier         notifier.PreviewGroupNotifier
+	StatusReporter   notifier.StatusReporter
+	DatabaseProvider database.DatabaseProvider
+	EnableGAMMA      bool // Enable GAMMA mesh routing (requires Istio Ambient)
 }
 
 // +kubebuilder:rbac:groups=diverge.io,resources=previewgroups,verbs=get;list;watch;create;update;patch;delete
@@ -173,10 +175,30 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 				serviceStatuses = append(serviceStatuses, svcStatus)
 				continue
 			}
-			r.Recorder.Eventf(&pg, "Normal", "ChildCreated",
-				"Created Environment %s/%s for service %s", targetNS, envName, svc.Name)
 			svcStatus.Phase = divergeiov1alpha1.PhasePending
 			svcStatus.Message = "Environment created"
+
+			// Provision database if configured
+			if desiredEnv.Spec.Database.Mode != "" && r.DatabaseProvider != nil {
+				res, err := r.DatabaseProvider.Provision(ctx, desiredEnv)
+				if err != nil {
+					logger.Error(err, "failed to provision database for child Environment")
+				} else if res != nil && len(res.EnvVars) > 0 {
+					// Inject database env vars into child environment
+					for k, v := range res.EnvVars {
+						desiredEnv.Spec.ServiceConfig.Env = append(desiredEnv.Spec.ServiceConfig.Env, divergeiov1alpha1.EnvVar{
+							Name:  k,
+							Value: v,
+						})
+					}
+					// TODO(v1.1): Execute res.SetupSQL here via a Job or direct DB connection
+
+					// Update the child environment with the new env vars
+					if err := r.Update(ctx, desiredEnv); err != nil {
+						logger.Error(err, "failed to update child Environment with database env vars")
+					}
+				}
+			}
 		} else {
 			// Update — sync spec if changed
 			if r.needsUpdate(&existingEnv, desiredEnv) {
@@ -292,6 +314,12 @@ func (r *PreviewGroupReconciler) handleTeardown(ctx context.Context, pg *diverge
 	for i := range children {
 		child := &children[i]
 		if child.DeletionTimestamp.IsZero() {
+			if r.DatabaseProvider != nil && child.Spec.Database.Mode != "" {
+				if err := r.DatabaseProvider.Teardown(ctx, child); err != nil {
+					logger.Error(err, "failed to teardown database for child Environment", "name", child.Name)
+				}
+			}
+
 			if err := r.Delete(ctx, child); err != nil && !apierrors.IsNotFound(err) {
 				logger.Error(err, "failed to delete child Environment", "name", child.Name, "namespace", child.Namespace)
 				remaining++

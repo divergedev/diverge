@@ -62,23 +62,26 @@ func (m *mockRouter) GetExternalURL(env *divergeiov1alpha1.Environment) string {
 }
 
 type mockDB struct {
-	provisionStatus *database.DatabaseStatus
+	provisionResult *database.DatabaseResult
 	provisionErr    error
 	teardownErr     error
 	provisionCalled bool
 	teardownCalled  bool
 }
 
-func (m *mockDB) Provision(ctx context.Context, env *divergeiov1alpha1.Environment) (*database.DatabaseStatus, error) {
+func (m *mockDB) Provision(ctx context.Context, env *divergeiov1alpha1.Environment) (*database.DatabaseResult, error) {
 	m.provisionCalled = true
-	return m.provisionStatus, m.provisionErr
+	return m.provisionResult, m.provisionErr
 }
 func (m *mockDB) Teardown(ctx context.Context, env *divergeiov1alpha1.Environment) error {
 	m.teardownCalled = true
 	return m.teardownErr
 }
 func (m *mockDB) Status(ctx context.Context, env *divergeiov1alpha1.Environment) (*database.DatabaseStatus, error) {
-	return m.provisionStatus, nil
+	if m.provisionResult != nil {
+		return &database.DatabaseStatus{Provisioned: m.provisionResult.Ready, Message: m.provisionResult.Message}, nil
+	}
+	return &database.DatabaseStatus{}, nil
 }
 
 func getTestScheme() *runtime.Scheme {
@@ -88,13 +91,13 @@ func getTestScheme() *runtime.Scheme {
 	return s
 }
 
-func newTestReconciler(t *testing.T, env *divergeiov1alpha1.Environment, dbStatus *database.DatabaseStatus, url string) (*EnvironmentReconciler, client.Client, *mockDeployer, *mockRouter, *mockDB) {
+func newTestReconciler(t *testing.T, env *divergeiov1alpha1.Environment, dbResult *database.DatabaseResult, url string) (*EnvironmentReconciler, client.Client, *mockDeployer, *mockRouter, *mockDB) {
 	t.Helper()
 	client := fake.NewClientBuilder().WithScheme(getTestScheme()).WithStatusSubresource(&divergeiov1alpha1.Environment{}).WithObjects(env).Build()
 
 	dep := &mockDeployer{}
 	rot := &mockRouter{url: url}
-	db := &mockDB{provisionStatus: dbStatus}
+	db := &mockDB{provisionResult: dbResult}
 
 	r := &EnvironmentReconciler{
 		Client:           client,
@@ -121,7 +124,7 @@ func TestReconcile_SuccessfulProvision(t *testing.T) {
 			},
 		},
 	}
-	r, client, dep, rot, db := newTestReconciler(t, env, &database.DatabaseStatus{Ready: true}, "https://test.com")
+	r, client, dep, rot, db := newTestReconciler(t, env, &database.DatabaseResult{Ready: true}, "https://test.com")
 
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-env", Namespace: "default"}}
 	res, err := r.Reconcile(context.Background(), req)
@@ -188,7 +191,7 @@ func TestReconcile_TTL(t *testing.T) {
 			CreatedAt: &metav1.Time{Time: time.Now().Add(-2 * time.Hour)}, // expired
 		},
 	}
-	r, client, _, _, _ := newTestReconciler(t, env, &database.DatabaseStatus{Ready: true}, "")
+	r, client, _, _, _ := newTestReconciler(t, env, &database.DatabaseResult{Ready: true}, "")
 
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-env", Namespace: "default"}}
 	res, err := r.Reconcile(context.Background(), req)
