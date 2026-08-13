@@ -140,6 +140,35 @@ func TestSyncBaselineEnv_NoPod(t *testing.T) {
 	require.ErrorIs(t, err, ErrBaselinePodNotFound)
 }
 
+func TestSyncBaselineEnv_InvalidServiceName(t *testing.T) {
+	ctx := context.Background()
+	clientset := fake.NewSimpleClientset()
+	tmpDir := t.TempDir()
+
+	tests := []struct {
+		name        string
+		serviceName string
+	}{
+		{"empty", ""},
+		{"too long", strings.Repeat("a", 64)},
+		{"starts with dash", "-payments"},
+		{"contains spaces", "my service"},
+		{"uppercase not valid label", "My.Service/Name"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := syncBaselineEnv(ctx, clientset, syncEnvOptions{
+				Namespace:   "default",
+				ServiceName: tt.serviceName,
+				OutputPath:  filepath.Join(tmpDir, ".env.diverge"),
+			})
+			require.Error(t, err)
+			require.ErrorIs(t, err, ErrInvalidServiceName)
+		})
+	}
+}
+
 func TestSyncBaselineEnv_FallbackLabelSelector(t *testing.T) {
 	ctx := context.Background()
 

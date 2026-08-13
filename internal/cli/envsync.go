@@ -11,12 +11,17 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/kubernetes"
 )
 
 // ErrBaselinePodNotFound is returned when no baseline pod can be found for the
 // given service name and namespace.
 var ErrBaselinePodNotFound = errors.New("no baseline pod found")
+
+// ErrInvalidServiceName is returned when the service name is not a valid
+// Kubernetes label value.
+var ErrInvalidServiceName = errors.New("invalid service name")
 
 // kubeInjectedPrefixes lists environment variable prefixes injected by Kubernetes
 // that are not useful for local development.
@@ -70,6 +75,14 @@ type syncEnvOptions struct {
 func syncBaselineEnv(ctx context.Context, clientset kubernetes.Interface, opts syncEnvOptions) (int, error) {
 	if opts.OutputPath == "" {
 		opts.OutputPath = ".env.diverge"
+	}
+
+	// Validate service name before using in label selectors
+	if opts.ServiceName == "" {
+		return 0, fmt.Errorf("%w: must not be empty", ErrInvalidServiceName)
+	}
+	if errs := validation.IsValidLabelValue(opts.ServiceName); len(errs) > 0 {
+		return 0, fmt.Errorf("%w: %q: %s", ErrInvalidServiceName, opts.ServiceName, strings.Join(errs, "; "))
 	}
 
 	// Find baseline pods by app label matching the service name
