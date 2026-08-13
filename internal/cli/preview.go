@@ -261,17 +261,17 @@ func runPreviewStatus(app *App, name string) error {
 	// Services table
 	fmt.Println()
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintf(w, "   SERVICE\tNAMESPACE\tPHASE\tURL\n")
-	fmt.Fprintf(w, "   ───────\t─────────\t─────\t───\n")
+	_, _ = fmt.Fprintf(w, "   SERVICE\tNAMESPACE\tPHASE\tURL\n")
+	_, _ = fmt.Fprintf(w, "   ───────\t─────────\t─────\t───\n")
 	for _, svc := range pg.Status.Services {
 		icon := phaseEmoji(string(svc.Phase))
 		url := svc.URL
 		if url == "" {
 			url = "-"
 		}
-		fmt.Fprintf(w, "   %s %s\t%s\t%s\t%s\n", icon, svc.Name, svc.Namespace, svc.Phase, url)
+		_, _ = fmt.Fprintf(w, "   %s %s\t%s\t%s\t%s\n", icon, svc.Name, svc.Namespace, svc.Phase, url)
 	}
-	w.Flush()
+	_ = w.Flush()
 
 	// Conditions
 	if len(pg.Status.Conditions) > 0 {
@@ -320,7 +320,7 @@ func runPreviewDelete(app *App, name string, force bool) error {
 	if !force {
 		fmt.Printf("Delete PreviewGroup %q and all %d child environments? [y/N] ", name, pg.Status.ServiceCount)
 		var confirm string
-		fmt.Scanln(&confirm)
+		_, _ = fmt.Scanln(&confirm)
 		if strings.ToLower(confirm) != "y" {
 			fmt.Println("Cancelled.")
 			return nil
