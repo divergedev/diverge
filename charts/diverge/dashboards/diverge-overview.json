@@ -1,0 +1,218 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "title": "Active Environments",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(diverge_environments_active)",
+          "legendFormat": "Total"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 10 },
+              { "color": "red", "value": 25 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Environments by Phase",
+      "type": "piechart",
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum by (phase) (diverge_environments_active)",
+          "legendFormat": "{{ phase }}"
+        }
+      ]
+    },
+    {
+      "title": "Reconcile Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum by (result) (rate(diverge_reconcile_outcomes_total[5m]))",
+          "legendFormat": "{{ result }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "stacking": { "mode": "normal" }
+          },
+          "unit": "ops"
+        }
+      }
+    },
+    {
+      "title": "Phase Transitions",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum by (from_phase, to_phase) (rate(diverge_environment_transitions_total[5m]))",
+          "legendFormat": "{{ from_phase }} → {{ to_phase }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "bars" },
+          "unit": "ops"
+        }
+      }
+    },
+    {
+      "title": "Subsystem Errors",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum by (subsystem, operation) (rate(diverge_subsystem_errors_total[5m]))",
+          "legendFormat": "{{ subsystem }}/{{ operation }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 30
+          },
+          "unit": "ops",
+          "color": { "mode": "palette-classic" }
+        }
+      }
+    },
+    {
+      "title": "Database Provision Latency",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, mode) (rate(diverge_database_provision_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50 {{ mode }}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, mode) (rate(diverge_database_provision_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{ mode }}"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le, mode) (rate(diverge_database_provision_duration_seconds_bucket[5m])))",
+          "legendFormat": "p99 {{ mode }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line" }
+        }
+      }
+    },
+    {
+      "title": "Deploy Latency",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, deployer) (rate(diverge_deploy_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50 {{ deployer }}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, deployer) (rate(diverge_deploy_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{ deployer }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line" }
+        }
+      }
+    },
+    {
+      "title": "Routing Reconcile Latency",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, mode) (rate(diverge_routing_reconcile_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{ mode }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line" }
+        }
+      }
+    },
+    {
+      "title": "Webhook Throughput",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "targets": [
+        {
+          "expr": "sum by (provider, action) (rate(diverge_webhook_process_duration_seconds_count[5m]))",
+          "legendFormat": "{{ provider }}/{{ action }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "drawStyle": "bars", "fillOpacity": 40 }
+        }
+      }
+    },
+    {
+      "title": "TTL Countdown",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 32 },
+      "targets": [
+        {
+          "expr": "diverge_environment_ttl_remaining_seconds > 0",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "__name__": true, "job": true, "instance": true },
+            "renameByName": {
+              "environment": "Environment",
+              "namespace": "Namespace",
+              "Value": "TTL Remaining (s)"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": { "fields": {}, "sort": [{ "field": "TTL Remaining (s)", "desc": false }] }
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["diverge", "kubernetes", "preview-environments"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "title": "Diverge Overview",
+  "uid": "diverge-overview"
+}

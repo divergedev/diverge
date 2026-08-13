@@ -89,6 +89,77 @@ func (c *CreateEnvironmentRequest) Equal(other *CreateEnvironmentRequest) bool {
 	return true
 }
 
+// CreateEnvironmentResponse is the domain representation of diverge.v1alpha1.CreateEnvironmentResponse.
+type CreateEnvironmentResponse struct {
+	Environment *Environment `json:"environment,omitempty"`
+}
+
+// ToProto converts to the protobuf message.
+func (c *CreateEnvironmentResponse) ToProto() *v1alpha1.CreateEnvironmentResponse {
+	if c == nil {
+		return nil
+	}
+	out := &v1alpha1.CreateEnvironmentResponse{}
+	if c.Environment != nil {
+		out.Environment = c.Environment.ToProto()
+	}
+	return out
+}
+
+// FromProto populates from a protobuf message.
+func (c *CreateEnvironmentResponse) FromProto(msg *v1alpha1.CreateEnvironmentResponse) {
+	if msg == nil {
+		return
+	}
+	c.Environment = nil
+	if msg.Environment != nil {
+		c.Environment = &Environment{}
+		c.Environment.FromProto(msg.Environment)
+	}
+}
+
+// ApplyFieldMaskCreateEnvironmentResponse copies fields from src to dst based on the given paths.
+func ApplyFieldMaskCreateEnvironmentResponse(dst, src *CreateEnvironmentResponse, paths []string) {
+	if dst == nil || src == nil {
+		return
+	}
+	for _, path := range paths {
+		switch path {
+		case "environment":
+			dst.Environment = src.Environment.Clone()
+		}
+	}
+}
+
+// Clone returns a deep copy of CreateEnvironmentResponse.
+func (c *CreateEnvironmentResponse) Clone() *CreateEnvironmentResponse {
+	if c == nil {
+		return nil
+	}
+	clone := &CreateEnvironmentResponse{}
+	if c.Environment != nil {
+		clone.Environment = c.Environment.Clone()
+	}
+	return clone
+}
+
+// Equal reports whether c and other are equal.
+func (c *CreateEnvironmentResponse) Equal(other *CreateEnvironmentResponse) bool {
+	if c == other {
+		return true
+	}
+	if c == nil || other == nil {
+		return false
+	}
+	if (c.Environment == nil) != (other.Environment == nil) {
+		return false
+	}
+	if c.Environment != nil && !c.Environment.Equal(other.Environment) {
+		return false
+	}
+	return true
+}
+
 // GetEnvironmentRequest is the domain representation of diverge.v1alpha1.GetEnvironmentRequest.
 type GetEnvironmentRequest struct {
 	Namespace string `json:"namespace,omitempty"`
@@ -155,6 +226,77 @@ func (g *GetEnvironmentRequest) Equal(other *GetEnvironmentRequest) bool {
 		return false
 	}
 	if g.Name != other.Name {
+		return false
+	}
+	return true
+}
+
+// GetEnvironmentResponse is the domain representation of diverge.v1alpha1.GetEnvironmentResponse.
+type GetEnvironmentResponse struct {
+	Environment *Environment `json:"environment,omitempty"`
+}
+
+// ToProto converts to the protobuf message.
+func (g *GetEnvironmentResponse) ToProto() *v1alpha1.GetEnvironmentResponse {
+	if g == nil {
+		return nil
+	}
+	out := &v1alpha1.GetEnvironmentResponse{}
+	if g.Environment != nil {
+		out.Environment = g.Environment.ToProto()
+	}
+	return out
+}
+
+// FromProto populates from a protobuf message.
+func (g *GetEnvironmentResponse) FromProto(msg *v1alpha1.GetEnvironmentResponse) {
+	if msg == nil {
+		return
+	}
+	g.Environment = nil
+	if msg.Environment != nil {
+		g.Environment = &Environment{}
+		g.Environment.FromProto(msg.Environment)
+	}
+}
+
+// ApplyFieldMaskGetEnvironmentResponse copies fields from src to dst based on the given paths.
+func ApplyFieldMaskGetEnvironmentResponse(dst, src *GetEnvironmentResponse, paths []string) {
+	if dst == nil || src == nil {
+		return
+	}
+	for _, path := range paths {
+		switch path {
+		case "environment":
+			dst.Environment = src.Environment.Clone()
+		}
+	}
+}
+
+// Clone returns a deep copy of GetEnvironmentResponse.
+func (g *GetEnvironmentResponse) Clone() *GetEnvironmentResponse {
+	if g == nil {
+		return nil
+	}
+	clone := &GetEnvironmentResponse{}
+	if g.Environment != nil {
+		clone.Environment = g.Environment.Clone()
+	}
+	return clone
+}
+
+// Equal reports whether g and other are equal.
+func (g *GetEnvironmentResponse) Equal(other *GetEnvironmentResponse) bool {
+	if g == other {
+		return true
+	}
+	if g == nil || other == nil {
+		return false
+	}
+	if (g.Environment == nil) != (other.Environment == nil) {
+		return false
+	}
+	if g.Environment != nil && !g.Environment.Equal(other.Environment) {
 		return false
 	}
 	return true
@@ -398,6 +540,754 @@ func (d *DeleteEnvironmentRequest) Equal(other *DeleteEnvironmentRequest) bool {
 		return false
 	}
 	if d.Name != other.Name {
+		return false
+	}
+	return true
+}
+
+// DeleteEnvironmentResponse is the domain representation of diverge.v1alpha1.DeleteEnvironmentResponse.
+type DeleteEnvironmentResponse struct {
+}
+
+// ToProto converts to the protobuf message.
+func (d *DeleteEnvironmentResponse) ToProto() *v1alpha1.DeleteEnvironmentResponse {
+	if d == nil {
+		return nil
+	}
+	out := &v1alpha1.DeleteEnvironmentResponse{}
+	return out
+}
+
+// FromProto populates from a protobuf message.
+func (d *DeleteEnvironmentResponse) FromProto(msg *v1alpha1.DeleteEnvironmentResponse) {
+	if msg == nil {
+		return
+	}
+}
+
+// ApplyFieldMaskDeleteEnvironmentResponse copies fields from src to dst based on the given paths.
+func ApplyFieldMaskDeleteEnvironmentResponse(dst, src *DeleteEnvironmentResponse, paths []string) {
+	if dst == nil || src == nil {
+		return
+	}
+	for _, path := range paths {
+		switch path {
+		}
+	}
+}
+
+// Clone returns a deep copy of DeleteEnvironmentResponse.
+func (d *DeleteEnvironmentResponse) Clone() *DeleteEnvironmentResponse {
+	if d == nil {
+		return nil
+	}
+	clone := &DeleteEnvironmentResponse{}
+	return clone
+}
+
+// Equal reports whether d and other are equal.
+func (d *DeleteEnvironmentResponse) Equal(other *DeleteEnvironmentResponse) bool {
+	if d == other {
+		return true
+	}
+	if d == nil || other == nil {
+		return false
+	}
+	return true
+}
+
+// CreatePreviewGroupRequest is the domain representation of diverge.v1alpha1.CreatePreviewGroupRequest.
+type CreatePreviewGroupRequest struct {
+	Spec *PreviewGroupSpec `json:"spec,omitempty"`
+	Name string            `json:"name,omitempty"`
+}
+
+// ToProto converts to the protobuf message.
+func (c *CreatePreviewGroupRequest) ToProto() *v1alpha1.CreatePreviewGroupRequest {
+	if c == nil {
+		return nil
+	}
+	out := &v1alpha1.CreatePreviewGroupRequest{
+		Name: c.Name,
+	}
+	if c.Spec != nil {
+		out.Spec = c.Spec.ToProto()
+	}
+	return out
+}
+
+// FromProto populates from a protobuf message.
+func (c *CreatePreviewGroupRequest) FromProto(msg *v1alpha1.CreatePreviewGroupRequest) {
+	if msg == nil {
+		return
+	}
+	c.Spec = nil
+	if msg.Spec != nil {
+		c.Spec = &PreviewGroupSpec{}
+		c.Spec.FromProto(msg.Spec)
+	}
+	c.Name = msg.Name
+}
+
+// ApplyFieldMaskCreatePreviewGroupRequest copies fields from src to dst based on the given paths.
+func ApplyFieldMaskCreatePreviewGroupRequest(dst, src *CreatePreviewGroupRequest, paths []string) {
+	if dst == nil || src == nil {
+		return
+	}
+	for _, path := range paths {
+		switch path {
+		case "spec":
+			dst.Spec = src.Spec.Clone()
+		case "name":
+			dst.Name = src.Name
+		}
+	}
+}
+
+// Clone returns a deep copy of CreatePreviewGroupRequest.
+func (c *CreatePreviewGroupRequest) Clone() *CreatePreviewGroupRequest {
+	if c == nil {
+		return nil
+	}
+	clone := &CreatePreviewGroupRequest{
+		Name: c.Name,
+	}
+	if c.Spec != nil {
+		clone.Spec = c.Spec.Clone()
+	}
+	return clone
+}
+
+// Equal reports whether c and other are equal.
+func (c *CreatePreviewGroupRequest) Equal(other *CreatePreviewGroupRequest) bool {
+	if c == other {
+		return true
+	}
+	if c == nil || other == nil {
+		return false
+	}
+	if (c.Spec == nil) != (other.Spec == nil) {
+		return false
+	}
+	if c.Spec != nil && !c.Spec.Equal(other.Spec) {
+		return false
+	}
+	if c.Name != other.Name {
+		return false
+	}
+	return true
+}
+
+// CreatePreviewGroupResponse is the domain representation of diverge.v1alpha1.CreatePreviewGroupResponse.
+type CreatePreviewGroupResponse struct {
+	PreviewGroup *PreviewGroup `json:"preview_group,omitempty"`
+}
+
+// ToProto converts to the protobuf message.
+func (c *CreatePreviewGroupResponse) ToProto() *v1alpha1.CreatePreviewGroupResponse {
+	if c == nil {
+		return nil
+	}
+	out := &v1alpha1.CreatePreviewGroupResponse{}
+	if c.PreviewGroup != nil {
+		out.PreviewGroup = c.PreviewGroup.ToProto()
+	}
+	return out
+}
+
+// FromProto populates from a protobuf message.
+func (c *CreatePreviewGroupResponse) FromProto(msg *v1alpha1.CreatePreviewGroupResponse) {
+	if msg == nil {
+		return
+	}
+	c.PreviewGroup = nil
+	if msg.PreviewGroup != nil {
+		c.PreviewGroup = &PreviewGroup{}
+		c.PreviewGroup.FromProto(msg.PreviewGroup)
+	}
+}
+
+// ApplyFieldMaskCreatePreviewGroupResponse copies fields from src to dst based on the given paths.
+func ApplyFieldMaskCreatePreviewGroupResponse(dst, src *CreatePreviewGroupResponse, paths []string) {
+	if dst == nil || src == nil {
+		return
+	}
+	for _, path := range paths {
+		switch path {
+		case "preview_group":
+			dst.PreviewGroup = src.PreviewGroup.Clone()
+		}
+	}
+}
+
+// Clone returns a deep copy of CreatePreviewGroupResponse.
+func (c *CreatePreviewGroupResponse) Clone() *CreatePreviewGroupResponse {
+	if c == nil {
+		return nil
+	}
+	clone := &CreatePreviewGroupResponse{}
+	if c.PreviewGroup != nil {
+		clone.PreviewGroup = c.PreviewGroup.Clone()
+	}
+	return clone
+}
+
+// Equal reports whether c and other are equal.
+func (c *CreatePreviewGroupResponse) Equal(other *CreatePreviewGroupResponse) bool {
+	if c == other {
+		return true
+	}
+	if c == nil || other == nil {
+		return false
+	}
+	if (c.PreviewGroup == nil) != (other.PreviewGroup == nil) {
+		return false
+	}
+	if c.PreviewGroup != nil && !c.PreviewGroup.Equal(other.PreviewGroup) {
+		return false
+	}
+	return true
+}
+
+// GetPreviewGroupRequest is the domain representation of diverge.v1alpha1.GetPreviewGroupRequest.
+type GetPreviewGroupRequest struct {
+	Name string `json:"name,omitempty"`
+}
+
+// ToProto converts to the protobuf message.
+func (g *GetPreviewGroupRequest) ToProto() *v1alpha1.GetPreviewGroupRequest {
+	if g == nil {
+		return nil
+	}
+	out := &v1alpha1.GetPreviewGroupRequest{
+		Name: g.Name,
+	}
+	return out
+}
+
+// FromProto populates from a protobuf message.
+func (g *GetPreviewGroupRequest) FromProto(msg *v1alpha1.GetPreviewGroupRequest) {
+	if msg == nil {
+		return
+	}
+	g.Name = msg.Name
+}
+
+// ApplyFieldMaskGetPreviewGroupRequest copies fields from src to dst based on the given paths.
+func ApplyFieldMaskGetPreviewGroupRequest(dst, src *GetPreviewGroupRequest, paths []string) {
+	if dst == nil || src == nil {
+		return
+	}
+	for _, path := range paths {
+		switch path {
+		case "name":
+			dst.Name = src.Name
+		}
+	}
+}
+
+// Clone returns a deep copy of GetPreviewGroupRequest.
+func (g *GetPreviewGroupRequest) Clone() *GetPreviewGroupRequest {
+	if g == nil {
+		return nil
+	}
+	clone := &GetPreviewGroupRequest{
+		Name: g.Name,
+	}
+	return clone
+}
+
+// Equal reports whether g and other are equal.
+func (g *GetPreviewGroupRequest) Equal(other *GetPreviewGroupRequest) bool {
+	if g == other {
+		return true
+	}
+	if g == nil || other == nil {
+		return false
+	}
+	if g.Name != other.Name {
+		return false
+	}
+	return true
+}
+
+// GetPreviewGroupResponse is the domain representation of diverge.v1alpha1.GetPreviewGroupResponse.
+type GetPreviewGroupResponse struct {
+	PreviewGroup *PreviewGroup `json:"preview_group,omitempty"`
+}
+
+// ToProto converts to the protobuf message.
+func (g *GetPreviewGroupResponse) ToProto() *v1alpha1.GetPreviewGroupResponse {
+	if g == nil {
+		return nil
+	}
+	out := &v1alpha1.GetPreviewGroupResponse{}
+	if g.PreviewGroup != nil {
+		out.PreviewGroup = g.PreviewGroup.ToProto()
+	}
+	return out
+}
+
+// FromProto populates from a protobuf message.
+func (g *GetPreviewGroupResponse) FromProto(msg *v1alpha1.GetPreviewGroupResponse) {
+	if msg == nil {
+		return
+	}
+	g.PreviewGroup = nil
+	if msg.PreviewGroup != nil {
+		g.PreviewGroup = &PreviewGroup{}
+		g.PreviewGroup.FromProto(msg.PreviewGroup)
+	}
+}
+
+// ApplyFieldMaskGetPreviewGroupResponse copies fields from src to dst based on the given paths.
+func ApplyFieldMaskGetPreviewGroupResponse(dst, src *GetPreviewGroupResponse, paths []string) {
+	if dst == nil || src == nil {
+		return
+	}
+	for _, path := range paths {
+		switch path {
+		case "preview_group":
+			dst.PreviewGroup = src.PreviewGroup.Clone()
+		}
+	}
+}
+
+// Clone returns a deep copy of GetPreviewGroupResponse.
+func (g *GetPreviewGroupResponse) Clone() *GetPreviewGroupResponse {
+	if g == nil {
+		return nil
+	}
+	clone := &GetPreviewGroupResponse{}
+	if g.PreviewGroup != nil {
+		clone.PreviewGroup = g.PreviewGroup.Clone()
+	}
+	return clone
+}
+
+// Equal reports whether g and other are equal.
+func (g *GetPreviewGroupResponse) Equal(other *GetPreviewGroupResponse) bool {
+	if g == other {
+		return true
+	}
+	if g == nil || other == nil {
+		return false
+	}
+	if (g.PreviewGroup == nil) != (other.PreviewGroup == nil) {
+		return false
+	}
+	if g.PreviewGroup != nil && !g.PreviewGroup.Equal(other.PreviewGroup) {
+		return false
+	}
+	return true
+}
+
+// ListPreviewGroupsRequest is the domain representation of diverge.v1alpha1.ListPreviewGroupsRequest.
+type ListPreviewGroupsRequest struct {
+	LabelSelector string `json:"label_selector,omitempty"`
+}
+
+// ToProto converts to the protobuf message.
+func (l *ListPreviewGroupsRequest) ToProto() *v1alpha1.ListPreviewGroupsRequest {
+	if l == nil {
+		return nil
+	}
+	out := &v1alpha1.ListPreviewGroupsRequest{
+		LabelSelector: l.LabelSelector,
+	}
+	return out
+}
+
+// FromProto populates from a protobuf message.
+func (l *ListPreviewGroupsRequest) FromProto(msg *v1alpha1.ListPreviewGroupsRequest) {
+	if msg == nil {
+		return
+	}
+	l.LabelSelector = msg.LabelSelector
+}
+
+// ApplyFieldMaskListPreviewGroupsRequest copies fields from src to dst based on the given paths.
+func ApplyFieldMaskListPreviewGroupsRequest(dst, src *ListPreviewGroupsRequest, paths []string) {
+	if dst == nil || src == nil {
+		return
+	}
+	for _, path := range paths {
+		switch path {
+		case "label_selector":
+			dst.LabelSelector = src.LabelSelector
+		}
+	}
+}
+
+// Clone returns a deep copy of ListPreviewGroupsRequest.
+func (l *ListPreviewGroupsRequest) Clone() *ListPreviewGroupsRequest {
+	if l == nil {
+		return nil
+	}
+	clone := &ListPreviewGroupsRequest{
+		LabelSelector: l.LabelSelector,
+	}
+	return clone
+}
+
+// Equal reports whether l and other are equal.
+func (l *ListPreviewGroupsRequest) Equal(other *ListPreviewGroupsRequest) bool {
+	if l == other {
+		return true
+	}
+	if l == nil || other == nil {
+		return false
+	}
+	if l.LabelSelector != other.LabelSelector {
+		return false
+	}
+	return true
+}
+
+// ListPreviewGroupsResponse is the domain representation of diverge.v1alpha1.ListPreviewGroupsResponse.
+type ListPreviewGroupsResponse struct {
+	PreviewGroups []*PreviewGroup `json:"preview_groups,omitempty"`
+}
+
+// ToProto converts to the protobuf message.
+func (l *ListPreviewGroupsResponse) ToProto() *v1alpha1.ListPreviewGroupsResponse {
+	if l == nil {
+		return nil
+	}
+	out := &v1alpha1.ListPreviewGroupsResponse{}
+	if len(l.PreviewGroups) > 0 {
+		out.PreviewGroups = make([]*v1alpha1.PreviewGroup, len(l.PreviewGroups))
+		for i, v := range l.PreviewGroups {
+			if v != nil {
+				out.PreviewGroups[i] = v.ToProto()
+			}
+		}
+	}
+	return out
+}
+
+// FromProto populates from a protobuf message.
+func (l *ListPreviewGroupsResponse) FromProto(msg *v1alpha1.ListPreviewGroupsResponse) {
+	if msg == nil {
+		return
+	}
+	l.PreviewGroups = nil
+	if len(msg.PreviewGroups) > 0 {
+		l.PreviewGroups = make([]*PreviewGroup, len(msg.PreviewGroups))
+		for i, v := range msg.PreviewGroups {
+			if v != nil {
+				elem := &PreviewGroup{}
+				elem.FromProto(v)
+				l.PreviewGroups[i] = elem
+			}
+		}
+	}
+}
+
+// ApplyFieldMaskListPreviewGroupsResponse copies fields from src to dst based on the given paths.
+func ApplyFieldMaskListPreviewGroupsResponse(dst, src *ListPreviewGroupsResponse, paths []string) {
+	if dst == nil || src == nil {
+		return
+	}
+	for _, path := range paths {
+		switch path {
+		case "preview_groups":
+			dst.PreviewGroups = src.PreviewGroups
+		}
+	}
+}
+
+// Clone returns a deep copy of ListPreviewGroupsResponse.
+func (l *ListPreviewGroupsResponse) Clone() *ListPreviewGroupsResponse {
+	if l == nil {
+		return nil
+	}
+	clone := &ListPreviewGroupsResponse{}
+	if l.PreviewGroups != nil {
+		clone.PreviewGroups = make([]*PreviewGroup, len(l.PreviewGroups))
+		for i, v := range l.PreviewGroups {
+			if v != nil {
+				clone.PreviewGroups[i] = v.Clone()
+			}
+		}
+	}
+	return clone
+}
+
+// Equal reports whether l and other are equal.
+func (l *ListPreviewGroupsResponse) Equal(other *ListPreviewGroupsResponse) bool {
+	if l == other {
+		return true
+	}
+	if l == nil || other == nil {
+		return false
+	}
+	if len(l.PreviewGroups) != len(other.PreviewGroups) {
+		return false
+	}
+	for i := range l.PreviewGroups {
+		if (l.PreviewGroups[i] == nil) != (other.PreviewGroups[i] == nil) {
+			return false
+		}
+		if l.PreviewGroups[i] != nil && !l.PreviewGroups[i].Equal(other.PreviewGroups[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// DeletePreviewGroupRequest is the domain representation of diverge.v1alpha1.DeletePreviewGroupRequest.
+type DeletePreviewGroupRequest struct {
+	Name string `json:"name,omitempty"`
+}
+
+// ToProto converts to the protobuf message.
+func (d *DeletePreviewGroupRequest) ToProto() *v1alpha1.DeletePreviewGroupRequest {
+	if d == nil {
+		return nil
+	}
+	out := &v1alpha1.DeletePreviewGroupRequest{
+		Name: d.Name,
+	}
+	return out
+}
+
+// FromProto populates from a protobuf message.
+func (d *DeletePreviewGroupRequest) FromProto(msg *v1alpha1.DeletePreviewGroupRequest) {
+	if msg == nil {
+		return
+	}
+	d.Name = msg.Name
+}
+
+// ApplyFieldMaskDeletePreviewGroupRequest copies fields from src to dst based on the given paths.
+func ApplyFieldMaskDeletePreviewGroupRequest(dst, src *DeletePreviewGroupRequest, paths []string) {
+	if dst == nil || src == nil {
+		return
+	}
+	for _, path := range paths {
+		switch path {
+		case "name":
+			dst.Name = src.Name
+		}
+	}
+}
+
+// Clone returns a deep copy of DeletePreviewGroupRequest.
+func (d *DeletePreviewGroupRequest) Clone() *DeletePreviewGroupRequest {
+	if d == nil {
+		return nil
+	}
+	clone := &DeletePreviewGroupRequest{
+		Name: d.Name,
+	}
+	return clone
+}
+
+// Equal reports whether d and other are equal.
+func (d *DeletePreviewGroupRequest) Equal(other *DeletePreviewGroupRequest) bool {
+	if d == other {
+		return true
+	}
+	if d == nil || other == nil {
+		return false
+	}
+	if d.Name != other.Name {
+		return false
+	}
+	return true
+}
+
+// DeletePreviewGroupResponse is the domain representation of diverge.v1alpha1.DeletePreviewGroupResponse.
+type DeletePreviewGroupResponse struct {
+}
+
+// ToProto converts to the protobuf message.
+func (d *DeletePreviewGroupResponse) ToProto() *v1alpha1.DeletePreviewGroupResponse {
+	if d == nil {
+		return nil
+	}
+	out := &v1alpha1.DeletePreviewGroupResponse{}
+	return out
+}
+
+// FromProto populates from a protobuf message.
+func (d *DeletePreviewGroupResponse) FromProto(msg *v1alpha1.DeletePreviewGroupResponse) {
+	if msg == nil {
+		return
+	}
+}
+
+// ApplyFieldMaskDeletePreviewGroupResponse copies fields from src to dst based on the given paths.
+func ApplyFieldMaskDeletePreviewGroupResponse(dst, src *DeletePreviewGroupResponse, paths []string) {
+	if dst == nil || src == nil {
+		return
+	}
+	for _, path := range paths {
+		switch path {
+		}
+	}
+}
+
+// Clone returns a deep copy of DeletePreviewGroupResponse.
+func (d *DeletePreviewGroupResponse) Clone() *DeletePreviewGroupResponse {
+	if d == nil {
+		return nil
+	}
+	clone := &DeletePreviewGroupResponse{}
+	return clone
+}
+
+// Equal reports whether d and other are equal.
+func (d *DeletePreviewGroupResponse) Equal(other *DeletePreviewGroupResponse) bool {
+	if d == other {
+		return true
+	}
+	if d == nil || other == nil {
+		return false
+	}
+	return true
+}
+
+// WatchPreviewGroupRequest is the domain representation of diverge.v1alpha1.WatchPreviewGroupRequest.
+type WatchPreviewGroupRequest struct {
+	Name string `json:"name,omitempty"`
+}
+
+// ToProto converts to the protobuf message.
+func (w *WatchPreviewGroupRequest) ToProto() *v1alpha1.WatchPreviewGroupRequest {
+	if w == nil {
+		return nil
+	}
+	out := &v1alpha1.WatchPreviewGroupRequest{
+		Name: w.Name,
+	}
+	return out
+}
+
+// FromProto populates from a protobuf message.
+func (w *WatchPreviewGroupRequest) FromProto(msg *v1alpha1.WatchPreviewGroupRequest) {
+	if msg == nil {
+		return
+	}
+	w.Name = msg.Name
+}
+
+// ApplyFieldMaskWatchPreviewGroupRequest copies fields from src to dst based on the given paths.
+func ApplyFieldMaskWatchPreviewGroupRequest(dst, src *WatchPreviewGroupRequest, paths []string) {
+	if dst == nil || src == nil {
+		return
+	}
+	for _, path := range paths {
+		switch path {
+		case "name":
+			dst.Name = src.Name
+		}
+	}
+}
+
+// Clone returns a deep copy of WatchPreviewGroupRequest.
+func (w *WatchPreviewGroupRequest) Clone() *WatchPreviewGroupRequest {
+	if w == nil {
+		return nil
+	}
+	clone := &WatchPreviewGroupRequest{
+		Name: w.Name,
+	}
+	return clone
+}
+
+// Equal reports whether w and other are equal.
+func (w *WatchPreviewGroupRequest) Equal(other *WatchPreviewGroupRequest) bool {
+	if w == other {
+		return true
+	}
+	if w == nil || other == nil {
+		return false
+	}
+	if w.Name != other.Name {
+		return false
+	}
+	return true
+}
+
+// WatchPreviewGroupResponse is the domain representation of diverge.v1alpha1.WatchPreviewGroupResponse.
+type WatchPreviewGroupResponse struct {
+	Type         string        `json:"type,omitempty"`
+	PreviewGroup *PreviewGroup `json:"preview_group,omitempty"`
+}
+
+// ToProto converts to the protobuf message.
+func (w *WatchPreviewGroupResponse) ToProto() *v1alpha1.WatchPreviewGroupResponse {
+	if w == nil {
+		return nil
+	}
+	out := &v1alpha1.WatchPreviewGroupResponse{
+		Type: w.Type,
+	}
+	if w.PreviewGroup != nil {
+		out.PreviewGroup = w.PreviewGroup.ToProto()
+	}
+	return out
+}
+
+// FromProto populates from a protobuf message.
+func (w *WatchPreviewGroupResponse) FromProto(msg *v1alpha1.WatchPreviewGroupResponse) {
+	if msg == nil {
+		return
+	}
+	w.Type = msg.Type
+	w.PreviewGroup = nil
+	if msg.PreviewGroup != nil {
+		w.PreviewGroup = &PreviewGroup{}
+		w.PreviewGroup.FromProto(msg.PreviewGroup)
+	}
+}
+
+// ApplyFieldMaskWatchPreviewGroupResponse copies fields from src to dst based on the given paths.
+func ApplyFieldMaskWatchPreviewGroupResponse(dst, src *WatchPreviewGroupResponse, paths []string) {
+	if dst == nil || src == nil {
+		return
+	}
+	for _, path := range paths {
+		switch path {
+		case "type":
+			dst.Type = src.Type
+		case "preview_group":
+			dst.PreviewGroup = src.PreviewGroup.Clone()
+		}
+	}
+}
+
+// Clone returns a deep copy of WatchPreviewGroupResponse.
+func (w *WatchPreviewGroupResponse) Clone() *WatchPreviewGroupResponse {
+	if w == nil {
+		return nil
+	}
+	clone := &WatchPreviewGroupResponse{
+		Type: w.Type,
+	}
+	if w.PreviewGroup != nil {
+		clone.PreviewGroup = w.PreviewGroup.Clone()
+	}
+	return clone
+}
+
+// Equal reports whether w and other are equal.
+func (w *WatchPreviewGroupResponse) Equal(other *WatchPreviewGroupResponse) bool {
+	if w == other {
+		return true
+	}
+	if w == nil || other == nil {
+		return false
+	}
+	if w.Type != other.Type {
+		return false
+	}
+	if (w.PreviewGroup == nil) != (other.PreviewGroup == nil) {
+		return false
+	}
+	if w.PreviewGroup != nil && !w.PreviewGroup.Equal(other.PreviewGroup) {
 		return false
 	}
 	return true

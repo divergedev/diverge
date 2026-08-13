@@ -9,7 +9,6 @@ package divergev1alpha1
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
-	emptypb "google.golang.org/protobuf/types/known/emptypb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -74,6 +73,50 @@ func (x *CreateEnvironmentRequest) GetSpec() *EnvironmentSpec {
 	return nil
 }
 
+type CreateEnvironmentResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Environment   *Environment           `protobuf:"bytes,1,opt,name=environment,proto3" json:"environment,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateEnvironmentResponse) Reset() {
+	*x = CreateEnvironmentResponse{}
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateEnvironmentResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateEnvironmentResponse) ProtoMessage() {}
+
+func (x *CreateEnvironmentResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateEnvironmentResponse.ProtoReflect.Descriptor instead.
+func (*CreateEnvironmentResponse) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_service_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *CreateEnvironmentResponse) GetEnvironment() *Environment {
+	if x != nil {
+		return x.Environment
+	}
+	return nil
+}
+
 type GetEnvironmentRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Namespace     string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
@@ -84,7 +127,7 @@ type GetEnvironmentRequest struct {
 
 func (x *GetEnvironmentRequest) Reset() {
 	*x = GetEnvironmentRequest{}
-	mi := &file_diverge_v1alpha1_service_proto_msgTypes[1]
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -96,7 +139,7 @@ func (x *GetEnvironmentRequest) String() string {
 func (*GetEnvironmentRequest) ProtoMessage() {}
 
 func (x *GetEnvironmentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_service_proto_msgTypes[1]
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -109,7 +152,7 @@ func (x *GetEnvironmentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetEnvironmentRequest.ProtoReflect.Descriptor instead.
 func (*GetEnvironmentRequest) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_service_proto_rawDescGZIP(), []int{1}
+	return file_diverge_v1alpha1_service_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *GetEnvironmentRequest) GetNamespace() string {
@@ -126,6 +169,50 @@ func (x *GetEnvironmentRequest) GetName() string {
 	return ""
 }
 
+type GetEnvironmentResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Environment   *Environment           `protobuf:"bytes,1,opt,name=environment,proto3" json:"environment,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetEnvironmentResponse) Reset() {
+	*x = GetEnvironmentResponse{}
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetEnvironmentResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetEnvironmentResponse) ProtoMessage() {}
+
+func (x *GetEnvironmentResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetEnvironmentResponse.ProtoReflect.Descriptor instead.
+func (*GetEnvironmentResponse) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_service_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *GetEnvironmentResponse) GetEnvironment() *Environment {
+	if x != nil {
+		return x.Environment
+	}
+	return nil
+}
+
 type ListEnvironmentsRequest struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	Namespace string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
@@ -138,7 +225,7 @@ type ListEnvironmentsRequest struct {
 
 func (x *ListEnvironmentsRequest) Reset() {
 	*x = ListEnvironmentsRequest{}
-	mi := &file_diverge_v1alpha1_service_proto_msgTypes[2]
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -150,7 +237,7 @@ func (x *ListEnvironmentsRequest) String() string {
 func (*ListEnvironmentsRequest) ProtoMessage() {}
 
 func (x *ListEnvironmentsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_service_proto_msgTypes[2]
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -163,7 +250,7 @@ func (x *ListEnvironmentsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListEnvironmentsRequest.ProtoReflect.Descriptor instead.
 func (*ListEnvironmentsRequest) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_service_proto_rawDescGZIP(), []int{2}
+	return file_diverge_v1alpha1_service_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ListEnvironmentsRequest) GetNamespace() string {
@@ -196,7 +283,7 @@ type ListEnvironmentsResponse struct {
 
 func (x *ListEnvironmentsResponse) Reset() {
 	*x = ListEnvironmentsResponse{}
-	mi := &file_diverge_v1alpha1_service_proto_msgTypes[3]
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -208,7 +295,7 @@ func (x *ListEnvironmentsResponse) String() string {
 func (*ListEnvironmentsResponse) ProtoMessage() {}
 
 func (x *ListEnvironmentsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_service_proto_msgTypes[3]
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -221,7 +308,7 @@ func (x *ListEnvironmentsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListEnvironmentsResponse.ProtoReflect.Descriptor instead.
 func (*ListEnvironmentsResponse) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_service_proto_rawDescGZIP(), []int{3}
+	return file_diverge_v1alpha1_service_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ListEnvironmentsResponse) GetEnvironments() []*Environment {
@@ -241,7 +328,7 @@ type DeleteEnvironmentRequest struct {
 
 func (x *DeleteEnvironmentRequest) Reset() {
 	*x = DeleteEnvironmentRequest{}
-	mi := &file_diverge_v1alpha1_service_proto_msgTypes[4]
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -253,7 +340,7 @@ func (x *DeleteEnvironmentRequest) String() string {
 func (*DeleteEnvironmentRequest) ProtoMessage() {}
 
 func (x *DeleteEnvironmentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_service_proto_msgTypes[4]
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -266,7 +353,7 @@ func (x *DeleteEnvironmentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteEnvironmentRequest.ProtoReflect.Descriptor instead.
 func (*DeleteEnvironmentRequest) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_service_proto_rawDescGZIP(), []int{4}
+	return file_diverge_v1alpha1_service_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *DeleteEnvironmentRequest) GetNamespace() string {
@@ -283,17 +370,508 @@ func (x *DeleteEnvironmentRequest) GetName() string {
 	return ""
 }
 
+type DeleteEnvironmentResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteEnvironmentResponse) Reset() {
+	*x = DeleteEnvironmentResponse{}
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteEnvironmentResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteEnvironmentResponse) ProtoMessage() {}
+
+func (x *DeleteEnvironmentResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteEnvironmentResponse.ProtoReflect.Descriptor instead.
+func (*DeleteEnvironmentResponse) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_service_proto_rawDescGZIP(), []int{7}
+}
+
+type CreatePreviewGroupRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Spec  *PreviewGroupSpec      `protobuf:"bytes,1,opt,name=spec,proto3" json:"spec,omitempty"`
+	// Name for the preview group (e.g. "mr-42").
+	Name          string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreatePreviewGroupRequest) Reset() {
+	*x = CreatePreviewGroupRequest{}
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreatePreviewGroupRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreatePreviewGroupRequest) ProtoMessage() {}
+
+func (x *CreatePreviewGroupRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreatePreviewGroupRequest.ProtoReflect.Descriptor instead.
+func (*CreatePreviewGroupRequest) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_service_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *CreatePreviewGroupRequest) GetSpec() *PreviewGroupSpec {
+	if x != nil {
+		return x.Spec
+	}
+	return nil
+}
+
+func (x *CreatePreviewGroupRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type CreatePreviewGroupResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PreviewGroup  *PreviewGroup          `protobuf:"bytes,1,opt,name=preview_group,json=previewGroup,proto3" json:"preview_group,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreatePreviewGroupResponse) Reset() {
+	*x = CreatePreviewGroupResponse{}
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreatePreviewGroupResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreatePreviewGroupResponse) ProtoMessage() {}
+
+func (x *CreatePreviewGroupResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreatePreviewGroupResponse.ProtoReflect.Descriptor instead.
+func (*CreatePreviewGroupResponse) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_service_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *CreatePreviewGroupResponse) GetPreviewGroup() *PreviewGroup {
+	if x != nil {
+		return x.PreviewGroup
+	}
+	return nil
+}
+
+type GetPreviewGroupRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetPreviewGroupRequest) Reset() {
+	*x = GetPreviewGroupRequest{}
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPreviewGroupRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPreviewGroupRequest) ProtoMessage() {}
+
+func (x *GetPreviewGroupRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPreviewGroupRequest.ProtoReflect.Descriptor instead.
+func (*GetPreviewGroupRequest) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_service_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *GetPreviewGroupRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type GetPreviewGroupResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PreviewGroup  *PreviewGroup          `protobuf:"bytes,1,opt,name=preview_group,json=previewGroup,proto3" json:"preview_group,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetPreviewGroupResponse) Reset() {
+	*x = GetPreviewGroupResponse{}
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPreviewGroupResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPreviewGroupResponse) ProtoMessage() {}
+
+func (x *GetPreviewGroupResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPreviewGroupResponse.ProtoReflect.Descriptor instead.
+func (*GetPreviewGroupResponse) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_service_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *GetPreviewGroupResponse) GetPreviewGroup() *PreviewGroup {
+	if x != nil {
+		return x.PreviewGroup
+	}
+	return nil
+}
+
+type ListPreviewGroupsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Optional label selector (e.g. "diverge.io/source-project=azra/platform").
+	LabelSelector string `protobuf:"bytes,1,opt,name=label_selector,json=labelSelector,proto3" json:"label_selector,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListPreviewGroupsRequest) Reset() {
+	*x = ListPreviewGroupsRequest{}
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListPreviewGroupsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListPreviewGroupsRequest) ProtoMessage() {}
+
+func (x *ListPreviewGroupsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListPreviewGroupsRequest.ProtoReflect.Descriptor instead.
+func (*ListPreviewGroupsRequest) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_service_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ListPreviewGroupsRequest) GetLabelSelector() string {
+	if x != nil {
+		return x.LabelSelector
+	}
+	return ""
+}
+
+type ListPreviewGroupsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PreviewGroups []*PreviewGroup        `protobuf:"bytes,1,rep,name=preview_groups,json=previewGroups,proto3" json:"preview_groups,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListPreviewGroupsResponse) Reset() {
+	*x = ListPreviewGroupsResponse{}
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListPreviewGroupsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListPreviewGroupsResponse) ProtoMessage() {}
+
+func (x *ListPreviewGroupsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListPreviewGroupsResponse.ProtoReflect.Descriptor instead.
+func (*ListPreviewGroupsResponse) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_service_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *ListPreviewGroupsResponse) GetPreviewGroups() []*PreviewGroup {
+	if x != nil {
+		return x.PreviewGroups
+	}
+	return nil
+}
+
+type DeletePreviewGroupRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeletePreviewGroupRequest) Reset() {
+	*x = DeletePreviewGroupRequest{}
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeletePreviewGroupRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeletePreviewGroupRequest) ProtoMessage() {}
+
+func (x *DeletePreviewGroupRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeletePreviewGroupRequest.ProtoReflect.Descriptor instead.
+func (*DeletePreviewGroupRequest) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_service_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *DeletePreviewGroupRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type DeletePreviewGroupResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeletePreviewGroupResponse) Reset() {
+	*x = DeletePreviewGroupResponse{}
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeletePreviewGroupResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeletePreviewGroupResponse) ProtoMessage() {}
+
+func (x *DeletePreviewGroupResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeletePreviewGroupResponse.ProtoReflect.Descriptor instead.
+func (*DeletePreviewGroupResponse) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_service_proto_rawDescGZIP(), []int{15}
+}
+
+type WatchPreviewGroupRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WatchPreviewGroupRequest) Reset() {
+	*x = WatchPreviewGroupRequest{}
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WatchPreviewGroupRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WatchPreviewGroupRequest) ProtoMessage() {}
+
+func (x *WatchPreviewGroupRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WatchPreviewGroupRequest.ProtoReflect.Descriptor instead.
+func (*WatchPreviewGroupRequest) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_service_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *WatchPreviewGroupRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type WatchPreviewGroupResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Event type: ADDED, MODIFIED, DELETED
+	Type          string        `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
+	PreviewGroup  *PreviewGroup `protobuf:"bytes,2,opt,name=preview_group,json=previewGroup,proto3" json:"preview_group,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WatchPreviewGroupResponse) Reset() {
+	*x = WatchPreviewGroupResponse{}
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WatchPreviewGroupResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WatchPreviewGroupResponse) ProtoMessage() {}
+
+func (x *WatchPreviewGroupResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_service_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WatchPreviewGroupResponse.ProtoReflect.Descriptor instead.
+func (*WatchPreviewGroupResponse) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_service_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *WatchPreviewGroupResponse) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *WatchPreviewGroupResponse) GetPreviewGroup() *PreviewGroup {
+	if x != nil {
+		return x.PreviewGroup
+	}
+	return nil
+}
+
 var File_diverge_v1alpha1_service_proto protoreflect.FileDescriptor
 
 const file_diverge_v1alpha1_service_proto_rawDesc = "" +
 	"\n" +
-	"\x1ediverge/v1alpha1/service.proto\x12\x10diverge.v1alpha1\x1a\x1bgoogle/protobuf/empty.proto\x1a\"diverge/v1alpha1/environment.proto\"o\n" +
+	"\x1ediverge/v1alpha1/service.proto\x12\x10diverge.v1alpha1\x1a\"diverge/v1alpha1/environment.proto\x1a#diverge/v1alpha1/previewgroup.proto\"o\n" +
 	"\x18CreateEnvironmentRequest\x12\x1c\n" +
 	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x125\n" +
-	"\x04spec\x18\x02 \x01(\v2!.diverge.v1alpha1.EnvironmentSpecR\x04spec\"I\n" +
+	"\x04spec\x18\x02 \x01(\v2!.diverge.v1alpha1.EnvironmentSpecR\x04spec\"\\\n" +
+	"\x19CreateEnvironmentResponse\x12?\n" +
+	"\venvironment\x18\x01 \x01(\v2\x1d.diverge.v1alpha1.EnvironmentR\venvironment\"I\n" +
 	"\x15GetEnvironmentRequest\x12\x1c\n" +
 	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\"\x89\x01\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\"Y\n" +
+	"\x16GetEnvironmentResponse\x12?\n" +
+	"\venvironment\x18\x01 \x01(\v2\x1d.diverge.v1alpha1.EnvironmentR\venvironment\"\x89\x01\n" +
 	"\x17ListEnvironmentsRequest\x12\x1c\n" +
 	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x128\n" +
 	"\x05phase\x18\x02 \x01(\x0e2\".diverge.v1alpha1.EnvironmentPhaseR\x05phase\x12\x16\n" +
@@ -302,12 +880,40 @@ const file_diverge_v1alpha1_service_proto_rawDesc = "" +
 	"\fenvironments\x18\x01 \x03(\v2\x1d.diverge.v1alpha1.EnvironmentR\fenvironments\"L\n" +
 	"\x18DeleteEnvironmentRequest\x12\x1c\n" +
 	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name2\x92\x03\n" +
-	"\x12EnvironmentService\x12^\n" +
-	"\x11CreateEnvironment\x12*.diverge.v1alpha1.CreateEnvironmentRequest\x1a\x1d.diverge.v1alpha1.Environment\x12X\n" +
-	"\x0eGetEnvironment\x12'.diverge.v1alpha1.GetEnvironmentRequest\x1a\x1d.diverge.v1alpha1.Environment\x12i\n" +
-	"\x10ListEnvironments\x12).diverge.v1alpha1.ListEnvironmentsRequest\x1a*.diverge.v1alpha1.ListEnvironmentsResponse\x12W\n" +
-	"\x11DeleteEnvironment\x12*.diverge.v1alpha1.DeleteEnvironmentRequest\x1a\x16.google.protobuf.EmptyB\xc9\x01\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\"\x1b\n" +
+	"\x19DeleteEnvironmentResponse\"g\n" +
+	"\x19CreatePreviewGroupRequest\x126\n" +
+	"\x04spec\x18\x01 \x01(\v2\".diverge.v1alpha1.PreviewGroupSpecR\x04spec\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\"a\n" +
+	"\x1aCreatePreviewGroupResponse\x12C\n" +
+	"\rpreview_group\x18\x01 \x01(\v2\x1e.diverge.v1alpha1.PreviewGroupR\fpreviewGroup\",\n" +
+	"\x16GetPreviewGroupRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\"^\n" +
+	"\x17GetPreviewGroupResponse\x12C\n" +
+	"\rpreview_group\x18\x01 \x01(\v2\x1e.diverge.v1alpha1.PreviewGroupR\fpreviewGroup\"A\n" +
+	"\x18ListPreviewGroupsRequest\x12%\n" +
+	"\x0elabel_selector\x18\x01 \x01(\tR\rlabelSelector\"b\n" +
+	"\x19ListPreviewGroupsResponse\x12E\n" +
+	"\x0epreview_groups\x18\x01 \x03(\v2\x1e.diverge.v1alpha1.PreviewGroupR\rpreviewGroups\"/\n" +
+	"\x19DeletePreviewGroupRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\"\x1c\n" +
+	"\x1aDeletePreviewGroupResponse\".\n" +
+	"\x18WatchPreviewGroupRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\"t\n" +
+	"\x19WatchPreviewGroupResponse\x12\x12\n" +
+	"\x04type\x18\x01 \x01(\tR\x04type\x12C\n" +
+	"\rpreview_group\x18\x02 \x01(\v2\x1e.diverge.v1alpha1.PreviewGroupR\fpreviewGroup2\xc0\x03\n" +
+	"\x12EnvironmentService\x12l\n" +
+	"\x11CreateEnvironment\x12*.diverge.v1alpha1.CreateEnvironmentRequest\x1a+.diverge.v1alpha1.CreateEnvironmentResponse\x12c\n" +
+	"\x0eGetEnvironment\x12'.diverge.v1alpha1.GetEnvironmentRequest\x1a(.diverge.v1alpha1.GetEnvironmentResponse\x12i\n" +
+	"\x10ListEnvironments\x12).diverge.v1alpha1.ListEnvironmentsRequest\x1a*.diverge.v1alpha1.ListEnvironmentsResponse\x12l\n" +
+	"\x11DeleteEnvironment\x12*.diverge.v1alpha1.DeleteEnvironmentRequest\x1a+.diverge.v1alpha1.DeleteEnvironmentResponse2\xc0\x04\n" +
+	"\x16PreviewGroupAPIService\x12o\n" +
+	"\x12CreatePreviewGroup\x12+.diverge.v1alpha1.CreatePreviewGroupRequest\x1a,.diverge.v1alpha1.CreatePreviewGroupResponse\x12f\n" +
+	"\x0fGetPreviewGroup\x12(.diverge.v1alpha1.GetPreviewGroupRequest\x1a).diverge.v1alpha1.GetPreviewGroupResponse\x12l\n" +
+	"\x11ListPreviewGroups\x12*.diverge.v1alpha1.ListPreviewGroupsRequest\x1a+.diverge.v1alpha1.ListPreviewGroupsResponse\x12o\n" +
+	"\x12DeletePreviewGroup\x12+.diverge.v1alpha1.DeletePreviewGroupRequest\x1a,.diverge.v1alpha1.DeletePreviewGroupResponse\x12n\n" +
+	"\x11WatchPreviewGroup\x12*.diverge.v1alpha1.WatchPreviewGroupRequest\x1a+.diverge.v1alpha1.WatchPreviewGroupResponse0\x01B\xc9\x01\n" +
 	"\x14com.diverge.v1alpha1B\fServiceProtoP\x01ZBgithub.com/divergedev/diverge/gen/diverge/v1alpha1;divergev1alpha1\xa2\x02\x03DXX\xaa\x02\x10Diverge.V1alpha1\xca\x02\x10Diverge\\V1alpha1\xe2\x02\x1cDiverge\\V1alpha1\\GPBMetadata\xea\x02\x11Diverge::V1alpha1b\x06proto3"
 
 var (
@@ -322,35 +928,66 @@ func file_diverge_v1alpha1_service_proto_rawDescGZIP() []byte {
 	return file_diverge_v1alpha1_service_proto_rawDescData
 }
 
-var file_diverge_v1alpha1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_diverge_v1alpha1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_diverge_v1alpha1_service_proto_goTypes = []any{
-	(*CreateEnvironmentRequest)(nil), // 0: diverge.v1alpha1.CreateEnvironmentRequest
-	(*GetEnvironmentRequest)(nil),    // 1: diverge.v1alpha1.GetEnvironmentRequest
-	(*ListEnvironmentsRequest)(nil),  // 2: diverge.v1alpha1.ListEnvironmentsRequest
-	(*ListEnvironmentsResponse)(nil), // 3: diverge.v1alpha1.ListEnvironmentsResponse
-	(*DeleteEnvironmentRequest)(nil), // 4: diverge.v1alpha1.DeleteEnvironmentRequest
-	(*EnvironmentSpec)(nil),          // 5: diverge.v1alpha1.EnvironmentSpec
-	(EnvironmentPhase)(0),            // 6: diverge.v1alpha1.EnvironmentPhase
-	(*Environment)(nil),              // 7: diverge.v1alpha1.Environment
-	(*emptypb.Empty)(nil),            // 8: google.protobuf.Empty
+	(*CreateEnvironmentRequest)(nil),   // 0: diverge.v1alpha1.CreateEnvironmentRequest
+	(*CreateEnvironmentResponse)(nil),  // 1: diverge.v1alpha1.CreateEnvironmentResponse
+	(*GetEnvironmentRequest)(nil),      // 2: diverge.v1alpha1.GetEnvironmentRequest
+	(*GetEnvironmentResponse)(nil),     // 3: diverge.v1alpha1.GetEnvironmentResponse
+	(*ListEnvironmentsRequest)(nil),    // 4: diverge.v1alpha1.ListEnvironmentsRequest
+	(*ListEnvironmentsResponse)(nil),   // 5: diverge.v1alpha1.ListEnvironmentsResponse
+	(*DeleteEnvironmentRequest)(nil),   // 6: diverge.v1alpha1.DeleteEnvironmentRequest
+	(*DeleteEnvironmentResponse)(nil),  // 7: diverge.v1alpha1.DeleteEnvironmentResponse
+	(*CreatePreviewGroupRequest)(nil),  // 8: diverge.v1alpha1.CreatePreviewGroupRequest
+	(*CreatePreviewGroupResponse)(nil), // 9: diverge.v1alpha1.CreatePreviewGroupResponse
+	(*GetPreviewGroupRequest)(nil),     // 10: diverge.v1alpha1.GetPreviewGroupRequest
+	(*GetPreviewGroupResponse)(nil),    // 11: diverge.v1alpha1.GetPreviewGroupResponse
+	(*ListPreviewGroupsRequest)(nil),   // 12: diverge.v1alpha1.ListPreviewGroupsRequest
+	(*ListPreviewGroupsResponse)(nil),  // 13: diverge.v1alpha1.ListPreviewGroupsResponse
+	(*DeletePreviewGroupRequest)(nil),  // 14: diverge.v1alpha1.DeletePreviewGroupRequest
+	(*DeletePreviewGroupResponse)(nil), // 15: diverge.v1alpha1.DeletePreviewGroupResponse
+	(*WatchPreviewGroupRequest)(nil),   // 16: diverge.v1alpha1.WatchPreviewGroupRequest
+	(*WatchPreviewGroupResponse)(nil),  // 17: diverge.v1alpha1.WatchPreviewGroupResponse
+	(*EnvironmentSpec)(nil),            // 18: diverge.v1alpha1.EnvironmentSpec
+	(*Environment)(nil),                // 19: diverge.v1alpha1.Environment
+	(EnvironmentPhase)(0),              // 20: diverge.v1alpha1.EnvironmentPhase
+	(*PreviewGroupSpec)(nil),           // 21: diverge.v1alpha1.PreviewGroupSpec
+	(*PreviewGroup)(nil),               // 22: diverge.v1alpha1.PreviewGroup
 }
 var file_diverge_v1alpha1_service_proto_depIdxs = []int32{
-	5, // 0: diverge.v1alpha1.CreateEnvironmentRequest.spec:type_name -> diverge.v1alpha1.EnvironmentSpec
-	6, // 1: diverge.v1alpha1.ListEnvironmentsRequest.phase:type_name -> diverge.v1alpha1.EnvironmentPhase
-	7, // 2: diverge.v1alpha1.ListEnvironmentsResponse.environments:type_name -> diverge.v1alpha1.Environment
-	0, // 3: diverge.v1alpha1.EnvironmentService.CreateEnvironment:input_type -> diverge.v1alpha1.CreateEnvironmentRequest
-	1, // 4: diverge.v1alpha1.EnvironmentService.GetEnvironment:input_type -> diverge.v1alpha1.GetEnvironmentRequest
-	2, // 5: diverge.v1alpha1.EnvironmentService.ListEnvironments:input_type -> diverge.v1alpha1.ListEnvironmentsRequest
-	4, // 6: diverge.v1alpha1.EnvironmentService.DeleteEnvironment:input_type -> diverge.v1alpha1.DeleteEnvironmentRequest
-	7, // 7: diverge.v1alpha1.EnvironmentService.CreateEnvironment:output_type -> diverge.v1alpha1.Environment
-	7, // 8: diverge.v1alpha1.EnvironmentService.GetEnvironment:output_type -> diverge.v1alpha1.Environment
-	3, // 9: diverge.v1alpha1.EnvironmentService.ListEnvironments:output_type -> diverge.v1alpha1.ListEnvironmentsResponse
-	8, // 10: diverge.v1alpha1.EnvironmentService.DeleteEnvironment:output_type -> google.protobuf.Empty
-	7, // [7:11] is the sub-list for method output_type
-	3, // [3:7] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	18, // 0: diverge.v1alpha1.CreateEnvironmentRequest.spec:type_name -> diverge.v1alpha1.EnvironmentSpec
+	19, // 1: diverge.v1alpha1.CreateEnvironmentResponse.environment:type_name -> diverge.v1alpha1.Environment
+	19, // 2: diverge.v1alpha1.GetEnvironmentResponse.environment:type_name -> diverge.v1alpha1.Environment
+	20, // 3: diverge.v1alpha1.ListEnvironmentsRequest.phase:type_name -> diverge.v1alpha1.EnvironmentPhase
+	19, // 4: diverge.v1alpha1.ListEnvironmentsResponse.environments:type_name -> diverge.v1alpha1.Environment
+	21, // 5: diverge.v1alpha1.CreatePreviewGroupRequest.spec:type_name -> diverge.v1alpha1.PreviewGroupSpec
+	22, // 6: diverge.v1alpha1.CreatePreviewGroupResponse.preview_group:type_name -> diverge.v1alpha1.PreviewGroup
+	22, // 7: diverge.v1alpha1.GetPreviewGroupResponse.preview_group:type_name -> diverge.v1alpha1.PreviewGroup
+	22, // 8: diverge.v1alpha1.ListPreviewGroupsResponse.preview_groups:type_name -> diverge.v1alpha1.PreviewGroup
+	22, // 9: diverge.v1alpha1.WatchPreviewGroupResponse.preview_group:type_name -> diverge.v1alpha1.PreviewGroup
+	0,  // 10: diverge.v1alpha1.EnvironmentService.CreateEnvironment:input_type -> diverge.v1alpha1.CreateEnvironmentRequest
+	2,  // 11: diverge.v1alpha1.EnvironmentService.GetEnvironment:input_type -> diverge.v1alpha1.GetEnvironmentRequest
+	4,  // 12: diverge.v1alpha1.EnvironmentService.ListEnvironments:input_type -> diverge.v1alpha1.ListEnvironmentsRequest
+	6,  // 13: diverge.v1alpha1.EnvironmentService.DeleteEnvironment:input_type -> diverge.v1alpha1.DeleteEnvironmentRequest
+	8,  // 14: diverge.v1alpha1.PreviewGroupAPIService.CreatePreviewGroup:input_type -> diverge.v1alpha1.CreatePreviewGroupRequest
+	10, // 15: diverge.v1alpha1.PreviewGroupAPIService.GetPreviewGroup:input_type -> diverge.v1alpha1.GetPreviewGroupRequest
+	12, // 16: diverge.v1alpha1.PreviewGroupAPIService.ListPreviewGroups:input_type -> diverge.v1alpha1.ListPreviewGroupsRequest
+	14, // 17: diverge.v1alpha1.PreviewGroupAPIService.DeletePreviewGroup:input_type -> diverge.v1alpha1.DeletePreviewGroupRequest
+	16, // 18: diverge.v1alpha1.PreviewGroupAPIService.WatchPreviewGroup:input_type -> diverge.v1alpha1.WatchPreviewGroupRequest
+	1,  // 19: diverge.v1alpha1.EnvironmentService.CreateEnvironment:output_type -> diverge.v1alpha1.CreateEnvironmentResponse
+	3,  // 20: diverge.v1alpha1.EnvironmentService.GetEnvironment:output_type -> diverge.v1alpha1.GetEnvironmentResponse
+	5,  // 21: diverge.v1alpha1.EnvironmentService.ListEnvironments:output_type -> diverge.v1alpha1.ListEnvironmentsResponse
+	7,  // 22: diverge.v1alpha1.EnvironmentService.DeleteEnvironment:output_type -> diverge.v1alpha1.DeleteEnvironmentResponse
+	9,  // 23: diverge.v1alpha1.PreviewGroupAPIService.CreatePreviewGroup:output_type -> diverge.v1alpha1.CreatePreviewGroupResponse
+	11, // 24: diverge.v1alpha1.PreviewGroupAPIService.GetPreviewGroup:output_type -> diverge.v1alpha1.GetPreviewGroupResponse
+	13, // 25: diverge.v1alpha1.PreviewGroupAPIService.ListPreviewGroups:output_type -> diverge.v1alpha1.ListPreviewGroupsResponse
+	15, // 26: diverge.v1alpha1.PreviewGroupAPIService.DeletePreviewGroup:output_type -> diverge.v1alpha1.DeletePreviewGroupResponse
+	17, // 27: diverge.v1alpha1.PreviewGroupAPIService.WatchPreviewGroup:output_type -> diverge.v1alpha1.WatchPreviewGroupResponse
+	19, // [19:28] is the sub-list for method output_type
+	10, // [10:19] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_diverge_v1alpha1_service_proto_init() }
@@ -359,15 +996,16 @@ func file_diverge_v1alpha1_service_proto_init() {
 		return
 	}
 	file_diverge_v1alpha1_environment_proto_init()
+	file_diverge_v1alpha1_previewgroup_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_diverge_v1alpha1_service_proto_rawDesc), len(file_diverge_v1alpha1_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   18,
 			NumExtensions: 0,
-			NumServices:   1,
+			NumServices:   2,
 		},
 		GoTypes:           file_diverge_v1alpha1_service_proto_goTypes,
 		DependencyIndexes: file_diverge_v1alpha1_service_proto_depIdxs,

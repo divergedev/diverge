@@ -10,7 +10,6 @@ import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	durationpb "google.golang.org/protobuf/types/known/durationpb"
-	_ "google.golang.org/protobuf/types/known/emptypb"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
@@ -1260,7 +1259,7 @@ var File_diverge_v1alpha1_environment_proto protoreflect.FileDescriptor
 
 const file_diverge_v1alpha1_environment_proto_rawDesc = "" +
 	"\n" +
-	"\"diverge/v1alpha1/environment.proto\x12\x10diverge.v1alpha1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1bgoogle/protobuf/empty.proto\"\xbd\x01\n" +
+	"\"diverge/v1alpha1/environment.proto\x12\x10diverge.v1alpha1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1egoogle/protobuf/duration.proto\"\xbd\x01\n" +
 	"\x0fStatusCondition\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x16\n" +

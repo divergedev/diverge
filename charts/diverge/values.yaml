@@ -68,7 +68,7 @@ proxy:
   port: 8090
   previewDomain: ""
   upstream: ""
-  headerKey: "x-diverge-env"
+  headerKey: "x-preview-env"
   resources:
     limits:
       cpu: 200m

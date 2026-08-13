@@ -19,7 +19,7 @@ message PropagationContext {
   RoutingMode routing_mode = 2;
 
   // The HTTP header key carrying the environment name.
-  // Default: "x-diverge-env". Can be overridden per-environment.
+  // Default: "x-preview-env". Can be overridden per-environment.
   string header_key = 3;
 }
 
