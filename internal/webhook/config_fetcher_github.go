@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+
+	"github.com/divergedev/diverge/internal/config"
 )
 
 // GitHubConfigFetcher fetches .diverge.yaml from the GitHub API.
@@ -33,11 +35,19 @@ func (f *GitHubConfigFetcher) FetchConfig(ctx context.Context, provider, project
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, fmt.Errorf(".diverge.yaml not found in %s@%s", project, ref)
+		return nil, config.ErrConfigNotFound
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status %d fetching .diverge.yaml", resp.StatusCode)
 	}
 
-	return io.ReadAll(resp.Body)
+	const maxConfigSize = 1 << 20 // 1 MiB
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxConfigSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("reading response body: %w", err)
+	}
+	if int64(len(data)) > maxConfigSize {
+		return nil, fmt.Errorf("config file exceeds maximum size of %d bytes", maxConfigSize)
+	}
+	return data, nil
 }

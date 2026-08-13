@@ -81,6 +81,10 @@ func main() {
 
 	var manifestSourceType string
 	flag.StringVar(&manifestSourceType, "manifest-source-type", "configmap", "Manifest source type for direct deployer (configmap|url)")
+	var gitlabToken string
+	flag.StringVar(&gitlabToken, "gitlab-token", "", "GitLab token for preview group notifier")
+	var gitlabURL string
+	flag.StringVar(&gitlabURL, "gitlab-url", "", "GitLab URL for preview group notifier")
 
 	opts := zap.Options{
 		Development: true,
@@ -90,6 +94,9 @@ func main() {
 
 	// C2: Read secrets from environment variables (take precedence over flags)
 	notifierToken := os.Getenv("DIVERGE_NOTIFIER_TOKEN")
+	if gitlabToken == "" {
+		gitlabToken = os.Getenv("DIVERGE_GITLAB_TOKEN")
+	}
 	if envSecret := os.Getenv("DIVERGE_WEBHOOK_SECRET"); envSecret != "" {
 		webhookSecretToken = envSecret
 	}
@@ -296,17 +303,32 @@ func main() {
 		os.Exit(1)
 	}
 
+	if (gitlabToken != "" && gitlabURL == "") || (gitlabToken == "" && gitlabURL != "") {
+		setupLog.Error(fmt.Errorf("both --gitlab-token and --gitlab-url must be set together"), "incomplete GitLab configuration")
+		os.Exit(1)
+	}
+
+	var pgNotifierImpl notifier.PreviewGroupNotifier = &notifier.NoopPreviewGroupNotifier{}
+	if gitlabToken != "" && gitlabURL != "" {
+		pgNotifierImpl = notifier.NewGitLabPreviewGroupNotifier(gitlabURL, gitlabToken)
+	}
+
 	if err = (&controller.PreviewGroupReconciler{
 		Client:         mgr.GetClient(),
 		Scheme:         mgr.GetScheme(),
 		Recorder:       mgr.GetEventRecorderFor("diverge-previewgroup"),
-		Notifier:       notifierImpl,
+		Notifier:       pgNotifierImpl,
 		StatusReporter: statusReporterImpl,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PreviewGroup")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
+
+	if err = divergeiov1alpha1.SetupPreviewGroupWebhookWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create webhook", "webhook", "PreviewGroup")
+		os.Exit(1)
+	}
 
 	// Setup webhook server for GitLab events
 	webhookConfig := webhook.WebhookConfig{SecretToken: webhookSecretToken}

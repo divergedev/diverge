@@ -43,7 +43,7 @@ const (
 )
 
 // PreviewGroupServiceSpec defines a single service in a preview group.
-// Only Name is required; Namespace, Port, ParentRef, and PathPrefix
+// Only Name is required; Port, ParentRef, and PathPrefix
 // are auto-discovered from existing Kubernetes Services if omitted.
 type PreviewGroupServiceSpec struct {
 	// Name of the Kubernetes Service to preview. Must match an existing Service.
@@ -68,7 +68,7 @@ type PreviewGroupServiceSpec struct {
 	// +optional
 	Endpoint string `json:"endpoint,omitempty"`
 
-	// Namespace is the target namespace. Auto-discovered from existing Service if empty.
+	// Namespace is the Kubernetes namespace where the service will be deployed. Required. If omitted, falls back to the controller's default namespace.
 	// +optional
 	Namespace string `json:"namespace,omitempty"`
 
@@ -249,6 +249,10 @@ type PreviewGroupStatus struct {
 	// PreviewGroup's state. Includes "Ready" and "Degraded" conditions.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// CommentID is the ID of the comment tracking the preview group status.
+	// +optional
+	CommentID int64 `json:"commentID,omitempty"`
 }
 
 // +kubebuilder:object:root=true

@@ -175,6 +175,8 @@ message PreviewGroupStatus {
   google.protobuf.Timestamp expires_at = 6;
   // Status conditions (Ready, Degraded, etc.)
   repeated StatusCondition conditions = 7;
+  // External system comment ID for the preview group status.
+  int64 comment_id = 8;
 }
 
 // PreviewGroup represents a collection of related preview services

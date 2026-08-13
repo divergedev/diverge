@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 
@@ -16,6 +17,8 @@ type Config struct {
 	LabelOverrides map[string]LabelOverride   `yaml:"label_overrides"`
 	Notifications  NotificationConfig         `yaml:"notifications"`
 }
+
+var ErrConfigNotFound = errors.New("config not found")
 
 type ServiceConfig struct {
 	Paths []string    `yaml:"paths"`
@@ -88,13 +91,7 @@ type ResolvedSettings struct {
 	EnvironmentSettings
 }
 
-// Load reads the YAML file from the given path, unmarshals it, and validates the version.
-func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read config file: %w", err)
-	}
-
+func Parse(data []byte) (*Config, error) {
 	var c Config
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
@@ -107,6 +104,15 @@ func Load(path string) (*Config, error) {
 	}
 
 	return &c, nil
+}
+
+// Load reads the YAML file from the given path, unmarshals it, and validates the version.
+func Load(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config file: %w", err)
+	}
+	return Parse(data)
 }
 
 // Resolve merges defaults with the named environment type, then applies label overrides in order.

@@ -3,12 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
-	"io"
-	"os"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -22,28 +17,57 @@ func TestParseServiceSpecs(t *testing.T) {
 	tests := []struct {
 		name    string
 		input   []string
-		want    int
+		want    []divergeiov1alpha1.PreviewGroupServiceSpec
 		wantErr bool
 	}{
 		{
 			name:  "baseline only",
 			input: []string{"consent-mgr"},
-			want:  1,
+			want: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{Name: "consent-mgr", Mode: divergeiov1alpha1.ServiceModeBaseline},
+			},
 		},
 		{
 			name:  "image with tag",
 			input: []string{"payments-api=registry.azra-ai.com/payments:mr-42"},
-			want:  1,
+			want: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{Name: "payments-api", Mode: divergeiov1alpha1.ServiceModeImage, Image: "registry.azra-ai.com/payments:mr-42", Port: 8080},
+			},
 		},
 		{
 			name:  "image with tag and port",
 			input: []string{"payments-api=registry.azra-ai.com/payments:mr-42:9090"},
-			want:  1,
+			want: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{Name: "payments-api", Mode: divergeiov1alpha1.ServiceModeImage, Image: "registry.azra-ai.com/payments:mr-42", Port: 9090},
+			},
 		},
 		{
 			name:  "mixed services",
 			input: []string{"payments-api=img:8080", "consent-mgr", "auth-svc=img2:9090"},
-			want:  3,
+			want: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{Name: "payments-api", Mode: divergeiov1alpha1.ServiceModeImage, Image: "img", Port: 8080},
+				{Name: "consent-mgr", Mode: divergeiov1alpha1.ServiceModeBaseline},
+				{Name: "auth-svc", Mode: divergeiov1alpha1.ServiceModeImage, Image: "img2", Port: 9090},
+			},
+		},
+		{
+			name:  "registry with port",
+			input: []string{"payments-api=registry.example.com:5000/payments"},
+			want: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{Name: "payments-api", Mode: divergeiov1alpha1.ServiceModeImage, Image: "registry.example.com:5000/payments", Port: 8080},
+			},
+		},
+		{
+			name:  "not a port",
+			input: []string{"name=img:8080abc"},
+			want: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{Name: "name", Mode: divergeiov1alpha1.ServiceModeImage, Image: "img:8080abc", Port: 8080},
+			},
+		},
+		{
+			name:    "empty name",
+			input:   []string{"=image"},
+			wantErr: true,
 		},
 	}
 
@@ -51,24 +75,46 @@ func TestParseServiceSpecs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			specs, err := parseServiceSpecs(tt.input)
 			if tt.wantErr {
-				require.Error(t, err)
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
 				return
 			}
-			require.NoError(t, err)
-			assert.Len(t, specs, tt.want)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(specs) != len(tt.want) {
+				t.Errorf("got %d specs, want %d", len(specs), len(tt.want))
+			} else {
+				for i := range specs {
+					if specs[i].Name != tt.want[i].Name || specs[i].Mode != tt.want[i].Mode || specs[i].Image != tt.want[i].Image || specs[i].Port != tt.want[i].Port {
+						t.Errorf("spec[%d] = %+v, want %+v", i, specs[i], tt.want[i])
+					}
+				}
+			}
 		})
 	}
 }
 
 func TestParseServiceSpecs_Modes(t *testing.T) {
 	specs, err := parseServiceSpecs([]string{"payments-api=img:8080", "consent-mgr"})
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	assert.Equal(t, divergeiov1alpha1.ServiceModeImage, specs[0].Mode)
-	assert.Equal(t, int32(8080), specs[0].Port)
-	assert.Equal(t, "img", specs[0].Image)
+	if specs[0].Mode != divergeiov1alpha1.ServiceModeImage {
+		t.Errorf("first spec mode = %q, want image", specs[0].Mode)
+	}
+	if specs[0].Port != 8080 {
+		t.Errorf("first spec port = %d, want 8080", specs[0].Port)
+	}
+	if specs[0].Image != "img" {
+		t.Errorf("first spec image = %q, want img", specs[0].Image)
+	}
 
-	assert.Equal(t, divergeiov1alpha1.ServiceModeBaseline, specs[1].Mode)
+	if specs[1].Mode != divergeiov1alpha1.ServiceModeBaseline {
+		t.Errorf("second spec mode = %q, want baseline", specs[1].Mode)
+	}
 }
 
 func TestPreviewStatusCmd(t *testing.T) {
@@ -103,10 +149,9 @@ func TestPreviewStatusCmd(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pg).Build()
 	app := &App{Client: c}
 
-	// Capture stdout
-	old := captureStdout(t)
-	err := runPreviewStatus(context.Background(), app, "mr-42")
-	output := old()
+	var buf bytes.Buffer
+	err := runPreviewStatus(app, "mr-42", &buf)
+	output := buf.String()
 
 	if err != nil {
 		t.Fatalf("runPreviewStatus failed: %v", err)
@@ -126,7 +171,7 @@ func TestPreviewDeleteCmd_NotFound(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).Build()
 	app := &App{Client: c}
 
-	err := runPreviewDelete(context.Background(), app, "nonexistent", true)
+	err := runPreviewDelete(app, "nonexistent", true)
 	if err == nil {
 		t.Error("expected error for non-existent PreviewGroup")
 	}
@@ -145,7 +190,7 @@ func TestPreviewDeleteCmd_Force(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pg).Build()
 	app := &App{Client: c}
 
-	err := runPreviewDelete(context.Background(), app, "mr-42", true)
+	err := runPreviewDelete(app, "mr-42", true)
 	if err != nil {
 		t.Fatalf("force delete failed: %v", err)
 	}
@@ -176,26 +221,5 @@ func TestPhaseEmoji(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("phaseEmoji(%q) = %q, want %q", tt.phase, got, tt.want)
 		}
-	}
-}
-
-// captureStdout redirects os.Stdout and returns a function that restores it
-// and returns the captured output.
-func captureStdout(t *testing.T) func() string {
-	t.Helper()
-	old := os.Stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	os.Stdout = w
-	return func() string {
-		if err := w.Close(); err != nil {
-			t.Errorf("failed to close pipe writer: %v", err)
-		}
-		var buf bytes.Buffer
-		_, _ = io.Copy(&buf, r)
-		os.Stdout = old
-		return buf.String()
 	}
 }

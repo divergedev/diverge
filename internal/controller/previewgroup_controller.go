@@ -4,16 +4,17 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
-	"reflect"
 	"regexp"
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -37,12 +38,11 @@ const (
 // Environment CRs for each service in the group.
 type PreviewGroupReconciler struct {
 	client.Client
-	Scheme           *runtime.Scheme
-	Recorder         record.EventRecorder
-	Notifier         notifier.Notifier
-	StatusReporter   notifier.StatusReporter
-	EnableGAMMA      bool // Enable GAMMA mesh routing (requires Istio Ambient)
-	DefaultNamespace string
+	Scheme         *runtime.Scheme
+	Recorder       record.EventRecorder
+	Notifier       notifier.PreviewGroupNotifier
+	StatusReporter notifier.StatusReporter
+	EnableGAMMA    bool // Enable GAMMA mesh routing (requires Istio Ambient)
 }
 
 // +kubebuilder:rbac:groups=diverge.io,resources=previewgroups,verbs=get;list;watch;create;update;patch;delete
@@ -103,6 +103,23 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// Reconcile child Environments for each service
 	desiredEnvNames := make(map[string]bool)
 	serviceStatuses := make([]divergeiov1alpha1.PreviewGroupServiceStatus, 0, len(pg.Spec.Services))
+	var requeue bool
+
+	if errs := validation.IsValidLabelValue(pg.Name); len(errs) > 0 {
+		pg.Status.Phase = divergeiov1alpha1.PreviewGroupPhaseFailed
+		readyCondition := metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			Reason:             "InvalidName",
+			Message:            fmt.Sprintf("PreviewGroup name %q is invalid as a label value: %s", pg.Name, strings.Join(errs, ", ")),
+			ObservedGeneration: pg.Generation,
+		}
+		meta.SetStatusCondition(&pg.Status.Conditions, readyCondition)
+		if err := r.Status().Patch(ctx, &pg, client.MergeFrom(statusBase)); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to update PreviewGroup status: %w", err)
+		}
+		return ctrl.Result{}, nil
+	}
 
 	for _, svc := range pg.Spec.Services {
 		envName := childEnvironmentName(pg.Name, svc.Name)
@@ -111,10 +128,7 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		// Determine target namespace — use service's namespace or default
 		targetNS := svc.Namespace
 		if targetNS == "" {
-			targetNS = r.DefaultNamespace
-			if targetNS == "" {
-				targetNS = "default"
-			}
+			targetNS = "default"
 		}
 
 		svcStatus := divergeiov1alpha1.PreviewGroupServiceStatus{
@@ -146,7 +160,12 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			if err := r.Create(ctx, desiredEnv); err != nil {
 				if apierrors.IsAlreadyExists(err) {
 					// Race condition — requeue
-					return ctrl.Result{Requeue: true}, nil
+					requeue = true
+					svcStatus.Phase = divergeiov1alpha1.PhasePending
+					svcStatus.Message = "Environment already exists, resyncing"
+					svcStatus.Reason = "CreateConflict"
+					serviceStatuses = append(serviceStatuses, svcStatus)
+					continue
 				}
 				svcStatus.Phase = divergeiov1alpha1.PhaseFailed
 				svcStatus.Message = fmt.Sprintf("Failed to create Environment: %v", err)
@@ -226,10 +245,30 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, fmt.Errorf("failed to update PreviewGroup status: %w", err)
 	}
 
-	if requeueAfter > 0 {
-		return ctrl.Result{RequeueAfter: requeueAfter}, nil
+	if r.Notifier != nil {
+		if err := r.Notifier.UpdateGroupStatus(ctx, &pg); err != nil {
+			logger.Error(err, "failed to update group status notification")
+		}
+
+		prevPhase := statusBase.Status.Phase
+		if pg.Status.Phase != prevPhase {
+			switch pg.Status.Phase {
+			case divergeiov1alpha1.PreviewGroupPhaseRunning:
+				if err := r.Notifier.PostGroupReady(ctx, &pg); err != nil {
+					logger.Error(err, "failed to post group ready notification")
+				}
+			case divergeiov1alpha1.PreviewGroupPhaseFailed, divergeiov1alpha1.PreviewGroupPhaseDegraded:
+				if err := r.Notifier.PostGroupFailed(ctx, &pg, readyCondition.Reason); err != nil {
+					logger.Error(err, "failed to post group failed notification")
+				}
+			}
+		}
 	}
-	return ctrl.Result{}, nil
+
+	if requeueAfter > 0 {
+		return ctrl.Result{Requeue: requeue, RequeueAfter: requeueAfter}, nil
+	}
+	return ctrl.Result{Requeue: requeue}, nil
 }
 
 // handleTeardown deletes all child Environments and removes the finalizer.
@@ -249,25 +288,34 @@ func (r *PreviewGroupReconciler) handleTeardown(ctx context.Context, pg *diverge
 	}
 
 	// Delete children that haven't been deleted yet
+	remaining := 0
 	for i := range children {
 		child := &children[i]
 		if child.DeletionTimestamp.IsZero() {
 			if err := r.Delete(ctx, child); err != nil && !apierrors.IsNotFound(err) {
 				logger.Error(err, "failed to delete child Environment", "name", child.Name, "namespace", child.Namespace)
+				remaining++
 				continue
 			}
 			r.Recorder.Eventf(pg, "Normal", "ChildDeleted",
 				"Deleted Environment %s/%s", child.Namespace, child.Name)
 		}
+		remaining++
 	}
 
 	// Requeue if children are still terminating
-	if len(children) > 0 {
-		logger.Info("Waiting for child Environments to terminate", "remaining", len(children))
+	if remaining > 0 {
+		logger.Info("Waiting for child Environments to terminate", "remaining", remaining)
 		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
 	}
 
 	// All children gone — remove finalizer
+	if r.Notifier != nil {
+		if err := r.Notifier.PostGroupTeardown(ctx, pg); err != nil {
+			logger.Error(err, "failed to post group teardown notification")
+		}
+	}
+
 	controllerutil.RemoveFinalizer(pg, previewGroupFinalizer)
 	if err := r.Update(ctx, pg); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to remove finalizer: %w", err)
@@ -307,9 +355,14 @@ func (r *PreviewGroupReconciler) buildChildEnvironment(
 		routingConfig.HeaderKey = "x-preview-env"
 	}
 
+	var svcName string
+	if r.EnableGAMMA {
+		svcName = svc.Name
+	}
+
 	// Build service config
 	serviceConfig := &divergeiov1alpha1.ServicePreviewConfig{
-		ServiceName:     svc.Name,
+		ServiceName:     svcName,
 		Namespace:       targetNS,
 		Port:            svc.Port,
 		Image:           svc.Image,
@@ -318,9 +371,7 @@ func (r *PreviewGroupReconciler) buildChildEnvironment(
 		PathPrefix:      svc.PathPrefix,
 		HeaderKey:       pg.Spec.Routing.HeaderKey,
 		Env:             svc.Env,
-		Protocol:        defaultProtocol(svc.Protocol),
-		Endpoint:        svc.Endpoint,
-		Resources:       svc.Resources,
+		Protocol:        string(svc.Protocol),
 	}
 
 	env := &divergeiov1alpha1.Environment{
@@ -357,13 +408,16 @@ func (r *PreviewGroupReconciler) buildChildEnvironment(
 
 // needsUpdate checks if the existing Environment's spec has drifted from desired.
 func (r *PreviewGroupReconciler) needsUpdate(existing, desired *divergeiov1alpha1.Environment) bool {
-	// Compare full spec
-	if !reflect.DeepEqual(existing.Spec, desired.Spec) {
+	// Compare full spec — defaultProtocol() in buildChildEnvironment prevents
+	// false drift from omitted protocol fields.
+	if !equality.Semantic.DeepEqual(existing.Spec, desired.Spec) {
 		return true
 	}
-	// Compare generation label to catch spec drift
-	if existing.Labels[labelPreviewGroup] != desired.Labels[labelPreviewGroup] {
-		return true
+	// Compare labels to catch metadata drift
+	for k, v := range desired.Labels {
+		if existing.Labels[k] != v {
+			return true
+		}
 	}
 	return false
 }
@@ -372,7 +426,10 @@ func (r *PreviewGroupReconciler) needsUpdate(existing, desired *divergeiov1alpha
 func (r *PreviewGroupReconciler) listChildEnvironments(ctx context.Context, pg *divergeiov1alpha1.PreviewGroup) ([]divergeiov1alpha1.Environment, error) {
 	var envList divergeiov1alpha1.EnvironmentList
 	if err := r.List(ctx, &envList,
-		client.MatchingLabels{labelPreviewGroup: pg.Name},
+		client.MatchingLabels{
+			labelPreviewGroup:              pg.Name,
+			"app.kubernetes.io/managed-by": "diverge",
+		},
 	); err != nil {
 		return nil, err
 	}
@@ -469,16 +526,6 @@ func (r *PreviewGroupReconciler) mapEnvironmentToGroup(_ context.Context, obj cl
 	return []reconcile.Request{
 		{NamespacedName: types.NamespacedName{Name: groupName}},
 	}
-}
-
-// defaultProtocol returns the protocol string, defaulting to "http" if empty.
-// This prevents false drift detection when the PreviewGroup omits protocol
-// but the persisted child Environment defaults to "http".
-func defaultProtocol(p divergeiov1alpha1.ServiceProtocol) string {
-	if p == "" {
-		return "http"
-	}
-	return string(p)
 }
 
 // SetupWithManager sets up the controller with the Manager.

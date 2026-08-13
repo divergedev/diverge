@@ -1,0 +1,98 @@
+spec:
+  inputs:
+    diverge_services:
+      description: "Comma-separated list of services to deploy"
+      type: string
+      default: ""
+    diverge_header_key:
+      description: "Header key to route traffic"
+      type: string
+      default: "x-preview-env"
+    diverge_ttl:
+      description: "TTL for preview environments (e.g. 2h)"
+      type: string
+      default: "2h"
+    diverge_registry:
+      description: "Container registry to push images to"
+      type: string
+    diverge_kubectl_version:
+      description: "Version of kubectl to install"
+      type: string
+      default: "v1.30.4"
+---
+diverge:preview:
+  stage: deploy
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_EVENT_TYPE != "merge_train"
+  variables:
+    DIVERGE_SERVICES: $[[ inputs.diverge_services ]]
+    DIVERGE_HEADER_KEY: $[[ inputs.diverge_header_key ]]
+    DIVERGE_TTL: $[[ inputs.diverge_ttl ]]
+    DIVERGE_REGISTRY: $[[ inputs.diverge_registry ]]
+  script:
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
+    - /kaniko/executor --context $CI_PROJECT_DIR --dockerfile $CI_PROJECT_DIR/Dockerfile --destination $DIVERGE_REGISTRY/$CI_PROJECT_NAME:$CI_COMMIT_SHORT_SHA
+    - |
+      echo "Applying PreviewGroup CR..."
+      if [ -z "$KUBECONFIG" ] && [ -z "$KUBECONFIG_CONTENT" ]; then
+        echo "Error: KUBECONFIG or KUBECONFIG_CONTENT must be set" >&2
+        exit 1
+      fi
+      if [ -n "$KUBECONFIG_CONTENT" ]; then
+        mkdir -p "$HOME/.kube"
+        echo "$KUBECONFIG_CONTENT" | base64 -d > "$HOME/.kube/config"
+        export KUBECONFIG="$HOME/.kube/config"
+      fi
+      # Install kubectl
+      wget -qO /usr/local/bin/kubectl "https://dl.k8s.io/release/$[[ inputs.diverge_kubectl_version ]]/bin/linux/amd64/kubectl"
+      chmod +x /usr/local/bin/kubectl
+
+      cat <<EOF > previewgroup.yaml
+      apiVersion: diverge.io/v1alpha1
+      kind: PreviewGroup
+      metadata:
+        name: preview-mr-${CI_MERGE_REQUEST_IID}
+      spec:
+        source:
+          provider: gitlab
+          project: ${CI_PROJECT_PATH}
+          mr: ${CI_MERGE_REQUEST_IID}
+          branch: ${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}
+          commitSHA: ${CI_COMMIT_SHA}
+        routing:
+          mode: header
+          headerKey: ${DIVERGE_HEADER_KEY}
+          headerValue: "${CI_MERGE_REQUEST_IID}"
+        lifecycle:
+          ttl: "${DIVERGE_TTL}"
+          cleanupOnMerge: true
+        services:
+      EOF
+
+      if [ -z "$DIVERGE_SERVICES" ]; then
+        echo "Error: DIVERGE_SERVICES must be set" >&2
+        exit 1
+      fi
+
+      IFS=',' read -ra ADDR <<< "$DIVERGE_SERVICES"
+      for i in "${ADDR[@]}"; do
+        echo "    - name: $i" >> previewgroup.yaml
+        echo "      image: $DIVERGE_REGISTRY/$CI_PROJECT_NAME:$CI_COMMIT_SHORT_SHA" >> previewgroup.yaml
+      done
+
+      kubectl apply -f previewgroup.yaml
+
+diverge:cleanup:
+  stage: deploy
+  image:
+    name: bitnami/kubectl:latest
+    entrypoint: [""]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_EVENT_TYPE == "merged"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_EVENT_TYPE == "closed"
+  script:
+    - kubectl delete previewgroup preview-mr-${CI_MERGE_REQUEST_IID} --ignore-not-found
