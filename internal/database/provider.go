@@ -1,36 +1,24 @@
 package database
 
-import (
-	"context"
+// Re-export types from pkg/database so existing internal consumers
+// continue to work without changing their imports.
+//
+// New code should import "github.com/divergedev/diverge/pkg/database" directly.
 
-	"github.com/divergedev/diverge/api/v1alpha1"
+import (
+	pkgdb "github.com/divergedev/diverge/pkg/database"
 )
 
-// DatabaseProvider provisions and tears down database contexts for previews.
-type DatabaseProvider interface {
-	// Provision creates a database context for the preview environment.
-	Provision(ctx context.Context, env *v1alpha1.Environment) (*DatabaseResult, error)
-	// Teardown removes the database context. Must be idempotent.
-	Teardown(ctx context.Context, env *v1alpha1.Environment) error
-	// Status returns the current state of the database context.
-	Status(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error)
-}
+// Type aliases for backward compatibility with internal consumers.
+type DatabaseProvider = pkgdb.DatabaseProvider
+type DatabaseResult = pkgdb.DatabaseResult
+type DatabaseStatus = pkgdb.DatabaseStatus
+type ProviderConfig = pkgdb.ProviderConfig
+type ProviderFactory = pkgdb.ProviderFactory
 
-// DatabaseResult is the outcome of a Provision call.
-type DatabaseResult struct {
-	DSN      string            // Connection string for the preview
-	EnvVars  map[string]string // Env vars to inject into preview pod
-	SetupSQL string            // SQL to run to initialize the database
-	// Ready reports that the provider finished its own work. It does not
-	// guarantee that SetupSQL has been executed; callers must run SetupSQL
-	// separately if non-empty.
-	Ready   bool
-	Message string
-}
-
-// DatabaseStatus is the observed state of a preview database context.
-type DatabaseStatus struct {
-	Provisioned bool
-	SchemaName  string
-	Message     string
-}
+// Re-export registry functions for backward compatibility.
+var (
+	RegisterProvider    = pkgdb.RegisterProvider
+	GetProvider         = pkgdb.GetProvider
+	RegisteredProviders = pkgdb.RegisteredProviders
+)
