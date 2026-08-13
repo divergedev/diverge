@@ -125,7 +125,7 @@ type ConditionData struct {
 	Message string
 }
 
-func renderTemplate(tmpl *template.Template, data TemplateData) (string, error) {
+func renderTemplate(tmpl *template.Template, data any) (string, error) {
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
 		return "", err

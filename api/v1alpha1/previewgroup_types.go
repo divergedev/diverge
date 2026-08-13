@@ -249,6 +249,10 @@ type PreviewGroupStatus struct {
 	// PreviewGroup's state. Includes "Ready" and "Degraded" conditions.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// CommentID stores the ID of the MR/PR comment.
+	// +optional
+	CommentID int `json:"commentID,omitempty"`
 }
 
 // +kubebuilder:object:root=true
