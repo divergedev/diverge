@@ -318,7 +318,7 @@ func (r *PreviewGroupReconciler) buildChildEnvironment(
 		PathPrefix:      svc.PathPrefix,
 		HeaderKey:       pg.Spec.Routing.HeaderKey,
 		Env:             svc.Env,
-		Protocol:        string(svc.Protocol),
+		Protocol:        defaultProtocol(svc.Protocol),
 		Endpoint:        svc.Endpoint,
 		Resources:       svc.Resources,
 	}
@@ -469,6 +469,16 @@ func (r *PreviewGroupReconciler) mapEnvironmentToGroup(_ context.Context, obj cl
 	return []reconcile.Request{
 		{NamespacedName: types.NamespacedName{Name: groupName}},
 	}
+}
+
+// defaultProtocol returns the protocol string, defaulting to "http" if empty.
+// This prevents false drift detection when the PreviewGroup omits protocol
+// but the persisted child Environment defaults to "http".
+func defaultProtocol(p divergeiov1alpha1.ServiceProtocol) string {
+	if p == "" {
+		return "http"
+	}
+	return string(p)
 }
 
 // SetupWithManager sets up the controller with the Manager.
