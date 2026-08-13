@@ -56,6 +56,7 @@ func TestSyncBaselineEnv(t *testing.T) {
 				"diverge.io/role": "baseline",
 			},
 		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{
 				{
@@ -181,6 +182,7 @@ func TestSyncBaselineEnv_FallbackLabelSelector(t *testing.T) {
 				"app": "gateway",
 			},
 		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{
 				{
@@ -220,6 +222,7 @@ func TestSyncBaselineEnv_ConfigMapRef(t *testing.T) {
 			Namespace: "default",
 			Labels:    map[string]string{"app": "svc"},
 		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{
 				{
@@ -267,6 +270,7 @@ func TestSyncBaselineEnv_EnvFrom(t *testing.T) {
 			Namespace: "default",
 			Labels:    map[string]string{"app": "svc-envfrom"},
 		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{
 				{
@@ -322,6 +326,7 @@ func TestSyncBaselineEnv_StaleFileTruncated(t *testing.T) {
 			Namespace: "default",
 			Labels:    map[string]string{"app": "empty-svc"},
 		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{
 				{

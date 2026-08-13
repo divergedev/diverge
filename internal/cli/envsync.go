@@ -98,15 +98,22 @@ func syncBaselineEnv(ctx context.Context, clientset kubernetes.Interface, opts s
 		listCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		pods, err := clientset.CoreV1().Pods(opts.Namespace).List(listCtx, metav1.ListOptions{
 			LabelSelector: sel,
-			Limit:         1,
+			FieldSelector: "status.phase=Running",
 		})
 		cancel()
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		if len(pods.Items) > 0 {
-			pod = &pods.Items[0]
+		// Pick the first Running pod deterministically (sorted by name)
+		for i := range pods.Items {
+			if pods.Items[i].Status.Phase == corev1.PodRunning {
+				if pod == nil || pods.Items[i].Name < pod.Name {
+					pod = &pods.Items[i]
+				}
+			}
+		}
+		if pod != nil {
 			break
 		}
 	}

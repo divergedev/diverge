@@ -87,6 +87,7 @@ func TestProperty_EnvDivergeRoundTrip(t *testing.T) {
 				Namespace: "default",
 				Labels:    map[string]string{"app": svcName},
 			},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning},
 			Spec: corev1.PodSpec{
 				Containers: []corev1.Container{
 					{Name: svcName, Image: svcName + ":latest", Env: envVars},
@@ -145,6 +146,7 @@ func TestProperty_EnvDivergeFileAlwaysCreated(t *testing.T) {
 				Namespace: "default",
 				Labels:    map[string]string{"app": svcName},
 			},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning},
 			Spec: corev1.PodSpec{
 				Containers: []corev1.Container{
 					{Name: svcName, Image: svcName + ":latest"},
