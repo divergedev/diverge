@@ -50,14 +50,19 @@ type PreviewEnvTransport struct {
 }
 
 func (t *PreviewEnvTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if val, ok := req.Context().Value(middleware.PreviewEnvContextKey).(string); ok {
-		req.Header.Set(middleware.PreviewEnvHeader, val)
-	}
-	
 	base := t.Base
 	if base == nil {
 		base = http.DefaultTransport
 	}
+
+	if val, ok := req.Context().Value(middleware.PreviewEnvContextKey).(string); ok && val != "" {
+		// Clone the request to avoid mutating the caller-owned original.
+		// Modifying req.Header directly violates the http.RoundTripper contract.
+		clone := req.Clone(req.Context())
+		clone.Header.Set(middleware.PreviewEnvHeader, val)
+		return base.RoundTrip(clone)
+	}
+
 	return base.RoundTrip(req)
 }
 
@@ -92,7 +97,7 @@ func PreviewEnvServerInterceptor() grpc.UnaryServerInterceptor {
 	) (interface{}, error) {
 		md, ok := metadata.FromIncomingContext(ctx)
 		if ok {
-			if vals := md.Get(middleware.PreviewEnvHeader); len(vals) > 0 {
+			if vals := md.Get(middleware.PreviewEnvHeader); len(vals) > 0 && vals[0] != "" {
 				ctx = context.WithValue(ctx, middleware.PreviewEnvContextKey, vals[0])
 			}
 		}
@@ -122,8 +127,13 @@ func PreviewEnvClientInterceptor() grpc.UnaryClientInterceptor {
 		invoker grpc.UnaryInvoker,
 		opts ...grpc.CallOption,
 	) error {
-		if val, ok := ctx.Value(middleware.PreviewEnvContextKey).(string); ok {
-			ctx = metadata.AppendToOutgoingContext(ctx, middleware.PreviewEnvHeader, val)
+		if val, ok := ctx.Value(middleware.PreviewEnvContextKey).(string); ok && val != "" {
+			// Use Set (not Append) to replace any existing preview header,
+			// preventing duplicate values on retry or re-invocation.
+			md, _ := metadata.FromOutgoingContext(ctx)
+			md = md.Copy()
+			md.Set(middleware.PreviewEnvHeader, val)
+			ctx = metadata.NewOutgoingContext(ctx, md)
 		}
 		return invoker(ctx, method, req, reply, cc, opts...)
 	}
