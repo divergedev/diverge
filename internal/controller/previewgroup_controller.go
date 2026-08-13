@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/notifier"
 )
 
 const (
@@ -35,8 +36,11 @@ const (
 // Environment CRs for each service in the group.
 type PreviewGroupReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Scheme         *runtime.Scheme
+	Recorder       record.EventRecorder
+	Notifier       notifier.Notifier
+	StatusReporter notifier.StatusReporter
+	EnableGAMMA    bool // Enable GAMMA mesh routing (requires Istio Ambient)
 }
 
 // +kubebuilder:rbac:groups=diverge.io,resources=previewgroups,verbs=get;list;watch;create;update;patch;delete
@@ -301,9 +305,14 @@ func (r *PreviewGroupReconciler) buildChildEnvironment(
 		routingConfig.HeaderKey = "x-preview-env"
 	}
 
+	var svcName string
+	if r.EnableGAMMA {
+		svcName = svc.Name
+	}
+
 	// Build service config
 	serviceConfig := &divergeiov1alpha1.ServicePreviewConfig{
-		ServiceName:     svc.Name,
+		ServiceName:     svcName,
 		Namespace:       targetNS,
 		Port:            svc.Port,
 		Image:           svc.Image,

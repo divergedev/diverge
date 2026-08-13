@@ -292,9 +292,11 @@ func main() {
 	}
 
 	if err = (&controller.PreviewGroupReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("diverge-previewgroup"),
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		Recorder:       mgr.GetEventRecorderFor("diverge-previewgroup"),
+		Notifier:       notifierImpl,
+		StatusReporter: statusReporterImpl,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PreviewGroup")
 		os.Exit(1)
