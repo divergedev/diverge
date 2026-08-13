@@ -7,7 +7,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
-	"github.com/divergedev/diverge/internal/database"
 )
 
 // ServiceConfigFetcher generates Kubernetes Deployment and Service manifests
@@ -130,8 +129,7 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 										"containerPort": int64(cfg.Port),
 									},
 								},
-								"env":     containerEnv,
-								"envFrom": containerEnvFrom,
+								"env": containerEnv,
 								"readinessProbe": map[string]interface{}{
 									"httpGet": map[string]interface{}{
 										"path": "/health",
@@ -144,6 +142,13 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 				},
 			},
 		},
+	}
+
+	// Conditionally inject envFrom if there are database secrets to mount
+	if len(containerEnvFrom) > 0 {
+		containers := deploy.Object["spec"].(map[string]interface{})["template"].(map[string]interface{})["spec"].(map[string]interface{})["containers"].([]interface{})
+		container := containers[0].(map[string]interface{})
+		container["envFrom"] = containerEnvFrom
 	}
 
 	// Service
@@ -191,14 +196,7 @@ func resolveDBSecret(env *v1alpha1.Environment) string {
 		return db.ConnectionRef
 	}
 
-	// Auto-provisioned: schema mode creates diverge-db-<schemaName>
-	if db.Mode == "schema" {
-		schemaName, err := database.SchemaName(env)
-		if err != nil {
-			return ""
-		}
-		return database.SecretName(schemaName)
-	}
-
+	// Auto-provisioned: schema mode no longer uses secrets, it injects env vars directly
+	// so we return empty here.
 	return ""
 }

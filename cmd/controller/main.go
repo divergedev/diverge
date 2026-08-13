@@ -72,7 +72,7 @@ func main() {
 	flag.IntVar(&webhookPort, "webhook-port", 9443, "The port the webhook server binds to.")
 	flag.StringVar(&routingProvider, "routing-provider", "gateway", "The routing provider to use (istio|gateway).")
 	flag.StringVar(&deployProvider, "deploy-provider", "noop", "Deployment provider (argocd|noop)")
-	flag.StringVar(&databaseProvider, "database-provider", "shared", "Database provider (shared|noop)")
+	flag.StringVar(&databaseProvider, "database-provider", "none", "Database provider (schema|none)")
 	flag.StringVar(&argoNamespace, "argo-namespace", "argocd", "Namespace where Argo CD is installed")
 	flag.StringVar(&argoRepoURL, "argo-repo-url", "", "Repository URL for Argo CD Application sources")
 	flag.StringVar(&notifierProvider, "notifier-provider", "noop", "Notification provider (gitlab|github|noop)")
@@ -138,8 +138,8 @@ func main() {
 
 	var dbProviderImpl database.DatabaseProvider
 	switch databaseProvider {
-	case "shared", "":
-		dbProviderImpl = &database.SharedProvider{}
+	case "none", "":
+		dbProviderImpl = &database.NoopDatabaseProvider{}
 	case "schema":
 		dbHost := os.Getenv("DIVERGE_DB_HOST")
 		dbPort := os.Getenv("DIVERGE_DB_PORT")
@@ -171,18 +171,17 @@ func main() {
 		defer pingCancel()
 		if err := db.PingContext(pingCtx); err != nil {
 			setupLog.Error(err, "failed to ping database", "host", dbHost, "port", dbPort)
+			_ = db.Close()
 			os.Exit(1)
 		}
 		setupLog.Info("Connected to database", "host", dbHost, "port", dbPort, "database", dbName)
+		_ = db.Close() // Close probe handle; SchemaDatabaseProvider opens its own connections
 
-		dbProviderImpl = &database.SchemaProvider{
-			Executor: database.NewPgExecutor(db),
-			Client:   mgr.GetClient(),
-			BaseURL:  dsn,
-			Runner:   &database.MigrationRunner{Client: mgr.GetClient()},
+		dbProviderImpl = &database.SchemaDatabaseProvider{
+			AdminDSN: dsn,
 		}
 	case "noop":
-		dbProviderImpl = &database.NoopProvider{}
+		dbProviderImpl = &database.NoopDatabaseProvider{}
 	default:
 		setupLog.Error(fmt.Errorf("unsupported database provider: %q", databaseProvider), "invalid --database-provider")
 		os.Exit(1)
@@ -190,7 +189,7 @@ func main() {
 
 	// Normalize label for metrics
 	if databaseProvider == "" {
-		databaseProvider = "shared"
+		databaseProvider = "none"
 	}
 
 	// Wrap with metrics
@@ -314,11 +313,12 @@ func main() {
 	}
 
 	if err = (&controller.PreviewGroupReconciler{
-		Client:         mgr.GetClient(),
-		Scheme:         mgr.GetScheme(),
-		Recorder:       mgr.GetEventRecorderFor("diverge-previewgroup"),
-		Notifier:       pgNotifierImpl,
-		StatusReporter: statusReporterImpl,
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		Recorder:         mgr.GetEventRecorderFor("diverge-previewgroup"),
+		Notifier:         pgNotifierImpl,
+		StatusReporter:   statusReporterImpl,
+		DatabaseProvider: dbProviderImpl,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PreviewGroup")
 		os.Exit(1)

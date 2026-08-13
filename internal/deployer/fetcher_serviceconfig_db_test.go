@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
-	"github.com/divergedev/diverge/internal/database"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -40,12 +39,11 @@ func TestResolveDBSecret_ConnectionRef(t *testing.T) {
 }
 
 func TestResolveDBSecret_SchemaMode(t *testing.T) {
+	// Schema mode no longer uses secrets — env vars are injected by the controller
+	// via DatabaseProvider.Provision()
 	env := testEnvWithDB("preview-42", "schema", "", "")
 	secret := resolveDBSecret(env)
-	schemaName, err := database.SchemaName(env)
-	require.NoError(t, err)
-	expected := database.SecretName(schemaName)
-	assert.Equal(t, expected, secret)
+	assert.Empty(t, secret, "schema mode should not return a secret (env vars injected by controller)")
 }
 
 func TestResolveDBSecret_NoDatabase(t *testing.T) {
@@ -66,7 +64,9 @@ func TestResolveDBSecret_ConnectionRefOverridesSchemaMode(t *testing.T) {
 	assert.Equal(t, "custom-secret", secret, "connectionRef should override schema auto-provision")
 }
 
-func TestServiceConfigFetcher_WithSchemaDB_InjectsEnvFrom(t *testing.T) {
+func TestServiceConfigFetcher_WithSchemaDB_NoEnvFrom(t *testing.T) {
+	// Schema mode env var injection is now handled by the controller via
+	// DatabaseProvider.Provision(), not by the deployer.
 	env := testEnvWithDB("preview-42", "schema", "", "")
 	fetcher := &ServiceConfigFetcher{}
 	objects, err := fetcher.Fetch(context.Background(), env)
@@ -79,15 +79,8 @@ func TestServiceConfigFetcher_WithSchemaDB_InjectsEnvFrom(t *testing.T) {
 	require.Len(t, containers, 1)
 
 	container := containers[0].(map[string]interface{})
-	envFrom, ok := container["envFrom"].([]interface{})
-	require.True(t, ok, "envFrom should be present")
-	require.Len(t, envFrom, 1)
-
-	ref := envFrom[0].(map[string]interface{})
-	secretRef := ref["secretRef"].(map[string]interface{})
-	schemaName, err := database.SchemaName(env)
-	require.NoError(t, err)
-	assert.Equal(t, database.SecretName(schemaName), secretRef["name"])
+	_, hasEnvFrom := container["envFrom"]
+	assert.False(t, hasEnvFrom, "schema mode should not inject envFrom (controller handles it)")
 }
 
 func TestServiceConfigFetcher_WithConnectionRef_InjectsEnvFrom(t *testing.T) {

@@ -15,7 +15,7 @@ type InstrumentedDatabaseProvider struct {
 	Mode  string
 }
 
-func (p *InstrumentedDatabaseProvider) Provision(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) {
+func (p *InstrumentedDatabaseProvider) Provision(ctx context.Context, env *v1alpha1.Environment) (*DatabaseResult, error) {
 	timer := prometheus.NewTimer(metrics.DatabaseProvisionDuration.WithLabelValues(p.Mode))
 	defer timer.ObserveDuration()
 	status, err := p.Inner.Provision(ctx, env)

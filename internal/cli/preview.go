@@ -40,6 +40,8 @@ Examples:
 	cmd.AddCommand(newPreviewStatusCmd(app))
 	cmd.AddCommand(newPreviewDeleteCmd(app))
 	cmd.AddCommand(newPreviewWatchCmd(app))
+	cmd.AddCommand(newPreviewInterceptCmd(app))
+	cmd.AddCommand(newPreviewReleaseCmd(app))
 	return cmd
 }
 
