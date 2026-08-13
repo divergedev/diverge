@@ -29,7 +29,8 @@ func TestPreviewGroupReconcile_Teardown(t *testing.T) {
 			Name:      "pg-test-group-web-12345678",
 			Namespace: "default",
 			Labels: map[string]string{
-				labelPreviewGroup: "test-group",
+				labelPreviewGroup:              "test-group",
+				"app.kubernetes.io/managed-by": "diverge",
 			},
 		},
 	}
@@ -81,7 +82,8 @@ func TestPreviewGroupReconcile_OrphanCleanup(t *testing.T) {
 			Name:      orphanEnvName,
 			Namespace: "default",
 			Labels: map[string]string{
-				labelPreviewGroup: "test-group",
+				labelPreviewGroup:              "test-group",
+				"app.kubernetes.io/managed-by": "diverge",
 			},
 		},
 	}

@@ -808,7 +808,9 @@ type PreviewGroupStatus struct {
 	// When the preview group will expire (TTL).
 	ExpiresAt *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
 	// Status conditions (Ready, Degraded, etc.)
-	Conditions    []*StatusCondition `protobuf:"bytes,7,rep,name=conditions,proto3" json:"conditions,omitempty"`
+	Conditions []*StatusCondition `protobuf:"bytes,7,rep,name=conditions,proto3" json:"conditions,omitempty"`
+	// External system comment ID for the preview group status.
+	CommentId     int64 `protobuf:"varint,8,opt,name=comment_id,json=commentId,proto3" json:"comment_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -890,6 +892,13 @@ func (x *PreviewGroupStatus) GetConditions() []*StatusCondition {
 		return x.Conditions
 	}
 	return nil
+}
+
+func (x *PreviewGroupStatus) GetCommentId() int64 {
+	if x != nil {
+		return x.CommentId
+	}
+	return 0
 }
 
 // PreviewGroup represents a collection of related preview services
@@ -1012,7 +1021,7 @@ const file_diverge_v1alpha1_previewgroup_proto_rawDesc = "" +
 	"\x03url\x18\x05 \x01(\tR\x03url\x12\x18\n" +
 	"\amessage\x18\x06 \x01(\tR\amessage\x12\x16\n" +
 	"\x06reason\x18\a \x01(\tR\x06reason\x12(\n" +
-	"\x10last_log_snippet\x18\b \x01(\tR\x0elastLogSnippet\"\xa7\x03\n" +
+	"\x10last_log_snippet\x18\b \x01(\tR\x0elastLogSnippet\"\xc6\x03\n" +
 	"\x12PreviewGroupStatus\x129\n" +
 	"\x05phase\x18\x01 \x01(\x0e2#.diverge.v1alpha1.PreviewGroupPhaseR\x05phase\x12#\n" +
 	"\rservice_count\x18\x02 \x01(\x05R\fserviceCount\x12G\n" +
@@ -1024,7 +1033,9 @@ const file_diverge_v1alpha1_previewgroup_proto_rawDesc = "" +
 	"expires_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12A\n" +
 	"\n" +
 	"conditions\x18\a \x03(\v2!.diverge.v1alpha1.StatusConditionR\n" +
-	"conditions\"\x98\x01\n" +
+	"conditions\x12\x1d\n" +
+	"\n" +
+	"comment_id\x18\b \x01(\x03R\tcommentId\"\x98\x01\n" +
 	"\fPreviewGroup\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x126\n" +
 	"\x04spec\x18\x02 \x01(\v2\".diverge.v1alpha1.PreviewGroupSpecR\x04spec\x12<\n" +

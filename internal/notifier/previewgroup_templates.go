@@ -32,8 +32,8 @@ const pgReadyTmplStr = `## 🟢 Diverge Preview — Ready!
 | Field | Value |
 |-------|-------|
 | **Status** | ✅ Running |
-| **Preview Link** | [🔗 Open Preview]({{.URL}}?preview={{.HeaderValue}}) |
-| **Environment** | ` + "`{{.Name | sanitize}}`" + ` |
+{{if .URL}}| **Preview Link** | [🔗 Open Preview]({{.URL | sanitize}}?preview={{.HeaderValue | sanitize}}) |
+{{end}}| **Environment** | ` + "`{{.Name | sanitize}}`" + ` |
 | **Services** | {{.ServiceCount}} ({{.RunningCount}} running) |
 
 ### Services
@@ -42,7 +42,7 @@ const pgReadyTmplStr = `## 🟢 Diverge Preview — Ready!
 {{range .Services}}| {{.Emoji}} {{.Name | sanitize}} | {{.Phase | sanitize}} | {{.Namespace | sanitize}} |
 {{end}}
 ### Quick Access
-` + "```\n" + `curl -H "{{.HeaderKey | sanitize}}: {{.HeaderValue | sanitize}}" {{.BaseURL}}
+` + "```\n" + `curl -H "{{.HeaderKey | sanitize}}: {{.HeaderValue | sanitize}}" {{.BaseURL | sanitize}}
 ` + "```\n" + `
 > 💡 **Tip:** Click the preview link or add header ` + "`{{.HeaderKey | sanitize}}: {{.HeaderValue | sanitize}}`" + ` to route traffic.
 

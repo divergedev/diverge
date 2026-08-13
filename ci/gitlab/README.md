@@ -8,11 +8,13 @@ Include this component in your `.gitlab-ci.yml` file:
 
 ```yaml
 include:
-  - component: $CI_SERVER_FQDN/divergedev/diverge/gitlab-ci-component@main
+  - component: $CI_SERVER_FQDN/divergedev/diverge/ci/gitlab/.gitlab-ci-component@main
     inputs:
       diverge_services: "my-service"
       diverge_registry: "$CI_REGISTRY/my-group/my-project"
 ```
+
+> **Note**: If you are publishing this component to the GitLab CI/CD catalog, users will need to reference the actual file path `ci/gitlab/.gitlab-ci-component.yml` in their configuration depending on how it's published.
 
 ## Inputs
 
@@ -22,6 +24,13 @@ include:
 | `diverge_header_key` | Header key to route traffic | `"x-preview-env"` |
 | `diverge_ttl` | TTL for preview environments (e.g. 2h) | `"2h"` |
 | `diverge_registry` | Container registry to push images to | (Required) |
+| `diverge_kubectl_version` | Version of kubectl to install | `"v1.30.4"` |
+
+## Cluster Authentication
+
+The component requires access to your Kubernetes cluster. You must provide either:
+- `KUBECONFIG`: Path to a kubeconfig file.
+- `KUBECONFIG_CONTENT`: Base64 encoded kubeconfig content provided as a CI/CD variable.
 
 ## Jobs Provided
 

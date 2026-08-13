@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 
@@ -16,6 +17,8 @@ type Config struct {
 	LabelOverrides map[string]LabelOverride   `yaml:"label_overrides"`
 	Notifications  NotificationConfig         `yaml:"notifications"`
 }
+
+var ErrConfigNotFound = errors.New("config not found")
 
 type ServiceConfig struct {
 	Paths []string    `yaml:"paths"`

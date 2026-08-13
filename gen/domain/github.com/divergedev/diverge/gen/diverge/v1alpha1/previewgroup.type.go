@@ -883,6 +883,7 @@ type PreviewGroupStatus struct {
 	CreatedAt          time.Time                    `json:"created_at,omitempty"`
 	ExpiresAt          time.Time                    `json:"expires_at,omitempty"`
 	Conditions         []*StatusCondition           `json:"conditions,omitempty"`
+	CommentID          int64                        `json:"comment_id,omitempty"`
 }
 
 // ToProto converts to the protobuf message.
@@ -894,6 +895,7 @@ func (p *PreviewGroupStatus) ToProto() *v1alpha1.PreviewGroupStatus {
 		Phase:              v1alpha1.PreviewGroupPhase(p.Phase),
 		ServiceCount:       p.ServiceCount,
 		ObservedGeneration: p.ObservedGeneration,
+		CommentId:          p.CommentID,
 	}
 	if len(p.Services) > 0 {
 		out.Services = make([]*v1alpha1.PreviewGroupServiceStatus, len(p.Services))
@@ -958,6 +960,7 @@ func (p *PreviewGroupStatus) FromProto(msg *v1alpha1.PreviewGroupStatus) {
 			}
 		}
 	}
+	p.CommentID = msg.CommentId
 }
 
 // ApplyFieldMaskPreviewGroupStatus copies fields from src to dst based on the given paths.
@@ -981,6 +984,8 @@ func ApplyFieldMaskPreviewGroupStatus(dst, src *PreviewGroupStatus, paths []stri
 			dst.ExpiresAt = src.ExpiresAt
 		case "conditions":
 			dst.Conditions = src.Conditions
+		case "comment_id":
+			dst.CommentID = src.CommentID
 		}
 	}
 }
@@ -996,6 +1001,7 @@ func (p *PreviewGroupStatus) Clone() *PreviewGroupStatus {
 		ObservedGeneration: p.ObservedGeneration,
 		CreatedAt:          p.CreatedAt,
 		ExpiresAt:          p.ExpiresAt,
+		CommentID:          p.CommentID,
 	}
 	if p.Services != nil {
 		clone.Services = make([]*PreviewGroupServiceStatus, len(p.Services))
@@ -1060,6 +1066,9 @@ func (p *PreviewGroupStatus) Equal(other *PreviewGroupStatus) bool {
 		if p.Conditions[i] != nil && !p.Conditions[i].Equal(other.Conditions[i]) {
 			return false
 		}
+	}
+	if p.CommentID != other.CommentID {
+		return false
 	}
 	return true
 }

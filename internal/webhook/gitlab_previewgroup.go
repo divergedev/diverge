@@ -4,9 +4,10 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
-	"strings"
+	"sort"
 	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
@@ -99,11 +100,14 @@ func (h *GitLabPreviewGroupWebhookHandler) reconcilePreviewGroup(ctx context.Con
 		}
 
 		if h.ConfigFetcher != nil {
-			cfgData, err := h.ConfigFetcher.FetchConfig(ctx, "gitlab",
+			fetchCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			defer cancel()
+
+			cfgData, err := h.ConfigFetcher.FetchConfig(fetchCtx, "gitlab",
 				payload.Project.PathWithNamespace,
 				payload.ObjectAttributes.SourceBranch)
 			if err != nil {
-				if strings.Contains(err.Error(), "not found") {
+				if errors.Is(err, config.ErrConfigNotFound) {
 					// No config found, clear services
 					pg.Spec.Services = nil
 					pg.Spec.Routing = v1alpha1.PreviewGroupRouting{}
@@ -147,17 +151,26 @@ func (h *GitLabPreviewGroupWebhookHandler) reconcilePreviewGroup(ctx context.Con
 				if len(imageTag) > 12 {
 					imageTag = imageTag[:12]
 				}
-				image := fmt.Sprintf("%s:%s", payload.Project.PathWithNamespace, imageTag)
+				image := fmt.Sprintf("registry.gitlab.com/%s:%s", payload.Project.PathWithNamespace, imageTag)
 
 				var svcs []v1alpha1.PreviewGroupServiceSpec
-				for name, svcCfg := range cfg.Services {
+				var keys []string
+				for k := range cfg.Services {
+					keys = append(keys, k)
+				}
+				sort.Strings(keys)
+
+				for _, name := range keys {
+					svcCfg := cfg.Services[name]
 					s := v1alpha1.PreviewGroupServiceSpec{
 						Name:  name,
-						Image: image,
+						Image: image, // fallback used when Repository is empty
 					}
 					if svcCfg.Image.Repository != "" {
 						tag := svcCfg.Image.TagTemplate
-						if tag == "" {
+						if tag != "" {
+							// TODO: render template instead of using it literally
+						} else {
 							tag = imageTag
 						}
 						s.Image = fmt.Sprintf("%s:%s", svcCfg.Image.Repository, tag)

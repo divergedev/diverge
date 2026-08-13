@@ -3,7 +3,8 @@ package cli
 import (
 	"context"
 	"fmt"
-	"os"
+	"io"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -29,7 +30,7 @@ environment. Each service can run a preview image, intercept locally,
 or use the baseline (production) version.
 
 Examples:
-  diverge preview create --services payments-api,consent-mgr
+  diverge preview create --service payments-api,consent-mgr
   diverge preview status mr-42
   diverge preview delete mr-42
   diverge preview watch mr-42`,
@@ -91,7 +92,7 @@ Examples:
 	return cmd
 }
 
-func runPreviewCreate(cmd *cobra.Command, app *App, name string, services []string, headerKey, headerValue, ttl string, mrNumber int, dryRun bool) error {
+func runPreviewCreate(_ *cobra.Command, app *App, name string, services []string, headerKey, headerValue, ttl string, mrNumber int, dryRun bool) error {
 	// Detect git context
 	gitCtx, err := git.Detect()
 	if err != nil {
@@ -160,7 +161,7 @@ func runPreviewCreate(cmd *cobra.Command, app *App, name string, services []stri
 		return fmt.Errorf("failed to create Kubernetes client: %w", err)
 	}
 
-	if err := c.Create(cmd.Context(), pg); err != nil {
+	if err := c.Create(context.TODO(), pg); err != nil {
 		return fmt.Errorf("failed to create PreviewGroup: %w", err)
 	}
 
@@ -177,6 +178,10 @@ func runPreviewCreate(cmd *cobra.Command, app *App, name string, services []stri
 func parseServiceSpecs(services []string) ([]divergeiov1alpha1.PreviewGroupServiceSpec, error) {
 	specs := make([]divergeiov1alpha1.PreviewGroupServiceSpec, 0, len(services))
 	for _, s := range services {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
 		eqIdx := strings.Index(s, "=")
 		if eqIdx < 0 {
 			// No '=' → baseline mode
@@ -196,8 +201,9 @@ func parseServiceSpecs(services []string) ([]divergeiov1alpha1.PreviewGroupServi
 		lastColon := strings.LastIndex(rest, ":")
 		if lastColon > 0 {
 			maybePart := rest[lastColon+1:]
-			if _, err := fmt.Sscanf(maybePart, "%d", &port); err == nil && port > 0 && port <= 65535 {
+			if p, err := strconv.ParseInt(maybePart, 10, 32); err == nil && p > 0 && p <= 65535 {
 				image = rest[:lastColon]
+				port = int32(p)
 			} else {
 				// Not a port — whole thing is image (e.g. image:tag)
 				image = rest
@@ -205,6 +211,10 @@ func parseServiceSpecs(services []string) ([]divergeiov1alpha1.PreviewGroupServi
 			}
 		} else {
 			image = rest
+		}
+
+		if name == "" || image == "" {
+			return nil, fmt.Errorf("invalid service spec %q: name and image cannot be empty", s)
 		}
 
 		specs = append(specs, divergeiov1alpha1.PreviewGroupServiceSpec{
@@ -225,42 +235,46 @@ func newPreviewStatusCmd(app *App) *cobra.Command {
 		Short: "Show status of a preview group",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPreviewStatus(cmd.Context(), app, args[0])
+			return runPreviewStatus(app, args[0], cmd.OutOrStdout())
 		},
 	}
 	return cmd
 }
 
-func runPreviewStatus(ctx context.Context, app *App, name string) error {
+func runPreviewStatus(app *App, name string, out io.Writer) error {
 	c, _, err := app.KubeClient()
 	if err != nil {
 		return fmt.Errorf("failed to create Kubernetes client: %w", err)
 	}
 
 	var pg divergeiov1alpha1.PreviewGroup
-	if err := c.Get(ctx, types.NamespacedName{Name: name}, &pg); err != nil {
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: name}, &pg); err != nil {
 		return fmt.Errorf("PreviewGroup %q not found: %w", name, err)
 	}
 
 	// Header
 	phaseIcon := phaseEmoji(string(pg.Status.Phase))
-	fmt.Printf("%s PreviewGroup: %s\n", phaseIcon, pg.Name)
-	fmt.Printf("   Phase: %s\n", pg.Status.Phase)
-	fmt.Printf("   Header: %s: %s\n", pg.Spec.Routing.HeaderKey, pg.Spec.Routing.HeaderValue)
-	fmt.Printf("   Source: %s/%s @ %s\n", pg.Spec.Source.Provider, pg.Spec.Source.Project, pg.Spec.Source.Branch)
+	_, _ = fmt.Fprintf(out, "%s PreviewGroup: %s\n", phaseIcon, pg.Name)
+	_, _ = fmt.Fprintf(out, "   Phase: %s\n", pg.Status.Phase)
+	if pg.Spec.Routing.Mode == "" || pg.Spec.Routing.Mode == "header" {
+		_, _ = fmt.Fprintf(out, "   Header: %s: %s\n", pg.Spec.Routing.HeaderKey, pg.Spec.Routing.HeaderValue)
+	} else {
+		_, _ = fmt.Fprintf(out, "   Routing: %s\n", pg.Spec.Routing.Mode)
+	}
+	_, _ = fmt.Fprintf(out, "   Source: %s/%s @ %s\n", pg.Spec.Source.Provider, pg.Spec.Source.Project, pg.Spec.Source.Branch)
 
 	if pg.Status.ExpiresAt != nil {
 		remaining := time.Until(pg.Status.ExpiresAt.Time)
 		if remaining > 0 {
-			fmt.Printf("   Expires: %s (%s remaining)\n", pg.Status.ExpiresAt.Format(time.RFC3339), remaining.Round(time.Minute))
+			_, _ = fmt.Fprintf(out, "   Expires: %s (%s remaining)\n", pg.Status.ExpiresAt.Format(time.RFC3339), remaining.Round(time.Minute))
 		} else {
-			fmt.Printf("   Expires: EXPIRED\n")
+			_, _ = fmt.Fprintf(out, "   Expires: EXPIRED\n")
 		}
 	}
 
 	// Services table
-	fmt.Println()
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprintln(out)
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	_, _ = fmt.Fprintf(w, "   SERVICE\tNAMESPACE\tPHASE\tURL\n")
 	_, _ = fmt.Fprintf(w, "   ───────\t─────────\t─────\t───\n")
 	for _, svc := range pg.Status.Services {
@@ -275,13 +289,16 @@ func runPreviewStatus(ctx context.Context, app *App, name string) error {
 
 	// Conditions
 	if len(pg.Status.Conditions) > 0 {
-		fmt.Println()
+		_, _ = fmt.Fprintln(out)
 		for _, c := range pg.Status.Conditions {
-			icon := "✅"
-			if c.Status != metav1.ConditionTrue {
+			icon := "⏳"
+			switch c.Status {
+			case metav1.ConditionTrue:
+				icon = "✅"
+			case metav1.ConditionFalse:
 				icon = "❌"
 			}
-			fmt.Printf("   %s %s: %s (%s)\n", icon, c.Type, c.Message, c.Reason)
+			_, _ = fmt.Fprintf(out, "   %s %s: %s (%s)\n", icon, c.Type, c.Message, c.Reason)
 		}
 	}
 
@@ -298,14 +315,14 @@ func newPreviewDeleteCmd(app *App) *cobra.Command {
 		Short: "Delete a preview group and all its child environments",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPreviewDelete(cmd.Context(), app, args[0], force)
+			return runPreviewDelete(app, args[0], force)
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "skip confirmation")
 	return cmd
 }
 
-func runPreviewDelete(ctx context.Context, app *App, name string, force bool) error {
+func runPreviewDelete(app *App, name string, force bool) error {
 	c, _, err := app.KubeClient()
 	if err != nil {
 		return fmt.Errorf("failed to create Kubernetes client: %w", err)
@@ -313,7 +330,7 @@ func runPreviewDelete(ctx context.Context, app *App, name string, force bool) er
 
 	// Verify it exists
 	var pg divergeiov1alpha1.PreviewGroup
-	if err := c.Get(ctx, types.NamespacedName{Name: name}, &pg); err != nil {
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: name}, &pg); err != nil {
 		return fmt.Errorf("PreviewGroup %q not found: %w", name, err)
 	}
 
@@ -327,7 +344,7 @@ func runPreviewDelete(ctx context.Context, app *App, name string, force bool) er
 		}
 	}
 
-	if err := c.Delete(ctx, &pg); err != nil {
+	if err := c.Delete(context.TODO(), &pg); err != nil {
 		return fmt.Errorf("failed to delete PreviewGroup: %w", err)
 	}
 
