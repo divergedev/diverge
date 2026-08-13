@@ -54,8 +54,18 @@ func TestGetProvider_NotFound(t *testing.T) {
 	database.ResetRegistry()
 	defer database.ResetRegistry()
 
-	_, ok := database.GetProvider("nonexistent")
+	factory, ok := database.GetProvider("nonexistent")
 	assert.False(t, ok)
+	assert.Nil(t, factory)
+}
+
+func TestRegisterProvider_NilFactory_Panics(t *testing.T) {
+	database.ResetRegistry()
+	defer database.ResetRegistry()
+
+	assert.Panics(t, func() {
+		database.RegisterProvider("nil-factory", nil)
+	}, "registering nil factory should panic")
 }
 
 func TestRegisterProvider_Duplicate_Panics(t *testing.T) {

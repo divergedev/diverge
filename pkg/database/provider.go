@@ -8,7 +8,7 @@
 // # Implementing a custom provider
 //
 // To implement a custom DatabaseProvider, implement the [DatabaseProvider]
-// interface and register it using [cmd/controller.RegisterProvider].
+// interface and register it using [RegisterProvider].
 //
 //	type MyProvider struct { /* config */ }
 //

@@ -33,6 +33,10 @@ var (
 //	    })
 //	}
 func RegisterProvider(name string, factory ProviderFactory) {
+	if factory == nil {
+		panic("database provider factory must not be nil")
+	}
+
 	registryMu.Lock()
 	defer registryMu.Unlock()
 	if _, exists := registry[name]; exists {
