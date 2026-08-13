@@ -187,6 +187,12 @@ type ServicePreviewConfig struct {
 	PathPrefix string `json:"pathPrefix,omitempty"`
 	// Env is additional environment variables for the preview container.
 	Env []EnvVar `json:"env,omitempty"`
+	// Protocol specifies the service protocol for routing (http or grpc).
+	// When set to "grpc", the router generates a GRPCRoute instead of HTTPRoute.
+	// +kubebuilder:validation:Enum=http;grpc
+	// +kubebuilder:default=http
+	// +optional
+	Protocol string `json:"protocol,omitempty"`
 }
 
 // EnvVar represents an environment variable for a preview container.

@@ -312,6 +312,7 @@ func (r *PreviewGroupReconciler) buildChildEnvironment(
 		PathPrefix:      svc.PathPrefix,
 		HeaderKey:       pg.Spec.Routing.HeaderKey,
 		Env:             svc.Env,
+		Protocol:        string(svc.Protocol),
 	}
 
 	env := &divergeiov1alpha1.Environment{
