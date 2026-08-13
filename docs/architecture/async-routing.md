@@ -25,7 +25,7 @@ Modern brokers support native message headers.
 - **Pros:** Zero payload modification required.
 - **Cons:** Legacy systems or older broker clients might strip headers.
 
-### Pattern 4: Query-Param + Cookie Middleware (The v1 Solution)
+### Pattern 4: Signed Query-Param Middleware (The v1 Solution)
 When external systems (like third-party webhooks) call back into your system, they usually won't set custom headers.
 - **Implementation:** Append a **signed, scoped, expiring token** as a query parameter to callback URLs (e.g., `?preview_token=<signed-jwt>`). An API gateway or BFF validates the token signature and expiry, extracts the preview environment identifier, converts it to the standard `x-preview-env` header, and **strips the query parameter** before forwarding to upstream services.
 - **Security considerations:**
@@ -45,4 +45,4 @@ When external systems (like third-party webhooks) call back into your system, th
 | 3rd-Party Webhooks (Stripe, Twilio)| Pattern 4: Signed Query-Param Token |
 
 ## Reference
-*For further reading on how large-scale engineering teams solve async preview environments, see Shopify's approach to routing preview contexts through Resque and Kafka.*
+*The patterns above are informed by common challenges in routing preview traffic through async systems. For additional context, explore how feature-flag-based routing is implemented in large-scale event-driven architectures using message metadata and broker-level header forwarding.*

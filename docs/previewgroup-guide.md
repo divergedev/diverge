@@ -83,7 +83,7 @@ A list of services included in this preview group.
 - `mode`: The participation mode: `image`, `local`, or `baseline`. (Defaults to `image`).
 - `image`: The container image to deploy (Required for `mode: image`).
 - `endpoint`: The external endpoint (e.g., developer's Tailscale IP, required for `mode: local`).
-- `namespace`: Target namespace. (Auto-discovered if empty).
+- `namespace`: Target namespace for the preview deployment. If empty, falls back to the service's own namespace, then the controller's `--default-namespace` flag, then `"default"`.
 - `port`: Container port. (Auto-discovered if empty).
 - `parentRef`: Gateway API parentRef name. (Auto-discovered if empty).
 - `pathPrefix`: Scopes HTTPRoute matching to a specific path prefix.
@@ -172,7 +172,7 @@ When a PreviewGroup finishes deploying, the bot comments on the MR with:
 Traffic needs to know how to reach your preview services instead of the baseline.
 
 - **Header Mode (Default):** Requires passing an HTTP header (e.g., `x-preview-env: 42`) in requests. This is the only Gateway API routing mode currently supported by the controller natively.
-- **Query-Param Mode (via BFF middleware):** If frontend clients cannot easily append headers, use a Backend-For-Frontend (BFF) middleware that intercepts a query parameter like `?preview=42` and injects the `x-preview-env` header before forwarding traffic into the cluster.
+- **Query-Param Mode (via BFF middleware):** If frontend clients cannot easily append headers, use a Backend-For-Frontend (BFF) middleware that intercepts a **signed, scoped, expiring token** passed as a query parameter (e.g., `?preview_token=<signed-jwt>`). The BFF validates the token, extracts the preview environment identifier, injects `x-preview-env`, and strips the query parameter before forwarding. See [async-routing.md](architecture/async-routing.md#pattern-4-signed-query-param-middleware-the-v1-solution) for security requirements. **Do not** accept raw, unauthenticated preview identifiers from query parameters.
 
 ## 10. Database Integration
 
