@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -65,11 +66,11 @@ func (r *GatewayRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment
 		routeName := fmt.Sprintf("%s-%s", env.Name, svc)
 
 		if protocol == "grpc" {
-			if err := r.reconcileGRPCRoute(ctx, env, routeName, svc, ns, parentRefName, headerKey, headerValue, backendPort); err != nil {
+			if err := r.reconcileGRPCRoute(ctx, env, routeName, svc, ns, parentRefName, "Gateway", headerKey, headerValue, backendPort); err != nil {
 				return err
 			}
 		} else {
-			if err := r.reconcileHTTPRoute(ctx, env, routeName, svc, ns, parentRefName, headerKey, headerValue, backendPort); err != nil {
+			if err := r.reconcileHTTPRoute(ctx, env, routeName, svc, ns, parentRefName, "Gateway", headerKey, headerValue, backendPort); err != nil {
 				return err
 			}
 		}
@@ -78,11 +79,11 @@ func (r *GatewayRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment
 		if cfg := env.Spec.ServiceConfig; cfg != nil && cfg.ServiceName != "" {
 			meshRouteName := fmt.Sprintf("%s-%s-mesh", env.Name, svc)
 			if protocol == "grpc" {
-				if err := r.reconcileGRPCRoute(ctx, env, meshRouteName, svc, ns, cfg.ServiceName, headerKey, headerValue, backendPort); err != nil {
+				if err := r.reconcileGRPCRoute(ctx, env, meshRouteName, svc, ns, cfg.ServiceName, "Service", headerKey, headerValue, backendPort); err != nil {
 					return err
 				}
 			} else {
-				if err := r.reconcileHTTPRoute(ctx, env, meshRouteName, svc, ns, cfg.ServiceName, headerKey, headerValue, backendPort); err != nil {
+				if err := r.reconcileHTTPRoute(ctx, env, meshRouteName, svc, ns, cfg.ServiceName, "Service", headerKey, headerValue, backendPort); err != nil {
 					return err
 				}
 			}
@@ -98,7 +99,7 @@ func (r *GatewayRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment
 }
 
 // reconcileHTTPRoute creates or updates a single HTTPRoute.
-func (r *GatewayRouter) reconcileHTTPRoute(ctx context.Context, env *v1alpha1.Environment, routeName, svc, ns, parentRefName, headerKey, headerValue string, backendPort int64) error {
+func (r *GatewayRouter) reconcileHTTPRoute(ctx context.Context, env *v1alpha1.Environment, routeName, svc, ns, parentRefName, parentKind, headerKey, headerValue string, backendPort int64) error {
 	logger := log.FromContext(ctx).WithName("gateway-router")
 
 	u := &unstructured.Unstructured{}
@@ -131,7 +132,7 @@ func (r *GatewayRouter) reconcileHTTPRoute(ctx context.Context, env *v1alpha1.En
 	parentRef := map[string]interface{}{
 		"name": parentRefName,
 	}
-	if isServiceName(parentRefName) {
+	if parentKind == "Service" {
 		parentRef["kind"] = "Service"
 		parentRef["group"] = ""
 	}
@@ -166,6 +167,10 @@ func (r *GatewayRouter) reconcileHTTPRoute(ctx context.Context, env *v1alpha1.En
 		}
 		logger.V(1).Info("Created HTTPRoute", "name", routeName, "service", svc)
 	} else {
+		existing.SetLabels(map[string]string{
+			"diverge.io/environment": env.Name,
+			"diverge.io/managed-by":  "diverge",
+		})
 		existing.Object["spec"] = spec
 		if err := r.Client.Update(ctx, existing); err != nil {
 			return fmt.Errorf("failed to update HTTPRoute for %s: %w", svc, err)
@@ -176,11 +181,13 @@ func (r *GatewayRouter) reconcileHTTPRoute(ctx context.Context, env *v1alpha1.En
 }
 
 // reconcileGRPCRoute creates or updates a single GRPCRoute for gRPC services.
-func (r *GatewayRouter) reconcileGRPCRoute(ctx context.Context, env *v1alpha1.Environment, routeName, svc, ns, parentRefName, headerKey, headerValue string, backendPort int64) error {
+func (r *GatewayRouter) reconcileGRPCRoute(ctx context.Context, env *v1alpha1.Environment, routeName, svc, ns, parentRefName, parentKind, headerKey, headerValue string, backendPort int64) error {
 	logger := log.FromContext(ctx).WithName("gateway-router")
 
 	u := &unstructured.Unstructured{}
-	u.SetAPIVersion("gateway.networking.k8s.io/v1")
+	// GRPCRoute requires Gateway API v1.2.0+ (GRPCRoute graduated to v1 in v1.2.0).
+	// For clusters with Gateway API < v1.2.0, use v1alpha2.
+	u.SetAPIVersion("gateway.networking.k8s.io/v1alpha2")
 	u.SetKind("GRPCRoute")
 	u.SetName(routeName)
 	u.SetNamespace(ns)
@@ -193,7 +200,7 @@ func (r *GatewayRouter) reconcileGRPCRoute(ctx context.Context, env *v1alpha1.En
 	parentRef := map[string]interface{}{
 		"name": parentRefName,
 	}
-	if isServiceName(parentRefName) {
+	if parentKind == "Service" {
 		parentRef["kind"] = "Service"
 		parentRef["group"] = ""
 	}
@@ -224,7 +231,7 @@ func (r *GatewayRouter) reconcileGRPCRoute(ctx context.Context, env *v1alpha1.En
 	}
 
 	existing := &unstructured.Unstructured{}
-	existing.SetAPIVersion("gateway.networking.k8s.io/v1")
+	existing.SetAPIVersion("gateway.networking.k8s.io/v1alpha2")
 	existing.SetKind("GRPCRoute")
 
 	err := r.Client.Get(ctx, client.ObjectKey{Name: routeName, Namespace: ns}, existing)
@@ -238,6 +245,10 @@ func (r *GatewayRouter) reconcileGRPCRoute(ctx context.Context, env *v1alpha1.En
 		}
 		logger.V(1).Info("Created GRPCRoute", "name", routeName, "service", svc)
 	} else {
+		existing.SetLabels(map[string]string{
+			"diverge.io/environment": env.Name,
+			"diverge.io/managed-by":  "diverge",
+		})
 		existing.Object["spec"] = spec
 		if err := r.Client.Update(ctx, existing); err != nil {
 			return fmt.Errorf("failed to update GRPCRoute for %s: %w", svc, err)
@@ -245,14 +256,6 @@ func (r *GatewayRouter) reconcileGRPCRoute(ctx context.Context, env *v1alpha1.En
 		logger.V(1).Info("Updated GRPCRoute", "name", routeName, "service", svc)
 	}
 	return nil
-}
-
-// isServiceName heuristically determines if a parentRef name refers to a
-// Kubernetes Service (for GAMMA mesh routing) vs a Gateway.
-// Convention: Gateway names contain "gateway" or "waypoint".
-func isServiceName(name string) bool {
-	lower := strings.ToLower(name)
-	return !strings.Contains(lower, "gateway") && !strings.Contains(lower, "waypoint")
 }
 
 // Teardown deletes all HTTPRoute and GRPCRoute resources associated with the
@@ -291,15 +294,19 @@ func (r *GatewayRouter) Teardown(ctx context.Context, env *v1alpha1.Environment)
 
 	// Delete GRPCRoutes
 	var grpcRouteList unstructured.UnstructuredList
-	grpcRouteList.SetAPIVersion("gateway.networking.k8s.io/v1")
+	grpcRouteList.SetAPIVersion("gateway.networking.k8s.io/v1alpha2")
 	grpcRouteList.SetKind("GRPCRouteList")
 
 	if err := r.Client.List(ctx, &grpcRouteList,
 		client.InNamespace(ns),
 		client.MatchingLabelsSelector{Selector: selector},
 	); err != nil {
-		// GRPCRoute CRD may not be installed — log and continue
-		logger.V(1).Info("GRPCRoute CRD not available, skipping cleanup", "error", err)
+		if meta.IsNoMatchError(err) {
+			// GRPCRoute CRD not installed — skip
+			logger.V(1).Info("GRPCRoute CRD not available, skipping cleanup", "error", err)
+		} else {
+			return fmt.Errorf("failed to list GRPCRoutes for environment %s: %w", env.Name, err)
+		}
 	} else {
 		for i := range grpcRouteList.Items {
 			if err := r.Client.Delete(ctx, &grpcRouteList.Items[i]); err != nil {

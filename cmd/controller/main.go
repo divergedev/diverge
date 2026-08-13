@@ -110,14 +110,19 @@ func main() {
 	}
 
 	var routerImpl routing.Router
-	if routingProvider == "istio" {
+	switch routingProvider {
+	case "istio":
 		routerImpl = &routing.IstioRouter{Client: mgr.GetClient()}
-	} else {
+	case "noop":
+		routerImpl = &routing.NoopRouter{}
+	case "gateway", "":
 		routerImpl = &routing.GatewayRouter{Client: mgr.GetClient()}
+	default:
+		setupLog.Error(fmt.Errorf("unsupported routing provider: %q", routingProvider), "invalid --routing-provider")
+		os.Exit(1)
 	}
 
-	// Normalize label for metrics
-	if routingProvider != "istio" {
+	if routingProvider == "" {
 		routingProvider = "gateway"
 	}
 

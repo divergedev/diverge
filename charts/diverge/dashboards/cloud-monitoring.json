@@ -1,0 +1,136 @@
+{
+  "displayName": "Diverge Overview",
+  "mosaicLayout": {
+    "tiles": [
+      {
+        "width": 12,
+        "height": 8,
+        "widget": {
+          "title": "Active Environments by Phase",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (phase) (diverge_environments_active)"
+                },
+                "plotType": "STACKED_BAR"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "xPos": 12,
+        "width": 12,
+        "height": 8,
+        "widget": {
+          "title": "Reconcile Outcomes (rate/5m)",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (result) (rate(diverge_reconcile_outcomes_total[5m]))"
+                },
+                "plotType": "STACKED_AREA"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "yPos": 8,
+        "width": 12,
+        "height": 8,
+        "widget": {
+          "title": "Database Provision Latency (p95)",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "histogram_quantile(0.95, sum by (le, mode) (rate(diverge_database_provision_duration_seconds_bucket[5m])))"
+                },
+                "plotType": "LINE"
+              }
+            ],
+            "yAxis": { "label": "seconds" }
+          }
+        }
+      },
+      {
+        "xPos": 12,
+        "yPos": 8,
+        "width": 12,
+        "height": 8,
+        "widget": {
+          "title": "Deploy Latency (p95)",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "histogram_quantile(0.95, sum by (le, deployer) (rate(diverge_deploy_duration_seconds_bucket[5m])))"
+                },
+                "plotType": "LINE"
+              }
+            ],
+            "yAxis": { "label": "seconds" }
+          }
+        }
+      },
+      {
+        "yPos": 16,
+        "width": 12,
+        "height": 8,
+        "widget": {
+          "title": "Subsystem Errors (rate/5m)",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (subsystem, operation) (rate(diverge_subsystem_errors_total[5m]))"
+                },
+                "plotType": "STACKED_BAR"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "xPos": 12,
+        "yPos": 16,
+        "width": 12,
+        "height": 8,
+        "widget": {
+          "title": "Webhook Throughput",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (provider, action) (rate(diverge_webhook_process_duration_seconds_count[5m]))"
+                },
+                "plotType": "STACKED_BAR"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "yPos": 24,
+        "width": 24,
+        "height": 8,
+        "widget": {
+          "title": "Phase Transitions",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (from_phase, to_phase) (rate(diverge_environment_transitions_total[5m]))"
+                },
+                "plotType": "STACKED_BAR"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

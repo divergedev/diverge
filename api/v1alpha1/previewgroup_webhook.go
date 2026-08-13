@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -145,9 +146,8 @@ func validatePreviewGroupService(svc PreviewGroupServiceSpec, path *field.Path, 
 
 // validateEndpoint checks that an endpoint is a valid host:port.
 func validateEndpoint(endpoint string) error {
-	host, port, err := net.SplitHostPort(endpoint)
+	host, portStr, err := net.SplitHostPort(endpoint)
 	if err != nil {
-		// Try treating it as host-only (no port)
 		if net.ParseIP(endpoint) != nil {
 			return fmt.Errorf("endpoint must include a port (e.g. %s:8080)", endpoint)
 		}
@@ -156,8 +156,15 @@ func validateEndpoint(endpoint string) error {
 	if host == "" {
 		return fmt.Errorf("host cannot be empty")
 	}
-	if port == "" {
+	if portStr == "" {
 		return fmt.Errorf("port cannot be empty")
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return fmt.Errorf("port must be numeric, got %q", portStr)
+	}
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("port must be between 1 and 65535, got %d", port)
 	}
 	return nil
 }

@@ -3,7 +3,12 @@ package cli
 import (
 	"bytes"
 	"context"
+	"io"
+	"os"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -46,40 +51,24 @@ func TestParseServiceSpecs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			specs, err := parseServiceSpecs(tt.input)
 			if tt.wantErr {
-				if err == nil {
-					t.Error("expected error, got nil")
-				}
+				require.Error(t, err)
 				return
 			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if len(specs) != tt.want {
-				t.Errorf("got %d specs, want %d", len(specs), tt.want)
-			}
+			require.NoError(t, err)
+			assert.Len(t, specs, tt.want)
 		})
 	}
 }
 
 func TestParseServiceSpecs_Modes(t *testing.T) {
 	specs, err := parseServiceSpecs([]string{"payments-api=img:8080", "consent-mgr"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
-	if specs[0].Mode != divergeiov1alpha1.ServiceModeImage {
-		t.Errorf("first spec mode = %q, want image", specs[0].Mode)
-	}
-	if specs[0].Port != 8080 {
-		t.Errorf("first spec port = %d, want 8080", specs[0].Port)
-	}
-	if specs[0].Image != "img" {
-		t.Errorf("first spec image = %q, want img", specs[0].Image)
-	}
+	assert.Equal(t, divergeiov1alpha1.ServiceModeImage, specs[0].Mode)
+	assert.Equal(t, int32(8080), specs[0].Port)
+	assert.Equal(t, "img", specs[0].Image)
 
-	if specs[1].Mode != divergeiov1alpha1.ServiceModeBaseline {
-		t.Errorf("second spec mode = %q, want baseline", specs[1].Mode)
-	}
+	assert.Equal(t, divergeiov1alpha1.ServiceModeBaseline, specs[1].Mode)
 }
 
 func TestPreviewStatusCmd(t *testing.T) {
@@ -116,7 +105,7 @@ func TestPreviewStatusCmd(t *testing.T) {
 
 	// Capture stdout
 	old := captureStdout(t)
-	err := runPreviewStatus(app, "mr-42")
+	err := runPreviewStatus(context.Background(), app, "mr-42")
 	output := old()
 
 	if err != nil {
@@ -137,7 +126,7 @@ func TestPreviewDeleteCmd_NotFound(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).Build()
 	app := &App{Client: c}
 
-	err := runPreviewDelete(app, "nonexistent", true)
+	err := runPreviewDelete(context.Background(), app, "nonexistent", true)
 	if err == nil {
 		t.Error("expected error for non-existent PreviewGroup")
 	}
@@ -156,7 +145,7 @@ func TestPreviewDeleteCmd_Force(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pg).Build()
 	app := &App{Client: c}
 
-	err := runPreviewDelete(app, "mr-42", true)
+	err := runPreviewDelete(context.Background(), app, "mr-42", true)
 	if err != nil {
 		t.Fatalf("force delete failed: %v", err)
 	}
@@ -194,7 +183,19 @@ func TestPhaseEmoji(t *testing.T) {
 // and returns the captured output.
 func captureStdout(t *testing.T) func() string {
 	t.Helper()
-	// For simplicity, just run and check error — stdout capture
-	// with os.Pipe is flaky in parallel tests
-	return func() string { return "mr-42 payments-api consent-mgr" }
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	return func() string {
+		if err := w.Close(); err != nil {
+			t.Errorf("failed to close pipe writer: %v", err)
+		}
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, r)
+		os.Stdout = old
+		return buf.String()
+	}
 }

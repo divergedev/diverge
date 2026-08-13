@@ -179,6 +179,48 @@ func TestValidatePreviewGroup(t *testing.T) {
 			wantField: "endpoint",
 		},
 		{
+			name: "local mode endpoint with non-numeric port",
+			pg: &PreviewGroup{
+				Spec: PreviewGroupSpec{
+					Source:  EnvironmentSource{Provider: "gitlab", Project: "azra/platform", Branch: "main"},
+					Routing: PreviewGroupRouting{HeaderValue: "42"},
+					Services: []PreviewGroupServiceSpec{
+						{Name: "svc", Mode: ServiceModeLocal, Endpoint: "100.64.1.1:abc"},
+					},
+				},
+			},
+			wantErrs:  1,
+			wantField: "endpoint",
+		},
+		{
+			name: "local mode endpoint with port 0",
+			pg: &PreviewGroup{
+				Spec: PreviewGroupSpec{
+					Source:  EnvironmentSource{Provider: "gitlab", Project: "azra/platform", Branch: "main"},
+					Routing: PreviewGroupRouting{HeaderValue: "42"},
+					Services: []PreviewGroupServiceSpec{
+						{Name: "svc", Mode: ServiceModeLocal, Endpoint: "100.64.1.1:0"},
+					},
+				},
+			},
+			wantErrs:  1,
+			wantField: "endpoint",
+		},
+		{
+			name: "local mode endpoint with port 65536",
+			pg: &PreviewGroup{
+				Spec: PreviewGroupSpec{
+					Source:  EnvironmentSource{Provider: "gitlab", Project: "azra/platform", Branch: "main"},
+					Routing: PreviewGroupRouting{HeaderValue: "42"},
+					Services: []PreviewGroupServiceSpec{
+						{Name: "svc", Mode: ServiceModeLocal, Endpoint: "100.64.1.1:65536"},
+					},
+				},
+			},
+			wantErrs:  1,
+			wantField: "endpoint",
+		},
+		{
 			name: "baseline mode with image is invalid",
 			pg: &PreviewGroup{
 				Spec: PreviewGroupSpec{

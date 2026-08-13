@@ -193,6 +193,12 @@ type ServicePreviewConfig struct {
 	// +kubebuilder:default=http
 	// +optional
 	Protocol string `json:"protocol,omitempty"`
+	// Endpoint is the external endpoint for mode=local (e.g. Tailscale IP:port).
+	// +optional
+	Endpoint string `json:"endpoint,omitempty"`
+	// Resources overrides the resource requests/limits for the preview pod.
+	// +optional
+	Resources *ResourceOverride `json:"resources,omitempty"`
 }
 
 // EnvVar represents an environment variable for a preview container.

@@ -37,7 +37,7 @@ func TestGatewayRouter_Reconcile_GRPCRoute(t *testing.T) {
 	require.NoError(t, err)
 
 	u := &unstructured.Unstructured{}
-	u.SetAPIVersion("gateway.networking.k8s.io/v1")
+	u.SetAPIVersion("gateway.networking.k8s.io/v1alpha2")
 	u.SetKind("GRPCRoute")
 	err = c.Get(context.Background(), client.ObjectKey{Name: "test-env-web", Namespace: "default"}, u)
 	require.NoError(t, err, "GRPCRoute should exist")
@@ -120,7 +120,7 @@ func TestGatewayRouter_Reconcile_GRPCWithGAMMA(t *testing.T) {
 
 	// Check mesh route
 	uMesh := &unstructured.Unstructured{}
-	uMesh.SetAPIVersion("gateway.networking.k8s.io/v1")
+	uMesh.SetAPIVersion("gateway.networking.k8s.io/v1alpha2")
 	uMesh.SetKind("GRPCRoute")
 	err = c.Get(context.Background(), client.ObjectKey{Name: "test-env-api-mesh", Namespace: "default"}, uMesh)
 	require.NoError(t, err, "Mesh GRPCRoute should exist")
@@ -129,24 +129,6 @@ func TestGatewayRouter_Reconcile_GRPCWithGAMMA(t *testing.T) {
 	require.Len(t, parents, 1)
 	assert.Equal(t, "api-svc", parents[0].(map[string]interface{})["name"])
 	assert.Equal(t, "Service", parents[0].(map[string]interface{})["kind"])
-}
-
-func TestIsServiceName(t *testing.T) {
-	tests := []struct {
-		name string
-		want bool
-	}{
-		{"diverge-gateway", false},
-		{"my-waypoint", false},
-		{"payments-api", true},
-		{"consent-manager", true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, isServiceName(tt.name))
-		})
-	}
 }
 
 func TestGatewayRouter_Teardown_GRPCRoutes(t *testing.T) {
@@ -161,7 +143,7 @@ func TestGatewayRouter_Teardown_GRPCRoutes(t *testing.T) {
 	}
 
 	u := &unstructured.Unstructured{}
-	u.SetAPIVersion("gateway.networking.k8s.io/v1")
+	u.SetAPIVersion("gateway.networking.k8s.io/v1alpha2")
 	u.SetKind("GRPCRoute")
 	u.SetName("test-env-web")
 	u.SetNamespace("default")

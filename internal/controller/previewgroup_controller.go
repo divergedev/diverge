@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -36,11 +37,12 @@ const (
 // Environment CRs for each service in the group.
 type PreviewGroupReconciler struct {
 	client.Client
-	Scheme         *runtime.Scheme
-	Recorder       record.EventRecorder
-	Notifier       notifier.Notifier
-	StatusReporter notifier.StatusReporter
-	EnableGAMMA    bool // Enable GAMMA mesh routing (requires Istio Ambient)
+	Scheme           *runtime.Scheme
+	Recorder         record.EventRecorder
+	Notifier         notifier.Notifier
+	StatusReporter   notifier.StatusReporter
+	EnableGAMMA      bool // Enable GAMMA mesh routing (requires Istio Ambient)
+	DefaultNamespace string
 }
 
 // +kubebuilder:rbac:groups=diverge.io,resources=previewgroups,verbs=get;list;watch;create;update;patch;delete
@@ -109,7 +111,10 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		// Determine target namespace — use service's namespace or default
 		targetNS := svc.Namespace
 		if targetNS == "" {
-			targetNS = "default"
+			targetNS = r.DefaultNamespace
+			if targetNS == "" {
+				targetNS = "default"
+			}
 		}
 
 		svcStatus := divergeiov1alpha1.PreviewGroupServiceStatus{
@@ -244,24 +249,21 @@ func (r *PreviewGroupReconciler) handleTeardown(ctx context.Context, pg *diverge
 	}
 
 	// Delete children that haven't been deleted yet
-	remaining := 0
 	for i := range children {
 		child := &children[i]
 		if child.DeletionTimestamp.IsZero() {
 			if err := r.Delete(ctx, child); err != nil && !apierrors.IsNotFound(err) {
 				logger.Error(err, "failed to delete child Environment", "name", child.Name, "namespace", child.Namespace)
-				remaining++
 				continue
 			}
 			r.Recorder.Eventf(pg, "Normal", "ChildDeleted",
 				"Deleted Environment %s/%s", child.Namespace, child.Name)
 		}
-		remaining++
 	}
 
 	// Requeue if children are still terminating
-	if remaining > 0 {
-		logger.Info("Waiting for child Environments to terminate", "remaining", remaining)
+	if len(children) > 0 {
+		logger.Info("Waiting for child Environments to terminate", "remaining", len(children))
 		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
 	}
 
@@ -305,14 +307,9 @@ func (r *PreviewGroupReconciler) buildChildEnvironment(
 		routingConfig.HeaderKey = "x-preview-env"
 	}
 
-	var svcName string
-	if r.EnableGAMMA {
-		svcName = svc.Name
-	}
-
 	// Build service config
 	serviceConfig := &divergeiov1alpha1.ServicePreviewConfig{
-		ServiceName:     svcName,
+		ServiceName:     svc.Name,
 		Namespace:       targetNS,
 		Port:            svc.Port,
 		Image:           svc.Image,
@@ -322,6 +319,8 @@ func (r *PreviewGroupReconciler) buildChildEnvironment(
 		HeaderKey:       pg.Spec.Routing.HeaderKey,
 		Env:             svc.Env,
 		Protocol:        string(svc.Protocol),
+		Endpoint:        svc.Endpoint,
+		Resources:       svc.Resources,
 	}
 
 	env := &divergeiov1alpha1.Environment{
@@ -358,14 +357,8 @@ func (r *PreviewGroupReconciler) buildChildEnvironment(
 
 // needsUpdate checks if the existing Environment's spec has drifted from desired.
 func (r *PreviewGroupReconciler) needsUpdate(existing, desired *divergeiov1alpha1.Environment) bool {
-	// Compare image (most common change — CI pushes new image)
-	if existing.Spec.ServiceConfig != nil && desired.Spec.ServiceConfig != nil {
-		if existing.Spec.ServiceConfig.Image != desired.Spec.ServiceConfig.Image {
-			return true
-		}
-	}
-	// Compare routing header value (group rename)
-	if existing.Spec.Routing.HeaderValue != desired.Spec.Routing.HeaderValue {
+	// Compare full spec
+	if !reflect.DeepEqual(existing.Spec, desired.Spec) {
 		return true
 	}
 	// Compare generation label to catch spec drift

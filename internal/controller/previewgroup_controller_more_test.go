@@ -95,7 +95,7 @@ func TestPreviewGroupReconcile_OrphanCleanup(t *testing.T) {
 	// Ensure orphan is deleted
 	var deletedEnv divergeiov1alpha1.Environment
 	err = c.Get(context.Background(), types.NamespacedName{Name: orphanEnvName, Namespace: "default"}, &deletedEnv)
-	assert.Error(t, err) // Should be not found
+	assert.True(t, apierrors.IsNotFound(err), "orphan Environment should be deleted, got %v", err)
 }
 
 func TestPreviewGroupReconcile_UpdateChildOnImageChange(t *testing.T) {
@@ -219,18 +219,30 @@ func TestNeedsUpdate(t *testing.T) {
 			want:     true,
 		},
 		{
+			name:     "port changed",
+			existing: &divergeiov1alpha1.Environment{Spec: divergeiov1alpha1.EnvironmentSpec{ServiceConfig: &divergeiov1alpha1.ServicePreviewConfig{Port: 8080}}},
+			desired:  &divergeiov1alpha1.Environment{Spec: divergeiov1alpha1.EnvironmentSpec{ServiceConfig: &divergeiov1alpha1.ServicePreviewConfig{Port: 8081}}},
+			want:     true,
+		},
+		{
+			name:     "protocol changed",
+			existing: &divergeiov1alpha1.Environment{Spec: divergeiov1alpha1.EnvironmentSpec{ServiceConfig: &divergeiov1alpha1.ServicePreviewConfig{Protocol: "http"}}},
+			desired:  &divergeiov1alpha1.Environment{Spec: divergeiov1alpha1.EnvironmentSpec{ServiceConfig: &divergeiov1alpha1.ServicePreviewConfig{Protocol: "grpc"}}},
+			want:     true,
+		},
+		{
 			name: "no change",
 			existing: &divergeiov1alpha1.Environment{
 				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{labelPreviewGroup: "same"}},
 				Spec: divergeiov1alpha1.EnvironmentSpec{
-					ServiceConfig: &divergeiov1alpha1.ServicePreviewConfig{Image: "same"},
+					ServiceConfig: &divergeiov1alpha1.ServicePreviewConfig{Image: "same", Port: 8080, Protocol: "http"},
 					Routing:       divergeiov1alpha1.EnvironmentRouting{HeaderValue: "same"},
 				},
 			},
 			desired: &divergeiov1alpha1.Environment{
 				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{labelPreviewGroup: "same"}},
 				Spec: divergeiov1alpha1.EnvironmentSpec{
-					ServiceConfig: &divergeiov1alpha1.ServicePreviewConfig{Image: "same"},
+					ServiceConfig: &divergeiov1alpha1.ServicePreviewConfig{Image: "same", Port: 8080, Protocol: "http"},
 					Routing:       divergeiov1alpha1.EnvironmentRouting{HeaderValue: "same"},
 				},
 			},
