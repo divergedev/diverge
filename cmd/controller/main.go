@@ -290,6 +290,15 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "Environment")
 		os.Exit(1)
 	}
+
+	if err = (&controller.PreviewGroupReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("diverge-previewgroup"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "PreviewGroup")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 
 	// Setup webhook server for GitLab events
