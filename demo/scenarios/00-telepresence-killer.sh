@@ -9,7 +9,7 @@ YELLOW='\033[0;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-CTX="k3d-diverge-demo"
+CTX="${DIVERGE_DEMO_CTX:-k3d-diverge-demo}"
 
 pause() {
   echo ""

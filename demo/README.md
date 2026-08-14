@@ -15,6 +15,17 @@ make demo-killer   # Run the headline demo
 make demo-teardown # Destroy cluster
 ```
 
+## GKE Demo
+
+Deploy to a real GKE Autopilot cluster:
+
+```bash
+export GCP_PROJECT=my-project-id
+make demo-gke              # Create cluster + deploy (~5 min)
+DIVERGE_DEMO_CTX=gke_${GCP_PROJECT}_us-central1_diverge-demo make demo-killer
+make demo-gke-teardown     # Destroy cluster
+```
+
 ## What It Shows
 1. **Gateway API Routing**: Header-based traffic splitting via HTTPRoute
 2. **GAMMA Mesh Routing**: East-west service mesh routing without sidecars

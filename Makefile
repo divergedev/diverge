@@ -144,3 +144,16 @@ demo-scenario-3:
 demo-scenario-4:
 	@bash demo/scenarios/04-cleanup.sh
 
+.PHONY: demo-gke demo-gke-setup demo-gke-teardown demo-gke-killer
+
+demo-gke: demo-gke-setup ## Deploy demo to GKE Autopilot (requires GCP_PROJECT)
+
+demo-gke-setup:
+	@bash demo/setup-gke.sh
+
+demo-gke-teardown: ## Destroy GKE demo cluster
+	@bash demo/teardown-gke.sh
+
+demo-gke-killer: ## Run headline demo on GKE
+	@DIVERGE_DEMO_CTX=$$(gcloud config get-value core/project 2>/dev/null | xargs -I{} echo "gke_{}_$${GCP_REGION:-us-central1}_$${GKE_CLUSTER:-diverge-demo}") bash demo/scenarios/00-telepresence-killer.sh
+
