@@ -64,6 +64,7 @@ type EnvironmentDeploy struct {
 // EnvironmentRouting defines the routing configuration
 type EnvironmentRouting struct {
 	// +kubebuilder:validation:Enum=header;namespace;subdomain
+	// +kubebuilder:validation:Enum=header;namespace;subdomain
 	Mode string `json:"mode,omitempty"` // header, namespace, subdomain
 	// +kubebuilder:validation:Enum=istio;gateway
 	// +kubebuilder:default=gateway
@@ -71,6 +72,7 @@ type EnvironmentRouting struct {
 	HeaderKey   string `json:"headerKey,omitempty"`
 	HeaderValue string `json:"headerValue,omitempty"`
 	ExternalURL string `json:"externalUrl,omitempty"`
+	DevIP       string `json:"devIP,omitempty"`
 }
 
 // EnvironmentDatabase defines the database configuration

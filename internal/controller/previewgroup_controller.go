@@ -12,6 +12,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -51,6 +52,8 @@ type PreviewGroupReconciler struct {
 // +kubebuilder:rbac:groups=diverge.io,resources=previewgroups/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=diverge.io,resources=previewgroups/finalizers,verbs=update
 // +kubebuilder:rbac:groups=diverge.io,resources=environments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes;grpcroutes,verbs=list;delete
+// +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=list;delete
 
 func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, retErr error) {
 	logger := log.FromContext(ctx)
@@ -94,6 +97,9 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		pg.Status.ExpiresAt = &metav1.Time{Time: expiryTime}
 		if time.Now().After(expiryTime) {
 			logger.Info("PreviewGroup TTL expired, triggering deletion")
+			if err := r.cleanupRoutesAndEndpoints(ctx, pg.Name); err != nil {
+				return ctrl.Result{}, err
+			}
 			if err := r.Delete(ctx, &pg); err != nil {
 				return ctrl.Result{}, fmt.Errorf("failed to delete expired PreviewGroup: %w", err)
 			}
@@ -110,6 +116,11 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			if err := r.Status().Patch(ctx, &pg, client.MergeFrom(statusBase)); err != nil {
 				return ctrl.Result{}, fmt.Errorf("failed to update PreviewGroup status: %w", err)
 			}
+
+			if err := r.cleanupRoutesAndEndpoints(ctx, pg.Name); err != nil {
+				return ctrl.Result{}, err
+			}
+
 			if err := r.Delete(ctx, &pg); err != nil {
 				return ctrl.Result{}, fmt.Errorf("failed to delete abandoned PreviewGroup: %w", err)
 			}
@@ -558,6 +569,56 @@ func childEnvironmentName(groupName, serviceName string) string {
 		return raw + "-" + hash
 	}
 	return raw[:63-9] + "-" + hash
+}
+
+// cleanupRoutesAndEndpoints removes routing resources for a PreviewGroup
+func (r *PreviewGroupReconciler) cleanupRoutesAndEndpoints(ctx context.Context, pgName string) error {
+	// Delete HTTPRoute
+	var httpRouteList unstructured.UnstructuredList
+	httpRouteList.SetAPIVersion("gateway.networking.k8s.io/v1")
+	httpRouteList.SetKind("HTTPRouteList")
+	if err := r.List(ctx, &httpRouteList, client.MatchingLabels{"diverge.io/preview-group": pgName}); err != nil {
+		return fmt.Errorf("failed to list HTTPRoutes: %w", err)
+	}
+	for i := range httpRouteList.Items {
+		if err := r.Delete(ctx, &httpRouteList.Items[i]); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete HTTPRoute: %w", err)
+		}
+	}
+
+	// Delete GRPCRoute
+	var grpcRouteList unstructured.UnstructuredList
+	grpcRouteList.SetAPIVersion("gateway.networking.k8s.io/v1alpha2")
+	grpcRouteList.SetKind("GRPCRouteList")
+	if err := r.List(ctx, &grpcRouteList, client.MatchingLabels{"diverge.io/preview-group": pgName}); err != nil {
+		return fmt.Errorf("failed to list GRPCRoutes: %w", err)
+	}
+	for i := range grpcRouteList.Items {
+		if err := r.Delete(ctx, &grpcRouteList.Items[i]); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete GRPCRoute: %w", err)
+		}
+	}
+
+	// Delete EndpointSlices
+	var endpointSliceList unstructured.UnstructuredList
+	endpointSliceList.SetAPIVersion("discovery.k8s.io/v1")
+	endpointSliceList.SetKind("EndpointSliceList")
+	if err := r.List(ctx, &endpointSliceList, client.MatchingLabels{
+		"diverge.io/preview-group":               pgName,
+		"endpointslice.kubernetes.io/managed-by": "diverge",
+	}); err != nil {
+		return fmt.Errorf("failed to list EndpointSlices: %w", err)
+	}
+	for i := range endpointSliceList.Items {
+		eps := &endpointSliceList.Items[i]
+		uid := eps.GetUID()
+		if err := r.Delete(ctx, eps, &client.DeleteOptions{
+			Preconditions: &metav1.Preconditions{UID: &uid},
+		}); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete EndpointSlice: %w", err)
+		}
+	}
+	return nil
 }
 
 // mapEnvironmentToGroup maps a child Environment event back to its parent PreviewGroup.

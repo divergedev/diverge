@@ -3,8 +3,12 @@ package controller
 import (
 	"context"
 	"testing"
+	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -70,86 +74,41 @@ func TestPreviewGroupReconcile_CreateChildEnvironments(t *testing.T) {
 
 	r, c := newTestPreviewGroupReconciler(pg)
 
-	// First reconcile: adds finalizer
-	result, err := r.Reconcile(context.Background(), ctrl.Request{
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "mr-42"},
 	})
-	if err != nil {
-		t.Fatalf("first reconcile failed: %v", err)
-	}
-	if result.Requeue || result.RequeueAfter > 0 {
-		t.Log("Requeue after finalizer add — expected")
-	}
+	require.NoError(t, err)
 
-	// Verify finalizer was added
 	var updated divergeiov1alpha1.PreviewGroup
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "mr-42"}, &updated); err != nil {
-		t.Fatalf("failed to get updated PreviewGroup: %v", err)
-	}
-	hasFinalizer := false
-	for _, f := range updated.Finalizers {
-		if f == previewGroupFinalizer {
-			hasFinalizer = true
-			break
-		}
-	}
-	if !hasFinalizer {
-		t.Error("finalizer not added")
-	}
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "mr-42"}, &updated))
+	assert.Contains(t, updated.Finalizers, previewGroupFinalizer)
 
-	// Second reconcile: creates child Environments
-	result, err = r.Reconcile(context.Background(), ctrl.Request{
+	_, err = r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "mr-42"},
 	})
-	if err != nil {
-		t.Fatalf("second reconcile failed: %v", err)
-	}
+	require.NoError(t, err)
 
-	// Verify child Environment was created for payments-api (image mode)
 	envName := childEnvironmentName("mr-42", "payments-api")
 	var childEnv divergeiov1alpha1.Environment
-	err = c.Get(context.Background(), types.NamespacedName{
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{
 		Name:      envName,
 		Namespace: "product-rad",
-	}, &childEnv)
-	if err != nil {
-		t.Fatalf("child Environment not created for payments-api: %v", err)
-	}
+	}, &childEnv))
 
-	// Verify labels
-	if childEnv.Labels[labelPreviewGroup] != "mr-42" {
-		t.Errorf("child Environment missing preview-group label, got %q", childEnv.Labels[labelPreviewGroup])
-	}
+	assert.Equal(t, "mr-42", childEnv.Labels[labelPreviewGroup])
+	assert.Equal(t, "42", childEnv.Spec.Routing.HeaderValue)
+	assert.Equal(t, "x-preview-env", childEnv.Spec.Routing.HeaderKey)
+	require.NotNil(t, childEnv.Spec.ServiceConfig)
+	assert.Equal(t, "registry.azra-ai.com/payments:mr-42", childEnv.Spec.ServiceConfig.Image)
+	assert.Equal(t, int32(8080), childEnv.Spec.ServiceConfig.Port)
 
-	// Verify routing config
-	if childEnv.Spec.Routing.HeaderValue != "42" {
-		t.Errorf("child Environment routing headerValue = %q, want %q", childEnv.Spec.Routing.HeaderValue, "42")
-	}
-	if childEnv.Spec.Routing.HeaderKey != "x-preview-env" {
-		t.Errorf("child Environment routing headerKey = %q, want %q", childEnv.Spec.Routing.HeaderKey, "x-preview-env")
-	}
-
-	// Verify service config
-	if childEnv.Spec.ServiceConfig == nil {
-		t.Fatal("child Environment ServiceConfig is nil")
-	}
-	if childEnv.Spec.ServiceConfig.Image != "registry.azra-ai.com/payments:mr-42" {
-		t.Errorf("child Environment image = %q, want %q", childEnv.Spec.ServiceConfig.Image, "registry.azra-ai.com/payments:mr-42")
-	}
-	if childEnv.Spec.ServiceConfig.Port != 8080 {
-		t.Errorf("child Environment port = %d, want 8080", childEnv.Spec.ServiceConfig.Port)
-	}
-
-	// Verify NO child Environment for baseline service
 	baselineEnvName := childEnvironmentName("mr-42", "consent-mgr")
 	var baselineEnv divergeiov1alpha1.Environment
 	err = c.Get(context.Background(), types.NamespacedName{
 		Name:      baselineEnvName,
 		Namespace: "platform-core",
 	}, &baselineEnv)
-	if err == nil {
-		t.Error("child Environment should NOT be created for baseline service")
-	}
+	assert.Error(t, err, "child Environment should NOT be created for baseline service")
 }
 
 func TestPreviewGroupReconcile_BaselinePhaseIsRunning(t *testing.T) {
@@ -179,25 +138,15 @@ func TestPreviewGroupReconcile_BaselinePhaseIsRunning(t *testing.T) {
 	}
 
 	r, c := newTestPreviewGroupReconciler(pg)
-
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "mr-99"},
 	})
-	if err != nil {
-		t.Fatalf("reconcile failed: %v", err)
-	}
+	require.NoError(t, err)
 
-	// Check status — baseline-only group should be Running
 	var updated divergeiov1alpha1.PreviewGroup
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "mr-99"}, &updated); err != nil {
-		t.Fatalf("failed to get updated PreviewGroup: %v", err)
-	}
-	if updated.Status.Phase != divergeiov1alpha1.PreviewGroupPhaseRunning {
-		t.Errorf("phase = %q, want %q", updated.Status.Phase, divergeiov1alpha1.PreviewGroupPhaseRunning)
-	}
-	if updated.Status.ServiceCount != 1 {
-		t.Errorf("serviceCount = %d, want 1", updated.Status.ServiceCount)
-	}
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "mr-99"}, &updated))
+	assert.Equal(t, divergeiov1alpha1.PreviewGroupPhaseRunning, updated.Status.Phase)
+	assert.Equal(t, int32(1), updated.Status.ServiceCount)
 }
 
 func TestDerivePreviewGroupPhase(t *testing.T) {
@@ -255,9 +204,7 @@ func TestDerivePreviewGroupPhase(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := derivePreviewGroupPhase(tt.statuses)
-			if got != tt.want {
-				t.Errorf("derivePreviewGroupPhase() = %q, want %q", got, tt.want)
-			}
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -275,32 +222,121 @@ func TestChildEnvironmentName(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.group+"/"+tt.service, func(t *testing.T) {
 			name := childEnvironmentName(tt.group, tt.service)
-			if len(name) > 63 {
-				t.Errorf("name too long: %d chars (max 63): %s", len(name), name)
-			}
-			if name == "" {
-				t.Error("name is empty")
-			}
-			// Verify DNS-1123 label
+			assert.LessOrEqual(t, len(name), 63)
+			assert.NotEmpty(t, name)
 			for _, c := range name {
-				if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
-					t.Errorf("invalid character %q in name %s", c, name)
-				}
+				assert.True(t, (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-', "invalid character %q", c)
 			}
 		})
 	}
 
-	// Verify deterministic
 	a := childEnvironmentName("mr-42", "payments-api")
 	b := childEnvironmentName("mr-42", "payments-api")
-	if a != b {
-		t.Errorf("non-deterministic: %q != %q", a, b)
-	}
+	assert.Equal(t, a, b)
 
-	// Verify unique across different inputs
 	x := childEnvironmentName("mr-42", "svc-a")
 	y := childEnvironmentName("mr-42", "svc-b")
-	if x == y {
-		t.Errorf("collision: %q == %q", x, y)
+	assert.NotEqual(t, x, y)
+}
+
+func TestPreviewGroupReconcile_TeardownTableDriven(t *testing.T) {
+	tests := []struct {
+		name       string
+		setupPG    func(*divergeiov1alpha1.PreviewGroup)
+		wantPhase  divergeiov1alpha1.PreviewGroupPhase
+		wantDelete bool
+	}{
+		{
+			name: "lease expiry",
+			setupPG: func(pg *divergeiov1alpha1.PreviewGroup) {
+				expiredTime := metav1.NewTime(time.Now().Add(-10 * time.Minute))
+				pg.Status.LeaseRenewedAt = &expiredTime
+			},
+			wantPhase:  divergeiov1alpha1.PreviewGroupPhaseAbandoned,
+			wantDelete: true,
+		},
+		{
+			name: "TTL expiry",
+			setupPG: func(pg *divergeiov1alpha1.PreviewGroup) {
+				createdAt := metav1.NewTime(time.Now().Add(-2 * time.Hour))
+				pg.Status.CreatedAt = &createdAt
+				pg.Spec.Lifecycle = &divergeiov1alpha1.PreviewGroupLifecycle{
+					TTL: &metav1.Duration{Duration: 1 * time.Hour},
+				}
+			},
+			wantPhase:  divergeiov1alpha1.PreviewGroupPhaseRunning, // TTL expiry deletes it immediately without marking Abandoned
+			wantDelete: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pg := &divergeiov1alpha1.PreviewGroup{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "mr-99",
+					Finalizers: []string{previewGroupFinalizer},
+				},
+				Spec: divergeiov1alpha1.PreviewGroupSpec{
+					Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+						{Name: "auth-svc", Namespace: "platform-core"},
+					},
+				},
+				Status: divergeiov1alpha1.PreviewGroupStatus{
+					Phase: divergeiov1alpha1.PreviewGroupPhaseRunning,
+				},
+			}
+			tt.setupPG(pg)
+
+			epsUID := types.UID("uid-eps-1")
+			eps1 := &unstructured.Unstructured{}
+			eps1.SetAPIVersion("discovery.k8s.io/v1")
+			eps1.SetKind("EndpointSlice")
+			eps1.SetName("auth-svc-mr-99")
+			eps1.SetNamespace("platform-core")
+			eps1.SetUID(epsUID)
+			eps1.SetLabels(map[string]string{
+				"diverge.io/preview-group":               "mr-99",
+				"endpointslice.kubernetes.io/managed-by": "diverge",
+			})
+
+			route1 := &unstructured.Unstructured{}
+			route1.SetAPIVersion("gateway.networking.k8s.io/v1")
+			route1.SetKind("HTTPRoute")
+			route1.SetName("auth-svc-mr-99")
+			route1.SetNamespace("platform-core")
+			route1.SetLabels(map[string]string{
+				"diverge.io/preview-group": "mr-99",
+			})
+
+			r, c := newTestPreviewGroupReconciler(pg, eps1, route1)
+
+			_, err := r.Reconcile(context.Background(), ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: "mr-99"},
+			})
+			require.NoError(t, err)
+
+			var updated divergeiov1alpha1.PreviewGroup
+			err = c.Get(context.Background(), types.NamespacedName{Name: "mr-99"}, &updated)
+			require.NoError(t, err)
+			if tt.wantDelete {
+				assert.False(t, updated.DeletionTimestamp.IsZero(), "expected DeletionTimestamp to be set")
+			} else {
+				assert.Equal(t, tt.wantPhase, updated.Status.Phase)
+			}
+
+			// Verify HTTPRoute is deleted
+			var routes unstructured.UnstructuredList
+			routes.SetAPIVersion("gateway.networking.k8s.io/v1")
+			routes.SetKind("HTTPRouteList")
+			_ = c.List(context.Background(), &routes, client.InNamespace("platform-core"))
+			assert.Empty(t, routes.Items)
+
+			// Verify EndpointSlice (managed) is deleted
+			var slices unstructured.UnstructuredList
+			slices.SetAPIVersion("discovery.k8s.io/v1")
+			slices.SetKind("EndpointSliceList")
+			_ = c.List(context.Background(), &slices, client.InNamespace("platform-core"))
+			assert.Empty(t, slices.Items)
+		})
 	}
 }
