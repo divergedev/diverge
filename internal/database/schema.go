@@ -15,33 +15,63 @@ type SchemaDatabaseProvider struct {
 	AdminDSN string
 }
 
-func sanitizeEnvName(name string) string {
-	s := strings.ReplaceAll(name, "-", "_")
-	reg := regexp.MustCompile(`[^a-zA-Z0-9_]+`)
-	s = reg.ReplaceAllString(s, "")
+var validSchemaName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
+
+var ErrInvalidSchemaName = fmt.Errorf("invalid schema name: must match ^[a-z0-9][a-z0-9_-]*$")
+
+func sanitizeEnvName(name string) (string, error) {
+	s := strings.ToLower(strings.ReplaceAll(name, "-", "_"))
 	if len(s) > 55 {
 		s = s[:55]
 	}
-	return s
+	if s == "" || !validSchemaName.MatchString(s) {
+		return "", ErrInvalidSchemaName
+	}
+	return s, nil
 }
 
 func (p *SchemaDatabaseProvider) Provision(ctx context.Context, env *v1alpha1.Environment) (*DatabaseResult, error) {
-	schema := fmt.Sprintf("preview_%s", sanitizeEnvName(env.Name))
+	envName, err := sanitizeEnvName(env.Name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sanitize environment name: %w", err)
+	}
+	schema := fmt.Sprintf("preview_%s", envName)
 
 	setupSQL := fmt.Sprintf(`DO $$
 DECLARE
     row record;
+    seq_row record;
+    col_row record;
 BEGIN
-    EXECUTE 'CREATE SCHEMA IF NOT EXISTS %s';
+    EXECUTE format('CREATE SCHEMA IF NOT EXISTS %%I', '%[1]s');
     FOR row IN
         SELECT table_name
         FROM information_schema.tables
         WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
     LOOP
-        EXECUTE 'CREATE TABLE IF NOT EXISTS %s.' || quote_ident(row.table_name) || ' (LIKE public.' || quote_ident(row.table_name) || ' INCLUDING ALL)';
+        EXECUTE format('CREATE TABLE IF NOT EXISTS %%I.%%I (LIKE public.%%I INCLUDING ALL)', '%[1]s', row.table_name, row.table_name);
+    END LOOP;
+
+    -- For each sequence in public schema, create independent copy in preview schema
+    FOR seq_row IN
+        SELECT sequence_name FROM information_schema.sequences WHERE sequence_schema = 'public'
+    LOOP
+        EXECUTE format('CREATE SEQUENCE IF NOT EXISTS %%I.%%I', '%[1]s', seq_row.sequence_name);
+    END LOOP;
+
+    -- Re-map column defaults to use preview schema sequences
+    FOR col_row IN
+        SELECT table_name, column_name, column_default
+        FROM information_schema.columns
+        WHERE table_schema = '%[1]s'
+        AND column_default LIKE 'nextval(''%%public.%%'
+    LOOP
+        EXECUTE format('ALTER TABLE %%I.%%I ALTER COLUMN %%I SET DEFAULT %%s',
+            '%[1]s', col_row.table_name, col_row.column_name,
+            replace(col_row.column_default, '''public.', '''%[1]s.'));
     END LOOP;
 END
-$$;`, schema, schema)
+$$;`, schema)
 
 	dsn := p.AdminDSN
 	if strings.Contains(dsn, "?") {
@@ -56,14 +86,18 @@ $$;`, schema, schema)
 			"DATABASE_URL":           dsn,
 			"DIVERGE_PREVIEW_SCHEMA": schema,
 		},
-		SetupSQL: setupSQL,
+		SetupSQL: fmt.Sprintf("SET LOCAL search_path TO %s, public;\n", schema) + setupSQL,
 		Ready:    true,
 		Message:  "Schema Provisioned SQL generated",
 	}, nil
 }
 
 func (p *SchemaDatabaseProvider) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
-	schema := fmt.Sprintf("preview_%s", sanitizeEnvName(env.Name))
+	envName, err := sanitizeEnvName(env.Name)
+	if err != nil {
+		return fmt.Errorf("failed to sanitize environment name: %w", err)
+	}
+	schema := fmt.Sprintf("preview_%s", envName)
 
 	db, err := sql.Open("pgx", p.AdminDSN)
 	if err != nil {
@@ -77,11 +111,22 @@ func (p *SchemaDatabaseProvider) Teardown(ctx context.Context, env *v1alpha1.Env
 		return fmt.Errorf("failed to drop schema: %w", err)
 	}
 
+	roleName := fmt.Sprintf("diverge_preview_%s", schema)
+	query = fmt.Sprintf("DROP ROLE IF EXISTS %s", roleName)
+	_, err = db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to drop role: %w", err)
+	}
+
 	return nil
 }
 
 func (p *SchemaDatabaseProvider) Status(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) {
-	schema := fmt.Sprintf("preview_%s", sanitizeEnvName(env.Name))
+	envName, err := sanitizeEnvName(env.Name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sanitize environment name: %w", err)
+	}
+	schema := fmt.Sprintf("preview_%s", envName)
 
 	db, err := sql.Open("pgx", p.AdminDSN)
 	if err != nil {

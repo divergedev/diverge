@@ -11,8 +11,17 @@ import (
 )
 
 func TestSchemaDatabaseProvider_Sanitize(t *testing.T) {
-	name := sanitizeEnvName("my-test-env-123!")
+	name, err := sanitizeEnvName("my-test-env-123")
+	assert.NoError(t, err)
 	assert.Equal(t, "my_test_env_123", name)
+}
+
+func TestSchemaDatabaseProvider_Sanitize_RejectsSQLInjection(t *testing.T) {
+	_, err := sanitizeEnvName("env; DROP TABLE users;")
+	assert.ErrorIs(t, err, ErrInvalidSchemaName)
+
+	_, err = sanitizeEnvName("env' OR 1=1--")
+	assert.ErrorIs(t, err, ErrInvalidSchemaName)
 }
 
 func TestSchemaDatabaseProvider_Provision(t *testing.T) {
@@ -25,8 +34,11 @@ func TestSchemaDatabaseProvider_Provision(t *testing.T) {
 
 	res, err := provider.Provision(context.Background(), env)
 	assert.NoError(t, err)
-	assert.Contains(t, res.SetupSQL, "CREATE SCHEMA IF NOT EXISTS preview_test_env")
-	assert.Contains(t, res.SetupSQL, "LIKE public.")
+	assert.Contains(t, res.SetupSQL, "CREATE SCHEMA IF NOT EXISTS %I")
+	assert.Contains(t, res.SetupSQL, "CREATE TABLE IF NOT EXISTS %I.%I (LIKE public.%I INCLUDING ALL)")
+	assert.Contains(t, res.SetupSQL, "SET LOCAL search_path TO preview_test_env, public;")
+	assert.Contains(t, res.SetupSQL, "ALTER TABLE %I.%I ALTER COLUMN %I SET DEFAULT %s")
+	assert.Contains(t, res.SetupSQL, "CREATE SEQUENCE IF NOT EXISTS %I.%I")
 	assert.Equal(t, "postgres://admin@localhost/db?search_path=preview_test_env,public", res.DSN)
 	assert.Equal(t, "postgres://admin@localhost/db?search_path=preview_test_env,public", res.EnvVars["DATABASE_URL"])
 	assert.Equal(t, "preview_test_env", res.EnvVars["DIVERGE_PREVIEW_SCHEMA"])
@@ -40,9 +52,8 @@ func TestSchemaDatabaseProvider_Provision_EmptyName(t *testing.T) {
 		},
 	}
 
-	res, err := provider.Provision(context.Background(), env)
-	assert.NoError(t, err)
-	assert.Equal(t, "preview_", res.EnvVars["DIVERGE_PREVIEW_SCHEMA"])
+	_, err := provider.Provision(context.Background(), env)
+	assert.ErrorIs(t, err, ErrInvalidSchemaName)
 }
 
 func TestSchemaDatabaseProvider_Provision_LongName(t *testing.T) {
@@ -66,9 +77,8 @@ func TestSchemaDatabaseProvider_Provision_SpecialChars(t *testing.T) {
 		},
 	}
 
-	res, err := provider.Provision(context.Background(), env)
-	assert.NoError(t, err)
-	assert.Equal(t, "preview_myenv", res.EnvVars["DIVERGE_PREVIEW_SCHEMA"])
+	_, err := provider.Provision(context.Background(), env)
+	assert.ErrorIs(t, err, ErrInvalidSchemaName)
 }
 
 func TestSchemaDatabaseProvider_Provision_DSN_WithQueryParam(t *testing.T) {

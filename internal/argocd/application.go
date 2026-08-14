@@ -135,6 +135,25 @@ func (g *Generator) Generate(
 						},
 						"syncOptions": []interface{}{
 							"CreateNamespace=true",
+							"ServerSideApply=true",
+							"IgnoreExtraneous=true",
+						},
+					},
+					"ignoreDifferences": []interface{}{
+						map[string]interface{}{
+							"group":        "gateway.networking.k8s.io",
+							"kind":         "HTTPRoute",
+							"jsonPointers": []interface{}{"/spec/rules"},
+						},
+						map[string]interface{}{
+							"group":             "discovery.k8s.io",
+							"kind":              "EndpointSlice",
+							"jqPathExpressions": []interface{}{".endpoints", ".ports"},
+						},
+						map[string]interface{}{
+							"group":        "apps",
+							"kind":         "Deployment",
+							"jsonPointers": []interface{}{"/spec/replicas"},
 						},
 					},
 				},

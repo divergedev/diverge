@@ -97,11 +97,10 @@ func TestProperty_EnvDivergeRoundTrip(t *testing.T) {
 		tmpDir := t.TempDir()
 		outPath := filepath.Join(tmpDir, ".env.diverge")
 
-		_, err := syncBaselineEnv(context.Background(), clientset, syncEnvOptions{
+		_, err := syncBaselineEnvToFile(context.Background(), clientset, syncEnvOptions{
 			Namespace:   "default",
 			ServiceName: svcName,
-			OutputPath:  outPath,
-		})
+		}, outPath)
 		require.NoError(ht, err)
 
 		// Parse the written file and verify round-trip
@@ -152,11 +151,10 @@ func TestProperty_EnvDivergeFileAlwaysCreated(t *testing.T) {
 		tmpDir := t.TempDir()
 		outPath := filepath.Join(tmpDir, ".env.diverge")
 
-		_, err := syncBaselineEnv(context.Background(), clientset, syncEnvOptions{
+		_, err := syncBaselineEnvToFile(context.Background(), clientset, syncEnvOptions{
 			Namespace:   "default",
 			ServiceName: svcName,
-			OutputPath:  outPath,
-		})
+		}, outPath)
 		require.NoError(ht, err)
 
 		// File must always exist after sync (even if pod has no env vars)
@@ -188,11 +186,10 @@ func TestEnvSync_NewlineValues(t *testing.T) {
 	tmpDir := t.TempDir()
 	outPath := filepath.Join(tmpDir, ".env.diverge")
 
-	_, err := syncBaselineEnv(context.Background(), clientset, syncEnvOptions{
+	_, err := syncBaselineEnvToFile(context.Background(), clientset, syncEnvOptions{
 		Namespace:   "default",
 		ServiceName: svcName,
-		OutputPath:  outPath,
-	})
+	}, outPath)
 	require.NoError(t, err)
 
 	content, err := os.ReadFile(outPath)

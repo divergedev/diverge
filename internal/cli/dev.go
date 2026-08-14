@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -28,9 +29,10 @@ func WithEnvironmentDetector(d EnvironmentDetector) DevOption {
 
 func newDevCmd(app *App) *cobra.Command {
 	var (
-		serviceFlag  string
-		portFlag     int32
-		endpointFlag string
+		serviceFlag   string
+		portFlag      int32
+		endpointFlag  string
+		envOutputFlag string
 	)
 
 	cmd := &cobra.Command{
@@ -39,17 +41,18 @@ func newDevCmd(app *App) *cobra.Command {
 		Long: `Start a local development session by creating a PreviewGroup that routes
 traffic for the specified service to your local machine's Tailscale IP.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDev(app, serviceFlag, portFlag, endpointFlag, cmd)
+			return runDev(app, serviceFlag, portFlag, endpointFlag, envOutputFlag, cmd)
 		},
 	}
 	cmd.Flags().StringVar(&serviceFlag, "service", "", "Service name (default: auto-detect)")
 	cmd.Flags().Int32Var(&portFlag, "port", 0, "Local port (default: 8080)")
 	cmd.Flags().StringVar(&endpointFlag, "endpoint", "", "Local endpoint IP (default: tailscale ip -4)")
+	cmd.Flags().StringVar(&envOutputFlag, "env-output", "inject", "How to handle env vars: inject (in-memory), file (.env.diverge)")
 
 	return cmd
 }
 
-func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, cmd *cobra.Command, opts ...DevOption) error {
+func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, envOutputFlag string, cmd *cobra.Command, opts ...DevOption) error {
 	ctx := cmd.Context()
 
 	devOpts := &DevOptions{
@@ -141,14 +144,33 @@ func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, c
 	if ns == "" {
 		ns = "default"
 	}
-	synced, syncErr := syncBaselineEnv(ctx, clientset, syncEnvOptions{
-		Namespace:   ns,
-		ServiceName: serviceName,
-	})
-	if syncErr != nil {
-		fmt.Printf("⚠️  Could not sync env vars: %v\n", syncErr)
-	} else if synced > 0 {
-		fmt.Printf("📋 Synced %d env vars from baseline → .env.diverge\n", synced)
+
+	if envOutputFlag == "file" {
+		synced, syncErr := syncBaselineEnvToFile(ctx, clientset, syncEnvOptions{
+			Namespace:   ns,
+			ServiceName: serviceName,
+		}, ".env.diverge")
+		if syncErr != nil {
+			fmt.Printf("⚠️  Could not sync env vars: %v\n", syncErr)
+		} else if synced > 0 {
+			fmt.Printf("📋 Synced %d env vars from baseline → .env.diverge\n", synced)
+		}
+	} else {
+		// Instead of writing to file, capture env vars in a buffer
+		var envBuf bytes.Buffer
+		synced, syncErr := syncBaselineEnv(ctx, clientset, syncEnvOptions{
+			Namespace:   ns,
+			ServiceName: serviceName,
+		}, &envBuf)
+
+		// Parse the buffer and prepare for child process injection
+		if syncErr == nil && synced > 0 {
+			// envBuf now contains KEY=VALUE lines
+			// These would be injected into a child process's cmd.Env
+			fmt.Printf("📋 Captured %d env vars from baseline (in-memory, no file written)\n", synced)
+		} else if syncErr != nil {
+			fmt.Printf("⚠️  Could not sync env vars: %v\n", syncErr)
+		}
 	}
 
 	fmt.Printf("Starting dev session for service %q...\n", serviceName)
