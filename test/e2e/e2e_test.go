@@ -41,7 +41,9 @@ func getKubeClient(t *testing.T) (client.Client, *kubernetes.Clientset) {
 }
 
 func buildCLI(t *testing.T) {
-	cmd := exec.Command("go", "build", "-o", "../../bin/diverge", "../../cmd/diverge")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "build", "-o", "../../bin/diverge", "../../cmd/diverge")
 	err := cmd.Run()
 	require.NoError(t, err, "failed to build diverge CLI")
 }
@@ -52,7 +54,9 @@ func TestE2E_DevCreatesPreviewGroup(t *testing.T) {
 	ctx := context.Background()
 
 	// Start diverge dev in background
-	cmd := exec.Command("../../bin/diverge", "dev", "--service", "echo-server", "--endpoint", "127.0.0.1:9999", "--port", "9999", "--namespace", "diverge-e2e-test")
+	ctxCmd, cancelCmd := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancelCmd()
+	cmd := exec.CommandContext(ctxCmd, "../../bin/diverge", "dev", "--service", "echo-server", "--endpoint", "127.0.0.1:9999", "--port", "9999", "--namespace", "diverge-e2e-test")
 	err := cmd.Start()
 	require.NoError(t, err)
 
@@ -66,7 +70,9 @@ func TestE2E_DevCreatesPreviewGroup(t *testing.T) {
 	// Wait for PreviewGroup
 	var pgList divergeiov1alpha1.PreviewGroupList
 	require.Eventually(t, func() bool {
-		err := c.List(ctx, &pgList)
+		listCtx, cancelList := context.WithTimeout(context.Background(), 5*time.Second)
+		err := c.List(listCtx, &pgList)
+		cancelList()
 		if err != nil {
 			return false
 		}
@@ -87,7 +93,9 @@ func TestE2E_DevCreatesPreviewGroup(t *testing.T) {
 
 	// Verify cleanup
 	require.Eventually(t, func() bool {
-		err := c.List(ctx, &pgList)
+		listCtx, cancelList := context.WithTimeout(context.Background(), 5*time.Second)
+		err := c.List(listCtx, &pgList)
+		cancelList()
 		require.NoError(t, err)
 		for _, pg := range pgList.Items {
 			for _, svc := range pg.Spec.Services {
@@ -124,33 +132,45 @@ func TestE2E_DevInterceptAndRelease(t *testing.T) {
 			},
 		},
 	}
-	err := c.Create(ctx, pg)
+	createCtx, cancelCreate := context.WithTimeout(context.Background(), 5*time.Second)
+	err := c.Create(createCtx, pg)
+	cancelCreate()
 	require.NoError(t, err)
 	defer func() {
-		_ = c.Delete(ctx, pg)
+		delCtx, cancelDel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = c.Delete(delCtx, pg)
+		cancelDel()
 	}()
 
 	// 2. Intercept
-	cmd := exec.Command("../../bin/diverge", "preview", "intercept", "echo-server", "--group", "test-group", "--endpoint", "127.0.0.1:8080")
+	interceptCtx, cancelIntercept := context.WithTimeout(context.Background(), 30*time.Second)
+	cmd := exec.CommandContext(interceptCtx, "../../bin/diverge", "preview", "intercept", "echo-server", "--group", "test-group", "--endpoint", "127.0.0.1:8080")
 	err = cmd.Run()
+	cancelIntercept()
 	require.NoError(t, err)
 
 	// 3. Verify
 	var updatedPg divergeiov1alpha1.PreviewGroup
-	err = c.Get(ctx, client.ObjectKey{Name: "test-group", Namespace: "default"}, &updatedPg) // or cluster scoped?
+	// err = c.Get(ctx, client.ObjectKey{Name: "test-group", Namespace: "default"}, &updatedPg) // or cluster scoped?
 	// Note: PreviewGroup is likely cluster-scoped, so Namespace=""
-	err = c.Get(ctx, client.ObjectKey{Name: "test-group"}, &updatedPg)
+	getCtx, cancelGet := context.WithTimeout(context.Background(), 5*time.Second)
+	err = c.Get(getCtx, client.ObjectKey{Name: "test-group"}, &updatedPg)
+	cancelGet()
 	require.NoError(t, err)
 	assert.Equal(t, divergeiov1alpha1.ServiceModeLocal, updatedPg.Spec.Services[0].Mode)
 	assert.Equal(t, "127.0.0.1:8080", updatedPg.Spec.Services[0].Endpoint)
 
 	// 4. Release
-	cmd = exec.Command("../../bin/diverge", "preview", "release", "echo-server", "--group", "test-group")
+	releaseCtx, cancelRelease := context.WithTimeout(context.Background(), 30*time.Second)
+	cmd = exec.CommandContext(releaseCtx, "../../bin/diverge", "preview", "release", "echo-server", "--group", "test-group")
 	err = cmd.Run()
+	cancelRelease()
 	require.NoError(t, err)
 
 	// 5. Verify
-	err = c.Get(ctx, client.ObjectKey{Name: "test-group"}, &updatedPg)
+	getCtx2, cancelGet2 := context.WithTimeout(context.Background(), 5*time.Second)
+	err = c.Get(getCtx2, client.ObjectKey{Name: "test-group"}, &updatedPg)
+	cancelGet2()
 	require.NoError(t, err)
 	assert.Equal(t, divergeiov1alpha1.ServiceModeImage, updatedPg.Spec.Services[0].Mode)
 	assert.Empty(t, updatedPg.Spec.Services[0].Endpoint)

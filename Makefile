@@ -45,11 +45,11 @@ test: manifests generate fmt vet ## Run tests.
 
 .PHONY: e2e-setup e2e e2e-teardown
 e2e-setup:
-	./test/e2e/setup.sh
+	nix develop -c ./test/e2e/setup.sh
 e2e:
-	go test -tags=e2e -v -count=1 ./test/e2e/...
+	nix develop -c go test -tags=e2e -v -count=1 ./test/e2e/...
 e2e-teardown:
-	./test/e2e/teardown.sh
+	nix develop -c ./test/e2e/teardown.sh
 
 ##@ Build
 

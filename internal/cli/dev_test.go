@@ -141,11 +141,11 @@ func TestRunDev_CreatesPreviewGroup(t *testing.T) {
 		errCh <- runDev(app, "", 0, "", cmd, WithEnvironmentDetector(detector))
 	}()
 
-	time.Sleep(50 * time.Millisecond)
-
 	var pg divergeiov1alpha1.PreviewGroup
-	err := c.Get(context.Background(), types.NamespacedName{Name: "dev-alice-web"}, &pg)
-	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		err := c.Get(context.Background(), types.NamespacedName{Name: "dev-alice-web"}, &pg)
+		return err == nil
+	}, 2*time.Second, 10*time.Millisecond)
 
 	require.Equal(t, "dev-alice-web", pg.Name)
 	require.Len(t, pg.Spec.Services, 1)
@@ -157,7 +157,7 @@ func TestRunDev_CreatesPreviewGroup(t *testing.T) {
 	require.Equal(t, "main", pg.Spec.Source.Branch)
 
 	cancel()
-	err = <-errCh
+	err := <-errCh
 	require.NoError(t, err)
 
 	err = c.Get(context.Background(), types.NamespacedName{Name: "dev-alice-web"}, &pg)
@@ -178,17 +178,17 @@ func TestRunDev_UsesExplicitFlags(t *testing.T) {
 		errCh <- runDev(app, "backend", 9090, "10.0.0.1", cmd, WithEnvironmentDetector(detector))
 	}()
 
-	time.Sleep(50 * time.Millisecond)
-
 	var pg divergeiov1alpha1.PreviewGroup
-	err := c.Get(context.Background(), types.NamespacedName{Name: "dev-alice-backend"}, &pg)
-	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		err := c.Get(context.Background(), types.NamespacedName{Name: "dev-alice-backend"}, &pg)
+		return err == nil
+	}, 2*time.Second, 10*time.Millisecond)
 
 	require.Equal(t, "backend", pg.Spec.Services[0].Name)
 	require.Equal(t, "10.0.0.1:9090", pg.Spec.Services[0].Endpoint)
 
 	cancel()
-	err = <-errCh
+	err := <-errCh
 	require.NoError(t, err)
 }
 
@@ -215,11 +215,11 @@ func TestRunDev_DefaultPort(t *testing.T) {
 		errCh <- runDev(app, "", 0, "", cmd, WithEnvironmentDetector(detector))
 	}()
 
-	time.Sleep(50 * time.Millisecond)
-
 	var pg divergeiov1alpha1.PreviewGroup
-	err := c.Get(context.Background(), types.NamespacedName{Name: "dev-dev-web"}, &pg)
-	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		err := c.Get(context.Background(), types.NamespacedName{Name: "dev-dev-web"}, &pg)
+		return err == nil
+	}, 2*time.Second, 10*time.Millisecond)
 	require.Equal(t, "100.100.100.100:8080", pg.Spec.Services[0].Endpoint)
 
 	cancel()
@@ -239,11 +239,11 @@ func TestRunDev_SlugifiesBranch(t *testing.T) {
 		errCh <- runDev(app, "", 0, "", cmd, WithEnvironmentDetector(detector))
 	}()
 
-	time.Sleep(50 * time.Millisecond)
-
 	var pg divergeiov1alpha1.PreviewGroup
-	err := c.Get(context.Background(), types.NamespacedName{Name: "dev-dev-web"}, &pg)
-	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		err := c.Get(context.Background(), types.NamespacedName{Name: "dev-dev-web"}, &pg)
+		return err == nil
+	}, 2*time.Second, 10*time.Millisecond)
 	require.Equal(t, "feat-my-feature", pg.Spec.Routing.HeaderValue)
 	require.Equal(t, "feat-my-feature", pg.Spec.Source.Branch)
 
@@ -264,11 +264,11 @@ func TestRunDev_FallbackBranch(t *testing.T) {
 		errCh <- runDev(app, "", 0, "", cmd, WithEnvironmentDetector(detector))
 	}()
 
-	time.Sleep(50 * time.Millisecond)
-
 	var pg divergeiov1alpha1.PreviewGroup
-	err := c.Get(context.Background(), types.NamespacedName{Name: "dev-dev-web"}, &pg)
-	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		err := c.Get(context.Background(), types.NamespacedName{Name: "dev-dev-web"}, &pg)
+		return err == nil
+	}, 2*time.Second, 10*time.Millisecond)
 	require.Equal(t, "local-dev", pg.Spec.Routing.HeaderValue)
 
 	cancel()
@@ -288,11 +288,11 @@ func TestRunDev_GroupNameFormat(t *testing.T) {
 		errCh <- runDev(app, "", 0, "", cmd, WithEnvironmentDetector(detector))
 	}()
 
-	time.Sleep(50 * time.Millisecond)
-
 	var pg divergeiov1alpha1.PreviewGroup
-	err := c.Get(context.Background(), types.NamespacedName{Name: "dev-user-name-my-service"}, &pg)
-	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		err := c.Get(context.Background(), types.NamespacedName{Name: "dev-user-name-my-service"}, &pg)
+		return err == nil
+	}, 2*time.Second, 10*time.Millisecond)
 
 	cancel()
 	<-errCh
@@ -310,16 +310,16 @@ func TestRunDev_CleanupOnContextCancel(t *testing.T) {
 		errCh <- runDev(app, "", 0, "", cmd, WithEnvironmentDetector(detector))
 	}()
 
-	time.Sleep(50 * time.Millisecond)
-
 	var pg divergeiov1alpha1.PreviewGroup
-	err := c.Get(context.Background(), types.NamespacedName{Name: "dev-dev-web"}, &pg)
-	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		err := c.Get(context.Background(), types.NamespacedName{Name: "dev-dev-web"}, &pg)
+		return err == nil
+	}, 2*time.Second, 10*time.Millisecond)
 
 	cancel()
 	<-errCh
 
-	err = c.Get(context.Background(), types.NamespacedName{Name: "dev-dev-web"}, &pg)
+	err := c.Get(context.Background(), types.NamespacedName{Name: "dev-dev-web"}, &pg)
 	require.Error(t, err)
 }
 
@@ -335,11 +335,11 @@ func TestRunDev_ServiceNameFromConfig(t *testing.T) {
 		errCh <- runDev(app, "", 0, "", cmd, WithEnvironmentDetector(detector))
 	}()
 
-	time.Sleep(50 * time.Millisecond)
-
 	var pg divergeiov1alpha1.PreviewGroup
-	err := c.Get(context.Background(), types.NamespacedName{Name: "dev-dev-detected-svc"}, &pg)
-	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		err := c.Get(context.Background(), types.NamespacedName{Name: "dev-dev-detected-svc"}, &pg)
+		return err == nil
+	}, 2*time.Second, 10*time.Millisecond)
 	require.Equal(t, "detected-svc", pg.Spec.Services[0].Name)
 
 	cancel()
@@ -358,14 +358,14 @@ func TestRunDev_CleansUpOnSignal(t *testing.T) {
 		errCh <- runDev(app, "", 0, "", cmd, WithEnvironmentDetector(detector))
 	}()
 
-	time.Sleep(50 * time.Millisecond)
-
 	var pg divergeiov1alpha1.PreviewGroup
-	err := c.Get(context.Background(), types.NamespacedName{Name: "dev-dev-web"}, &pg)
-	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		err := c.Get(context.Background(), types.NamespacedName{Name: "dev-dev-web"}, &pg)
+		return err == nil
+	}, 2*time.Second, 10*time.Millisecond)
 
 	cancel()
-	err = <-errCh
+	err := <-errCh
 	require.NoError(t, err)
 
 	err = c.Get(context.Background(), types.NamespacedName{Name: "dev-dev-web"}, &pg)
@@ -383,6 +383,14 @@ func TestRunDev_CleanupTimeout(t *testing.T) {
 
 	c := fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(interceptor.Funcs{
 		Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if deadline, ok := ctx.Deadline(); ok {
+				remaining := time.Until(deadline)
+				if remaining < 4*time.Second || remaining > 6*time.Second {
+					t.Errorf("expected deadline ~5s from now, got %v", remaining)
+				}
+			} else {
+				t.Errorf("expected deadline on context")
+			}
 			<-ctx.Done()
 			return ctx.Err()
 		},
@@ -402,20 +410,17 @@ func TestRunDev_CleanupTimeout(t *testing.T) {
 		errCh <- runDev(app, "", 0, "", cmd, WithEnvironmentDetector(detector))
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		var pg divergeiov1alpha1.PreviewGroup
+		err := c.Get(context.Background(), types.NamespacedName{Name: "dev-dev-web"}, &pg)
+		return err == nil
+	}, 2*time.Second, 10*time.Millisecond)
 
 	cancel()
 
-	doneCh := make(chan struct{})
-	go func() {
-		err := <-errCh
-		require.NoError(t, err)
-		close(doneCh)
-	}()
-
 	select {
-	case <-doneCh:
-		// success
+	case err := <-errCh:
+		require.NoError(t, err)
 	case <-time.After(10 * time.Second):
 		t.Fatal("cleanup timed out, likely missing context with timeout")
 	}

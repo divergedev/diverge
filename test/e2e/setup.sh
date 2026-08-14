@@ -42,7 +42,7 @@ spec:
     spec:
       containers:
       - name: echo-server
-        image: ealen/echo-server:latest
+        image: ealen/echo-server:0.9.2
         ports:
         - containerPort: 80
 ---
