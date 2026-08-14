@@ -43,16 +43,14 @@ func (d *KNativeDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment)
 		ksvc.SetOwnerReferences([]metav1.OwnerReference{ownerRef})
 	}
 
-	labels := map[string]string{
-		"diverge.io/managed-by":  "diverge",
-		"diverge.io/environment": env.Name,
+	labels := ksvc.GetLabels()
+	if labels == nil {
+		labels = make(map[string]string)
 	}
+	labels["diverge.io/managed-by"] = "diverge"
+	labels["diverge.io/environment"] = env.Name
+	labels["networking.knative.dev/visibility"] = "cluster-local"
 	ksvc.SetLabels(labels)
-
-	annotations := map[string]string{
-		"serving.knative.dev/visibility": "cluster-local",
-	}
-	ksvc.SetAnnotations(annotations)
 
 	image := ""
 	if env.Spec.ServiceConfig != nil {

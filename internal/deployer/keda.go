@@ -26,8 +26,10 @@ var hsoListGVK = schema.GroupVersionKind{
 }
 
 type KEDADeployer struct {
-	Inner  Deployer
-	Client client.Client
+	Inner       Deployer
+	Client      client.Client
+	MinReplicas int64
+	MaxReplicas int64
 }
 
 func (d *KEDADeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) error {
@@ -65,10 +67,15 @@ func (d *KEDADeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) er
 	if err := unstructured.SetNestedField(hso.Object, env.Name, "spec", "scaleTargetRef", "name"); err != nil {
 		return fmt.Errorf("failed to set scaleTargetRef.name: %w", err)
 	}
-	if err := unstructured.SetNestedField(hso.Object, int64(0), "spec", "replicas", "min"); err != nil {
+	minRepl := d.MinReplicas
+	maxRepl := d.MaxReplicas
+	if maxRepl == 0 {
+		maxRepl = 3
+	}
+	if err := unstructured.SetNestedField(hso.Object, minRepl, "spec", "replicas", "min"); err != nil {
 		return fmt.Errorf("failed to set replicas.min: %w", err)
 	}
-	if err := unstructured.SetNestedField(hso.Object, int64(3), "spec", "replicas", "max"); err != nil {
+	if err := unstructured.SetNestedField(hso.Object, maxRepl, "spec", "replicas", "max"); err != nil {
 		return fmt.Errorf("failed to set replicas.max: %w", err)
 	}
 
@@ -145,15 +152,8 @@ func (d *KEDADeployer) Status(ctx context.Context, env *v1alpha1.Environment) ([
 		return nil, fmt.Errorf("failed to get HTTPScaledObject: %w", err)
 	}
 
-	// Find the matching service in inner status, or add a new one?
-	// HSO is a separate resource, maybe we aggregate the health?
-	// The prompt says:
-	// - Aggregate status from both Inner deployer AND HTTPScaledObject
-	// - If Inner is Healthy and HSO exists and is ready → Healthy
-	// - If Inner is Healthy but HSO missing → still Healthy (KEDA is optional)
-
-	// Wait, HSO status. Check conditions?
-	// We can add the HSO as a ServiceStatus.
+	// Aggregate status from both Inner deployer and HTTPScaledObject.
+	// If HSO exists, append its status.
 	hsoReady := isHSOReady(hso)
 	hsoHealth := "Progressing"
 	if hsoReady {

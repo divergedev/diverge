@@ -237,10 +237,19 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	pg.Status.Phase = derivePreviewGroupPhase(serviceStatuses)
 
 	if pg.Status.LeaseRenewedAt != nil {
-		if time.Since(pg.Status.LeaseRenewedAt.Time) > 90*time.Second {
-			// Mark as abandoned
+		expiration := pg.Status.LeaseRenewedAt.Add(90 * time.Second)
+		if time.Now().After(expiration) {
+			logger.Info("PreviewGroup lease expired, marking abandoned and triggering deletion")
 			pg.Status.Phase = divergeiov1alpha1.PreviewGroupPhaseAbandoned
-			// Optionally: auto-delete
+			if err := r.Delete(ctx, &pg); err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to delete abandoned PreviewGroup: %w", err)
+			}
+			return ctrl.Result{}, nil
+		}
+
+		d := time.Until(expiration)
+		if requeueAfter == 0 || d < requeueAfter {
+			requeueAfter = d
 		}
 	}
 

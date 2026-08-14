@@ -68,47 +68,90 @@ func (g *GitHubNotifier) postOrUpdateComment(ctx context.Context, env *v1alpha1.
 		return err
 	}
 
-	commentID := g.getCommentID(env)
-
 	payload := map[string]string{"body": body}
 	jsonPayload, _ := json.Marshal(payload)
 
-	var reqURL string
-	var method string
+	backoff := 500 * time.Millisecond
+	maxRetries := 3
 
-	if commentID != 0 {
-		reqURL = fmt.Sprintf("%s/repos/%s/issues/comments/%d", g.BaseURL, escapedProject, commentID)
-		method = http.MethodPatch
-	} else {
-		reqURL = fmt.Sprintf("%s/repos/%s/issues/%d/comments", g.BaseURL, escapedProject, pr)
-		method = http.MethodPost
-	}
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		commentID := g.getCommentID(env)
+		var reqURL string
+		var method string
 
-	req, err := http.NewRequestWithContext(ctx, method, reqURL, bytes.NewReader(jsonPayload))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+g.Token)
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
-
-	resp, err := g.HTTPClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("github API returned status: %d", resp.StatusCode)
-	}
-
-	if commentID == 0 {
-		var result struct {
-			ID int `json:"id"`
+		if commentID != 0 {
+			reqURL = fmt.Sprintf("%s/repos/%s/issues/comments/%d", g.BaseURL, escapedProject, commentID)
+			method = http.MethodPatch
+		} else {
+			reqURL = fmt.Sprintf("%s/repos/%s/issues/%d/comments", g.BaseURL, escapedProject, pr)
+			method = http.MethodPost
 		}
-		if err := json.NewDecoder(resp.Body).Decode(&result); err == nil && result.ID != 0 {
-			g.setCommentID(env, result.ID)
+
+		req, err := http.NewRequestWithContext(ctx, method, reqURL, bytes.NewReader(jsonPayload))
+		if err != nil {
+			return err
 		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+g.Token)
+		req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+		resp, err := g.HTTPClient.Do(req)
+		if err != nil {
+			return err
+		}
+
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusForbidden {
+			_ = resp.Body.Close()
+			if attempt == maxRetries {
+				return fmt.Errorf("github API rate limited after retries")
+			}
+
+			sleepDuration := backoff
+			if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
+				if parsedSecs, err := strconv.Atoi(retryAfter); err == nil {
+					sleepDuration = time.Duration(parsedSecs) * time.Second
+				}
+			} else if reset := resp.Header.Get("X-RateLimit-Reset"); reset != "" {
+				if resetUnix, err := strconv.ParseInt(reset, 10, 64); err == nil {
+					resetTime := time.Unix(resetUnix, 0)
+					if resetTime.After(time.Now()) {
+						d := time.Until(resetTime)
+						if d < 1*time.Minute {
+							sleepDuration = d
+						}
+					}
+				}
+			}
+
+			jitter := time.Duration(rand.Int63n(int64(sleepDuration/2) + 1))
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(sleepDuration + jitter):
+			}
+			backoff *= 2
+			continue
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			_ = resp.Body.Close()
+			if commentID != 0 && resp.StatusCode == http.StatusNotFound {
+				g.setCommentID(env, 0)
+				continue
+			}
+			return fmt.Errorf("github API returned status: %d", resp.StatusCode)
+		}
+
+		if commentID == 0 {
+			var result struct {
+				ID int `json:"id"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&result); err == nil && result.ID != 0 {
+				g.setCommentID(env, result.ID)
+			}
+		}
+		_ = resp.Body.Close()
+		break
 	}
 
 	return nil
@@ -290,7 +333,11 @@ func (g *GitHubPreviewGroupNotifier) postOrUpdateComment(ctx context.Context, pg
 			}
 
 			jitter := time.Duration(rand.Int63n(int64(sleepDuration/2) + 1))
-			time.Sleep(sleepDuration + jitter)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(sleepDuration + jitter):
+			}
 			backoff *= 2
 			continue
 		}

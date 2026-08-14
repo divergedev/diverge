@@ -19,6 +19,8 @@ import (
 	"github.com/divergedev/diverge/internal/git"
 )
 
+var ErrCollision = errors.New("preview group collision")
+
 type DevOptions struct {
 	Detector EnvironmentDetector
 }
@@ -180,7 +182,6 @@ func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, e
 	fmt.Printf("Routing traffic with header %s: %s to %s\n", "x-diverge-env", headerValue, endpoint)
 
 	// Atomic Create — handle collision
-	var ErrCollision = errors.New("preview group collision")
 
 	if err := c.Create(ctx, pg); err != nil {
 		if apierrors.IsAlreadyExists(err) {

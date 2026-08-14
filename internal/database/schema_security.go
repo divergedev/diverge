@@ -4,27 +4,38 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
+	"github.com/jackc/pgx/v5"
 )
 
 func (p *SchemaDatabaseProvider) CreatePreviewRole(ctx context.Context, db *sql.DB, schemaName string) (string, error) {
 	roleName := fmt.Sprintf("diverge_preview_%s", schemaName)
+	schemaIdent := pgx.Identifier{schemaName}.Sanitize()
+	roleIdent := pgx.Identifier{roleName}.Sanitize()
 
-	query := fmt.Sprintf(`
-		DO $$
-		BEGIN
-			IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '%[2]s') THEN
-				EXECUTE format('CREATE ROLE %%I LOGIN PASSWORD ''random''', '%[2]s');
-			END IF;
-			EXECUTE format('GRANT USAGE ON SCHEMA %%I TO %%I', '%[1]s', '%[2]s');
-			EXECUTE format('GRANT ALL ON ALL TABLES IN SCHEMA %%I TO %%I', '%[1]s', '%[2]s');
-			EXECUTE format('GRANT ALL ON ALL SEQUENCES IN SCHEMA %%I TO %%I', '%[1]s', '%[2]s');
-			EXECUTE format('REVOKE ALL ON SCHEMA public FROM %%I', '%[2]s');
-		END
-		$$;
-	`, schemaName, roleName)
+	var exists bool
+	err := db.QueryRowContext(ctx, "SELECT EXISTS(SELECT FROM pg_catalog.pg_roles WHERE rolname = $1)", roleName).Scan(&exists)
+	if err != nil {
+		return "", fmt.Errorf("failed to check role existence: %w", err)
+	}
 
-	if _, err := db.ExecContext(ctx, query); err != nil {
-		return "", fmt.Errorf("failed to create preview role: %w", err)
+	if !exists {
+		if _, err := db.ExecContext(ctx, fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD 'random'", roleIdent)); err != nil {
+			return "", fmt.Errorf("failed to create preview role: %w", err)
+		}
+	}
+
+	queries := []string{
+		fmt.Sprintf("GRANT USAGE ON SCHEMA %s TO %s", schemaIdent, roleIdent),
+		fmt.Sprintf("GRANT ALL ON ALL TABLES IN SCHEMA %s TO %s", schemaIdent, roleIdent),
+		fmt.Sprintf("GRANT ALL ON ALL SEQUENCES IN SCHEMA %s TO %s", schemaIdent, roleIdent),
+		fmt.Sprintf("REVOKE ALL ON SCHEMA public FROM %s", roleIdent),
+	}
+
+	for _, q := range queries {
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			return "", fmt.Errorf("failed to execute grant: %w", err)
+		}
 	}
 
 	return roleName, nil

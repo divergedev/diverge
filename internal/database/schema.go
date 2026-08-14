@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/jackc/pgx/v5"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -105,14 +106,16 @@ func (p *SchemaDatabaseProvider) Teardown(ctx context.Context, env *v1alpha1.Env
 	}
 	defer func() { _ = db.Close() }()
 
-	query := fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", schema)
+	schemaIdent := pgx.Identifier{schema}.Sanitize()
+	query := fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", schemaIdent)
 	_, err = db.ExecContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("failed to drop schema: %w", err)
 	}
 
 	roleName := fmt.Sprintf("diverge_preview_%s", schema)
-	query = fmt.Sprintf("DROP ROLE IF EXISTS %s", roleName)
+	roleIdent := pgx.Identifier{roleName}.Sanitize()
+	query = fmt.Sprintf("DROP ROLE IF EXISTS %s", roleIdent)
 	_, err = db.ExecContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("failed to drop role: %w", err)

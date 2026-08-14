@@ -264,6 +264,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Wrap with KEDA Deployer (detects CRD automatically)
+	deployerImpl = &deployer.KEDADeployer{
+		Inner:       deployerImpl,
+		Client:      mgr.GetClient(),
+		MinReplicas: 0,
+		MaxReplicas: 3,
+	}
+
 	// Normalize label for metrics
 	if deployProvider == "" {
 		deployProvider = "noop"
@@ -312,9 +320,10 @@ func main() {
 	}
 
 	var pgNotifierImpl notifier.PreviewGroupNotifier = &notifier.NoopPreviewGroupNotifier{}
-	if gitlabToken != "" && gitlabURL != "" {
+	switch notifierProvider {
+	case "gitlab":
 		pgNotifierImpl = notifier.NewGitLabPreviewGroupNotifier(gitlabURL, gitlabToken)
-	} else if notifierProvider == "github" && notifierToken != "" {
+	case "github":
 		pgNotifierImpl = notifier.NewGitHubPreviewGroupNotifier("", notifierToken)
 	}
 

@@ -17,59 +17,95 @@ import (
 
 func TestKNativeDeployer_Deploy(t *testing.T) {
 	ctx := context.Background()
-	clientFake := fake.NewClientBuilder().Build()
-	deployer := &KNativeDeployer{Client: clientFake}
 
-	env := &v1alpha1.Environment{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "diverge.io/v1alpha1",
-			Kind:       "Environment",
+	tests := []struct {
+		name          string
+		namespaceMode string
+		targetNS      string
+		expectOwner   bool
+	}{
+		{
+			name:          "same namespace",
+			namespaceMode: "same",
+			targetNS:      "default",
+			expectOwner:   true,
 		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-env",
-			Namespace: "default",
-			UID:       "1234",
-		},
-		Spec: v1alpha1.EnvironmentSpec{
-			Deploy: v1alpha1.EnvironmentDeploy{
-				Namespace: "same",
-			},
-			ServiceConfig: &v1alpha1.ServicePreviewConfig{
-				Image: "my-image:latest",
-			},
+		{
+			name:          "create namespace",
+			namespaceMode: "create",
+			targetNS:      "test-env",
+			expectOwner:   false,
 		},
 	}
 
-	err := deployer.Deploy(ctx, env)
-	require.NoError(t, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clientFake := fake.NewClientBuilder().Build()
+			deployer := &KNativeDeployer{Client: clientFake}
 
-	ksvc := &unstructured.Unstructured{}
-	ksvc.SetGroupVersionKind(schema.GroupVersionKind{Group: "serving.knative.dev", Version: "v1", Kind: "Service"})
-	err = clientFake.Get(ctx, client.ObjectKey{Name: "test-env", Namespace: "default"}, ksvc)
-	require.NoError(t, err)
+			env := &v1alpha1.Environment{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: "diverge.io/v1alpha1",
+					Kind:       "Environment",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-env",
+					Namespace: "default",
+					UID:       "1234",
+				},
+				Spec: v1alpha1.EnvironmentSpec{
+					Deploy: v1alpha1.EnvironmentDeploy{
+						Namespace: tt.namespaceMode,
+					},
+					ServiceConfig: &v1alpha1.ServicePreviewConfig{
+						Image: "my-image:latest",
+					},
+				},
+			}
 
-	// Test: ksvc has scale-to-zero annotation
-	annos, found, err := unstructured.NestedStringMap(ksvc.Object, "spec", "template", "metadata", "annotations")
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, "0", annos["autoscaling.knative.dev/minScale"])
+			err := deployer.Deploy(ctx, env)
+			require.NoError(t, err)
 
-	// Test: ksvc has cluster-local visibility
-	assert.Equal(t, "cluster-local", ksvc.GetAnnotations()["serving.knative.dev/visibility"])
+			expectedNS := tt.targetNS
+			if tt.namespaceMode == "create" {
+				expectedNS = env.PreviewNamespace()
+			}
 
-	// Test: OwnerReferences set correctly
-	owners := ksvc.GetOwnerReferences()
-	require.Len(t, owners, 1)
-	assert.Equal(t, "Environment", owners[0].Kind)
-	assert.Equal(t, "test-env", owners[0].Name)
+			ksvc := &unstructured.Unstructured{}
+			ksvc.SetGroupVersionKind(schema.GroupVersionKind{Group: "serving.knative.dev", Version: "v1", Kind: "Service"})
+			err = clientFake.Get(ctx, client.ObjectKey{Name: "test-env", Namespace: expectedNS}, ksvc)
+			require.NoError(t, err)
 
-	// Test: Image correctly set
-	containers, found, err := unstructured.NestedSlice(ksvc.Object, "spec", "template", "spec", "containers")
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Len(t, containers, 1)
-	container := containers[0].(map[string]interface{})
-	assert.Equal(t, "my-image:latest", container["image"])
+			// Test: ksvc has scale-to-zero annotation
+			annos, found, err := unstructured.NestedStringMap(ksvc.Object, "spec", "template", "metadata", "annotations")
+			require.NoError(t, err)
+			require.True(t, found)
+			assert.Equal(t, "0", annos["autoscaling.knative.dev/minScale"])
+
+			// Test: ksvc has cluster-local visibility
+			assert.Equal(t, "cluster-local", ksvc.GetLabels()["networking.knative.dev/visibility"])
+
+			// Test: OwnerReferences set correctly
+			owners := ksvc.GetOwnerReferences()
+			if tt.expectOwner {
+				require.Len(t, owners, 1)
+				assert.Equal(t, "Environment", owners[0].Kind)
+				assert.Equal(t, "test-env", owners[0].Name)
+			} else {
+				require.Len(t, owners, 0)
+			}
+
+			// Test: Image correctly set
+			containers, found, err := unstructured.NestedSlice(ksvc.Object, "spec", "template", "spec", "containers")
+			require.NoError(t, err)
+			require.True(t, found)
+			require.Len(t, containers, 1)
+
+			container, ok := containers[0].(map[string]interface{})
+			require.True(t, ok)
+			assert.Equal(t, "my-image:latest", container["image"])
+		})
+	}
 }
 
 func TestKNativeDeployer_Teardown(t *testing.T) {

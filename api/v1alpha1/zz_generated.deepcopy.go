@@ -484,6 +484,10 @@ func (in *PreviewGroupStatus) DeepCopyInto(out *PreviewGroupStatus) {
 		in, out := &in.ExpiresAt, &out.ExpiresAt
 		*out = (*in).DeepCopy()
 	}
+	if in.LeaseRenewedAt != nil {
+		in, out := &in.LeaseRenewedAt, &out.LeaseRenewedAt
+		*out = (*in).DeepCopy()
+	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
 		*out = make([]v1.Condition, len(*in))
