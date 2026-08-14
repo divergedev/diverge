@@ -4,7 +4,7 @@ metadata:
   name: diverge-gateway
   namespace: default
 spec:
-  gatewayClassName: k3d
+  gatewayClassName: eg
   listeners:
   - name: http
     protocol: HTTP

@@ -16,16 +16,37 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: nginx:alpine
+        image: nginxinc/nginx-unprivileged:alpine
         ports:
-        - containerPort: 80
+        - containerPort: 8080
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+          readOnlyRootFilesystem: true
         volumeMounts:
         - name: config
           mountPath: /usr/share/nginx/html
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+        - name: cache
+          mountPath: /var/cache/nginx
+        - name: run
+          mountPath: /var/run
       volumes:
       - name: config
         configMap:
           name: frontend-content
+      - name: tmp
+        emptyDir: {}
+      - name: cache
+        emptyDir: {}
+      - name: run
+        emptyDir: {}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -48,7 +69,7 @@ spec:
     app: frontend
   ports:
   - port: 80
-    targetPort: 80
+    targetPort: 8080
 ---
 # Payments service
 apiVersion: apps/v1
@@ -68,16 +89,37 @@ spec:
     spec:
       containers:
       - name: payments
-        image: nginx:alpine
+        image: nginxinc/nginx-unprivileged:alpine
         ports:
-        - containerPort: 80
+        - containerPort: 8080
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+          readOnlyRootFilesystem: true
         volumeMounts:
         - name: config
           mountPath: /usr/share/nginx/html
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+        - name: cache
+          mountPath: /var/cache/nginx
+        - name: run
+          mountPath: /var/run
       volumes:
       - name: config
         configMap:
           name: payments-content
+      - name: tmp
+        emptyDir: {}
+      - name: cache
+        emptyDir: {}
+      - name: run
+        emptyDir: {}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -100,7 +142,7 @@ spec:
     app: payments
   ports:
   - port: 80
-    targetPort: 80
+    targetPort: 8080
 ---
 # Orders service
 apiVersion: apps/v1
@@ -120,16 +162,37 @@ spec:
     spec:
       containers:
       - name: orders
-        image: nginx:alpine
+        image: nginxinc/nginx-unprivileged:alpine
         ports:
-        - containerPort: 80
+        - containerPort: 8080
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+          readOnlyRootFilesystem: true
         volumeMounts:
         - name: config
           mountPath: /usr/share/nginx/html
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+        - name: cache
+          mountPath: /var/cache/nginx
+        - name: run
+          mountPath: /var/run
       volumes:
       - name: config
         configMap:
           name: orders-content
+      - name: tmp
+        emptyDir: {}
+      - name: cache
+        emptyDir: {}
+      - name: run
+        emptyDir: {}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -152,4 +215,4 @@ spec:
     app: orders
   ports:
   - port: 80
-    targetPort: 80
+    targetPort: 8080

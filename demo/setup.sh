@@ -28,34 +28,53 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────
-step "2/6 Installing Gateway API CRDs..."
-kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml --context "k3d-${CLUSTER_NAME}" 2>/dev/null || \
-kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.1.0/standard-install.yaml --context "k3d-${CLUSTER_NAME}"
+step "2/7 Installing Gateway API + Envoy Gateway..."
+helm install eg oci://docker.io/envoyproxy/gateway-helm \
+  --version v1.2.6 \
+  --namespace envoy-gateway-system --create-namespace \
+  --kube-context "k3d-${CLUSTER_NAME}" \
+  --wait --timeout 120s
+echo "  Waiting for Envoy Gateway to be ready..."
+kubectl wait --for=condition=available deployment/envoy-gateway \
+  --namespace envoy-gateway-system --timeout=60s --context "k3d-${CLUSTER_NAME}" 2>/dev/null || true
 
 # ─────────────────────────────────────────────────────────
-step "3/6 Installing Diverge CRDs..."
+step "3/7 Installing Diverge CRDs..."
 kubectl apply -f "${ROOT_DIR}/config/crd/bases/" --context "k3d-${CLUSTER_NAME}"
 
 # ─────────────────────────────────────────────────────────
-step "4/6 Building Diverge controller image..."
+step "4/7 Building Diverge controller image..."
 cd "$ROOT_DIR"
 docker build -t "$IMG" . --quiet
 k3d image import "$IMG" -c "$CLUSTER_NAME"
 
 # ─────────────────────────────────────────────────────────
-step "5/6 Deploying Diverge controller + proxy..."
+step "5/7 Deploying Diverge controller + proxy..."
+
+# Create self-signed webhook TLS secret for the demo
+openssl req -x509 -newkey rsa:2048 -keyout /tmp/diverge-tls.key -out /tmp/diverge-tls.crt \
+  -days 1 -nodes -subj "/CN=diverge-webhook.default.svc" 2>/dev/null
+kubectl create secret tls diverge-webhook-tls \
+  --cert=/tmp/diverge-tls.crt --key=/tmp/diverge-tls.key \
+  --context "k3d-${CLUSTER_NAME}" 2>/dev/null || true
+rm -f /tmp/diverge-tls.key /tmp/diverge-tls.crt
+
 helm upgrade --install diverge "${ROOT_DIR}/charts/diverge" \
   --set image.repository=divergedev/diverge \
   --set image.tag=demo \
   --set image.pullPolicy=Never \
   --set routingProvider=composite \
   --kube-context "k3d-${CLUSTER_NAME}" \
-  --wait --timeout 60s
+  --wait --timeout 120s
 
 # ─────────────────────────────────────────────────────────
-step "6/6 Deploying sample microservices..."
+step "6/7 Deploying sample microservices..."
 kubectl apply -f "${SCRIPT_DIR}/manifests/services.yaml" --context "k3d-${CLUSTER_NAME}"
 kubectl apply -f "${SCRIPT_DIR}/manifests/gateway.yaml" --context "k3d-${CLUSTER_NAME}"
+
+step "7/7 Waiting for Gateway to be programmed..."
+kubectl wait --for=condition=programmed gateway/diverge-gateway \
+  --timeout=60s --context "k3d-${CLUSTER_NAME}" 2>/dev/null || true
 
 # Wait for pods
 echo -e "  ${YELLOW}Waiting for services to be ready...${NC}"

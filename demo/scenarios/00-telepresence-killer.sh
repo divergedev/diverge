@@ -192,15 +192,17 @@ echo -e "           1. HTTPRoute/GRPCRoute deleted (stop routing)"
 echo -e "           2. EndpointSlice deleted (detach dev)"
 echo -e "           3. PreviewGroup → Abandoned → garbage collected"
 echo ""
-echo -e "  ${YELLOW}▸ Simulating auto-cleanup (deleting Bob's environment)...${NC}"
+echo -e "  ${YELLOW}▸ Demonstrating controller-driven cleanup (removing Bob's environment)...${NC}"
+echo -e "  ${DIM}In production, this happens automatically after 90s without heartbeat.${NC}"
+echo -e "  ${DIM}Here we trigger it manually to show the cleanup flow:${NC}"
 kubectl delete environment bob-mr-99 --context "$CTX" 2>/dev/null || true
 sleep 2
 echo ""
-echo -e "  ${CYAN}Remaining environments:${NC}"
+echo -e "  ${CYAN}Remaining environments (Bob's is gone):${NC}"
 kubectl get environments --context "$CTX" 2>/dev/null || true
 echo ""
-echo -e "  ${CYAN}Bob's routes cleaned up:${NC}"
-kubectl get httproute -l diverge.io/environment=bob-mr-99 --context "$CTX" 2>/dev/null || echo "  None — auto-cleaned!"
+echo -e "  ${CYAN}Bob's routes auto-cleaned by controller:${NC}"
+kubectl get httproute -l diverge.io/environment=bob-mr-99 --context "$CTX" 2>/dev/null || echo "  None — controller cleaned up routes + EndpointSlices!"
 echo ""
 echo -e "  ${GREEN}✓ No stale resources. Ever.${NC}"
 

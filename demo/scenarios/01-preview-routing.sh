@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+CTX="k3d-diverge-demo"
 echo "═══════════════════════════════════════════"
 echo "  Scenario 1: Preview Environment Routing"
 echo "═══════════════════════════════════════════"
@@ -7,7 +8,7 @@ echo ""
 
 # Create a preview environment
 echo "📝 Creating preview environment 'mr-42'..."
-kubectl apply -f - <<EOF
+kubectl apply --context "$CTX" -f - <<EOF
 apiVersion: diverge.io/v1alpha1
 kind: Environment
 metadata:
@@ -40,7 +41,7 @@ curl -s -H 'x-diverge-env: mr-42' http://localhost:8080/ 2>/dev/null || echo "  
 
 echo ""
 echo "📊 HTTPRoute created:"
-kubectl get httproute -l diverge.io/environment=mr-42 -o wide 2>/dev/null || echo "  (HTTPRoute visible once controller runs)"
+kubectl get httproute -l diverge.io/environment=mr-42 --context "$CTX" -o wide 2>/dev/null || echo "  (HTTPRoute visible once controller runs)"
 
 echo ""
 echo "✅ Scenario 1 complete!"
