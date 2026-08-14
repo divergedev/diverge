@@ -54,25 +54,41 @@ spec:
                   connectionRef:
                     type: string
                   migrationJob:
+                    description: MigrationJobSpec configures a Kubernetes Job for
+                      database migrations.
                     properties:
                       args:
+                        description: Args specifies the arguments to pass to the migration
+                          job container.
                         items:
                           type: string
                         type: array
                       envFrom:
+                        description: EnvFrom specifies environment variables to inject
+                          from Secrets.
                         items:
+                          description: SecretRef references a specific key within
+                            a Kubernetes Secret.
                           properties:
                             key:
+                              description: Key is the specific key in the Secret to
+                                reference.
                               type: string
                             name:
+                              description: Name is the name of the Secret.
                               type: string
                             namespace:
+                              description: Namespace is the namespace of the Secret.
                               type: string
                           type: object
                         type: array
                       image:
+                        description: Image is the container image to use for the migration
+                          job.
                         type: string
                       timeoutSeconds:
+                        description: TimeoutSeconds is the maximum duration the migration
+                          job can run before being terminated.
                         format: int32
                         type: integer
                     type: object
@@ -140,6 +156,8 @@ spec:
               routing:
                 description: EnvironmentRouting defines the routing configuration
                 properties:
+                  devIP:
+                    type: string
                   externalUrl:
                     type: string
                   headerKey:
@@ -169,6 +187,10 @@ spec:
                     description: |-
                       DatabaseEnvKey is the environment variable name for the database connection URL.
                       Defaults to DATABASE_URL.
+                    type: string
+                  endpoint:
+                    description: Endpoint is the external endpoint for mode=local
+                      (e.g. Tailscale IP:port).
                     type: string
                   env:
                     description: Env is additional environment variables for the preview
@@ -208,14 +230,43 @@ spec:
                       If empty, defaults to "diverge-gateway".
                     type: string
                   pathPrefix:
-                    description: |-
-                      PathPrefix scopes the preview HTTPRoute to a specific path prefix (e.g., "/api/payments").
-                      Without this, the route matches all paths which can shadow the baseline.
+                    description: PathPrefix scopes HTTPRoute matching to a specific
+                      path prefix (e.g., "/api/payments") to avoid shadowing the baseline.
+                    pattern: ^/.*$
                     type: string
                   port:
                     description: Port is the container port the service listens on.
                     format: int32
                     type: integer
+                  protocol:
+                    default: http
+                    description: |-
+                      Protocol specifies the service protocol for routing (http or grpc).
+                      When set to "grpc", the router generates a GRPCRoute instead of HTTPRoute.
+                    enum:
+                    - http
+                    - grpc
+                    type: string
+                  resources:
+                    description: Resources overrides the resource requests/limits
+                      for the preview pod.
+                    properties:
+                      cpuLimit:
+                        description: CPULimit is the CPU limit for the preview pod.
+                        type: string
+                      cpuRequest:
+                        description: CPURequest is the CPU request for the preview
+                          pod (e.g. "100m").
+                        type: string
+                      memoryLimit:
+                        description: MemoryLimit is the memory limit for the preview
+                          pod.
+                        type: string
+                      memoryRequest:
+                        description: MemoryRequest is the memory request for the preview
+                          pod (e.g. "256Mi").
+                        type: string
+                    type: object
                   serviceName:
                     description: ServiceName is the Kubernetes Service name to shadow.
                     type: string

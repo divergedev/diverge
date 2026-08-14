@@ -7,7 +7,7 @@ REGION="${GCP_REGION:-us-central1}"
 CLUSTER_NAME="${GKE_CLUSTER:-diverge-demo}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-IMG="us-docker.pkg.dev/${PROJECT}/diverge/controller:demo"
+IMG="us-docker.pkg.dev/${PROJECT}/diverge/controller:demo-amd64"
 
 BOLD='\033[1m'
 GREEN='\033[0;32m'
@@ -76,7 +76,7 @@ gcloud artifacts repositories create diverge \
 gcloud auth configure-docker us-docker.pkg.dev --quiet
 
 cd "$ROOT_DIR"
-docker buildx build --platform linux/amd64 -t "$IMG" --push .
+docker buildx build --platform linux/amd64 --provenance=false -t "$IMG" --push .
 
 # 5. Deploy controller
 step "5/7 Deploying Diverge controller..."
@@ -91,13 +91,13 @@ kubectl create secret tls diverge-webhook-tls \
 
 helm upgrade --install diverge "${ROOT_DIR}/charts/diverge" \
   --set image.repository="us-docker.pkg.dev/${PROJECT}/diverge/controller" \
-  --set image.tag=demo \
+  --set image.tag=demo-amd64 \
   --set image.pullPolicy=Always \
   --set routingProvider=composite \
   --kube-context "$CTX" \
   --wait --timeout 300s
 
-# 6. Deploy sample services
+# 6. Deploy sample services + gateway
 step "6/7 Deploying sample microservices..."
 kubectl apply -f "${SCRIPT_DIR}/manifests/services.yaml" --context "$CTX"
 
@@ -114,6 +114,19 @@ spec:
   - name: http
     protocol: HTTP
     port: 80
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: default-frontend
+  namespace: default
+spec:
+  parentRefs:
+  - name: diverge-gateway
+  rules:
+  - backendRefs:
+    - name: frontend
+      port: 80
 EOF
 
 # 7. Wait for everything
