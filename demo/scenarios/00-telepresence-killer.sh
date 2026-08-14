@@ -71,10 +71,11 @@ spec:
   deploy:
     namespace: same
     changedServices:
-    - name: payments
+    - payments
   serviceConfig:
     image: nginx:alpine
     serviceName: payments
+    port: 8080
 EOF
 
 wait_for_route "alice-mr-42"
@@ -128,10 +129,11 @@ spec:
   deploy:
     namespace: same
     changedServices:
-    - name: payments
+    - payments
   serviceConfig:
     image: nginx:alpine
     serviceName: payments
+    port: 8080
 EOF
 
 wait_for_route "bob-mr-99"

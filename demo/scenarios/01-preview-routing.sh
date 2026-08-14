@@ -22,10 +22,11 @@ spec:
   deploy:
     namespace: same
     changedServices:
-    - name: payments
+    - payments
   serviceConfig:
     image: nginx:alpine
     serviceName: payments
+    port: 8080
 EOF
 
 echo ""
