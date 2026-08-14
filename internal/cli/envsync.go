@@ -59,6 +59,11 @@ func isKubeInjected(name string) bool {
 	return false
 }
 
+type envEntry struct {
+	Value  string
+	Source string
+}
+
 // syncEnvOptions configures the env var sync behavior.
 type syncEnvOptions struct {
 	// Namespace is the K8s namespace to search for the baseline pod.
@@ -131,7 +136,7 @@ func syncBaselineEnv(ctx context.Context, clientset kubernetes.Interface, opts s
 	}
 
 	container := pod.Spec.Containers[0]
-	envMap := make(map[string]string)
+	envMap := make(map[string]envEntry)
 
 	for _, env := range container.Env {
 		if isKubeInjected(env.Name) {
@@ -140,18 +145,18 @@ func syncBaselineEnv(ctx context.Context, clientset kubernetes.Interface, opts s
 		// Skip vars sourced from secrets/configmaps (value will be empty,
 		// and we can't resolve them from here without additional permissions)
 		if env.ValueFrom != nil {
-			envMap[env.Name] = fmt.Sprintf("# sourced from %s", describeValueSource(env.ValueFrom))
+			envMap[env.Name] = envEntry{Source: describeValueSource(env.ValueFrom)}
 			continue
 		}
-		envMap[env.Name] = env.Value
+		envMap[env.Name] = envEntry{Value: env.Value}
 	}
 
 	// Handle EnvFrom sources (ConfigMaps and Secrets mounted as env bundles)
 	for _, envFrom := range container.EnvFrom {
 		if envFrom.ConfigMapRef != nil {
-			envMap[fmt.Sprintf("# [envFrom] configmap:%s", envFrom.ConfigMapRef.Name)] = ""
+			envMap[fmt.Sprintf("# [envFrom] configmap:%s", envFrom.ConfigMapRef.Name)] = envEntry{}
 		} else if envFrom.SecretRef != nil {
-			envMap[fmt.Sprintf("# [envFrom] secret:%s", envFrom.SecretRef.Name)] = ""
+			envMap[fmt.Sprintf("# [envFrom] secret:%s", envFrom.SecretRef.Name)] = envEntry{}
 		}
 	}
 
@@ -170,13 +175,17 @@ func syncBaselineEnv(ctx context.Context, clientset kubernetes.Interface, opts s
 
 	written := 0
 	for _, k := range keys {
-		v := envMap[k]
+		entry := envMap[k]
 		if strings.HasPrefix(k, "# [envFrom]") {
 			fmt.Fprintf(&sb, "%s\n", k)
-		} else if strings.HasPrefix(v, "# sourced from") {
-			fmt.Fprintf(&sb, "# %s=%s\n", k, v)
+		} else if entry.Source != "" {
+			fmt.Fprintf(&sb, "# %s=# sourced from %s\n", k, entry.Source)
 		} else {
-			fmt.Fprintf(&sb, "%s=%s\n", k, v)
+			if strings.Contains(entry.Value, "\n") {
+				fmt.Fprintf(&sb, "%s=%q\n", k, entry.Value)
+			} else {
+				fmt.Fprintf(&sb, "%s=%s\n", k, entry.Value)
+			}
 			written++
 		}
 	}

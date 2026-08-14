@@ -60,9 +60,7 @@ func validEnvValue(ht *hegel.T) string {
 func TestProperty_isKubeInjected_NeverFiltersAppEnvVars(t *testing.T) {
 	hegel.Test(t, func(ht *hegel.T) {
 		name := validEnvVarName(ht)
-		if isKubeInjected(name) {
-			ht.Fatalf("isKubeInjected(%q) = true, but this is an app env var", name)
-		}
+		require.False(ht, isKubeInjected(name), "isKubeInjected(%q) = true, but this is an app env var", name)
 	})
 }
 
@@ -126,12 +124,8 @@ func TestProperty_EnvDivergeRoundTrip(t *testing.T) {
 		// Every expected env var should appear in the parsed output
 		for name, value := range expected {
 			got, ok := parsed[name]
-			if !ok {
-				ht.Fatalf("env var %q not found in .env.diverge", name)
-			}
-			if got != value {
-				ht.Fatalf("env var %q: got %q, want %q", name, got, value)
-			}
+			require.True(ht, ok, "env var %q not found in .env.diverge", name)
+			require.Equal(ht, value, got, "env var %q: got %q, want %q", name, got, value)
 		}
 	})
 }
@@ -167,8 +161,40 @@ func TestProperty_EnvDivergeFileAlwaysCreated(t *testing.T) {
 
 		// File must always exist after sync (even if pod has no env vars)
 		_, err = os.Stat(outPath)
-		if os.IsNotExist(err) {
-			ht.Fatalf(".env.diverge was not created for service %q", svcName)
-		}
+		require.NoError(ht, err)
 	})
+}
+
+func TestEnvSync_NewlineValues(t *testing.T) {
+	svcName := "test-svc"
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      svcName + "-abc",
+			Namespace: "default",
+			Labels:    map[string]string{"app": svcName},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{Name: svcName, Image: svcName + ":latest", Env: []corev1.EnvVar{
+					{Name: "MULTILINE", Value: "line1\nline2"},
+				}},
+			},
+		},
+	}
+
+	clientset := fake.NewSimpleClientset(pod)
+	tmpDir := t.TempDir()
+	outPath := filepath.Join(tmpDir, ".env.diverge")
+
+	_, err := syncBaselineEnv(context.Background(), clientset, syncEnvOptions{
+		Namespace:   "default",
+		ServiceName: svcName,
+		OutputPath:  outPath,
+	})
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(outPath)
+	require.NoError(t, err)
+	require.Contains(t, string(content), "MULTILINE=\"line1\\nline2\"\n")
 }
