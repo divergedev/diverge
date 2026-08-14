@@ -17,14 +17,36 @@ NC='\033[0m'
 
 step() { echo -e "\n${BOLD}${CYAN}▸ $1${NC}"; }
 
+# TLS temp directory with cleanup trap
+TLS_DIR=$(mktemp -d)
+trap 'rm -rf "$TLS_DIR"' EXIT
+
+# 0. Enable required APIs (opt-in)
+if [[ "${ENABLE_APIS:-}" == "1" ]]; then
+  step "0/7 Enabling required GCP APIs..."
+  gcloud services enable \
+    container.googleapis.com \
+    artifactregistry.googleapis.com \
+    --project="$PROJECT"
+fi
+
 # 1. Create GKE Autopilot cluster
 step "1/7 Creating GKE Autopilot cluster '${CLUSTER_NAME}'..."
 if gcloud container clusters describe "$CLUSTER_NAME" --region="$REGION" --project="$PROJECT" &>/dev/null; then
   echo "  Cluster already exists, reusing."
 else
+  # Ensure a VPC network exists (some projects have no default network)
+  NETWORK="${GKE_NETWORK:-diverge-demo}"
+  if ! gcloud compute networks describe "$NETWORK" --project="$PROJECT" &>/dev/null; then
+    echo "  Creating VPC network '${NETWORK}'..."
+    gcloud compute networks create "$NETWORK" \
+      --subnet-mode=auto --project="$PROJECT"
+  fi
+
   gcloud container clusters create-auto "$CLUSTER_NAME" \
     --region="$REGION" \
     --project="$PROJECT" \
+    --network="$NETWORK" \
     --release-channel=rapid
 fi
 
@@ -35,8 +57,6 @@ CTX="gke_${PROJECT}_${REGION}_${CLUSTER_NAME}"
 
 # 2. Enable Gateway API (GKE has built-in GatewayClass)
 step "2/7 Enabling Gateway API on GKE..."
-# GKE Autopilot on rapid channel has Gateway API built-in
-# Verify GatewayClass exists
 kubectl get gatewayclass --context "$CTX" 2>/dev/null || \
   echo "  Gateway API CRDs will be available shortly..."
 
@@ -52,20 +72,22 @@ gcloud artifacts repositories describe diverge \
 gcloud artifacts repositories create diverge \
   --repository-format=docker --location=us --project="$PROJECT"
 
+# Configure Docker auth for Artifact Registry
+gcloud auth configure-docker us-docker.pkg.dev --quiet
+
 cd "$ROOT_DIR"
-docker build -t "$IMG" . --quiet
-docker push "$IMG"
+docker buildx build --platform linux/amd64 -t "$IMG" --push .
 
 # 5. Deploy controller
 step "5/7 Deploying Diverge controller..."
 
-# Create webhook TLS secret
-openssl req -x509 -newkey rsa:2048 -keyout /tmp/diverge-tls.key -out /tmp/diverge-tls.crt \
+# Create self-signed webhook TLS secret
+openssl req -x509 -newkey rsa:2048 \
+  -keyout "${TLS_DIR}/tls.key" -out "${TLS_DIR}/tls.crt" \
   -days 1 -nodes -subj "/CN=diverge-webhook.default.svc" 2>/dev/null
 kubectl create secret tls diverge-webhook-tls \
-  --cert=/tmp/diverge-tls.crt --key=/tmp/diverge-tls.key \
+  --cert="${TLS_DIR}/tls.crt" --key="${TLS_DIR}/tls.key" \
   --context "$CTX" 2>/dev/null || true
-rm -f /tmp/diverge-tls.key /tmp/diverge-tls.crt
 
 helm upgrade --install diverge "${ROOT_DIR}/charts/diverge" \
   --set image.repository="us-docker.pkg.dev/${PROJECT}/diverge/controller" \
@@ -73,7 +95,7 @@ helm upgrade --install diverge "${ROOT_DIR}/charts/diverge" \
   --set image.pullPolicy=Always \
   --set routingProvider=composite \
   --kube-context "$CTX" \
-  --wait --timeout 180s
+  --wait --timeout 300s
 
 # 6. Deploy sample services
 step "6/7 Deploying sample microservices..."
@@ -97,33 +119,29 @@ EOF
 # 7. Wait for everything
 step "7/7 Waiting for Gateway + services..."
 kubectl wait --for=condition=programmed gateway/diverge-gateway \
-  --timeout=120s --context "$CTX" 2>/dev/null || true
+  --timeout=180s --context "$CTX"
 kubectl wait --for=condition=available deployment/frontend deployment/payments deployment/orders \
-  --timeout=120s --context "$CTX" 2>/dev/null || true
+  --timeout=120s --context "$CTX"
 
 # Get external IP
 EXTERNAL_IP=$(kubectl get gateway diverge-gateway --context "$CTX" \
   -o jsonpath='{.status.addresses[0].value}' 2>/dev/null || echo "pending")
 
 echo ""
-echo -e "${BOLD}${GREEN}╔═══════════════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}${GREEN}║  🔀 Diverge GKE Demo Ready!                      ║${NC}"
-echo -e "${BOLD}${GREEN}╠═══════════════════════════════════════════════════╣${NC}"
-echo -e "${BOLD}${GREEN}║                                                   ║${NC}"
-echo -e "${BOLD}${GREEN}║  make demo-gke-killer    # The headline demo      ║${NC}"
-echo -e "${BOLD}${GREEN}║  make demo-gke-teardown  # Destroy GKE cluster    ║${NC}"
-echo -e "${BOLD}${GREEN}║                                                   ║${NC}"
-echo -e "${BOLD}${GREEN}║  External IP: ${EXTERNAL_IP}${NC}"
-echo -e "${BOLD}${GREEN}╚═══════════════════════════════════════════════════╝${NC}"
+echo -e "${BOLD}${GREEN}╔═══════════════════════════════════════════════════════╗${NC}"
+echo -e "${BOLD}${GREEN}║  🔀 Diverge GKE Demo Ready!                          ║${NC}"
+echo -e "${BOLD}${GREEN}╠═══════════════════════════════════════════════════════╣${NC}"
+echo -e "${BOLD}${GREEN}║                                                       ║${NC}"
+echo -e "${BOLD}${GREEN}║  DIVERGE_DEMO_CTX=${CTX}${NC}"
+echo -e "${BOLD}${GREEN}║  DIVERGE_DEMO_URL=http://${EXTERNAL_IP}${NC}"
+echo -e "${BOLD}${GREEN}║                                                       ║${NC}"
+echo -e "${BOLD}${GREEN}║  Run:                                                 ║${NC}"
+echo -e "${BOLD}${GREEN}║    make demo-gke-killer    # The headline demo        ║${NC}"
+echo -e "${BOLD}${GREEN}║    make demo-gke-teardown  # Destroy GKE cluster      ║${NC}"
+echo -e "${BOLD}${GREEN}╚═══════════════════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "${CYAN}Context: ${CTX}${NC}"
 echo -e "${CYAN}Controller:${NC}"
 kubectl get pods -l app.kubernetes.io/name=diverge --context "$CTX" 2>/dev/null || true
 echo ""
 echo -e "${CYAN}Services:${NC}"
 kubectl get pods -l "app in (frontend,payments,orders)" --context "$CTX" 2>/dev/null || true
-
-# Export context for scenarios
-echo ""
-echo -e "${YELLOW}Run scenarios with:${NC}"
-echo "  DIVERGE_DEMO_CTX=${CTX} make demo-killer"

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 CTX="${DIVERGE_DEMO_CTX:-k3d-diverge-demo}"
+DEMO_URL="${DIVERGE_DEMO_URL:-http://localhost:8080}"
 echo "═══════════════════════════════════════════"
 echo "  Scenario 1: Preview Environment Routing"
 echo "═══════════════════════════════════════════"
@@ -33,11 +34,11 @@ sleep 3
 
 echo ""
 echo "🔍 Production traffic (no header):"
-curl -s http://localhost:8080/ 2>/dev/null || echo "  → Routes to production frontend"
+curl -s "${DEMO_URL}/" 2>/dev/null || echo "  → Routes to production frontend"
 
 echo ""
 echo "🔀 Preview traffic (with header):"
-curl -s -H 'x-diverge-env: mr-42' http://localhost:8080/ 2>/dev/null || echo "  → Routes to preview payments service"
+curl -s -H 'x-diverge-env: mr-42' "${DEMO_URL}/" 2>/dev/null || echo "  → Routes to preview payments service"
 
 echo ""
 echo "📊 HTTPRoute created:"

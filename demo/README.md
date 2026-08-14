@@ -21,9 +21,9 @@ Deploy to a real GKE Autopilot cluster:
 
 ```bash
 export GCP_PROJECT=my-project-id
-make demo-gke              # Create cluster + deploy (~5 min)
-DIVERGE_DEMO_CTX=gke_${GCP_PROJECT}_us-central1_diverge-demo make demo-killer
-make demo-gke-teardown     # Destroy cluster
+ENABLE_APIS=1 make demo-gke          # Create cluster + deploy (~5 min, first run)
+GCP_PROJECT=my-project-id make demo-gke-killer    # Run headline demo
+make demo-gke-teardown               # Destroy cluster
 ```
 
 ## What It Shows
