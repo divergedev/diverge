@@ -14,6 +14,7 @@ import (
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 )
@@ -343,4 +344,79 @@ func TestRunDev_ServiceNameFromConfig(t *testing.T) {
 
 	cancel()
 	<-errCh
+}
+
+func TestRunDev_CleansUpOnSignal(t *testing.T) {
+	detector := fakeDetector{
+		tailscaleIP: "100.100.100.100",
+		serviceName: "web",
+	}
+	app, c, cmd, cancel := runDevTestSetup(t, detector)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runDev(app, "", 0, "", cmd, WithEnvironmentDetector(detector))
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	var pg divergeiov1alpha1.PreviewGroup
+	err := c.Get(context.Background(), types.NamespacedName{Name: "dev-dev-web"}, &pg)
+	require.NoError(t, err)
+
+	cancel()
+	err = <-errCh
+	require.NoError(t, err)
+
+	err = c.Get(context.Background(), types.NamespacedName{Name: "dev-dev-web"}, &pg)
+	require.Error(t, err)
+}
+
+func TestRunDev_CleanupTimeout(t *testing.T) {
+	detector := fakeDetector{
+		tailscaleIP: "100.100.100.100",
+		serviceName: "web",
+	}
+
+	s := runtime.NewScheme()
+	_ = divergeiov1alpha1.AddToScheme(s)
+
+	c := fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(interceptor.Funcs{
+		Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	}).Build()
+
+	app := &App{
+		Client:    c,
+		Clientset: k8sfake.NewSimpleClientset(),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cmd := &cobra.Command{}
+	cmd.SetContext(ctx)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runDev(app, "", 0, "", cmd, WithEnvironmentDetector(detector))
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	cancel()
+
+	doneCh := make(chan struct{})
+	go func() {
+		err := <-errCh
+		require.NoError(t, err)
+		close(doneCh)
+	}()
+
+	select {
+	case <-doneCh:
+		// success
+	case <-time.After(10 * time.Second):
+		t.Fatal("cleanup timed out, likely missing context with timeout")
+	}
 }
