@@ -11,6 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
@@ -529,6 +530,54 @@ func (r *EnvironmentReconciler) ensureNamespace(ctx context.Context, env *diverg
 		})
 		if err != nil {
 			return fmt.Errorf("failed to create or update namespace: %w", err)
+		}
+
+		limitRange := &corev1.LimitRange{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "diverge-default-limits",
+				Namespace: env.PreviewNamespace(),
+				Labels: map[string]string{
+					"diverge.io/managed-by": "diverge",
+				},
+			},
+			Spec: corev1.LimitRangeSpec{
+				Limits: []corev1.LimitRangeItem{{
+					Type: corev1.LimitTypeContainer,
+					Default: corev1.ResourceList{
+						corev1.ResourceMemory: resource.MustParse("256Mi"),
+						corev1.ResourceCPU:    resource.MustParse("250m"),
+					},
+					DefaultRequest: corev1.ResourceList{
+						corev1.ResourceMemory: resource.MustParse("128Mi"),
+						corev1.ResourceCPU:    resource.MustParse("100m"),
+					},
+				}},
+			},
+		}
+		if err := r.Create(ctx, limitRange); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("failed to create limit range: %w", err)
+		}
+
+		quota := &corev1.ResourceQuota{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "diverge-preview-quota",
+				Namespace: env.PreviewNamespace(),
+				Labels: map[string]string{
+					"diverge.io/managed-by": "diverge",
+				},
+			},
+			Spec: corev1.ResourceQuotaSpec{
+				Hard: corev1.ResourceList{
+					corev1.ResourcePods:           resource.MustParse("5"),
+					corev1.ResourceRequestsMemory: resource.MustParse("1Gi"),
+					corev1.ResourceRequestsCPU:    resource.MustParse("1"),
+					corev1.ResourceLimitsMemory:   resource.MustParse("2Gi"),
+					corev1.ResourceLimitsCPU:      resource.MustParse("2"),
+				},
+			},
+		}
+		if err := r.Create(ctx, quota); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("failed to create resource quota: %w", err)
 		}
 	}
 	// "same" mode: namespace already exists (it's where the CR lives), nothing to do
