@@ -178,6 +178,7 @@ func TestEnvSync_NewlineValues(t *testing.T) {
 			Containers: []corev1.Container{
 				{Name: svcName, Image: svcName + ":latest", Env: []corev1.EnvVar{
 					{Name: "MULTILINE", Value: "line1\nline2"},
+					{Name: "HAS_HASH", Value: "# sourced from application"},
 				}},
 			},
 		},
@@ -197,4 +198,5 @@ func TestEnvSync_NewlineValues(t *testing.T) {
 	content, err := os.ReadFile(outPath)
 	require.NoError(t, err)
 	require.Contains(t, string(content), "MULTILINE=\"line1\\nline2\"\n")
+	require.Contains(t, string(content), "HAS_HASH=# sourced from application\n")
 }

@@ -35,6 +35,11 @@ type EnvironmentDetector interface {
 
 type DefaultEnvironmentDetector struct{}
 
+var tailscaleCGNAT = func() *net.IPNet {
+	_, n, _ := net.ParseCIDR("100.64.0.0/10")
+	return n
+}()
+
 func (d *DefaultEnvironmentDetector) DetectTailscaleIP() (string, error) {
 	interfaces, err := net.Interfaces()
 	if err != nil {
@@ -60,7 +65,9 @@ func (d *DefaultEnvironmentDetector) DetectTailscaleIP() (string, error) {
 				}
 				ip = ip.To4()
 				if ip != nil {
-					return ip.String(), nil
+					if tailscaleCGNAT.Contains(ip) {
+						return ip.String(), nil
+					}
 				}
 			}
 		}

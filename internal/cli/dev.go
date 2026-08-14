@@ -65,10 +65,12 @@ func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, c
 	if serviceName == "" {
 		s, err := detector.DetectServiceName()
 		if err != nil {
-			slog.Debug("failed to detect service name", "error", err)
-		} else {
-			serviceName = s
+			return fmt.Errorf("failed to detect service name: %w. Use --service flag", err)
 		}
+		serviceName = s
+	}
+	if serviceName == "" {
+		return fmt.Errorf("could not determine service name: use --service flag")
 	}
 
 	// 2. Auto-detect endpoint
@@ -160,8 +162,11 @@ func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, c
 		fmt.Printf("\nCleaning up PreviewGroup %q...\n", groupName)
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = c.Delete(cleanupCtx, pg)
-		fmt.Println("Goodbye!")
+		if err := c.Delete(cleanupCtx, pg); err != nil {
+			slog.Error("failed to clean up PreviewGroup", "name", groupName, "error", err)
+		} else {
+			fmt.Println("Goodbye!")
+		}
 	}()
 
 	// 7. Print status
@@ -194,6 +199,9 @@ func newPreviewInterceptCmd(app *App) *cobra.Command {
 }
 
 func runPreviewIntercept(app *App, service, groupName, endpoint string, ctx context.Context) error {
+	if service == "" {
+		return fmt.Errorf("service name is required")
+	}
 	c, _, err := app.KubeClient()
 	if err != nil {
 		return err

@@ -167,7 +167,10 @@ func withApplyMock() interceptor.Funcs {
 				clone := obj.DeepCopyObject().(client.Object)
 				err := c.Get(ctx, client.ObjectKeyFromObject(obj), clone)
 				if err != nil {
-					return c.Create(ctx, obj)
+					if errors.IsNotFound(err) {
+						return c.Create(ctx, obj)
+					}
+					return err
 				}
 				obj.SetResourceVersion(clone.GetResourceVersion())
 				return c.Update(ctx, obj)

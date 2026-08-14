@@ -47,9 +47,16 @@ func (d *LocalDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) e
 		return fmt.Errorf("%w: %v", ErrInvalidEndpoint, err)
 	}
 
+	if net.ParseIP(host).To4() == nil {
+		return fmt.Errorf("%w: invalid IPv4 address %q", ErrInvalidEndpoint, host)
+	}
+
 	portNum, err := strconv.ParseInt(portStr, 10, 32)
 	if err != nil {
-		return fmt.Errorf("invalid port %q: %w", portStr, err)
+		return fmt.Errorf("%w: invalid port %q: %v", ErrInvalidEndpoint, portStr, err)
+	}
+	if portNum < 1 || portNum > 65535 {
+		return fmt.Errorf("%w: port must be between 1 and 65535", ErrInvalidEndpoint)
 	}
 	port := int32(portNum)
 
