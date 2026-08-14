@@ -9,7 +9,8 @@ YELLOW='\033[0;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-CTX="k3d-diverge-demo"
+CTX="${DIVERGE_DEMO_CTX:-k3d-diverge-demo}"
+DEMO_URL="${DIVERGE_DEMO_URL:-http://localhost:8080}"
 
 pause() {
   echo ""
@@ -70,10 +71,11 @@ spec:
   deploy:
     namespace: same
     changedServices:
-    - name: payments
+    - payments
   serviceConfig:
     image: nginx:alpine
     serviceName: payments
+    port: 8080
 EOF
 
 wait_for_route "alice-mr-42"
@@ -88,13 +90,13 @@ echo -e "${BOLD}  ② LIVE HEADER-BASED ROUTING${NC}"
 echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 echo -e "  ${CYAN}Production traffic (no header):${NC}"
-echo -e "  ${DIM}\$ curl http://localhost:8080/${NC}"
-PROD_RESPONSE=$(curl -s http://localhost:8080/ 2>/dev/null || echo "(gateway not ready)")
+echo -e "  ${DIM}\$ curl ${DEMO_URL}/${NC}"
+PROD_RESPONSE=$(curl -s "${DEMO_URL}/" 2>/dev/null || echo "(gateway not ready)")
 echo -e "  ${GREEN}→ ${PROD_RESPONSE}${NC}"
 echo ""
 echo -e "  ${CYAN}Preview traffic (with header):${NC}"
-echo -e "  ${DIM}\$ curl -H 'x-diverge-env: alice-mr-42' http://localhost:8080/${NC}"
-PREVIEW_RESPONSE=$(curl -s -H 'x-diverge-env: alice-mr-42' http://localhost:8080/ 2>/dev/null || echo "(preview routing)")
+echo -e "  ${DIM}\$ curl -H 'x-diverge-env: alice-mr-42' ${DEMO_URL}/${NC}"
+PREVIEW_RESPONSE=$(curl -s -H 'x-diverge-env: alice-mr-42' "${DEMO_URL}/" 2>/dev/null || echo "(preview routing)")
 echo -e "  ${GREEN}→ ${PREVIEW_RESPONSE}${NC}"
 echo ""
 echo -e "  ${CYAN}HTTPRoutes created by controller:${NC}"
@@ -127,10 +129,11 @@ spec:
   deploy:
     namespace: same
     changedServices:
-    - name: payments
+    - payments
   serviceConfig:
     image: nginx:alpine
     serviceName: payments
+    port: 8080
 EOF
 
 wait_for_route "bob-mr-99"

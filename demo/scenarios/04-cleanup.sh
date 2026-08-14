@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-CTX="k3d-diverge-demo"
+CTX="${DIVERGE_DEMO_CTX:-k3d-diverge-demo}"
 echo "═══════════════════════════════════════════"
 echo "  Scenario 4: Cleanup & Auto-Cleanup on Disconnect"
 echo "═══════════════════════════════════════════"
