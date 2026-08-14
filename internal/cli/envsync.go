@@ -1,0 +1,207 @@
+package cli
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"sort"
+	"strings"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/client-go/kubernetes"
+)
+
+// ErrBaselinePodNotFound is returned when no baseline pod can be found for the
+// given service name and namespace.
+var ErrBaselinePodNotFound = errors.New("no baseline pod found")
+
+// ErrInvalidServiceName is returned when the service name is not a valid
+// Kubernetes label value.
+var ErrInvalidServiceName = errors.New("invalid service name")
+
+// kubeInjectedPrefixes lists environment variable prefixes injected by Kubernetes
+// that are not useful for local development.
+var kubeInjectedPrefixes = []string{
+	"KUBERNETES_",
+	"_SERVICE_HOST",
+	"_SERVICE_PORT",
+	"_PORT_",
+	"_PORT=",
+}
+
+// kubeInjectedExact lists exact env var names injected by Kubernetes.
+var kubeInjectedExact = map[string]bool{
+	"KUBERNETES_SERVICE_HOST": true,
+	"KUBERNETES_SERVICE_PORT": true,
+	"KUBERNETES_PORT":         true,
+	"HOME":                    true,
+	"HOSTNAME":                true,
+	"PATH":                    true,
+	"TERM":                    true,
+}
+
+// isKubeInjected returns true if the given env var name is injected by Kubernetes
+// infrastructure and should be excluded from the local .env file.
+func isKubeInjected(name string) bool {
+	if kubeInjectedExact[name] {
+		return true
+	}
+	upper := strings.ToUpper(name)
+	for _, prefix := range kubeInjectedPrefixes {
+		if strings.Contains(upper, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// syncEnvOptions configures the env var sync behavior.
+type syncEnvOptions struct {
+	// Namespace is the K8s namespace to search for the baseline pod.
+	Namespace string
+	// ServiceName is the baseline service name to find pods for.
+	ServiceName string
+	// OutputPath is the file to write (default: .env.diverge).
+	OutputPath string
+}
+
+// syncBaselineEnv reads environment variables from a running baseline pod
+// and writes them to a local .env file for use during local development.
+// It filters out Kubernetes-injected variables that are not useful locally.
+func syncBaselineEnv(ctx context.Context, clientset kubernetes.Interface, opts syncEnvOptions) (int, error) {
+	if opts.OutputPath == "" {
+		opts.OutputPath = ".env.diverge"
+	}
+
+	// Validate service name before using in label selectors
+	if opts.ServiceName == "" {
+		return 0, fmt.Errorf("%w: must not be empty", ErrInvalidServiceName)
+	}
+	if errs := validation.IsValidLabelValue(opts.ServiceName); len(errs) > 0 {
+		return 0, fmt.Errorf("%w: %q: %s", ErrInvalidServiceName, opts.ServiceName, strings.Join(errs, "; "))
+	}
+
+	// Find baseline pods by app label matching the service name
+	labelSelectors := []string{
+		fmt.Sprintf("app=%s,diverge.io/role=baseline", opts.ServiceName),
+		fmt.Sprintf("app=%s", opts.ServiceName),
+		fmt.Sprintf("app.kubernetes.io/name=%s", opts.ServiceName),
+	}
+
+	var pod *corev1.Pod
+	var lastErr error
+	for _, sel := range labelSelectors {
+		listCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		pods, err := clientset.CoreV1().Pods(opts.Namespace).List(listCtx, metav1.ListOptions{
+			LabelSelector: sel,
+			FieldSelector: "status.phase=Running",
+		})
+		cancel()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		// Pick the first Running pod deterministically (sorted by name)
+		for i := range pods.Items {
+			if pods.Items[i].Status.Phase == corev1.PodRunning {
+				if pod == nil || pods.Items[i].Name < pod.Name {
+					pod = &pods.Items[i]
+				}
+			}
+		}
+		if pod != nil {
+			break
+		}
+	}
+
+	if pod == nil {
+		if lastErr != nil {
+			return 0, fmt.Errorf("for service %q in namespace %q: %w (last error: %v)", opts.ServiceName, opts.Namespace, ErrBaselinePodNotFound, lastErr)
+		}
+		return 0, fmt.Errorf("for service %q in namespace %q: %w", opts.ServiceName, opts.Namespace, ErrBaselinePodNotFound)
+	}
+
+	// Extract env vars from the first container
+	if len(pod.Spec.Containers) == 0 {
+		return 0, fmt.Errorf("pod %q has no containers", pod.Name)
+	}
+
+	container := pod.Spec.Containers[0]
+	envMap := make(map[string]string)
+
+	for _, env := range container.Env {
+		if isKubeInjected(env.Name) {
+			continue
+		}
+		// Skip vars sourced from secrets/configmaps (value will be empty,
+		// and we can't resolve them from here without additional permissions)
+		if env.ValueFrom != nil {
+			envMap[env.Name] = fmt.Sprintf("# sourced from %s", describeValueSource(env.ValueFrom))
+			continue
+		}
+		envMap[env.Name] = env.Value
+	}
+
+	// Handle EnvFrom sources (ConfigMaps and Secrets mounted as env bundles)
+	for _, envFrom := range container.EnvFrom {
+		if envFrom.ConfigMapRef != nil {
+			envMap[fmt.Sprintf("# [envFrom] configmap:%s", envFrom.ConfigMapRef.Name)] = ""
+		} else if envFrom.SecretRef != nil {
+			envMap[fmt.Sprintf("# [envFrom] secret:%s", envFrom.SecretRef.Name)] = ""
+		}
+	}
+
+	// Sort keys for deterministic output
+	keys := make([]string, 0, len(envMap))
+	for k := range envMap {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	// Write .env file — always write to truncate stale content
+	var sb strings.Builder
+	sb.WriteString("# Generated by 'diverge dev' — env vars from baseline pod\n")
+	fmt.Fprintf(&sb, "# Source: %s/%s (container: %s)\n", pod.Namespace, pod.Name, container.Name)
+	sb.WriteString("# Re-run 'diverge dev' to refresh.\n\n")
+
+	written := 0
+	for _, k := range keys {
+		v := envMap[k]
+		if strings.HasPrefix(k, "# [envFrom]") {
+			fmt.Fprintf(&sb, "%s\n", k)
+		} else if strings.HasPrefix(v, "# sourced from") {
+			fmt.Fprintf(&sb, "# %s=%s\n", k, v)
+		} else {
+			fmt.Fprintf(&sb, "%s=%s\n", k, v)
+			written++
+		}
+	}
+
+	if err := os.WriteFile(opts.OutputPath, []byte(sb.String()), 0600); err != nil {
+		return 0, fmt.Errorf("failed to write %s: %w", opts.OutputPath, err)
+	}
+
+	return written, nil
+}
+
+// describeValueSource returns a human-readable description of where an env var
+// value is sourced from (Secret, ConfigMap, etc).
+func describeValueSource(vs *corev1.EnvVarSource) string {
+	if vs.SecretKeyRef != nil {
+		return fmt.Sprintf("secret:%s/%s", vs.SecretKeyRef.Name, vs.SecretKeyRef.Key)
+	}
+	if vs.ConfigMapKeyRef != nil {
+		return fmt.Sprintf("configmap:%s/%s", vs.ConfigMapKeyRef.Name, vs.ConfigMapKeyRef.Key)
+	}
+	if vs.FieldRef != nil {
+		return fmt.Sprintf("fieldRef:%s", vs.FieldRef.FieldPath)
+	}
+	if vs.ResourceFieldRef != nil {
+		return fmt.Sprintf("resourceFieldRef:%s", vs.ResourceFieldRef.Resource)
+	}
+	return "unknown"
+}

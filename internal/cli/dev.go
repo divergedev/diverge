@@ -122,9 +122,24 @@ func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, c
 		},
 	}
 
-	c, _, err := app.KubeClient()
+	c, clientset, err := app.KubeClient()
 	if err != nil {
 		return fmt.Errorf("failed to create Kubernetes client: %w", err)
+	}
+
+	// Sync env vars from baseline pod
+	ns := app.Namespace
+	if ns == "" {
+		ns = "default"
+	}
+	synced, syncErr := syncBaselineEnv(ctx, clientset, syncEnvOptions{
+		Namespace:   ns,
+		ServiceName: serviceName,
+	})
+	if syncErr != nil {
+		fmt.Printf("⚠️  Could not sync env vars: %v\n", syncErr)
+	} else if synced > 0 {
+		fmt.Printf("📋 Synced %d env vars from baseline → .env.diverge\n", synced)
 	}
 
 	fmt.Printf("Starting dev session for service %q...\n", serviceName)

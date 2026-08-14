@@ -29,3 +29,6 @@ result
 .DS_Store
 .go/
 coverage/
+
+# Diverge dev session
+.env.diverge
