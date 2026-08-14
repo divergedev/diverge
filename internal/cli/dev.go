@@ -3,20 +3,28 @@ package cli
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/exec"
-	"os/user"
-	"path/filepath"
+	"log/slog"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
-	"github.com/divergedev/diverge/internal/config"
 	"github.com/divergedev/diverge/internal/git"
 )
+
+type DevOptions struct {
+	Detector EnvironmentDetector
+}
+
+type DevOption func(*DevOptions)
+
+func WithEnvironmentDetector(d EnvironmentDetector) DevOption {
+	return func(o *DevOptions) { o.Detector = d }
+}
 
 func newDevCmd(app *App) *cobra.Command {
 	var (
@@ -41,34 +49,38 @@ traffic for the specified service to your local machine's Tailscale IP.`,
 	return cmd
 }
 
-func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, cmd *cobra.Command) error {
+func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, cmd *cobra.Command, opts ...DevOption) error {
 	ctx := cmd.Context()
+
+	devOpts := &DevOptions{
+		Detector: &DefaultEnvironmentDetector{},
+	}
+	for _, opt := range opts {
+		opt(devOpts)
+	}
+	detector := devOpts.Detector
 
 	// 1. Auto-detect service name
 	serviceName := serviceFlag
 	if serviceName == "" {
-		cfg, err := config.Load(".diverge.yaml")
-		if err == nil && len(cfg.Services) > 0 {
-			// use the first service
-			for k := range cfg.Services {
-				serviceName = k
-				break
-			}
-		} else {
-			// fallback to directory name
-			cwd, _ := os.Getwd()
-			serviceName = filepath.Base(cwd)
+		s, err := detector.DetectServiceName()
+		if err != nil {
+			return fmt.Errorf("failed to detect service name: %w. Use --service flag", err)
 		}
+		serviceName = s
+	}
+	if serviceName == "" {
+		return fmt.Errorf("could not determine service name: use --service flag")
 	}
 
 	// 2. Auto-detect endpoint
 	endpointIP := endpointFlag
 	if endpointIP == "" {
-		out, err := exec.Command("tailscale", "ip", "-4").Output()
+		ip, err := detector.DetectTailscaleIP()
 		if err != nil {
-			return fmt.Errorf("failed to detect tailscale IP: %w. Make sure tailscale is running or pass --endpoint", err)
+			return err
 		}
-		endpointIP = strings.TrimSpace(string(out))
+		endpointIP = ip
 	}
 
 	// 3. Auto-detect port
@@ -79,25 +91,22 @@ func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, c
 	endpoint := fmt.Sprintf("%s:%d", endpointIP, port)
 
 	// 4. Construct header value
-	gitCtx, err := git.Detect()
-	var headerValue string
-	if err == nil && gitCtx != nil {
-		headerValue = gitCtx.Branch
-	}
-	if headerValue == "" {
-		headerValue = "local-dev"
+	headerValue := "local-dev"
+	branch, err := detector.DetectGitBranch()
+	if err == nil && branch != "" {
+		headerValue = git.SlugifyBranch(branch)
+	} else if err != nil {
+		slog.Debug("failed to detect git branch", "error", err)
 	}
 
 	// 5. Construct group name
-	u, _ := user.Current()
-	username := "dev"
-	if u != nil {
-		username = strings.ToLower(u.Username)
-	}
+	username := detector.DetectUsername()
 	groupName := fmt.Sprintf("dev-%s-%s", username, serviceName)
 
 	// Normalize group name
 	groupName = strings.ReplaceAll(groupName, "_", "-")
+	groupName = strings.ToLower(groupName)
+	groupName = strings.TrimRight(groupName, "-")
 
 	// 6. Create PreviewGroup CR
 	pg := &divergeiov1alpha1.PreviewGroup{
@@ -151,8 +160,13 @@ func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, c
 
 	defer func() {
 		fmt.Printf("\nCleaning up PreviewGroup %q...\n", groupName)
-		_ = c.Delete(context.Background(), pg)
-		fmt.Println("Goodbye!")
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := c.Delete(cleanupCtx, pg); err != nil {
+			slog.Error("failed to clean up PreviewGroup", "name", groupName, "error", err)
+		} else {
+			fmt.Println("Goodbye!")
+		}
 	}()
 
 	// 7. Print status
@@ -174,7 +188,7 @@ func newPreviewInterceptCmd(app *App) *cobra.Command {
 		Short: "Intercept a service in a preview group and route it locally",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPreviewIntercept(app, args[0], groupName, endpoint)
+			return runPreviewIntercept(app, args[0], groupName, endpoint, cmd.Context())
 		},
 	}
 	cmd.Flags().StringVar(&groupName, "group", "", "PreviewGroup name")
@@ -184,28 +198,28 @@ func newPreviewInterceptCmd(app *App) *cobra.Command {
 	return cmd
 }
 
-func runPreviewIntercept(app *App, service, groupName, endpoint string) error {
+func runPreviewIntercept(app *App, service, groupName, endpoint string, ctx context.Context) error {
+	if service == "" {
+		return fmt.Errorf("service name is required")
+	}
 	c, _, err := app.KubeClient()
 	if err != nil {
 		return err
 	}
 
 	var pg divergeiov1alpha1.PreviewGroup
-	if err := c.Get(context.TODO(), types.NamespacedName{Name: groupName}, &pg); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: groupName}, &pg); err != nil {
 		return err
 	}
 
-	found := false
-	for i, svc := range pg.Spec.Services {
-		if svc.Name == service {
-			pg.Spec.Services[i].Mode = divergeiov1alpha1.ServiceModeLocal
-			pg.Spec.Services[i].Endpoint = endpoint
-			found = true
-			break
-		}
-	}
+	i := slices.IndexFunc(pg.Spec.Services, func(svc divergeiov1alpha1.PreviewGroupServiceSpec) bool {
+		return svc.Name == service
+	})
 
-	if !found {
+	if i != -1 {
+		pg.Spec.Services[i].Mode = divergeiov1alpha1.ServiceModeLocal
+		pg.Spec.Services[i].Endpoint = endpoint
+	} else {
 		pg.Spec.Services = append(pg.Spec.Services, divergeiov1alpha1.PreviewGroupServiceSpec{
 			Name:     service,
 			Mode:     divergeiov1alpha1.ServiceModeLocal,
@@ -213,7 +227,7 @@ func runPreviewIntercept(app *App, service, groupName, endpoint string) error {
 		})
 	}
 
-	if err := c.Update(context.TODO(), &pg); err != nil {
+	if err := c.Update(ctx, &pg); err != nil {
 		return err
 	}
 
@@ -228,7 +242,7 @@ func newPreviewReleaseCmd(app *App) *cobra.Command {
 		Short: "Stop intercepting a service and revert to image mode",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPreviewRelease(app, args[0], groupName)
+			return runPreviewRelease(app, args[0], groupName, cmd.Context())
 		},
 	}
 	cmd.Flags().StringVar(&groupName, "group", "", "PreviewGroup name")
@@ -236,32 +250,29 @@ func newPreviewReleaseCmd(app *App) *cobra.Command {
 	return cmd
 }
 
-func runPreviewRelease(app *App, service, groupName string) error {
+func runPreviewRelease(app *App, service, groupName string, ctx context.Context) error {
 	c, _, err := app.KubeClient()
 	if err != nil {
 		return err
 	}
 
 	var pg divergeiov1alpha1.PreviewGroup
-	if err := c.Get(context.TODO(), types.NamespacedName{Name: groupName}, &pg); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: groupName}, &pg); err != nil {
 		return err
 	}
 
-	found := false
-	for i, svc := range pg.Spec.Services {
-		if svc.Name == service {
-			pg.Spec.Services[i].Mode = divergeiov1alpha1.ServiceModeImage
-			pg.Spec.Services[i].Endpoint = "" // clear endpoint
-			found = true
-			break
-		}
-	}
+	i := slices.IndexFunc(pg.Spec.Services, func(svc divergeiov1alpha1.PreviewGroupServiceSpec) bool {
+		return svc.Name == service
+	})
 
-	if !found {
+	if i != -1 {
+		pg.Spec.Services[i].Mode = divergeiov1alpha1.ServiceModeImage
+		pg.Spec.Services[i].Endpoint = "" // clear endpoint
+	} else {
 		return fmt.Errorf("service %q not found in group %q", service, groupName)
 	}
 
-	if err := c.Update(context.TODO(), &pg); err != nil {
+	if err := c.Update(ctx, &pg); err != nil {
 		return err
 	}
 

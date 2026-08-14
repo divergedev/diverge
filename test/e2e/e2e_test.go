@@ -4,11 +4,174 @@ package e2e
 
 import (
 	"context"
+	"os/exec"
+	"syscall"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 )
 
-func TestE2E(t *testing.T) {
+func getKubeClient(t *testing.T) (client.Client, *kubernetes.Clientset) {
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	configOverrides := &clientcmd.ConfigOverrides{CurrentContext: "k3d-oneazra-dev"}
+	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
+
+	config, err := kubeConfig.ClientConfig()
+	require.NoError(t, err)
+
+	cs, err := kubernetes.NewForConfig(config)
+	require.NoError(t, err)
+
+	c, err := client.New(config, client.Options{})
+	require.NoError(t, err)
+	err = divergeiov1alpha1.AddToScheme(c.Scheme())
+	require.NoError(t, err)
+
+	return c, cs
+}
+
+func buildCLI(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "build", "-o", "../../bin/diverge", "../../cmd/diverge")
+	err := cmd.Run()
+	require.NoError(t, err, "failed to build diverge CLI")
+}
+
+func TestE2E_DevCreatesPreviewGroup(t *testing.T) {
+	buildCLI(t)
+	c, _ := getKubeClient(t)
 	ctx := context.Background()
-	_ = ctx
-	// e2e framework init
+
+	// Start diverge dev in background
+	ctxCmd, cancelCmd := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancelCmd()
+	cmd := exec.CommandContext(ctxCmd, "../../bin/diverge", "dev", "--service", "echo-server", "--endpoint", "127.0.0.1:9999", "--port", "9999", "--namespace", "diverge-e2e-test")
+	err := cmd.Start()
+	require.NoError(t, err)
+
+	defer func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Signal(syscall.SIGINT)
+			_ = cmd.Wait()
+		}
+	}()
+
+	// Wait for PreviewGroup
+	var pgList divergeiov1alpha1.PreviewGroupList
+	require.Eventually(t, func() bool {
+		listCtx, cancelList := context.WithTimeout(context.Background(), 5*time.Second)
+		err := c.List(listCtx, &pgList)
+		cancelList()
+		if err != nil {
+			return false
+		}
+		for _, pg := range pgList.Items {
+			for _, svc := range pg.Spec.Services {
+				if svc.Name == "echo-server" && svc.Endpoint == "127.0.0.1:9999" && svc.Mode == divergeiov1alpha1.ServiceModeLocal {
+					return true
+				}
+			}
+		}
+		return false
+	}, 15*time.Second, 1*time.Second, "PreviewGroup should be created")
+
+	// Send SIGINT
+	err = cmd.Process.Signal(syscall.SIGINT)
+	require.NoError(t, err)
+	_ = cmd.Wait() // Wait for cleanup to finish
+
+	// Verify cleanup
+	require.Eventually(t, func() bool {
+		listCtx, cancelList := context.WithTimeout(context.Background(), 5*time.Second)
+		err := c.List(listCtx, &pgList)
+		cancelList()
+		require.NoError(t, err)
+		for _, pg := range pgList.Items {
+			for _, svc := range pg.Spec.Services {
+				if svc.Name == "echo-server" {
+					return false
+				}
+			}
+		}
+		return true
+	}, 15*time.Second, 1*time.Second, "PreviewGroup should be cleaned up")
+}
+
+func TestE2E_HeadlessServiceAndEndpointSlice(t *testing.T) {
+	t.Skip("requires diverge controller to be running")
+}
+
+func TestE2E_DevInterceptAndRelease(t *testing.T) {
+	buildCLI(t)
+	c, _ := getKubeClient(t)
+	ctx := context.Background()
+
+	// 1. Create PreviewGroup
+	pg := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-group",
+			Namespace: "default", // CLI defaults to namespace default usually, but controller puts cluster scope
+		},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{
+					Name: "echo-server",
+					Mode: divergeiov1alpha1.ServiceModeImage,
+				},
+			},
+		},
+	}
+	createCtx, cancelCreate := context.WithTimeout(context.Background(), 5*time.Second)
+	err := c.Create(createCtx, pg)
+	cancelCreate()
+	require.NoError(t, err)
+	defer func() {
+		delCtx, cancelDel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = c.Delete(delCtx, pg)
+		cancelDel()
+	}()
+
+	// 2. Intercept
+	interceptCtx, cancelIntercept := context.WithTimeout(context.Background(), 30*time.Second)
+	cmd := exec.CommandContext(interceptCtx, "../../bin/diverge", "preview", "intercept", "echo-server", "--group", "test-group", "--endpoint", "127.0.0.1:8080")
+	err = cmd.Run()
+	cancelIntercept()
+	require.NoError(t, err)
+
+	// 3. Verify
+	var updatedPg divergeiov1alpha1.PreviewGroup
+	// err = c.Get(ctx, client.ObjectKey{Name: "test-group", Namespace: "default"}, &updatedPg) // or cluster scoped?
+	// Note: PreviewGroup is likely cluster-scoped, so Namespace=""
+	getCtx, cancelGet := context.WithTimeout(context.Background(), 5*time.Second)
+	err = c.Get(getCtx, client.ObjectKey{Name: "test-group"}, &updatedPg)
+	cancelGet()
+	require.NoError(t, err)
+	assert.Equal(t, divergeiov1alpha1.ServiceModeLocal, updatedPg.Spec.Services[0].Mode)
+	assert.Equal(t, "127.0.0.1:8080", updatedPg.Spec.Services[0].Endpoint)
+
+	// 4. Release
+	releaseCtx, cancelRelease := context.WithTimeout(context.Background(), 30*time.Second)
+	cmd = exec.CommandContext(releaseCtx, "../../bin/diverge", "preview", "release", "echo-server", "--group", "test-group")
+	err = cmd.Run()
+	cancelRelease()
+	require.NoError(t, err)
+
+	// 5. Verify
+	getCtx2, cancelGet2 := context.WithTimeout(context.Background(), 5*time.Second)
+	err = c.Get(getCtx2, client.ObjectKey{Name: "test-group"}, &updatedPg)
+	cancelGet2()
+	require.NoError(t, err)
+	assert.Equal(t, divergeiov1alpha1.ServiceModeImage, updatedPg.Spec.Services[0].Mode)
+	assert.Empty(t, updatedPg.Spec.Services[0].Endpoint)
 }

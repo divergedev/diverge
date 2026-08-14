@@ -2,18 +2,24 @@ package deployer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+)
+
+var (
+	ErrInvalidEndpoint = errors.New("invalid endpoint format: expected host:port")
+	ErrMissingEndpoint = errors.New("local mode requires endpoint to be set")
 )
 
 type LocalDeployer struct {
@@ -30,7 +36,7 @@ func (d *LocalDeployer) targetNamespace(env *v1alpha1.Environment) string {
 
 func (d *LocalDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) error {
 	if env.Spec.ServiceConfig == nil || env.Spec.ServiceConfig.Endpoint == "" {
-		return fmt.Errorf("local mode requires env.Spec.ServiceConfig.Endpoint to be set")
+		return ErrMissingEndpoint
 	}
 
 	targetNS := d.targetNamespace(env)
@@ -38,89 +44,91 @@ func (d *LocalDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) e
 
 	host, portStr, err := net.SplitHostPort(env.Spec.ServiceConfig.Endpoint)
 	if err != nil {
-		return fmt.Errorf("invalid endpoint format (expected host:port): %w", err)
+		return fmt.Errorf("%w: %v", ErrInvalidEndpoint, err)
+	}
+
+	if net.ParseIP(host).To4() == nil {
+		return fmt.Errorf("%w: invalid IPv4 address %q", ErrInvalidEndpoint, host)
 	}
 
 	portNum, err := strconv.ParseInt(portStr, 10, 32)
 	if err != nil {
-		return fmt.Errorf("invalid port %q: %w", portStr, err)
+		return fmt.Errorf("%w: invalid port %q: %v", ErrInvalidEndpoint, portStr, err)
+	}
+	if portNum < 1 || portNum > 65535 {
+		return fmt.Errorf("%w: port must be between 1 and 65535", ErrInvalidEndpoint)
 	}
 	port := int32(portNum)
+
+	labels := map[string]string{
+		"diverge.io/managed-by":  "diverge",
+		"diverge.io/environment": env.Name,
+	}
 
 	// Create or Update Headless Service
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      svcName,
 			Namespace: targetNS,
+			Labels:    labels,
+		},
+		Spec: corev1.ServiceSpec{
+			Type:      corev1.ServiceTypeClusterIP,
+			ClusterIP: corev1.ClusterIPNone, // headless
+			Ports:     []corev1.ServicePort{{Name: "http", Port: port}},
 		},
 	}
+	svc.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Service"})
 
-	_, err = controllerutil.CreateOrUpdate(ctx, d.Client, svc, func() error {
-		svc.Spec.Type = corev1.ServiceTypeClusterIP
-		svc.Spec.ClusterIP = corev1.ClusterIPNone // headless
-		// Ensure port matches
-		if len(svc.Spec.Ports) == 0 {
-			svc.Spec.Ports = []corev1.ServicePort{{Name: "http", Port: port}}
-		} else {
-			svc.Spec.Ports[0].Port = port
-		}
-		// Clear selectors so we can manage endpoints manually via EndpointSlice
-		svc.Spec.Selector = nil
-		return nil
-	})
+	err = d.Client.Patch(ctx, svc, client.Apply, client.FieldOwner("diverge"), client.ForceOwnership)
 	if err != nil {
-		return fmt.Errorf("failed to create/update headless service: %w", err)
+		return fmt.Errorf("failed to apply headless service: %w", err)
 	}
 
 	// Create or Update EndpointSlice
 	isReady := true
+	epsLabels := make(map[string]string)
+	for k, v := range labels {
+		epsLabels[k] = v
+	}
+	epsLabels["endpointslice.kubernetes.io/managed-by"] = "diverge"
+	epsLabels["kubernetes.io/service-name"] = svcName
+
 	eps := &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      svcName,
 			Namespace: targetNS,
-		},
-	}
-
-	addressType := discoveryv1.AddressTypeIPv4
-	// Assume IPv4 for now as per instructions (run tailscale ip -4)
-
-	_, err = controllerutil.CreateOrUpdate(ctx, d.Client, eps, func() error {
-		if eps.Labels == nil {
-			eps.Labels = make(map[string]string)
-		}
-		eps.Labels["kubernetes.io/service-name"] = svcName
-
-		eps.AddressType = addressType
-		eps.Endpoints = []discoveryv1.Endpoint{
-			{
-				Addresses: []string{host},
-				Conditions: discoveryv1.EndpointConditions{
-					Ready: &isReady,
-				},
-			},
-		}
-		eps.Ports = []discoveryv1.EndpointPort{
-			{
-				Name: nil, // can be named, but nil is fine if single port
-				Port: &port,
-			},
-		}
-
-		// Owner reference to headless service
-		if len(eps.OwnerReferences) == 0 {
-			eps.OwnerReferences = []metav1.OwnerReference{
+			Labels:    epsLabels,
+			OwnerReferences: []metav1.OwnerReference{
 				{
 					APIVersion: "v1",
 					Kind:       "Service",
 					Name:       svc.Name,
 					UID:        svc.UID,
 				},
-			}
-		}
-		return nil
-	})
+			},
+		},
+		AddressType: discoveryv1.AddressTypeIPv4,
+		Endpoints: []discoveryv1.Endpoint{
+			{
+				Addresses: []string{host},
+				Conditions: discoveryv1.EndpointConditions{
+					Ready: &isReady,
+				},
+			},
+		},
+		Ports: []discoveryv1.EndpointPort{
+			{
+				Name: nil, // can be named, but nil is fine if single port
+				Port: &port,
+			},
+		},
+	}
+	eps.SetGroupVersionKind(schema.GroupVersionKind{Group: "discovery.k8s.io", Version: "v1", Kind: "EndpointSlice"})
+
+	err = d.Client.Patch(ctx, eps, client.Apply, client.FieldOwner("diverge"), client.ForceOwnership)
 	if err != nil {
-		return fmt.Errorf("failed to create/update endpointslice: %w", err)
+		return fmt.Errorf("failed to apply endpointslice: %w", err)
 	}
 
 	return nil
@@ -136,7 +144,7 @@ func (d *LocalDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment)
 			Namespace: targetNS,
 		},
 	}
-	if err := d.Client.Delete(ctx, eps); err != nil && !errors.IsNotFound(err) {
+	if err := d.Client.Delete(ctx, eps); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("failed to delete endpointslice: %w", err)
 	}
 
@@ -146,7 +154,7 @@ func (d *LocalDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment)
 			Namespace: targetNS,
 		},
 	}
-	if err := d.Client.Delete(ctx, svc); err != nil && !errors.IsNotFound(err) {
+	if err := d.Client.Delete(ctx, svc); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("failed to delete headless service: %w", err)
 	}
 
@@ -167,7 +175,7 @@ func (d *LocalDeployer) Status(ctx context.Context, env *v1alpha1.Environment) (
 	}
 
 	if err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			status.Health = "Missing"
 			return []ServiceStatus{status}, nil
 		}

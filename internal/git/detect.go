@@ -110,6 +110,10 @@ func SlugifyBranch(branch string) string {
 		slug = strings.TrimRight(slug, "-")
 	}
 
+	if slug == "" {
+		return "local-dev"
+	}
+
 	return slug
 }
 

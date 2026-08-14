@@ -1,0 +1,23 @@
+# 2026/08/13 17:48:08.496769 [TestProperty_GroupNameAlwaysValidK8s] [rapid] draw username: "-"
+# 2026/08/13 17:48:08.496772 [TestProperty_GroupNameAlwaysValidK8s] [rapid] draw service: "-"
+# 2026/08/13 17:48:08.496789 [TestProperty_GroupNameAlwaysValidK8s]
+# 	Error Trace:	/Users/ab/code/divergedev/diverge/internal/cli/dev_property_test.go:22
+# 	            				/Users/ab/go/pkg/mod/pgregory.net/rapid@v1.3.0/engine.go:458
+# 	            				/Users/ab/go/pkg/mod/pgregory.net/rapid@v1.3.0/engine.go:467
+# 	            				/Users/ab/go/pkg/mod/pgregory.net/rapid@v1.3.0/engine.go:292
+# 	            				/Users/ab/go/pkg/mod/pgregory.net/rapid@v1.3.0/engine.go:207
+# 	            				/Users/ab/code/divergedev/diverge/internal/cli/dev_property_test.go:16
+# 	Error:      	Expect "dev----" to match "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
+# 	Test:       	TestProperty_GroupNameAlwaysValidK8s
+#
+v0.4.8#9352601853308890823
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0

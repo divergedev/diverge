@@ -41,7 +41,7 @@ func TestLocalDeployer_Property_Deploy_Teardown_Roundtrip(t *testing.T) {
 		}
 
 		d := &LocalDeployer{
-			Client: fake.NewClientBuilder().WithScheme(buildScheme()).Build(),
+			Client: fake.NewClientBuilder().WithScheme(buildScheme()).WithInterceptorFuncs(withApplyMock()).Build(),
 		}
 
 		ctx := context.Background()
@@ -78,7 +78,7 @@ func TestLocalDeployer_Property_Deploy_Status_Healthy(t *testing.T) {
 		}
 
 		d := &LocalDeployer{
-			Client: fake.NewClientBuilder().WithScheme(buildScheme()).Build(),
+			Client: fake.NewClientBuilder().WithScheme(buildScheme()).WithInterceptorFuncs(withApplyMock()).Build(),
 		}
 		ctx := context.Background()
 
@@ -110,7 +110,7 @@ func TestLocalDeployer_Property_Teardown_Idempotent(t *testing.T) {
 		}
 
 		d := &LocalDeployer{
-			Client: fake.NewClientBuilder().WithScheme(buildScheme()).Build(),
+			Client: fake.NewClientBuilder().WithScheme(buildScheme()).WithInterceptorFuncs(withApplyMock()).Build(),
 		}
 		ctx := context.Background()
 
@@ -153,7 +153,7 @@ func TestLocalDeployer_Property_Deploy_InvalidEndpoint(t *testing.T) {
 		}
 
 		d := &LocalDeployer{
-			Client: fake.NewClientBuilder().WithScheme(buildScheme()).Build(),
+			Client: fake.NewClientBuilder().WithScheme(buildScheme()).WithInterceptorFuncs(withApplyMock()).Build(),
 		}
 		ctx := context.Background()
 
@@ -174,7 +174,7 @@ func TestLocalDeployer_Property_Deploy_NilServiceConfig(t *testing.T) {
 		}
 
 		d := &LocalDeployer{
-			Client: fake.NewClientBuilder().WithScheme(buildScheme()).Build(),
+			Client: fake.NewClientBuilder().WithScheme(buildScheme()).WithInterceptorFuncs(withApplyMock()).Build(),
 		}
 		ctx := context.Background()
 

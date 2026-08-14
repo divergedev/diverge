@@ -43,6 +43,14 @@ lint: ## Run golangci-lint
 test: manifests generate fmt vet ## Run tests.
 	go test ./... -coverprofile cover.out
 
+.PHONY: e2e-setup e2e e2e-teardown
+e2e-setup:
+	nix develop -c ./test/e2e/setup.sh
+e2e:
+	nix develop -c go test -tags=e2e -v -count=1 ./test/e2e/...
+e2e-teardown:
+	nix develop -c ./test/e2e/teardown.sh
+
 ##@ Build
 
 .PHONY: build
