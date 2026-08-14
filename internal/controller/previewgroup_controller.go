@@ -236,6 +236,14 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	pg.Status.ServiceCount = int32(len(pg.Spec.Services))
 	pg.Status.Phase = derivePreviewGroupPhase(serviceStatuses)
 
+	if pg.Status.LeaseRenewedAt != nil {
+		if time.Since(pg.Status.LeaseRenewedAt.Time) > 90*time.Second {
+			// Mark as abandoned
+			pg.Status.Phase = divergeiov1alpha1.PreviewGroupPhaseAbandoned
+			// Optionally: auto-delete
+		}
+	}
+
 	// Set conditions
 	readyCondition := metav1.Condition{
 		Type:               "Ready",

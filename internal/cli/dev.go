@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -117,6 +119,7 @@ func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, e
 			Name: groupName,
 		},
 		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Owner: username,
 			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
 				{
 					Name:     serviceName,
@@ -176,9 +179,49 @@ func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, e
 	fmt.Printf("Starting dev session for service %q...\n", serviceName)
 	fmt.Printf("Routing traffic with header %s: %s to %s\n", "x-diverge-env", headerValue, endpoint)
 
+	// Atomic Create — handle collision
+	var ErrCollision = errors.New("preview group collision")
+
 	if err := c.Create(ctx, pg); err != nil {
-		return fmt.Errorf("failed to create PreviewGroup: %w", err)
+		if apierrors.IsAlreadyExists(err) {
+			// Fetch existing PG
+			var existing divergeiov1alpha1.PreviewGroup
+			if getErr := c.Get(ctx, types.NamespacedName{Name: groupName}, &existing); getErr != nil {
+				return fmt.Errorf("failed to check existing PreviewGroup: %w", getErr)
+			}
+			if existing.Spec.Owner != "" && existing.Spec.Owner != username {
+				return fmt.Errorf("%w: group %q is owned by %q (you are %q). Delete it first with: diverge preview delete %s",
+					ErrCollision, groupName, existing.Spec.Owner, username, groupName)
+			}
+			// Same owner — update instead
+			existing.Spec = pg.Spec
+			if updateErr := c.Update(ctx, &existing); updateErr != nil {
+				return fmt.Errorf("failed to update PreviewGroup: %w", updateErr)
+			}
+		} else {
+			return fmt.Errorf("failed to create PreviewGroup: %w", err)
+		}
 	}
+
+	// Start lease heartbeat
+	heartbeatTicker := time.NewTicker(20 * time.Second)
+	defer heartbeatTicker.Stop()
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-heartbeatTicker.C:
+				var current divergeiov1alpha1.PreviewGroup
+				if err := c.Get(ctx, types.NamespacedName{Name: groupName}, &current); err == nil {
+					now := metav1.Now()
+					current.Status.LeaseRenewedAt = &now
+					_ = c.Status().Update(ctx, &current)
+				}
+			}
+		}
+	}()
 
 	defer func() {
 		fmt.Printf("\nCleaning up PreviewGroup %q...\n", groupName)

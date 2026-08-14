@@ -14,6 +14,7 @@ const (
 	PreviewGroupPhaseDegraded    PreviewGroupPhase = "Degraded"
 	PreviewGroupPhaseFailed      PreviewGroupPhase = "Failed"
 	PreviewGroupPhaseTerminating PreviewGroupPhase = "Terminating"
+	PreviewGroupPhaseAbandoned   PreviewGroupPhase = "Abandoned"
 )
 
 // ServiceMode defines how a service participates in a preview group.
@@ -191,6 +192,10 @@ type PreviewGroupSpec struct {
 	// Lifecycle configures TTL and automatic cleanup.
 	// +optional
 	Lifecycle *PreviewGroupLifecycle `json:"lifecycle,omitempty"`
+
+	// Owner is the username of the developer who created this PreviewGroup.
+	// Used for collision detection and audit.
+	Owner string `json:"owner,omitempty"`
 }
 
 // PreviewGroupServiceStatus reports the current state of a single service
@@ -253,6 +258,9 @@ type PreviewGroupStatus struct {
 	// CommentID is the ID of the comment tracking the preview group status.
 	// +optional
 	CommentID int64 `json:"commentID,omitempty"`
+
+	// LeaseRenewedAt is the last time the owning CLI heartbeat renewed the lease.
+	LeaseRenewedAt *metav1.Time `json:"leaseRenewedAt,omitempty"`
 }
 
 // +kubebuilder:object:root=true

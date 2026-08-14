@@ -425,3 +425,89 @@ func TestRunDev_CleanupTimeout(t *testing.T) {
 		t.Fatal("cleanup timed out, likely missing context with timeout")
 	}
 }
+
+func TestRunDev_OwnerFieldSet(t *testing.T) {
+	detector := fakeDetector{
+		tailscaleIP: "100.100.100.100",
+		serviceName: "web",
+		username:    "charlie",
+	}
+	app, c, cmd, cancel := runDevTestSetup(t, detector)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runDev(app, "", 0, "", "inject", cmd, WithEnvironmentDetector(detector))
+	}()
+
+	var pg divergeiov1alpha1.PreviewGroup
+	require.Eventually(t, func() bool {
+		err := c.Get(context.Background(), types.NamespacedName{Name: "dev-charlie-web"}, &pg)
+		return err == nil
+	}, 2*time.Second, 10*time.Millisecond)
+
+	require.Equal(t, "charlie", pg.Spec.Owner)
+
+	cancel()
+	<-errCh
+}
+
+func TestRunDev_CollisionDifferentOwner(t *testing.T) {
+	detectorBob := fakeDetector{
+		tailscaleIP: "100.100.100.100",
+		serviceName: "web",
+		username:    "bob",
+	}
+	app, c, cmd, cancel := runDevTestSetup(t, detectorBob)
+	defer cancel()
+
+	// Pre-create the PG with owner alice
+	pg := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "dev-bob-web"},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Owner: "alice",
+		},
+	}
+	require.NoError(t, c.Create(context.Background(), pg))
+
+	err := runDev(app, "", 0, "", "inject", cmd, WithEnvironmentDetector(detectorBob))
+	require.Error(t, err)
+	require.ErrorContains(t, err, "preview group collision")
+	require.ErrorContains(t, err, "owned by \"alice\" (you are \"bob\")")
+}
+
+func TestRunDev_SameOwnerUpdates(t *testing.T) {
+	detector := fakeDetector{
+		tailscaleIP: "100.100.100.100",
+		serviceName: "web",
+		username:    "alice",
+	}
+	app, c, cmd, cancel := runDevTestSetup(t, detector)
+
+	// Pre-create the PG with owner alice
+	pg := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "dev-alice-web"},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Owner: "alice",
+		},
+	}
+	require.NoError(t, c.Create(context.Background(), pg))
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runDev(app, "", 0, "", "inject", cmd, WithEnvironmentDetector(detector))
+	}()
+
+	var updatedPg divergeiov1alpha1.PreviewGroup
+	require.Eventually(t, func() bool {
+		err := c.Get(context.Background(), types.NamespacedName{Name: "dev-alice-web"}, &updatedPg)
+		if err != nil {
+			return false
+		}
+		return len(updatedPg.Spec.Services) > 0
+	}, 2*time.Second, 10*time.Millisecond)
+
+	require.Equal(t, "alice", updatedPg.Spec.Owner)
+
+	cancel()
+	<-errCh
+}
