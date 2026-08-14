@@ -102,6 +102,26 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		requeueAfter = time.Until(expiryTime)
 	}
 
+	if pg.Status.LeaseRenewedAt != nil {
+		expiration := pg.Status.LeaseRenewedAt.Add(90 * time.Second)
+		if time.Now().After(expiration) {
+			logger.Info("PreviewGroup lease expired, marking abandoned and triggering deletion")
+			pg.Status.Phase = divergeiov1alpha1.PreviewGroupPhaseAbandoned
+			if err := r.Status().Patch(ctx, &pg, client.MergeFrom(statusBase)); err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to update PreviewGroup status: %w", err)
+			}
+			if err := r.Delete(ctx, &pg); err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to delete abandoned PreviewGroup: %w", err)
+			}
+			return ctrl.Result{}, nil
+		}
+
+		d := time.Until(expiration)
+		if requeueAfter == 0 || d < requeueAfter {
+			requeueAfter = d
+		}
+	}
+
 	// Reconcile child Environments for each service
 	desiredEnvNames := make(map[string]bool)
 	serviceStatuses := make([]divergeiov1alpha1.PreviewGroupServiceStatus, 0, len(pg.Spec.Services))

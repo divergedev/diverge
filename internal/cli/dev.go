@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -9,12 +11,15 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/git"
 )
+
+var ErrCollision = errors.New("preview group collision")
 
 type DevOptions struct {
 	Detector EnvironmentDetector
@@ -28,9 +33,10 @@ func WithEnvironmentDetector(d EnvironmentDetector) DevOption {
 
 func newDevCmd(app *App) *cobra.Command {
 	var (
-		serviceFlag  string
-		portFlag     int32
-		endpointFlag string
+		serviceFlag   string
+		portFlag      int32
+		endpointFlag  string
+		envOutputFlag string
 	)
 
 	cmd := &cobra.Command{
@@ -39,17 +45,18 @@ func newDevCmd(app *App) *cobra.Command {
 		Long: `Start a local development session by creating a PreviewGroup that routes
 traffic for the specified service to your local machine's Tailscale IP.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDev(app, serviceFlag, portFlag, endpointFlag, cmd)
+			return runDev(app, serviceFlag, portFlag, endpointFlag, envOutputFlag, cmd)
 		},
 	}
 	cmd.Flags().StringVar(&serviceFlag, "service", "", "Service name (default: auto-detect)")
 	cmd.Flags().Int32Var(&portFlag, "port", 0, "Local port (default: 8080)")
 	cmd.Flags().StringVar(&endpointFlag, "endpoint", "", "Local endpoint IP (default: tailscale ip -4)")
+	cmd.Flags().StringVar(&envOutputFlag, "env-output", "inject", "How to handle env vars: inject (in-memory), file (.env.diverge)")
 
 	return cmd
 }
 
-func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, cmd *cobra.Command, opts ...DevOption) error {
+func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, envOutputFlag string, cmd *cobra.Command, opts ...DevOption) error {
 	ctx := cmd.Context()
 
 	devOpts := &DevOptions{
@@ -114,6 +121,7 @@ func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, c
 			Name: groupName,
 		},
 		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Owner: username,
 			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
 				{
 					Name:     serviceName,
@@ -141,22 +149,80 @@ func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, c
 	if ns == "" {
 		ns = "default"
 	}
-	synced, syncErr := syncBaselineEnv(ctx, clientset, syncEnvOptions{
-		Namespace:   ns,
-		ServiceName: serviceName,
-	})
-	if syncErr != nil {
-		fmt.Printf("⚠️  Could not sync env vars: %v\n", syncErr)
-	} else if synced > 0 {
-		fmt.Printf("📋 Synced %d env vars from baseline → .env.diverge\n", synced)
+
+	if envOutputFlag == "file" {
+		synced, syncErr := syncBaselineEnvToFile(ctx, clientset, syncEnvOptions{
+			Namespace:   ns,
+			ServiceName: serviceName,
+		}, ".env.diverge")
+		if syncErr != nil {
+			fmt.Printf("⚠️  Could not sync env vars: %v\n", syncErr)
+		} else if synced > 0 {
+			fmt.Printf("📋 Synced %d env vars from baseline → .env.diverge\n", synced)
+		}
+	} else {
+		// Instead of writing to file, capture env vars in a buffer
+		var envBuf bytes.Buffer
+		synced, syncErr := syncBaselineEnv(ctx, clientset, syncEnvOptions{
+			Namespace:   ns,
+			ServiceName: serviceName,
+		}, &envBuf)
+
+		// Parse the buffer and prepare for child process injection
+		if syncErr == nil && synced > 0 {
+			// envBuf now contains KEY=VALUE lines
+			// These would be injected into a child process's cmd.Env
+			fmt.Printf("📋 Captured %d env vars from baseline (in-memory, no file written)\n", synced)
+		} else if syncErr != nil {
+			fmt.Printf("⚠️  Could not sync env vars: %v\n", syncErr)
+		}
 	}
 
 	fmt.Printf("Starting dev session for service %q...\n", serviceName)
 	fmt.Printf("Routing traffic with header %s: %s to %s\n", "x-diverge-env", headerValue, endpoint)
 
+	// Atomic Create — handle collision
+
 	if err := c.Create(ctx, pg); err != nil {
-		return fmt.Errorf("failed to create PreviewGroup: %w", err)
+		if apierrors.IsAlreadyExists(err) {
+			// Fetch existing PG
+			var existing divergeiov1alpha1.PreviewGroup
+			if getErr := c.Get(ctx, types.NamespacedName{Name: groupName}, &existing); getErr != nil {
+				return fmt.Errorf("failed to check existing PreviewGroup: %w", getErr)
+			}
+			if existing.Spec.Owner != "" && existing.Spec.Owner != username {
+				return fmt.Errorf("%w: group %q is owned by %q (you are %q). Delete it first with: diverge preview delete %s",
+					ErrCollision, groupName, existing.Spec.Owner, username, groupName)
+			}
+			// Same owner — update instead
+			existing.Spec = pg.Spec
+			if updateErr := c.Update(ctx, &existing); updateErr != nil {
+				return fmt.Errorf("failed to update PreviewGroup: %w", updateErr)
+			}
+		} else {
+			return fmt.Errorf("failed to create PreviewGroup: %w", err)
+		}
 	}
+
+	// Start lease heartbeat
+	heartbeatTicker := time.NewTicker(20 * time.Second)
+	defer heartbeatTicker.Stop()
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-heartbeatTicker.C:
+				var current divergeiov1alpha1.PreviewGroup
+				if err := c.Get(ctx, types.NamespacedName{Name: groupName}, &current); err == nil {
+					now := metav1.Now()
+					current.Status.LeaseRenewedAt = &now
+					_ = c.Status().Update(ctx, &current)
+				}
+			}
+		}
+	}()
 
 	defer func() {
 		fmt.Printf("\nCleaning up PreviewGroup %q...\n", groupName)

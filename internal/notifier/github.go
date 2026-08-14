@@ -3,10 +3,15 @@ package notifier
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -63,47 +68,90 @@ func (g *GitHubNotifier) postOrUpdateComment(ctx context.Context, env *v1alpha1.
 		return err
 	}
 
-	commentID := g.getCommentID(env)
-
 	payload := map[string]string{"body": body}
 	jsonPayload, _ := json.Marshal(payload)
 
-	var reqURL string
-	var method string
+	backoff := 500 * time.Millisecond
+	maxRetries := 3
 
-	if commentID != 0 {
-		reqURL = fmt.Sprintf("%s/repos/%s/issues/comments/%d", g.BaseURL, escapedProject, commentID)
-		method = http.MethodPatch
-	} else {
-		reqURL = fmt.Sprintf("%s/repos/%s/issues/%d/comments", g.BaseURL, escapedProject, pr)
-		method = http.MethodPost
-	}
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		commentID := g.getCommentID(env)
+		var reqURL string
+		var method string
 
-	req, err := http.NewRequestWithContext(ctx, method, reqURL, bytes.NewReader(jsonPayload))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+g.Token)
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
-
-	resp, err := g.HTTPClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("github API returned status: %d", resp.StatusCode)
-	}
-
-	if commentID == 0 {
-		var result struct {
-			ID int `json:"id"`
+		if commentID != 0 {
+			reqURL = fmt.Sprintf("%s/repos/%s/issues/comments/%d", g.BaseURL, escapedProject, commentID)
+			method = http.MethodPatch
+		} else {
+			reqURL = fmt.Sprintf("%s/repos/%s/issues/%d/comments", g.BaseURL, escapedProject, pr)
+			method = http.MethodPost
 		}
-		if err := json.NewDecoder(resp.Body).Decode(&result); err == nil && result.ID != 0 {
-			g.setCommentID(env, result.ID)
+
+		req, err := http.NewRequestWithContext(ctx, method, reqURL, bytes.NewReader(jsonPayload))
+		if err != nil {
+			return err
 		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+g.Token)
+		req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+		resp, err := g.HTTPClient.Do(req)
+		if err != nil {
+			return err
+		}
+
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusForbidden {
+			_ = resp.Body.Close()
+			if attempt == maxRetries {
+				return fmt.Errorf("github API rate limited after retries")
+			}
+
+			sleepDuration := backoff
+			if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
+				if parsedSecs, err := strconv.Atoi(retryAfter); err == nil {
+					sleepDuration = time.Duration(parsedSecs) * time.Second
+				}
+			} else if reset := resp.Header.Get("X-RateLimit-Reset"); reset != "" {
+				if resetUnix, err := strconv.ParseInt(reset, 10, 64); err == nil {
+					resetTime := time.Unix(resetUnix, 0)
+					if resetTime.After(time.Now()) {
+						d := time.Until(resetTime)
+						if d < 1*time.Minute {
+							sleepDuration = d
+						}
+					}
+				}
+			}
+
+			jitter := time.Duration(rand.Int63n(int64(sleepDuration/2) + 1))
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(sleepDuration + jitter):
+			}
+			backoff *= 2
+			continue
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			_ = resp.Body.Close()
+			if commentID != 0 && resp.StatusCode == http.StatusNotFound {
+				g.setCommentID(env, 0)
+				continue
+			}
+			return fmt.Errorf("github API returned status: %d", resp.StatusCode)
+		}
+
+		if commentID == 0 {
+			var result struct {
+				ID int `json:"id"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&result); err == nil && result.ID != 0 {
+				g.setCommentID(env, result.ID)
+			}
+		}
+		_ = resp.Body.Close()
+		break
 	}
 
 	return nil
@@ -167,4 +215,197 @@ func escapeProjectPath(project string) (string, error) {
 		return "", fmt.Errorf("invalid project format %q: path traversal not allowed", project)
 	}
 	return url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1]), nil
+}
+
+// ValidateGitHubWebhookSignature validates a GitHub webhook payload signature
+// using the provided secret. The signature should be the value of the
+// X-Hub-Signature-256 header (e.g. "sha256=...").
+func ValidateGitHubWebhookSignature(payload []byte, signature, secret string) bool {
+	if !strings.HasPrefix(signature, "sha256=") {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(payload)
+	expectedMAC := hex.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(strings.TrimPrefix(signature, "sha256=")), []byte(expectedMAC))
+}
+
+// GitHubPreviewGroupNotifier implements PreviewGroupNotifier for GitHub.
+type GitHubPreviewGroupNotifier struct {
+	BaseURL    string
+	Token      string
+	HTTPClient *http.Client
+}
+
+func NewGitHubPreviewGroupNotifier(baseURL, token string) *GitHubPreviewGroupNotifier {
+	if baseURL == "" {
+		baseURL = "https://api.github.com"
+	}
+	return &GitHubPreviewGroupNotifier{
+		BaseURL:    baseURL,
+		Token:      token,
+		HTTPClient: &http.Client{Timeout: 10 * time.Second},
+	}
+}
+
+func (g *GitHubPreviewGroupNotifier) getProjectAndMR(pg *v1alpha1.PreviewGroup) (string, int, error) {
+	if pg.Spec.Source.Provider != "github" {
+		return "", 0, fmt.Errorf("preview group source is not github")
+	}
+	if pg.Spec.Source.MR == 0 {
+		return "", 0, ErrMissingMergeRequest
+	}
+	return pg.Spec.Source.Project, pg.Spec.Source.MR, nil
+}
+
+func (g *GitHubPreviewGroupNotifier) getCommentID(pg *v1alpha1.PreviewGroup) int64 {
+	return pg.Status.CommentID
+}
+
+func (g *GitHubPreviewGroupNotifier) setCommentID(pg *v1alpha1.PreviewGroup, id int64) {
+	pg.Status.CommentID = id
+}
+
+func (g *GitHubPreviewGroupNotifier) postOrUpdateComment(ctx context.Context, pg *v1alpha1.PreviewGroup, body string) error {
+	project, mr, err := g.getProjectAndMR(pg)
+	if err != nil {
+		return err
+	}
+
+	escapedProject, err := escapeProjectPath(project)
+	if err != nil {
+		return err
+	}
+
+	payload := map[string]string{"body": body}
+	jsonPayload, _ := json.Marshal(payload)
+
+	backoff := 500 * time.Millisecond
+	maxRetries := 3
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		commentID := g.getCommentID(pg)
+		var reqURL string
+		var method string
+
+		if commentID != 0 {
+			reqURL = fmt.Sprintf("%s/repos/%s/issues/comments/%d", g.BaseURL, escapedProject, commentID)
+			method = http.MethodPatch
+		} else {
+			reqURL = fmt.Sprintf("%s/repos/%s/issues/%d/comments", g.BaseURL, escapedProject, mr)
+			method = http.MethodPost
+		}
+
+		req, err := http.NewRequestWithContext(ctx, method, reqURL, bytes.NewReader(jsonPayload))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+g.Token)
+		req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+		resp, err := g.HTTPClient.Do(req)
+		if err != nil {
+			return err
+		}
+
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusForbidden {
+			_ = resp.Body.Close()
+			if attempt == maxRetries {
+				return fmt.Errorf("github API rate limited after retries")
+			}
+
+			sleepDuration := backoff
+			if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
+				if parsedSecs, err := strconv.Atoi(retryAfter); err == nil {
+					sleepDuration = time.Duration(parsedSecs) * time.Second
+				}
+			} else if reset := resp.Header.Get("X-RateLimit-Reset"); reset != "" {
+				if resetUnix, err := strconv.ParseInt(reset, 10, 64); err == nil {
+					resetTime := time.Unix(resetUnix, 0)
+					if resetTime.After(time.Now()) {
+						d := time.Until(resetTime)
+						if d < 1*time.Minute {
+							sleepDuration = d
+						}
+					}
+				}
+			}
+
+			jitter := time.Duration(rand.Int63n(int64(sleepDuration/2) + 1))
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(sleepDuration + jitter):
+			}
+			backoff *= 2
+			continue
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			_ = resp.Body.Close()
+			if commentID != 0 && resp.StatusCode == http.StatusNotFound {
+				g.setCommentID(pg, 0)
+				continue
+			}
+			return fmt.Errorf("github API returned status: %d", resp.StatusCode)
+		}
+
+		if commentID == 0 {
+			var result struct {
+				ID int64 `json:"id"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&result); err == nil && result.ID != 0 {
+				g.setCommentID(pg, result.ID)
+			}
+		}
+		_ = resp.Body.Close()
+		break
+	}
+	return nil
+}
+
+func (g *GitHubPreviewGroupNotifier) PostGroupCreated(ctx context.Context, pg *v1alpha1.PreviewGroup) error {
+	data := buildPreviewGroupTemplateData(pg, "")
+	msg, err := renderTemplate(pgCreatedTemplate, data)
+	if err != nil {
+		return err
+	}
+	return g.postOrUpdateComment(ctx, pg, msg)
+}
+
+func (g *GitHubPreviewGroupNotifier) PostGroupReady(ctx context.Context, pg *v1alpha1.PreviewGroup) error {
+	data := buildPreviewGroupTemplateData(pg, "")
+	msg, err := renderTemplate(pgReadyTemplate, data)
+	if err != nil {
+		return err
+	}
+	return g.postOrUpdateComment(ctx, pg, msg)
+}
+
+func (g *GitHubPreviewGroupNotifier) PostGroupFailed(ctx context.Context, pg *v1alpha1.PreviewGroup, reason string) error {
+	data := buildPreviewGroupTemplateData(pg, reason)
+	msg, err := renderTemplate(pgFailedTemplate, data)
+	if err != nil {
+		return err
+	}
+	return g.postOrUpdateComment(ctx, pg, msg)
+}
+
+func (g *GitHubPreviewGroupNotifier) PostGroupTeardown(ctx context.Context, pg *v1alpha1.PreviewGroup) error {
+	data := buildPreviewGroupTemplateData(pg, "Teardown requested")
+	msg, err := renderTemplate(pgTeardownTemplate, data)
+	if err != nil {
+		return err
+	}
+	return g.postOrUpdateComment(ctx, pg, msg)
+}
+
+func (g *GitHubPreviewGroupNotifier) UpdateGroupStatus(ctx context.Context, pg *v1alpha1.PreviewGroup) error {
+	data := buildPreviewGroupTemplateData(pg, "")
+	msg, err := renderTemplate(pgReadyTemplate, data)
+	if err != nil {
+		return err
+	}
+	return g.postOrUpdateComment(ctx, pg, msg)
 }

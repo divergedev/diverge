@@ -91,11 +91,10 @@ func TestSyncBaselineEnv(t *testing.T) {
 	tmpDir := t.TempDir()
 	outPath := filepath.Join(tmpDir, ".env.diverge")
 
-	synced, err := syncBaselineEnv(ctx, clientset, syncEnvOptions{
+	synced, err := syncBaselineEnvToFile(ctx, clientset, syncEnvOptions{
 		Namespace:   "demo-bank",
 		ServiceName: "payments-api",
-		OutputPath:  outPath,
-	})
+	}, outPath)
 	require.NoError(t, err)
 	assert.Equal(t, 3, synced, "should sync 3 app env vars (DATABASE_URL, APP_VERSION, ACCOUNTS_API_URL)")
 
@@ -132,11 +131,10 @@ func TestSyncBaselineEnv_NoPod(t *testing.T) {
 
 	tmpDir := t.TempDir()
 
-	_, err := syncBaselineEnv(ctx, clientset, syncEnvOptions{
+	_, err := syncBaselineEnvToFile(ctx, clientset, syncEnvOptions{
 		Namespace:   "demo-bank",
 		ServiceName: "nonexistent-service",
-		OutputPath:  filepath.Join(tmpDir, ".env.diverge"),
-	})
+	}, filepath.Join(tmpDir, ".env.diverge"))
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrBaselinePodNotFound)
 }
@@ -159,11 +157,10 @@ func TestSyncBaselineEnv_InvalidServiceName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := syncBaselineEnv(ctx, clientset, syncEnvOptions{
+			_, err := syncBaselineEnvToFile(ctx, clientset, syncEnvOptions{
 				Namespace:   "default",
 				ServiceName: tt.serviceName,
-				OutputPath:  filepath.Join(tmpDir, ".env.diverge"),
-			})
+			}, filepath.Join(tmpDir, ".env.diverge"))
 			require.Error(t, err)
 			require.ErrorIs(t, err, ErrInvalidServiceName)
 		})
@@ -200,11 +197,10 @@ func TestSyncBaselineEnv_FallbackLabelSelector(t *testing.T) {
 	tmpDir := t.TempDir()
 	outPath := filepath.Join(tmpDir, ".env.diverge")
 
-	synced, err := syncBaselineEnv(ctx, clientset, syncEnvOptions{
+	synced, err := syncBaselineEnvToFile(ctx, clientset, syncEnvOptions{
 		Namespace:   "default",
 		ServiceName: "gateway",
-		OutputPath:  outPath,
-	})
+	}, outPath)
 	require.NoError(t, err)
 	assert.Equal(t, 1, synced)
 
@@ -248,11 +244,10 @@ func TestSyncBaselineEnv_ConfigMapRef(t *testing.T) {
 	tmpDir := t.TempDir()
 	outPath := filepath.Join(tmpDir, ".env.diverge")
 
-	synced, err := syncBaselineEnv(ctx, clientset, syncEnvOptions{
+	synced, err := syncBaselineEnvToFile(ctx, clientset, syncEnvOptions{
 		Namespace:   "default",
 		ServiceName: "svc",
-		OutputPath:  outPath,
-	})
+	}, outPath)
 	require.NoError(t, err)
 	assert.Equal(t, 0, synced, "secret/configmap refs are commented out, not counted")
 
@@ -297,11 +292,10 @@ func TestSyncBaselineEnv_EnvFrom(t *testing.T) {
 	tmpDir := t.TempDir()
 	outPath := filepath.Join(tmpDir, ".env.diverge")
 
-	synced, err := syncBaselineEnv(ctx, clientset, syncEnvOptions{
+	synced, err := syncBaselineEnvToFile(ctx, clientset, syncEnvOptions{
 		Namespace:   "default",
 		ServiceName: "svc-envfrom",
-		OutputPath:  outPath,
-	})
+	}, outPath)
 	require.NoError(t, err)
 	assert.Equal(t, 0, synced, "envFrom annotations are not counted as synced vars")
 
@@ -345,11 +339,10 @@ func TestSyncBaselineEnv_StaleFileTruncated(t *testing.T) {
 	// Write stale content first
 	require.NoError(t, os.WriteFile(outPath, []byte("STALE_VAR=old_value\n"), 0600))
 
-	synced, err := syncBaselineEnv(ctx, clientset, syncEnvOptions{
+	synced, err := syncBaselineEnvToFile(ctx, clientset, syncEnvOptions{
 		Namespace:   "default",
 		ServiceName: "empty-svc",
-		OutputPath:  outPath,
-	})
+	}, outPath)
 	require.NoError(t, err)
 	assert.Equal(t, 0, synced)
 

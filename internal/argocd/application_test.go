@@ -82,6 +82,24 @@ func TestGenerate(t *testing.T) {
 				assert.Equal(t, "default", ns)
 				srv, _, _ := unstructured.NestedString(app.Object, "spec", "destination", "server")
 				assert.Equal(t, "https://kubernetes.default.svc", srv)
+
+				syncOptions, _, _ := unstructured.NestedSlice(app.Object, "spec", "syncPolicy", "syncOptions")
+				assert.Contains(t, syncOptions, "CreateNamespace=true")
+				assert.Contains(t, syncOptions, "ServerSideApply=true")
+				assert.Contains(t, syncOptions, "IgnoreExtraneous=true")
+				assert.NotContains(t, syncOptions, "Prune=false")
+
+				ignoreDiffs, _, _ := unstructured.NestedSlice(app.Object, "spec", "ignoreDifferences")
+				require.Len(t, ignoreDiffs, 3)
+
+				var kinds []string
+				for _, d := range ignoreDiffs {
+					dm := d.(map[string]interface{})
+					kinds = append(kinds, dm["kind"].(string))
+				}
+				assert.Contains(t, kinds, "HTTPRoute")
+				assert.Contains(t, kinds, "EndpointSlice")
+				assert.Contains(t, kinds, "Deployment")
 			},
 		},
 		{

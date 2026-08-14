@@ -71,7 +71,7 @@ func main() {
 			"Enabling this will ensure there is only one active controller manager.")
 	flag.IntVar(&webhookPort, "webhook-port", 9443, "The port the webhook server binds to.")
 	flag.StringVar(&routingProvider, "routing-provider", "gateway", "The routing provider to use (istio|gateway).")
-	flag.StringVar(&deployProvider, "deploy-provider", "noop", "Deployment provider (argocd|noop)")
+	flag.StringVar(&deployProvider, "deploy-provider", "noop", "Deployment provider (argocd|noop|direct|knative)")
 	flag.StringVar(&databaseProvider, "database-provider", "none", "Database provider (schema|none)")
 	flag.StringVar(&argoNamespace, "argo-namespace", "argocd", "Namespace where Argo CD is installed")
 	flag.StringVar(&argoRepoURL, "argo-repo-url", "", "Repository URL for Argo CD Application sources")
@@ -253,11 +253,25 @@ func main() {
 			Client:  mgr.GetClient(),
 			Fetcher: fetcher,
 		}
+	case "knative":
+		deployerImpl = &deployer.KNativeDeployer{
+			Client: mgr.GetClient(),
+		}
 	case "noop", "":
 		deployerImpl = &deployer.NoopDeployer{}
 	default:
 		setupLog.Error(fmt.Errorf("unsupported deploy provider: %q", deployProvider), "invalid --deploy-provider")
 		os.Exit(1)
+	}
+
+	// Wrap with KEDA Deployer (detects CRD automatically)
+	if deployProvider != "noop" {
+		deployerImpl = &deployer.KEDADeployer{
+			Inner:       deployerImpl,
+			Client:      mgr.GetClient(),
+			MinReplicas: 0,
+			MaxReplicas: 3,
+		}
 	}
 
 	// Normalize label for metrics
@@ -308,8 +322,11 @@ func main() {
 	}
 
 	var pgNotifierImpl notifier.PreviewGroupNotifier = &notifier.NoopPreviewGroupNotifier{}
-	if gitlabToken != "" && gitlabURL != "" {
+	switch notifierProvider {
+	case "gitlab":
 		pgNotifierImpl = notifier.NewGitLabPreviewGroupNotifier(gitlabURL, gitlabToken)
+	case "github":
+		pgNotifierImpl = notifier.NewGitHubPreviewGroupNotifier("", notifierToken)
 	}
 
 	if err = (&controller.PreviewGroupReconciler{

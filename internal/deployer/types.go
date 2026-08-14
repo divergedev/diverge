@@ -16,4 +16,8 @@ type ServiceStatus struct {
 	// Values: "Healthy", "Progressing", "Degraded", "Missing",
 	// "Current", "InProgress", "Failed", "Terminating".
 	Health string
+	// URL is an optional endpoint where this service can be reached.
+	URL string
+	// Message provides additional context about the current status.
+	Message string
 }
