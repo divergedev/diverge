@@ -67,6 +67,14 @@ func TestGatewayRouter_Reconcile_CreatesHTTPRoutes(t *testing.T) {
 		parents, _, _ := unstructured.NestedSlice(u.Object, "spec", "parentRefs")
 		require.Len(t, parents, 1)
 		assert.Equal(t, "diverge-gateway", parents[0].(map[string]interface{})["name"])
+
+		// Verify edge header stripping filter
+		filters, _, _ := unstructured.NestedSlice(rules[0].(map[string]interface{}), "filters")
+		require.Len(t, filters, 1)
+		assert.Equal(t, "RequestHeaderModifier", filters[0].(map[string]interface{})["type"])
+		headerModifier, _, _ := unstructured.NestedMap(filters[0].(map[string]interface{}), "requestHeaderModifier")
+		removes, _, _ := unstructured.NestedSlice(headerModifier, "remove")
+		assert.Contains(t, removes, "x-custom-env")
 	}
 }
 
@@ -509,4 +517,40 @@ func TestGatewayRouter_Reconcile_PathPrefix(t *testing.T) {
 	require.True(t, found, "path match should exist")
 	assert.Equal(t, "/api/test", pathMatch["value"])
 	assert.Equal(t, "PathPrefix", pathMatch["type"])
+}
+
+func TestGatewayRouter_Reconcile_MeshRoutes(t *testing.T) {
+	c := fake.NewClientBuilder().Build()
+	r := &GatewayRouter{Client: c, Namespace: "default"}
+
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-env",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Deploy: v1alpha1.EnvironmentDeploy{
+				ChangedServices: []string{"web"},
+			},
+			ServiceConfig: &v1alpha1.ServicePreviewConfig{
+				ServiceName: "web-svc",
+			},
+		},
+	}
+
+	err := r.Reconcile(context.Background(), env)
+	require.NoError(t, err)
+
+	// Verify mesh HTTPRoute was created and has no filters
+	u := &unstructured.Unstructured{}
+	u.SetAPIVersion("gateway.networking.k8s.io/v1")
+	u.SetKind("HTTPRoute")
+	err = c.Get(context.Background(), client.ObjectKey{Name: "test-env-web-mesh", Namespace: "default"}, u)
+	require.NoError(t, err)
+
+	rules, _, _ := unstructured.NestedSlice(u.Object, "spec", "rules")
+	require.Len(t, rules, 1)
+
+	_, found, _ := unstructured.NestedSlice(rules[0].(map[string]interface{}), "filters")
+	assert.False(t, found, "mesh route should not have filters")
 }

@@ -12,6 +12,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -51,6 +52,8 @@ type PreviewGroupReconciler struct {
 // +kubebuilder:rbac:groups=diverge.io,resources=previewgroups/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=diverge.io,resources=previewgroups/finalizers,verbs=update
 // +kubebuilder:rbac:groups=diverge.io,resources=environments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes;grpcroutes,verbs=list;delete
+// +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=list;delete
 
 func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, retErr error) {
 	logger := log.FromContext(ctx)
@@ -110,6 +113,45 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			if err := r.Status().Patch(ctx, &pg, client.MergeFrom(statusBase)); err != nil {
 				return ctrl.Result{}, fmt.Errorf("failed to update PreviewGroup status: %w", err)
 			}
+
+			// Delete HTTPRoute/GRPCRoute first
+			var httpRouteList unstructured.UnstructuredList
+			httpRouteList.SetAPIVersion("gateway.networking.k8s.io/v1")
+			httpRouteList.SetKind("HTTPRouteList")
+			if err := r.Client.List(ctx, &httpRouteList, client.MatchingLabels{"diverge.io/preview-group": pg.Name}); err == nil {
+				for i := range httpRouteList.Items {
+					_ = r.Client.Delete(ctx, &httpRouteList.Items[i])
+				}
+			}
+
+			var grpcRouteList unstructured.UnstructuredList
+			grpcRouteList.SetAPIVersion("gateway.networking.k8s.io/v1alpha2")
+			grpcRouteList.SetKind("GRPCRouteList")
+			if err := r.Client.List(ctx, &grpcRouteList, client.MatchingLabels{"diverge.io/preview-group": pg.Name}); err == nil {
+				for i := range grpcRouteList.Items {
+					_ = r.Client.Delete(ctx, &grpcRouteList.Items[i])
+				}
+			}
+
+			// Then delete EndpointSlices with UID verification
+			var endpointSliceList unstructured.UnstructuredList
+			endpointSliceList.SetAPIVersion("discovery.k8s.io/v1")
+			endpointSliceList.SetKind("EndpointSliceList")
+			if err := r.Client.List(ctx, &endpointSliceList, client.MatchingLabels{
+				"diverge.io/preview-group":               pg.Name,
+				"endpointslice.kubernetes.io/managed-by": "diverge",
+			}); err == nil {
+				for i := range endpointSliceList.Items {
+					eps := &endpointSliceList.Items[i]
+					uid := eps.GetUID()
+					_ = r.Client.Delete(ctx, eps, &client.DeleteOptions{
+						Preconditions: &metav1.Preconditions{
+							UID: &uid,
+						},
+					})
+				}
+			}
+
 			if err := r.Delete(ctx, &pg); err != nil {
 				return ctrl.Result{}, fmt.Errorf("failed to delete abandoned PreviewGroup: %w", err)
 			}

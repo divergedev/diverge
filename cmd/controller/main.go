@@ -70,7 +70,7 @@ func main() {
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
 	flag.IntVar(&webhookPort, "webhook-port", 9443, "The port the webhook server binds to.")
-	flag.StringVar(&routingProvider, "routing-provider", "gateway", "The routing provider to use (istio|gateway).")
+	flag.StringVar(&routingProvider, "routing-provider", "gateway", "The routing provider to use (istio|gateway|composite).")
 	flag.StringVar(&deployProvider, "deploy-provider", "noop", "Deployment provider (argocd|noop|direct|knative)")
 	flag.StringVar(&databaseProvider, "database-provider", "none", "Database provider (schema|none)")
 	flag.StringVar(&argoNamespace, "argo-namespace", "argocd", "Namespace where Argo CD is installed")
@@ -124,6 +124,13 @@ func main() {
 		routerImpl = &routing.NoopRouter{}
 	case "gateway", "":
 		routerImpl = &routing.GatewayRouter{Client: mgr.GetClient()}
+	case "composite":
+		routerImpl = &routing.CompositeRouter{
+			Routers: map[string]routing.Router{
+				"gateway": &routing.GatewayRouter{Client: mgr.GetClient()},
+				"async":   &routing.AsyncRouter{}, // Initialize without providers for now
+			},
+		}
 	default:
 		setupLog.Error(fmt.Errorf("unsupported routing provider: %q", routingProvider), "invalid --routing-provider")
 		os.Exit(1)

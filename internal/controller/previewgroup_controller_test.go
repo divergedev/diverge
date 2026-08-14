@@ -3,8 +3,10 @@ package controller
 import (
 	"context"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -302,5 +304,110 @@ func TestChildEnvironmentName(t *testing.T) {
 	y := childEnvironmentName("mr-42", "svc-b")
 	if x == y {
 		t.Errorf("collision: %q == %q", x, y)
+	}
+}
+
+func TestPreviewGroupReconcile_LeaseExpiry(t *testing.T) {
+	pg := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "mr-99",
+			Finalizers: []string{previewGroupFinalizer},
+		},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Source: divergeiov1alpha1.EnvironmentSource{
+				Provider: "gitlab",
+				Project:  "azra/platform",
+				Branch:   "main",
+			},
+			Routing: divergeiov1alpha1.PreviewGroupRouting{
+				HeaderKey:   "x-preview-env",
+				HeaderValue: "99",
+			},
+			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{
+					Name:      "auth-svc",
+					Mode:      divergeiov1alpha1.ServiceModeLocal,
+					Namespace: "platform-core",
+				},
+			},
+		},
+		Status: divergeiov1alpha1.PreviewGroupStatus{
+			Phase: divergeiov1alpha1.PreviewGroupPhaseRunning,
+		},
+	}
+
+	// Set lease to expired
+	expiredTime := metav1.Now()
+	expiredTime.Time = expiredTime.Time.Add(-10 * time.Minute)
+	pg.Status.LeaseRenewedAt = &expiredTime
+
+	epsUID := types.UID("uid-eps-1")
+
+	eps1 := &unstructured.Unstructured{}
+	eps1.SetAPIVersion("discovery.k8s.io/v1")
+	eps1.SetKind("EndpointSlice")
+	eps1.SetName("auth-svc-mr-99")
+	eps1.SetNamespace("platform-core")
+	eps1.SetUID(epsUID)
+	eps1.SetLabels(map[string]string{
+		"diverge.io/preview-group":               "mr-99",
+		"endpointslice.kubernetes.io/managed-by": "diverge",
+	})
+
+	route1 := &unstructured.Unstructured{}
+	route1.SetAPIVersion("gateway.networking.k8s.io/v1")
+	route1.SetKind("HTTPRoute")
+	route1.SetName("auth-svc-mr-99")
+	route1.SetNamespace("platform-core")
+	route1.SetLabels(map[string]string{
+		"diverge.io/preview-group": "mr-99",
+	})
+
+	epsOther := &unstructured.Unstructured{}
+	epsOther.SetAPIVersion("discovery.k8s.io/v1")
+	epsOther.SetKind("EndpointSlice")
+	epsOther.SetName("other-svc-mr-99")
+	epsOther.SetNamespace("platform-core")
+	epsOther.SetUID("uid-eps-other")
+	epsOther.SetLabels(map[string]string{
+		"diverge.io/preview-group": "mr-99",
+		// missing managed-by label
+	})
+
+	r, c := newTestPreviewGroupReconciler(pg, eps1, route1, epsOther)
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "mr-99"},
+	})
+	if err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+
+	// Verify group is now marked Abandoned
+	var updated divergeiov1alpha1.PreviewGroup
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "mr-99"}, &updated); err == nil {
+		if updated.Status.Phase != divergeiov1alpha1.PreviewGroupPhaseAbandoned {
+			t.Errorf("expected phase Abandoned, got %s", updated.Status.Phase)
+		}
+	} else if client.IgnoreNotFound(err) != nil {
+		t.Errorf("failed to get updated pg: %v", err)
+	}
+
+	// Verify HTTPRoute is deleted
+	var routes unstructured.UnstructuredList
+	routes.SetAPIVersion("gateway.networking.k8s.io/v1")
+	routes.SetKind("HTTPRouteList")
+	_ = c.List(context.Background(), &routes, client.InNamespace("platform-core"))
+	if len(routes.Items) != 0 {
+		t.Errorf("expected HTTPRoute to be deleted, got %d", len(routes.Items))
+	}
+
+	// Verify EndpointSlice (managed) is deleted
+	var slices unstructured.UnstructuredList
+	slices.SetAPIVersion("discovery.k8s.io/v1")
+	slices.SetKind("EndpointSliceList")
+	_ = c.List(context.Background(), &slices, client.InNamespace("platform-core"))
+	if len(slices.Items) != 1 || slices.Items[0].GetName() != "other-svc-mr-99" {
+		t.Errorf("expected only other-svc-mr-99 to remain, got %v", slices.Items)
 	}
 }

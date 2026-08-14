@@ -138,19 +138,30 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 		parentRef["group"] = ""
 	}
 
-	spec := map[string]interface{}{
-		"parentRefs": []interface{}{parentRef},
-		"rules": []interface{}{
+	rule := map[string]interface{}{
+		"matches": []interface{}{matchRule},
+		"backendRefs": []interface{}{
 			map[string]interface{}{
-				"matches": []interface{}{matchRule},
-				"backendRefs": []interface{}{
-					map[string]interface{}{
-						"name": fmt.Sprintf("%s-%s", env.Name, svc),
-						"port": backendPort,
-					},
-				},
+				"name": fmt.Sprintf("%s-%s", env.Name, svc),
+				"port": backendPort,
 			},
 		},
+	}
+
+	if kind == "HTTPRoute" && !isServiceName(parentRefName) {
+		rule["filters"] = []interface{}{
+			map[string]interface{}{
+				"type": "RequestHeaderModifier",
+				"requestHeaderModifier": map[string]interface{}{
+					"remove": []interface{}{headerKey},
+				},
+			},
+		}
+	}
+
+	spec := map[string]interface{}{
+		"parentRefs": []interface{}{parentRef},
+		"rules":      []interface{}{rule},
 	}
 
 	existing := &unstructured.Unstructured{}

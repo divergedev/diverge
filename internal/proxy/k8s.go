@@ -137,7 +137,31 @@ func NewK8sEnvironmentLister(ctx context.Context, kubeconfig, namespace string, 
 		}
 	}()
 
+	lister.startPruner(ctx)
+
 	return lister, nil
+}
+
+func (l *K8sEnvironmentLister) startPruner(ctx context.Context) {
+	ticker := time.NewTicker(60 * time.Second)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				l.ttlMu.Lock()
+				now := time.Now()
+				for k, v := range l.ttlCache {
+					if now.After(v.expiresAt) {
+						delete(l.ttlCache, k)
+					}
+				}
+				l.ttlMu.Unlock()
+			}
+		}
+	}()
 }
 
 // HasSynced reports whether the informer cache has completed its initial list.
