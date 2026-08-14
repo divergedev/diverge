@@ -10,12 +10,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
 
 func TestLocalDeployer_Deploy(t *testing.T) {
-	c := fake.NewClientBuilder().Build()
+	c := fake.NewClientBuilder().WithInterceptorFuncs(withApplyMock()).Build()
 	d := &LocalDeployer{Client: c}
 
 	env := &v1alpha1.Environment{
@@ -60,7 +61,7 @@ func TestLocalDeployer_Deploy(t *testing.T) {
 }
 
 func TestLocalDeployer_Teardown(t *testing.T) {
-	c := fake.NewClientBuilder().Build()
+	c := fake.NewClientBuilder().WithInterceptorFuncs(withApplyMock()).Build()
 	d := &LocalDeployer{Client: c}
 
 	env := &v1alpha1.Environment{
@@ -91,7 +92,7 @@ func TestLocalDeployer_Teardown(t *testing.T) {
 }
 
 func TestLocalDeployer_Status(t *testing.T) {
-	c := fake.NewClientBuilder().Build()
+	c := fake.NewClientBuilder().WithInterceptorFuncs(withApplyMock()).Build()
 	d := &LocalDeployer{Client: c}
 
 	env := &v1alpha1.Environment{
@@ -126,7 +127,7 @@ func TestLocalDeployer_Status(t *testing.T) {
 }
 
 func TestLocalDeployer_Deploy_Update(t *testing.T) {
-	c := fake.NewClientBuilder().Build()
+	c := fake.NewClientBuilder().WithInterceptorFuncs(withApplyMock()).Build()
 	d := &LocalDeployer{Client: c}
 
 	env := &v1alpha1.Environment{
@@ -156,5 +157,22 @@ func TestLocalDeployer_Deploy_Update(t *testing.T) {
 	}
 	if *eps.Ports[0].Port != 8081 {
 		t.Errorf("Expected updated port 8081, got %v", *eps.Ports[0].Port)
+	}
+}
+
+func withApplyMock() interceptor.Funcs {
+	return interceptor.Funcs{
+		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if patch.Type() == "application/apply-patch+yaml" {
+				clone := obj.DeepCopyObject().(client.Object)
+				err := c.Get(ctx, client.ObjectKeyFromObject(obj), clone)
+				if err != nil {
+					return c.Create(ctx, obj)
+				}
+				obj.SetResourceVersion(clone.GetResourceVersion())
+				return c.Update(ctx, obj)
+			}
+			return c.Patch(ctx, obj, patch, opts...)
+		},
 	}
 }

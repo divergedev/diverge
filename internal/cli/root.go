@@ -32,8 +32,8 @@ type App struct {
 	Commit     string
 	Date       string
 
-	Client    client.Client         // For testing
-	Clientset *kubernetes.Clientset // For testing (logs needs CoreV1)
+	Client    client.Client        // For testing
+	Clientset kubernetes.Interface // For testing (logs needs CoreV1)
 }
 
 var lazyRootCmd *cobra.Command
@@ -131,7 +131,7 @@ func (app *App) ResolveNamespace() error {
 // KubeClient returns a controller-runtime client and a kubernetes.Clientset.
 // It returns injected clients when app.Client is non-nil; otherwise it creates
 // both clients from kubeconfig.
-func (app *App) KubeClient() (client.Client, *kubernetes.Clientset, error) {
+func (app *App) KubeClient() (client.Client, kubernetes.Interface, error) {
 	if app.Client != nil {
 		return app.Client, app.Clientset, nil
 	}
