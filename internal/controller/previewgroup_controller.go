@@ -118,18 +118,18 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			var httpRouteList unstructured.UnstructuredList
 			httpRouteList.SetAPIVersion("gateway.networking.k8s.io/v1")
 			httpRouteList.SetKind("HTTPRouteList")
-			if err := r.Client.List(ctx, &httpRouteList, client.MatchingLabels{"diverge.io/preview-group": pg.Name}); err == nil {
+			if err := r.List(ctx, &httpRouteList, client.MatchingLabels{"diverge.io/preview-group": pg.Name}); err == nil {
 				for i := range httpRouteList.Items {
-					_ = r.Client.Delete(ctx, &httpRouteList.Items[i])
+					_ = r.Delete(ctx, &httpRouteList.Items[i])
 				}
 			}
 
 			var grpcRouteList unstructured.UnstructuredList
 			grpcRouteList.SetAPIVersion("gateway.networking.k8s.io/v1alpha2")
 			grpcRouteList.SetKind("GRPCRouteList")
-			if err := r.Client.List(ctx, &grpcRouteList, client.MatchingLabels{"diverge.io/preview-group": pg.Name}); err == nil {
+			if err := r.List(ctx, &grpcRouteList, client.MatchingLabels{"diverge.io/preview-group": pg.Name}); err == nil {
 				for i := range grpcRouteList.Items {
-					_ = r.Client.Delete(ctx, &grpcRouteList.Items[i])
+					_ = r.Delete(ctx, &grpcRouteList.Items[i])
 				}
 			}
 
@@ -137,14 +137,14 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			var endpointSliceList unstructured.UnstructuredList
 			endpointSliceList.SetAPIVersion("discovery.k8s.io/v1")
 			endpointSliceList.SetKind("EndpointSliceList")
-			if err := r.Client.List(ctx, &endpointSliceList, client.MatchingLabels{
+			if err := r.List(ctx, &endpointSliceList, client.MatchingLabels{
 				"diverge.io/preview-group":               pg.Name,
 				"endpointslice.kubernetes.io/managed-by": "diverge",
 			}); err == nil {
 				for i := range endpointSliceList.Items {
 					eps := &endpointSliceList.Items[i]
 					uid := eps.GetUID()
-					_ = r.Client.Delete(ctx, eps, &client.DeleteOptions{
+					_ = r.Delete(ctx, eps, &client.DeleteOptions{
 						Preconditions: &metav1.Preconditions{
 							UID: &uid,
 						},

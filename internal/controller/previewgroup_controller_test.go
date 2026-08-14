@@ -337,8 +337,7 @@ func TestPreviewGroupReconcile_LeaseExpiry(t *testing.T) {
 	}
 
 	// Set lease to expired
-	expiredTime := metav1.Now()
-	expiredTime.Time = expiredTime.Time.Add(-10 * time.Minute)
+	expiredTime := metav1.NewTime(time.Now().Add(-10 * time.Minute))
 	pg.Status.LeaseRenewedAt = &expiredTime
 
 	epsUID := types.UID("uid-eps-1")
