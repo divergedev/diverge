@@ -265,11 +265,13 @@ func main() {
 	}
 
 	// Wrap with KEDA Deployer (detects CRD automatically)
-	deployerImpl = &deployer.KEDADeployer{
-		Inner:       deployerImpl,
-		Client:      mgr.GetClient(),
-		MinReplicas: 0,
-		MaxReplicas: 3,
+	if deployProvider != "noop" {
+		deployerImpl = &deployer.KEDADeployer{
+			Inner:       deployerImpl,
+			Client:      mgr.GetClient(),
+			MinReplicas: 0,
+			MaxReplicas: 3,
+		}
 	}
 
 	// Normalize label for metrics

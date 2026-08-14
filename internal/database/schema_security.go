@@ -4,11 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
 
 func (p *SchemaDatabaseProvider) CreatePreviewRole(ctx context.Context, db *sql.DB, schemaName string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
 	roleName := fmt.Sprintf("diverge_preview_%s", schemaName)
 	schemaIdent := pgx.Identifier{schemaName}.Sanitize()
 	roleIdent := pgx.Identifier{roleName}.Sanitize()
@@ -20,7 +24,7 @@ func (p *SchemaDatabaseProvider) CreatePreviewRole(ctx context.Context, db *sql.
 	}
 
 	if !exists {
-		if _, err := db.ExecContext(ctx, fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD 'random'", roleIdent)); err != nil {
+		if _, err := db.ExecContext(ctx, fmt.Sprintf("CREATE ROLE %s NOLOGIN", roleIdent)); err != nil {
 			return "", fmt.Errorf("failed to create preview role: %w", err)
 		}
 	}
@@ -29,7 +33,7 @@ func (p *SchemaDatabaseProvider) CreatePreviewRole(ctx context.Context, db *sql.
 		fmt.Sprintf("GRANT USAGE ON SCHEMA %s TO %s", schemaIdent, roleIdent),
 		fmt.Sprintf("GRANT ALL ON ALL TABLES IN SCHEMA %s TO %s", schemaIdent, roleIdent),
 		fmt.Sprintf("GRANT ALL ON ALL SEQUENCES IN SCHEMA %s TO %s", schemaIdent, roleIdent),
-		fmt.Sprintf("REVOKE ALL ON SCHEMA public FROM %s", roleIdent),
+		fmt.Sprintf("REVOKE USAGE ON SCHEMA public FROM %s", roleIdent),
 	}
 
 	for _, q := range queries {
