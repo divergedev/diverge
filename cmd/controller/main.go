@@ -314,6 +314,8 @@ func main() {
 	var pgNotifierImpl notifier.PreviewGroupNotifier = &notifier.NoopPreviewGroupNotifier{}
 	if gitlabToken != "" && gitlabURL != "" {
 		pgNotifierImpl = notifier.NewGitLabPreviewGroupNotifier(gitlabURL, gitlabToken)
+	} else if notifierProvider == "github" && notifierToken != "" {
+		pgNotifierImpl = notifier.NewGitHubPreviewGroupNotifier("", notifierToken)
 	}
 
 	if err = (&controller.PreviewGroupReconciler{

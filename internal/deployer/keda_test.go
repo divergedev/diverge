@@ -124,12 +124,13 @@ func TestKEDADeployer_Status_WithHSO(t *testing.T) {
 	hso.SetGroupVersionKind(hsoGVK)
 	hso.SetName("test-env")
 	hso.SetNamespace("test-ns")
-	unstructured.SetNestedSlice(hso.Object, []interface{}{
+	err := unstructured.SetNestedSlice(hso.Object, []interface{}{
 		map[string]interface{}{
 			"type":   "Ready",
 			"status": "True",
 		},
 	}, "status", "conditions")
+	require.NoError(t, err)
 
 	c := fake.NewClientBuilder().WithRuntimeObjects(hso).Build()
 

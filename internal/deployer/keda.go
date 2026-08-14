@@ -75,8 +75,7 @@ func (d *KEDADeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) er
 	// Apply via Server-Side Apply (create-or-patch)
 	existing := &unstructured.Unstructured{}
 	existing.SetGroupVersionKind(hsoGVK)
-	var err error
-	err = d.Client.Get(ctx, client.ObjectKey{Name: env.Name, Namespace: targetNS}, existing)
+	err := d.Client.Get(ctx, client.ObjectKey{Name: env.Name, Namespace: targetNS}, existing)
 	if err != nil {
 		if client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("failed to check existing HTTPScaledObject: %w", err)
@@ -159,9 +158,6 @@ func (d *KEDADeployer) Status(ctx context.Context, env *v1alpha1.Environment) ([
 	hsoHealth := "Progressing"
 	if hsoReady {
 		hsoHealth = "Healthy"
-	} else {
-		// Just a heuristic
-		// Could check specific conditions if required, but let's default to Progressing unless ready.
 	}
 
 	innerStatus = append(innerStatus, ServiceStatus{

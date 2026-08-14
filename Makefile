@@ -51,6 +51,14 @@ e2e:
 e2e-teardown:
 	nix develop -c ./test/e2e/teardown.sh
 
+e2e-dual-setup:
+	nix develop -c ./test/e2e/setup_dual.sh
+
+e2e-dual:
+	nix develop -c go test -tags=e2e_dual -v -count=1 -timeout=10m ./test/e2e/...
+
+e2e-dual-teardown:
+	nix develop -c ./test/e2e/teardown_dual.sh
 ##@ Build
 
 .PHONY: build
