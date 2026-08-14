@@ -95,10 +95,10 @@ func TestIstioRouter_Reconcile(t *testing.T) {
 	from2 := rule2["from"].([]interface{})[0].(map[string]interface{})
 	source2 := from2["source"].(map[string]interface{})
 	principals := source2["principals"].([]interface{})
-	assert.Equal(t, "cluster.local/ns/*/sa/*", principals[0])
+	assert.Equal(t, "cluster.local/ns/test-ns/sa/*", principals[0])
 
 	// pure L4, no methods or operation
-	_, ok, _ = unstructured.NestedMap(rule1, "to")
+	_, ok, _ = unstructured.NestedSlice(rule1, "to")
 	assert.False(t, ok, "should not have 'to' or 'operation' block for pure L4")
 }
 

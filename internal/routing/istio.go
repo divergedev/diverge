@@ -3,13 +3,16 @@ package routing
 import (
 	"context"
 	"fmt"
+	"net/netip"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
@@ -23,7 +26,13 @@ var _ Router = (*IstioRouter)(nil)
 
 // Reconcile creates or updates an AuthorizationPolicy for the environment.
 func (r *IstioRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	logger := log.FromContext(ctx).WithName("istio-router")
+
+	if errs := validation.IsValidLabelValue(env.Name); len(errs) > 0 {
+		return fmt.Errorf("invalid environment name %q: %v", env.Name, errs)
+	}
 
 	policyName := fmt.Sprintf("diverge-dev-%s", env.Name)
 	targetNS := env.Namespace
@@ -48,7 +57,11 @@ func (r *IstioRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment) 
 
 	ipBlocks := []interface{}{}
 	if env.Spec.Routing.DevIP != "" {
-		ipBlocks = append(ipBlocks, fmt.Sprintf("%s/32", env.Spec.Routing.DevIP))
+		ip, err := netip.ParseAddr(env.Spec.Routing.DevIP)
+		if err != nil {
+			return fmt.Errorf("invalid DevIP %q: %w", env.Spec.Routing.DevIP, err)
+		}
+		ipBlocks = append(ipBlocks, fmt.Sprintf("%s/32", ip.String()))
 	}
 
 	rules := []interface{}{}
@@ -69,7 +82,7 @@ func (r *IstioRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment) 
 			map[string]interface{}{
 				"source": map[string]interface{}{
 					"principals": []interface{}{
-						"cluster.local/ns/*/sa/*",
+						fmt.Sprintf("cluster.local/ns/%s/sa/*", targetNS),
 					},
 				},
 			},
@@ -98,6 +111,8 @@ func (r *IstioRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment) 
 
 // Teardown deletes AuthorizationPolicy resources by label selector.
 func (r *IstioRouter) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	logger := log.FromContext(ctx).WithName("istio-router")
 
 	targetNS := env.Namespace
@@ -130,6 +145,7 @@ func (r *IstioRouter) Teardown(ctx context.Context, env *v1alpha1.Environment) e
 			if client.IgnoreNotFound(err) != nil {
 				return fmt.Errorf("failed to delete AuthorizationPolicy %s: %w", policyList.Items[i].GetName(), err)
 			}
+			continue
 		}
 		deleted++
 	}

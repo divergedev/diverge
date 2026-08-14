@@ -72,6 +72,8 @@ func NewK8sEnvironmentLister(ctx context.Context, kubeconfig, namespace string, 
 		ttlCache:  make(map[string]*ttlEntry),
 	}
 
+	lister.startPruner(ctx)
+
 	cacheOpts := ctrlcache.Options{
 		Scheme: scheme,
 		DefaultNamespaces: map[string]ctrlcache.Config{
@@ -136,8 +138,6 @@ func NewK8sEnvironmentLister(ctx context.Context, kubeconfig, namespace string, 
 			k8sLogger.V(0).Info("Informer cache stopped", "error", err)
 		}
 	}()
-
-	lister.startPruner(ctx)
 
 	return lister, nil
 }

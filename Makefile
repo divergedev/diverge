@@ -105,3 +105,42 @@ install: manifests ## Install CRDs into the K8s cluster specified in ~/.kube/con
 .PHONY: release-snapshot
 release-snapshot: ## Run GoReleaser locally (snapshot)
 	goreleaser release --snapshot --clean
+
+##@ Demo
+
+.PHONY: demo demo-setup demo-teardown demo-killer demo-scenario-1 demo-scenario-2 demo-scenario-3 demo-scenario-4
+
+demo: demo-setup
+	@echo ""
+	@echo "🔀 Diverge Demo Ready!"
+	@echo "═══════════════════════"
+	@echo "Run scenarios:"
+	@echo "  make demo-killer      # 🪦 Telepresence is Dead (headline demo)"
+	@echo "  make demo-scenario-1  # Preview routing"
+	@echo "  make demo-scenario-2  # GAMMA mesh routing"
+	@echo "  make demo-scenario-3  # Collision detection"
+	@echo "  make demo-scenario-4  # Cleanup & dead man's switch"
+	@echo ""
+	@echo "Teardown: make demo-teardown"
+
+demo-setup:
+	@bash demo/setup.sh
+
+demo-teardown:
+	@bash demo/teardown.sh
+
+demo-killer: ## 🪦 The "Telepresence is Dead" headline demo
+	@bash demo/scenarios/00-telepresence-killer.sh
+
+demo-scenario-1:
+	@bash demo/scenarios/01-preview-routing.sh
+
+demo-scenario-2:
+	@bash demo/scenarios/02-gamma-mesh.sh
+
+demo-scenario-3:
+	@bash demo/scenarios/03-collision-detection.sh
+
+demo-scenario-4:
+	@bash demo/scenarios/04-cleanup.sh
+

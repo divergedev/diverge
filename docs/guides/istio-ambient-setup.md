@@ -13,9 +13,12 @@ istioctl install --set profile=ambient --skip-confirmation
 ```
 
 ### 2. Enable Ambient Mode on Preview Namespaces
-Diverge automatically adds the `istio.io/dataplane-mode: ambient` label
-to preview namespaces when `--routing-provider=istio` is configured.
-
+You must configure your `Environment` to set the `istio.io/dataplane-mode: ambient` label on the target namespace:
+```yaml
+spec:
+  namespaceLabels:
+    istio.io/dataplane-mode: ambient
+```
 ### 3. Configure DevIP for AuthorizationPolicy
 Set the Tailscale IP in your Environment spec:
 ```yaml

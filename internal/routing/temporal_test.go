@@ -43,7 +43,7 @@ func TestTemporalProvider_Reconcile(t *testing.T) {
 	require.NoError(t, err)
 
 	cm := &corev1.ConfigMap{}
-	err = c.Get(context.Background(), types.NamespacedName{Name: "diverge-temporal-test-env", Namespace: "test-ns"}, cm)
+	err = c.Get(context.Background(), types.NamespacedName{Name: "diverge-temporal-test-uid", Namespace: "test-ns"}, cm)
 	require.NoError(t, err)
 
 	assert.Equal(t, "test-env", cm.Data["diverge-env"])
@@ -58,7 +58,7 @@ func TestTemporalProvider_Reconcile(t *testing.T) {
 func TestTemporalProvider_Teardown(t *testing.T) {
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "diverge-temporal-test-env",
+			Name:      "diverge-temporal-test-uid",
 			Namespace: "test-ns",
 			Labels: map[string]string{
 				"diverge.io/managed-by":  "diverge",

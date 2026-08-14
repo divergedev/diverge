@@ -7,6 +7,7 @@ import (
 
 	"github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type mockRouter struct {
@@ -48,7 +49,7 @@ func TestCompositeRouter_Reconcile(t *testing.T) {
 		c := &CompositeRouter{Routers: map[string]Router{"r1": r1, "r2": r2}}
 		err := c.Reconcile(context.Background(), nil)
 		var pfErr *PartialFailureError
-		assert.ErrorAs(t, err, &pfErr)
+		require.ErrorAs(t, err, &pfErr)
 		assert.Contains(t, pfErr.Succeeded, "r1")
 		assert.Equal(t, map[string]error{"r2": r2.reconcileErr}, pfErr.Failed)
 	})

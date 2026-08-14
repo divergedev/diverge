@@ -1,0 +1,155 @@
+# Frontend service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+      - name: frontend
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: config
+          mountPath: /usr/share/nginx/html
+      volumes:
+      - name: config
+        configMap:
+          name: frontend-content
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontend-content
+data:
+  index.html: |
+    <html><body>
+    <h1>🏪 Frontend (Production)</h1>
+    <p>Environment: <b>production</b></p>
+    <p>Served by: frontend v1.0</p>
+    </body></html>
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+spec:
+  selector:
+    app: frontend
+  ports:
+  - port: 80
+    targetPort: 80
+---
+# Payments service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: payments
+  template:
+    metadata:
+      labels:
+        app: payments
+    spec:
+      containers:
+      - name: payments
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: config
+          mountPath: /usr/share/nginx/html
+      volumes:
+      - name: config
+        configMap:
+          name: payments-content
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: payments-content
+data:
+  index.html: |
+    <html><body>
+    <h1>💳 Payments (Production)</h1>
+    <p>Environment: <b>production</b></p>
+    <p>Served by: payments v1.0</p>
+    </body></html>
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payments
+spec:
+  selector:
+    app: payments
+  ports:
+  - port: 80
+    targetPort: 80
+---
+# Orders service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: orders
+  template:
+    metadata:
+      labels:
+        app: orders
+    spec:
+      containers:
+      - name: orders
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: config
+          mountPath: /usr/share/nginx/html
+      volumes:
+      - name: config
+        configMap:
+          name: orders-content
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: orders-content
+data:
+  index.html: |
+    <html><body>
+    <h1>📦 Orders (Production)</h1>
+    <p>Environment: <b>production</b></p>
+    <p>Served by: orders v1.0</p>
+    </body></html>
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orders
+spec:
+  selector:
+    app: orders
+  ports:
+  - port: 80
+    targetPort: 80

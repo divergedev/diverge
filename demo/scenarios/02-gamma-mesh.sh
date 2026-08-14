@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+echo "═══════════════════════════════════════════"
+echo "  Scenario 2: GAMMA Mesh Routing (East-West)"
+echo "═══════════════════════════════════════════"
+echo ""
+echo "GAMMA routes east-west mesh traffic through the preview environment."
+echo "When frontend calls payments, the x-diverge-env header routes to the preview."
+echo ""
+echo "📝 The HTTPRoute uses parentRef: {name: payments, kind: Service, group: ''}."
+echo "   This is the GAMMA pattern — no VirtualService, pure Gateway API."
+echo ""
+kubectl get httproute -l diverge.io/environment=mr-42 -o yaml 2>/dev/null | grep -A5 parentRefs || echo "  (Run scenario 1 first)"
+echo ""
+echo "✅ East-west mesh routing is handled by the same GatewayRouter."
+echo "   No separate mesh configuration needed."

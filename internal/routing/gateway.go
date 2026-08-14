@@ -148,7 +148,7 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 		},
 	}
 
-	if kind == "HTTPRoute" && !isServiceName(parentRefName) {
+	if !isServiceName(parentRefName) {
 		rule["filters"] = []interface{}{
 			map[string]interface{}{
 				"type": "RequestHeaderModifier",

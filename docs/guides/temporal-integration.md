@@ -22,14 +22,19 @@ When creating your Temporal Client, register the Diverge ContextPropagator:
 
 ```go
 import (
+	"log"
+	"os"
+	
 	divergetemporal "github.com/divergedev/diverge/pkg/sdk/temporal"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/workflow"
 )
 
 func main() {
-	// The propagator will automatically read from the injected environment
-	// if running inside a Diverge preview environment.
-	env := os.Getenv("DIVERGE_ENV") // Or read from the diverging ConfigMap
+	// The propagator will explicitly use this EnvName to override incoming headers.
+	// In a Diverge environment, you can map the DIVERGE_ENV_NAME environment variable
+	// from the divergedev-temporal-config ConfigMap.
+	env := os.Getenv("DIVERGE_ENV_NAME")
 
 	propagator := &divergetemporal.Propagator{
 		EnvName: env,

@@ -128,7 +128,11 @@ func main() {
 		routerImpl = &routing.CompositeRouter{
 			Routers: map[string]routing.Router{
 				"gateway": &routing.GatewayRouter{Client: mgr.GetClient()},
-				"async":   &routing.AsyncRouter{}, // Initialize without providers for now
+				"async": &routing.AsyncRouter{
+					Providers: []routing.AsyncProvider{
+						&routing.TemporalProvider{Client: mgr.GetClient()},
+					},
+				},
 			},
 		}
 	default:

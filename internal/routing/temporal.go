@@ -6,6 +6,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
@@ -27,13 +28,22 @@ var _ AsyncProvider = (*TemporalProvider)(nil)
 func (p *TemporalProvider) Name() string { return temporalProviderName }
 
 func (p *TemporalProvider) Reconcile(ctx context.Context, env *v1alpha1.Environment) error {
+	if errs := validation.IsValidLabelValue(env.Name); len(errs) > 0 {
+		return fmt.Errorf("invalid environment name %q: %v", env.Name, errs)
+	}
+
+	uidSuffix := string(env.UID)
+	if uidSuffix == "" {
+		uidSuffix = env.Name
+	}
+
 	cm := &corev1.ConfigMap{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "v1",
 			Kind:       "ConfigMap",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("diverge-temporal-%s", env.Name),
+			Name:      fmt.Sprintf("diverge-temporal-%s", uidSuffix),
 			Namespace: env.Namespace,
 			Labels: map[string]string{
 				"diverge.io/managed-by":  "diverge",
@@ -62,6 +72,10 @@ func (p *TemporalProvider) Reconcile(ctx context.Context, env *v1alpha1.Environm
 }
 
 func (p *TemporalProvider) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
+	if errs := validation.IsValidLabelValue(env.Name); len(errs) > 0 {
+		return fmt.Errorf("invalid environment name %q: %v", env.Name, errs)
+	}
+
 	opts := []client.DeleteAllOfOption{
 		client.InNamespace(env.Namespace),
 		client.MatchingLabels{
