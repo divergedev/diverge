@@ -237,6 +237,7 @@ type GitHubPreviewGroupNotifier struct {
 	HTTPClient *http.Client
 }
 
+// NewGitHubPreviewGroupNotifier creates a GitHub-backed notifier that posts preview group status to pull request comments using the GitHub API.
 func NewGitHubPreviewGroupNotifier(baseURL, token string) *GitHubPreviewGroupNotifier {
 	if baseURL == "" {
 		baseURL = "https://api.github.com"
@@ -365,6 +366,7 @@ func (g *GitHubPreviewGroupNotifier) postOrUpdateComment(ctx context.Context, pg
 	return nil
 }
 
+// PostGroupCreated performs its designated operation.
 func (g *GitHubPreviewGroupNotifier) PostGroupCreated(ctx context.Context, pg *v1alpha1.PreviewGroup) error {
 	data := buildPreviewGroupTemplateData(pg, "")
 	msg, err := renderTemplate(pgCreatedTemplate, data)
@@ -374,6 +376,7 @@ func (g *GitHubPreviewGroupNotifier) PostGroupCreated(ctx context.Context, pg *v
 	return g.postOrUpdateComment(ctx, pg, msg)
 }
 
+// PostGroupReady performs its designated operation.
 func (g *GitHubPreviewGroupNotifier) PostGroupReady(ctx context.Context, pg *v1alpha1.PreviewGroup) error {
 	data := buildPreviewGroupTemplateData(pg, "")
 	msg, err := renderTemplate(pgReadyTemplate, data)
@@ -383,6 +386,7 @@ func (g *GitHubPreviewGroupNotifier) PostGroupReady(ctx context.Context, pg *v1a
 	return g.postOrUpdateComment(ctx, pg, msg)
 }
 
+// PostGroupFailed performs its designated operation.
 func (g *GitHubPreviewGroupNotifier) PostGroupFailed(ctx context.Context, pg *v1alpha1.PreviewGroup, reason string) error {
 	data := buildPreviewGroupTemplateData(pg, reason)
 	msg, err := renderTemplate(pgFailedTemplate, data)
@@ -392,6 +396,7 @@ func (g *GitHubPreviewGroupNotifier) PostGroupFailed(ctx context.Context, pg *v1
 	return g.postOrUpdateComment(ctx, pg, msg)
 }
 
+// PostGroupTeardown performs its designated operation.
 func (g *GitHubPreviewGroupNotifier) PostGroupTeardown(ctx context.Context, pg *v1alpha1.PreviewGroup) error {
 	data := buildPreviewGroupTemplateData(pg, "Teardown requested")
 	msg, err := renderTemplate(pgTeardownTemplate, data)
@@ -401,6 +406,7 @@ func (g *GitHubPreviewGroupNotifier) PostGroupTeardown(ctx context.Context, pg *
 	return g.postOrUpdateComment(ctx, pg, msg)
 }
 
+// UpdateGroupStatus performs its designated operation.
 func (g *GitHubPreviewGroupNotifier) UpdateGroupStatus(ctx context.Context, pg *v1alpha1.PreviewGroup) error {
 	data := buildPreviewGroupTemplateData(pg, "")
 	msg, err := renderTemplate(pgReadyTemplate, data)

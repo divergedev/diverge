@@ -29,6 +29,7 @@ type URLFetcher struct {
 	SkipURLValidation bool
 }
 
+// Fetch performs its designated operation.
 func (f *URLFetcher) Fetch(ctx context.Context, env *v1alpha1.Environment) ([]unstructured.Unstructured, error) {
 	if env.Spec.Deploy.Manifests == nil || env.Spec.Deploy.Manifests.URL == "" {
 		return nil, fmt.Errorf("manifest URL not specified in environment %s/%s", env.Namespace, env.Name)

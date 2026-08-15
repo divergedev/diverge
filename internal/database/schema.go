@@ -13,10 +13,12 @@ import (
 	"time"
 )
 
+// SQLExecutor defines the contract for this component.
 type SQLExecutor interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
+// SchemaDatabaseProvider represents the configuration or state for this type.
 type SchemaDatabaseProvider struct {
 	AdminDSN string
 	Executor SQLExecutor
@@ -24,6 +26,7 @@ type SchemaDatabaseProvider struct {
 
 var validSchemaName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
+// ErrInvalidSchemaName defines a package-level variable.
 var ErrInvalidSchemaName = fmt.Errorf("invalid schema name: must match ^[a-z0-9][a-z0-9_-]*$")
 
 func sanitizeEnvName(name string) (string, error) {
@@ -37,6 +40,7 @@ func sanitizeEnvName(name string) (string, error) {
 	return s, nil
 }
 
+// Provision performs its designated operation.
 func (p *SchemaDatabaseProvider) Provision(ctx context.Context, env *v1alpha1.Environment) (*DatabaseResult, error) {
 	envName, err := sanitizeEnvName(env.Name)
 	if err != nil {
@@ -125,6 +129,7 @@ $$;`, schema)
 	return result, nil
 }
 
+// Teardown performs its designated operation.
 func (p *SchemaDatabaseProvider) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
 	envName, err := sanitizeEnvName(env.Name)
 	if err != nil {
@@ -156,6 +161,7 @@ func (p *SchemaDatabaseProvider) Teardown(ctx context.Context, env *v1alpha1.Env
 	return nil
 }
 
+// Status performs its designated operation.
 func (p *SchemaDatabaseProvider) Status(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) {
 	envName, err := sanitizeEnvName(env.Name)
 	if err != nil {

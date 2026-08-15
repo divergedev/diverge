@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// CreatePreviewRole performs its designated operation.
 func (p *SchemaDatabaseProvider) CreatePreviewRole(ctx context.Context, db *sql.DB, schemaName string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()

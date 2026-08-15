@@ -11,14 +11,9 @@ import (
 
 // Type aliases for backward compatibility with internal consumers.
 type DatabaseProvider = pkgdb.DatabaseProvider
-type DatabaseResult = pkgdb.DatabaseResult
-type DatabaseStatus = pkgdb.DatabaseStatus
-type ProviderConfig = pkgdb.ProviderConfig
-type ProviderFactory = pkgdb.ProviderFactory
 
-// Re-export registry functions for backward compatibility.
-var (
-	RegisterProvider    = pkgdb.RegisterProvider
-	GetProvider         = pkgdb.GetProvider
-	RegisteredProviders = pkgdb.RegisteredProviders
-)
+// DatabaseResult represents the configuration or state for this type.
+type DatabaseResult = pkgdb.DatabaseResult
+
+// DatabaseStatus aliases the public DatabaseStatus type...
+type DatabaseStatus = pkgdb.DatabaseStatus

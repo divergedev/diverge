@@ -7,6 +7,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
+// HeaderKey is used by the propagator to inject/extract the Diverge environment name into Temporal workflow headers.
 const HeaderKey = "x-diverge-env"
 
 // Propagator implements workflow.ContextPropagator.
@@ -22,6 +23,7 @@ type Propagator struct {
 
 var _ workflow.ContextPropagator = (*Propagator)(nil)
 
+// Inject injects the environment name into workflow headers.
 func (p *Propagator) Inject(ctx context.Context, writer workflow.HeaderWriter) error {
 	env := p.EnvName
 	if env == "" {
@@ -40,6 +42,7 @@ func (p *Propagator) Inject(ctx context.Context, writer workflow.HeaderWriter) e
 	return nil
 }
 
+// Extract extracts the environment name from workflow headers.
 func (p *Propagator) Extract(ctx context.Context, reader workflow.HeaderReader) (context.Context, error) {
 	// If EnvName is set (preview mode), ALWAYS use it regardless of header
 	if p.EnvName != "" {
@@ -57,6 +60,7 @@ func (p *Propagator) Extract(ctx context.Context, reader workflow.HeaderReader) 
 	return context.WithValue(ctx, envContextKey, env), nil
 }
 
+// InjectFromWorkflow injects the environment name from the workflow context.
 func (p *Propagator) InjectFromWorkflow(ctx workflow.Context, writer workflow.HeaderWriter) error {
 	// Same as Inject but for workflow context
 	env := p.EnvName
@@ -76,6 +80,7 @@ func (p *Propagator) InjectFromWorkflow(ctx workflow.Context, writer workflow.He
 	return nil
 }
 
+// ExtractToWorkflow extracts the environment name into the workflow context.
 func (p *Propagator) ExtractToWorkflow(ctx workflow.Context, reader workflow.HeaderReader) (workflow.Context, error) {
 	if p.EnvName != "" {
 		return workflow.WithValue(ctx, envContextKey, p.EnvName), nil

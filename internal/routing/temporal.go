@@ -17,17 +17,17 @@ const (
 	temporalProviderName = "temporal"
 )
 
-// TemporalProvider implements AsyncProvider for Temporal workflow routing.
-// It creates a ConfigMap in the preview namespace containing the environment
-// configuration that the Temporal SDK propagator reads at startup.
+// TemporalProvider creates and deletes Temporal TaskQueue resources for preview environments.
 type TemporalProvider struct {
 	Client client.Client
 }
 
 var _ AsyncProvider = (*TemporalProvider)(nil)
 
+// Name performs its designated operation.
 func (p *TemporalProvider) Name() string { return temporalProviderName }
 
+// Reconcile performs its designated operation.
 func (p *TemporalProvider) Reconcile(ctx context.Context, env *v1alpha1.Environment) error {
 	if errs := validation.IsValidLabelValue(env.Name); len(errs) > 0 {
 		return fmt.Errorf("invalid environment name %q: %v", env.Name, errs)
@@ -60,6 +60,7 @@ func (p *TemporalProvider) Reconcile(ctx context.Context, env *v1alpha1.Environm
 	return nil
 }
 
+// Teardown performs its designated operation.
 func (p *TemporalProvider) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
 	if errs := validation.IsValidLabelValue(env.Name); len(errs) > 0 {
 		return fmt.Errorf("invalid environment name %q: %v", env.Name, errs)

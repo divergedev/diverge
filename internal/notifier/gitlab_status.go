@@ -12,12 +12,14 @@ import (
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
 
+// GitLabStatusReporter reports commit statuses to GitLab.
 type GitLabStatusReporter struct {
 	BaseURL    string
 	Token      string
 	HTTPClient *http.Client
 }
 
+// NewGitLabStatusReporter creates a reporter that updates GitLab commit statuses via the Commits API.
 func NewGitLabStatusReporter(baseURL, token string) *GitLabStatusReporter {
 	return &GitLabStatusReporter{
 		BaseURL: baseURL,
@@ -28,6 +30,7 @@ func NewGitLabStatusReporter(baseURL, token string) *GitLabStatusReporter {
 	}
 }
 
+// PostCommitStatus performs its designated operation.
 func (g *GitLabStatusReporter) PostCommitStatus(ctx context.Context, env *v1alpha1.Environment, state, description string) error {
 	if env.Spec.Source.Provider != "gitlab" {
 		return fmt.Errorf("environment is not from gitlab")

@@ -95,6 +95,7 @@ func addCommands(root *cobra.Command, app *App) {
 	root.AddCommand(newCreateCmd(app))
 	root.AddCommand(newDeleteCmd(app))
 	root.AddCommand(newDevCmd(app))
+	root.AddCommand(newEnvCmd(app))
 	root.AddCommand(newInitCmd(app))
 	root.AddCommand(newListCmd(app))
 	root.AddCommand(newLogsCmd(app))

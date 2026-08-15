@@ -1,12 +1,9 @@
 package main
 
 import (
-	"context"
-	"database/sql"
 	"flag"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"time"
 
@@ -26,7 +23,6 @@ import (
 	webhookserver "sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
-	"github.com/divergedev/diverge/internal/argocd"
 	"github.com/divergedev/diverge/internal/changeset"
 	"github.com/divergedev/diverge/internal/controller"
 	"github.com/divergedev/diverge/internal/database"
@@ -37,6 +33,8 @@ import (
 	"github.com/divergedev/diverge/internal/routing"
 	divtesting "github.com/divergedev/diverge/internal/testing"
 	"github.com/divergedev/diverge/internal/webhook"
+	pkgdb "github.com/divergedev/diverge/pkg/database"
+	"github.com/divergedev/diverge/pkg/registry"
 )
 
 var (
@@ -59,9 +57,7 @@ func main() {
 	var routingProvider string
 	var deployProvider string
 	var databaseProvider string
-	var argoNamespace string
 	var webhookSecretToken string
-	var argoRepoURL string
 	var notifierProvider string
 	var defaultNamespace string
 
@@ -74,8 +70,6 @@ func main() {
 	flag.StringVar(&routingProvider, "routing-provider", "gateway", "The routing provider to use (istio|gateway|composite).")
 	flag.StringVar(&deployProvider, "deploy-provider", "noop", "Deployment provider (argocd|noop|direct|knative)")
 	flag.StringVar(&databaseProvider, "database-provider", "none", "Database provider (schema|none)")
-	flag.StringVar(&argoNamespace, "argo-namespace", "argocd", "Namespace where Argo CD is installed")
-	flag.StringVar(&argoRepoURL, "argo-repo-url", "", "Repository URL for Argo CD Application sources")
 	flag.StringVar(&notifierProvider, "notifier-provider", "noop", "Notification provider (gitlab|github|noop)")
 	flag.StringVar(&webhookSecretToken, "webhook-secret-token", "", "The secret token for authenticating webhooks (prefer DIVERGE_WEBHOOK_SECRET env var).")
 	flag.StringVar(&defaultNamespace, "default-namespace", "default", "Default namespace to create environments in")
@@ -86,13 +80,6 @@ func main() {
 	flag.Int64Var(&kedaMinReplicas, "keda-min-replicas", 0, "Minimum replicas for KEDA scaling")
 	flag.Int64Var(&kedaMaxReplicas, "keda-max-replicas", 3, "Maximum replicas for KEDA scaling")
 	flag.Int64Var(&kedaCooldown, "keda-cooldown", 300, "Cooldown period in seconds for KEDA scaling")
-
-	var manifestSourceType string
-	flag.StringVar(&manifestSourceType, "manifest-source-type", "configmap", "Manifest source type for direct deployer (configmap|url)")
-	var gitlabToken string
-	flag.StringVar(&gitlabToken, "gitlab-token", "", "GitLab token for preview group notifier")
-	var gitlabURL string
-	flag.StringVar(&gitlabURL, "gitlab-url", "", "GitLab URL for preview group notifier")
 
 	opts := zap.Options{
 		Development: true,
@@ -118,9 +105,6 @@ func main() {
 
 	// C2: Read secrets from environment variables (take precedence over flags)
 	notifierToken := os.Getenv("DIVERGE_NOTIFIER_TOKEN")
-	if gitlabToken == "" {
-		gitlabToken = os.Getenv("DIVERGE_GITLAB_TOKEN")
-	}
 	if envSecret := os.Getenv("DIVERGE_WEBHOOK_SECRET"); envSecret != "" {
 		webhookSecretToken = envSecret
 	}
@@ -140,162 +124,59 @@ func main() {
 		os.Exit(1)
 	}
 
-	var routerImpl routing.Router
-	switch routingProvider {
-	case "istio":
-		routerImpl = &routing.IstioRouter{Client: mgr.GetClient()}
-	case "noop":
-		routerImpl = &routing.NoopRouter{}
-	case "gateway", "":
-		routerImpl = &routing.GatewayRouter{Client: mgr.GetClient()}
-	case "composite":
-		routerImpl = &routing.CompositeRouter{
-			Routers: map[string]routing.Router{
-				"gateway": &routing.GatewayRouter{Client: mgr.GetClient()},
-				"async": &routing.AsyncRouter{
-					Providers: []routing.AsyncProvider{
-						&routing.TemporalProvider{Client: mgr.GetClient()},
-					},
-				},
-			},
-		}
-	default:
-		setupLog.Error(fmt.Errorf("unsupported routing provider: %q", routingProvider), "invalid --routing-provider")
-		os.Exit(1)
+	deps := registry.Deps{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		Logger: ctrl.Log,
 	}
 
+	var routerImpl routing.Router
 	if routingProvider == "" {
 		routingProvider = "gateway"
+	}
+	routerImpl, err = routing.Providers.Create(routingProvider, deps)
+	if err != nil {
+		setupLog.Error(err, "creating router", "provider", routingProvider)
+		os.Exit(1)
 	}
 
 	// Wrap with metrics
 	routerImpl = &routing.InstrumentedRouter{Inner: routerImpl, Mode: routingProvider}
 
-	var dbProviderImpl database.DatabaseProvider
-	switch databaseProvider {
-	case "none", "":
-		dbProviderImpl = &database.NoopDatabaseProvider{}
-	case "schema":
-		dbHost := os.Getenv("DIVERGE_DB_HOST")
-		dbPort := os.Getenv("DIVERGE_DB_PORT")
-		dbUser := os.Getenv("DIVERGE_DB_USER")
-		dbPassword := os.Getenv("DIVERGE_DB_PASSWORD")
-		dbName := os.Getenv("DIVERGE_DB_NAME")
-		dbSSLMode := os.Getenv("DIVERGE_DB_SSLMODE")
-		if dbSSLMode == "" {
-			dbSSLMode = "disable"
-		}
-		if dbPort == "" {
-			dbPort = "5432"
-		}
-
-		if dbHost == "" {
-			setupLog.Error(fmt.Errorf("DIVERGE_DB_HOST is required for --database-provider=schema"), "missing database host")
-			os.Exit(1)
-		}
-
-		dsn := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s",
-			dbUser, url.QueryEscape(dbPassword), dbHost, dbPort, dbName, dbSSLMode)
-		db, err := sql.Open("pgx", dsn)
-		if err != nil {
-			setupLog.Error(err, "failed to open database connection")
-			os.Exit(1)
-		}
-		// Verify connectivity
-		pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer pingCancel()
-		if err := db.PingContext(pingCtx); err != nil {
-			setupLog.Error(err, "failed to ping database", "host", dbHost, "port", dbPort)
-			_ = db.Close()
-			os.Exit(1)
-		}
-		setupLog.Info("Connected to database", "host", dbHost, "port", dbPort, "database", dbName)
-		_ = db.Close() // Close probe handle; SchemaDatabaseProvider opens its own connections
-
-		dbProviderImpl = &database.SchemaDatabaseProvider{
-			AdminDSN: dsn,
-		}
-	case "noop":
-		dbProviderImpl = &database.NoopDatabaseProvider{}
-	default:
-		setupLog.Error(fmt.Errorf("unsupported database provider: %q", databaseProvider), "invalid --database-provider")
-		os.Exit(1)
-	}
-
-	// Normalize label for metrics
 	if databaseProvider == "" {
 		databaseProvider = "none"
+	}
+	dbProviderImpl, err := pkgdb.Providers.Create(databaseProvider, deps)
+	if err != nil {
+		setupLog.Error(err, "creating database provider", "provider", databaseProvider)
+		os.Exit(1)
 	}
 
 	// Wrap with metrics
 	dbProviderImpl = &database.InstrumentedDatabaseProvider{Inner: dbProviderImpl, Mode: databaseProvider}
 	detectorImpl := &changeset.GitChangeDetector{}
 
-	var notifierImpl notifier.Notifier
-	var statusReporterImpl notifier.StatusReporter
-	switch notifierProvider {
-	case "gitlab":
-		if notifierToken == "" {
-			setupLog.Error(fmt.Errorf("DIVERGE_NOTIFIER_TOKEN is required for --notifier-provider=gitlab"), "missing token")
-			os.Exit(1)
-		}
-		notifierImpl = notifier.NewGitLabNotifier("", notifierToken)
-		statusReporterImpl = notifier.NewGitLabStatusReporter("", notifierToken)
-	case "github":
-		if notifierToken == "" {
-			setupLog.Error(fmt.Errorf("DIVERGE_NOTIFIER_TOKEN is required for --notifier-provider=github"), "missing token")
-			os.Exit(1)
-		}
-		notifierImpl = notifier.NewGitHubNotifier("", notifierToken)
-		statusReporterImpl = notifier.NewGitHubStatusReporter("", notifierToken)
-	case "noop", "":
-		notifierImpl = &notifier.NoopNotifier{}
-		statusReporterImpl = &notifier.NoopStatusReporter{}
-	default:
-		setupLog.Error(fmt.Errorf("unsupported notifier provider: %q", notifierProvider), "invalid --notifier-provider")
+	if notifierProvider == "" {
+		notifierProvider = "noop"
+	}
+	notifierImpl, err := notifier.Providers.Create(notifierProvider, deps)
+	if err != nil {
+		setupLog.Error(err, "creating notifier", "provider", notifierProvider)
 		os.Exit(1)
 	}
 
-	var deployerImpl deployer.Deployer
-	switch deployProvider {
-	case "argocd":
-		argoClient := argocd.NewClient(mgr.GetClient(), argoNamespace)
-		argoGenerator := &argocd.Generator{
-			ArgoNamespace:     argoNamespace,
-			RepoURL:           argoRepoURL,
-			DestinationServer: "https://kubernetes.default.svc",
-			Project:           "default",
-		}
-		deployerImpl = deployer.NewArgoDeployer(argoClient, argoGenerator, nil)
-	case "direct":
-		var fetcher deployer.ManifestFetcher
-		switch manifestSourceType {
-		case "url":
-			manifestToken := os.Getenv("DIVERGE_MANIFEST_TOKEN")
-			fetcher = &deployer.URLFetcher{
-				HTTPClient: &http.Client{Timeout: 60 * time.Second},
-				AuthToken:  manifestToken,
-			}
-		case "serviceconfig":
-			fetcher = &deployer.ServiceConfigFetcher{}
-		case "configmap", "":
-			fetcher = &deployer.ConfigMapFetcher{Client: mgr.GetClient()}
-		default:
-			setupLog.Error(fmt.Errorf("unsupported manifest source type: %q", manifestSourceType), "invalid --manifest-source-type")
-			os.Exit(1)
-		}
-		deployerImpl = &deployer.DirectDeployer{
-			Client:  mgr.GetClient(),
-			Fetcher: fetcher,
-		}
-	case "knative":
-		deployerImpl = &deployer.KNativeDeployer{
-			Client: mgr.GetClient(),
-		}
-	case "noop", "":
-		deployerImpl = &deployer.NoopDeployer{}
-	default:
-		setupLog.Error(fmt.Errorf("unsupported deploy provider: %q", deployProvider), "invalid --deploy-provider")
+	statusReporterImpl, err := notifier.StatusProviders.Create(notifierProvider, deps)
+	if err != nil {
+		setupLog.Error(err, "creating status reporter", "provider", notifierProvider)
+		os.Exit(1)
+	}
+
+	if deployProvider == "" {
+		deployProvider = "noop"
+	}
+	deployerImpl, err := deployer.Providers.Create(deployProvider, deps)
+	if err != nil {
+		setupLog.Error(err, "creating deployer", "provider", deployProvider)
 		os.Exit(1)
 	}
 
@@ -320,22 +201,10 @@ func main() {
 	// Wrap with metrics
 	deployerImpl = &deployer.InstrumentedDeployer{Inner: deployerImpl, Name: deployProvider}
 
-	// Configure test runner (reuses notifier credentials)
-	var testRunnerImpl divtesting.TestRunner
-	switch notifierProvider {
-	case "gitlab":
-		testRunnerImpl = &divtesting.GitLabPipelineRunner{
-			BaseURL:    "",
-			Token:      notifierToken,
-			HTTPClient: &http.Client{Timeout: 30 * time.Second},
-		}
-	case "github":
-		testRunnerImpl = &divtesting.GitHubActionsRunner{
-			Token:      notifierToken,
-			HTTPClient: &http.Client{Timeout: 30 * time.Second},
-		}
-	default:
-		testRunnerImpl = &divtesting.NoopTestRunner{}
+	testRunnerImpl, err := divtesting.Providers.Create(notifierProvider, deps)
+	if err != nil {
+		setupLog.Error(err, "creating test runner", "provider", notifierProvider)
+		os.Exit(1)
 	}
 
 	if err = (&controller.EnvironmentReconciler{
@@ -354,17 +223,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	if (gitlabToken != "" && gitlabURL == "") || (gitlabToken == "" && gitlabURL != "") {
-		setupLog.Error(fmt.Errorf("both --gitlab-token and --gitlab-url must be set together"), "incomplete GitLab configuration")
+	pgNotifierImpl, err := notifier.GroupProviders.Create(notifierProvider, deps)
+	if err != nil {
+		setupLog.Error(err, "creating preview group notifier", "provider", notifierProvider)
 		os.Exit(1)
-	}
-
-	var pgNotifierImpl notifier.PreviewGroupNotifier = &notifier.NoopPreviewGroupNotifier{}
-	switch notifierProvider {
-	case "gitlab":
-		pgNotifierImpl = notifier.NewGitLabPreviewGroupNotifier(gitlabURL, gitlabToken)
-	case "github":
-		pgNotifierImpl = notifier.NewGitHubPreviewGroupNotifier("", notifierToken)
 	}
 
 	if err = (&controller.PreviewGroupReconciler{

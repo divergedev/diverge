@@ -13,8 +13,14 @@ func TestMetricsRegistrationAndUsage(t *testing.T) {
 	assert.Equal(t, float64(1), testutil.ToFloat64(ReconcileOutcomes.WithLabelValues("success")))
 
 	// Test Gauge
-	EnvironmentsActive.WithLabelValues("running", "aws").Set(5)
-	assert.Equal(t, float64(5), testutil.ToFloat64(EnvironmentsActive.WithLabelValues("running", "aws")))
+	EnvironmentsActive.Set(5)
+	assert.Equal(t, float64(5), testutil.ToFloat64(EnvironmentsActive))
+
+	PreviewGroupsActive.Set(2)
+	assert.Equal(t, float64(2), testutil.ToFloat64(PreviewGroupsActive))
+
+	ReconcileTotal.WithLabelValues("environment", "success").Inc()
+	assert.Equal(t, float64(1), testutil.ToFloat64(ReconcileTotal.WithLabelValues("environment", "success")))
 
 	EnvironmentTTLRemaining.WithLabelValues("env-1", "default").Set(3600)
 	assert.Equal(t, float64(3600), testutil.ToFloat64(EnvironmentTTLRemaining.WithLabelValues("env-1", "default")))

@@ -41,6 +41,16 @@ jobs:
         run: go test -tags=e2e_dual -v -count=1 -timeout=10m ./test/e2e/...
         timeout-minutes: 10
 
+      - name: Dump controller logs
+        if: always()
+        run: |
+          echo "=== Controller logs ==="
+          cat /tmp/diverge-controller.log || echo "No controller log found"
+          echo "=== Controller process ==="
+          cat /tmp/diverge-controller.pid && ps -p $(cat /tmp/diverge-controller.pid) || echo "Controller not running"
+          echo "=== K8s resources ==="
+          kubectl --context k3d-diverge-e2e-mgmt get environments,previewgroups,httproutes -A 2>/dev/null || true
+
       - name: Teardown
         if: always()
         run: ./test/e2e/teardown_dual.sh

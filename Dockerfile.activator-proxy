@@ -1,0 +1,4 @@
+FROM gcr.io/distroless/static:nonroot
+COPY diverge-activator-proxy /diverge-activator-proxy
+USER 65532:65532
+ENTRYPOINT ["/diverge-activator-proxy"]

@@ -26,6 +26,7 @@ import (
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/database"
 	"github.com/divergedev/diverge/internal/events"
+	"github.com/divergedev/diverge/internal/metrics"
 	"github.com/divergedev/diverge/internal/notifier"
 )
 
@@ -55,6 +56,7 @@ type PreviewGroupReconciler struct {
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes;grpcroutes,verbs=list;delete
 // +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=list;delete
 
+// Reconcile performs its designated operation.
 func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, retErr error) {
 	logger := log.FromContext(ctx)
 
@@ -62,6 +64,16 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if err := r.Get(ctx, req.NamespacedName, &pg); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+
+	startTime := time.Now()
+	defer func() {
+		metrics.ReconcileDuration.WithLabelValues("previewgroup").Observe(time.Since(startTime).Seconds())
+		if retErr != nil {
+			metrics.ReconcileTotal.WithLabelValues("previewgroup", "error").Inc()
+		} else {
+			metrics.ReconcileTotal.WithLabelValues("previewgroup", "success").Inc()
+		}
+	}()
 
 	// Capture pre-mutation baseline for status patch
 	statusBase := pg.DeepCopy()
@@ -77,6 +89,7 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		if err := r.Update(ctx, &pg); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to add finalizer: %w", err)
 		}
+		metrics.PreviewGroupsActive.Inc()
 		r.Recorder.Event(&pg, "Normal", "Created", "PreviewGroup created")
 		return ctrl.Result{}, nil
 	}
@@ -391,6 +404,7 @@ func (r *PreviewGroupReconciler) handleTeardown(ctx context.Context, pg *diverge
 	if err := r.Update(ctx, pg); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to remove finalizer: %w", err)
 	}
+	metrics.PreviewGroupsActive.Dec()
 
 	r.Recorder.Event(pg, "Normal", "Terminated", "Teardown complete")
 	return ctrl.Result{}, nil
@@ -460,8 +474,9 @@ func (r *PreviewGroupReconciler) buildChildEnvironment(
 			Database:      dbConfig,
 			ServiceConfig: serviceConfig,
 			Deploy: divergeiov1alpha1.EnvironmentDeploy{
-				Mode:      "delta",
-				Namespace: "same",
+				Mode:            "delta",
+				Namespace:       "same",
+				ChangedServices: []string{svc.Name},
 			},
 		},
 	}

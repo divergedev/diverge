@@ -104,9 +104,12 @@ type ManifestSource struct {
 type TestTriggerType string
 
 const (
+	// TestTriggerGitLabPipeline triggers an external GitLab pipeline to run tests.
 	TestTriggerGitLabPipeline TestTriggerType = "gitlab-pipeline"
+	// TestTriggerGitHubDispatch triggers a GitHub repository dispatch event to run tests.
 	TestTriggerGitHubDispatch TestTriggerType = "github-dispatch"
-	TestTriggerWebhook        TestTriggerType = "webhook"
+	// TestTriggerWebhook POSTs to an external webhook URL to run tests.
+	TestTriggerWebhook TestTriggerType = "webhook"
 )
 
 // TestTriggerSpec defines how to trigger a test run.
@@ -144,10 +147,15 @@ type TestingSpec struct {
 type TestState string
 
 const (
-	TestStatePending  TestState = "pending"
-	TestStateRunning  TestState = "running"
-	TestStatePassed   TestState = "passed"
-	TestStateFailed   TestState = "failed"
+	// TestStatePending indicates the test run is queued or starting.
+	TestStatePending TestState = "pending"
+	// TestStateRunning indicates the test run is currently executing.
+	TestStateRunning TestState = "running"
+	// TestStatePassed indicates the test run completed successfully.
+	TestStatePassed TestState = "passed"
+	// TestStateFailed indicates the test run completed with errors or test failures.
+	TestStateFailed TestState = "failed"
+	// TestStateTimedOut indicates the test run did not complete within the configured timeout.
 	TestStateTimedOut TestState = "timed-out"
 )
 
@@ -230,10 +238,15 @@ type EnvironmentSpec struct {
 type EnvironmentPhase string
 
 const (
-	PhasePending     EnvironmentPhase = "Pending"
-	PhaseDeploying   EnvironmentPhase = "Deploying"
-	PhaseRunning     EnvironmentPhase = "Running"
-	PhaseFailed      EnvironmentPhase = "Failed"
+	// PhasePending ...
+	PhasePending EnvironmentPhase = "Pending"
+	// PhaseDeploying ...
+	PhaseDeploying EnvironmentPhase = "Deploying"
+	// PhaseRunning ...
+	PhaseRunning EnvironmentPhase = "Running"
+	// PhaseFailed ...
+	PhaseFailed EnvironmentPhase = "Failed"
+	// PhaseTerminating ...
 	PhaseTerminating EnvironmentPhase = "Terminating"
 )
 

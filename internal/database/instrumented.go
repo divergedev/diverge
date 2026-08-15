@@ -15,6 +15,7 @@ type InstrumentedDatabaseProvider struct {
 	Mode  string
 }
 
+// Provision performs its designated operation.
 func (p *InstrumentedDatabaseProvider) Provision(ctx context.Context, env *v1alpha1.Environment) (*DatabaseResult, error) {
 	timer := prometheus.NewTimer(metrics.DatabaseProvisionDuration.WithLabelValues(p.Mode))
 	defer timer.ObserveDuration()
@@ -25,6 +26,7 @@ func (p *InstrumentedDatabaseProvider) Provision(ctx context.Context, env *v1alp
 	return status, err
 }
 
+// Teardown performs its designated operation.
 func (p *InstrumentedDatabaseProvider) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
 	err := p.Inner.Teardown(ctx, env)
 	if err != nil {
@@ -33,6 +35,7 @@ func (p *InstrumentedDatabaseProvider) Teardown(ctx context.Context, env *v1alph
 	return err
 }
 
+// Status performs its designated operation.
 func (p *InstrumentedDatabaseProvider) Status(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) {
 	status, err := p.Inner.Status(ctx, env)
 	if err != nil {

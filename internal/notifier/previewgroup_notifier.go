@@ -14,7 +14,9 @@ import (
 )
 
 var (
-	ErrNotGitLabSource     = errors.New("preview group source is not gitlab")
+	// ErrNotGitLabSource indicates the project is not a GitLab project
+	ErrNotGitLabSource = errors.New("preview group source is not gitlab")
+	// ErrMissingMergeRequest indicates no merge request is associated
 	ErrMissingMergeRequest = errors.New("preview group has no merge request number")
 )
 
@@ -31,22 +33,27 @@ type PreviewGroupNotifier interface {
 // NoopPreviewGroupNotifier is a dummy implementation.
 type NoopPreviewGroupNotifier struct{}
 
+// PostGroupCreated performs its designated operation.
 func (n *NoopPreviewGroupNotifier) PostGroupCreated(ctx context.Context, pg *v1alpha1.PreviewGroup) error {
 	return nil
 }
 
+// PostGroupReady performs its designated operation.
 func (n *NoopPreviewGroupNotifier) PostGroupReady(ctx context.Context, pg *v1alpha1.PreviewGroup) error {
 	return nil
 }
 
+// PostGroupFailed performs its designated operation.
 func (n *NoopPreviewGroupNotifier) PostGroupFailed(ctx context.Context, pg *v1alpha1.PreviewGroup, reason string) error {
 	return nil
 }
 
+// PostGroupTeardown performs its designated operation.
 func (n *NoopPreviewGroupNotifier) PostGroupTeardown(ctx context.Context, pg *v1alpha1.PreviewGroup) error {
 	return nil
 }
 
+// UpdateGroupStatus performs its designated operation.
 func (n *NoopPreviewGroupNotifier) UpdateGroupStatus(ctx context.Context, pg *v1alpha1.PreviewGroup) error {
 	return nil
 }
@@ -58,6 +65,7 @@ type GitLabPreviewGroupNotifier struct {
 	HTTPClient *http.Client
 }
 
+// NewGitLabPreviewGroupNotifier performs its designated operation.
 func NewGitLabPreviewGroupNotifier(baseURL, token string) *GitLabPreviewGroupNotifier {
 	return &GitLabPreviewGroupNotifier{
 		BaseURL: baseURL,
@@ -229,6 +237,7 @@ func buildPreviewGroupTemplateData(pg *v1alpha1.PreviewGroup, reason string) Pre
 	}
 }
 
+// PostGroupCreated performs its designated operation.
 func (g *GitLabPreviewGroupNotifier) PostGroupCreated(ctx context.Context, pg *v1alpha1.PreviewGroup) error {
 	data := buildPreviewGroupTemplateData(pg, "")
 	msg, err := renderTemplate(pgCreatedTemplate, data)
@@ -238,6 +247,7 @@ func (g *GitLabPreviewGroupNotifier) PostGroupCreated(ctx context.Context, pg *v
 	return g.postOrUpdateComment(ctx, pg, msg)
 }
 
+// PostGroupReady performs its designated operation.
 func (g *GitLabPreviewGroupNotifier) PostGroupReady(ctx context.Context, pg *v1alpha1.PreviewGroup) error {
 	data := buildPreviewGroupTemplateData(pg, "")
 	msg, err := renderTemplate(pgReadyTemplate, data)
@@ -247,6 +257,7 @@ func (g *GitLabPreviewGroupNotifier) PostGroupReady(ctx context.Context, pg *v1a
 	return g.postOrUpdateComment(ctx, pg, msg)
 }
 
+// PostGroupFailed performs its designated operation.
 func (g *GitLabPreviewGroupNotifier) PostGroupFailed(ctx context.Context, pg *v1alpha1.PreviewGroup, reason string) error {
 	data := buildPreviewGroupTemplateData(pg, reason)
 	msg, err := renderTemplate(pgFailedTemplate, data)
@@ -256,6 +267,7 @@ func (g *GitLabPreviewGroupNotifier) PostGroupFailed(ctx context.Context, pg *v1
 	return g.postOrUpdateComment(ctx, pg, msg)
 }
 
+// PostGroupTeardown performs its designated operation.
 func (g *GitLabPreviewGroupNotifier) PostGroupTeardown(ctx context.Context, pg *v1alpha1.PreviewGroup) error {
 	data := buildPreviewGroupTemplateData(pg, "Teardown requested")
 	msg, err := renderTemplate(pgTeardownTemplate, data)
@@ -265,6 +277,7 @@ func (g *GitLabPreviewGroupNotifier) PostGroupTeardown(ctx context.Context, pg *
 	return g.postOrUpdateComment(ctx, pg, msg)
 }
 
+// UpdateGroupStatus performs its designated operation.
 func (g *GitLabPreviewGroupNotifier) UpdateGroupStatus(ctx context.Context, pg *v1alpha1.PreviewGroup) error {
 	data := buildPreviewGroupTemplateData(pg, "")
 	msg, err := renderTemplate(pgReadyTemplate, data)

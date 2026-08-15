@@ -23,15 +23,19 @@ import (
 	"github.com/divergedev/diverge/internal/git"
 )
 
+// ErrCollision indicates that a preview group with the same name already exists but belongs to a different owner.
 var ErrCollision = errors.New("preview group collision")
 
+// DevOptions holds optional configuration for the dev command.
 type DevOptions struct {
 	Detector       EnvironmentDetector
 	resolvedEnvMap map[string]string
 }
 
+// DevOption configures DevOptions (e.g. WithDetector, WithPort, WithService).
 type DevOption func(*DevOptions)
 
+// WithEnvironmentDetector allows injecting a custom EnvironmentDetector for testing.
 func WithEnvironmentDetector(d EnvironmentDetector) DevOption {
 	return func(o *DevOptions) { o.Detector = d }
 }
