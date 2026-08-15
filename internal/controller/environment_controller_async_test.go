@@ -14,7 +14,7 @@ import (
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/async"
-	"github.com/divergedev/diverge/internal/database"
+	"github.com/divergedev/diverge/pkg/database"
 )
 
 type fakeProvisionerDynamic struct {

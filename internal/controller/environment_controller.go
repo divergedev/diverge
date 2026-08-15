@@ -22,13 +22,13 @@ import (
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/async"
 	"github.com/divergedev/diverge/internal/changeset"
-	"github.com/divergedev/diverge/internal/database"
 	"github.com/divergedev/diverge/internal/deployer"
 	"github.com/divergedev/diverge/internal/events"
 	"github.com/divergedev/diverge/internal/metrics"
 	"github.com/divergedev/diverge/internal/notifier"
 	"github.com/divergedev/diverge/internal/routing"
 	divtesting "github.com/divergedev/diverge/internal/testing"
+	"github.com/divergedev/diverge/pkg/database"
 )
 
 const environmentFinalizer = "diverge.io/environment-protection"

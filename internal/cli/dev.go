@@ -6,12 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
-	"os/exec"
-	"os/signal"
 	"slices"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -257,7 +253,7 @@ func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, e
 	}()
 
 	// 7. Print status
-	_ = runPreviewStatus(app, groupName, cmd.OutOrStdout())
+	_ = runPreviewStatus(ctx, app, groupName, cmd.OutOrStdout())
 
 	if len(args) > 0 {
 		fmt.Printf("🚀 Starting child process: %v\n", args)
@@ -382,47 +378,4 @@ func runPreviewRelease(app *App, service, groupName string, ctx context.Context)
 
 	fmt.Printf("Released intercept for %s in group %s\n", service, groupName)
 	return nil
-}
-
-func runChildProcess(ctx context.Context, args []string, envMap map[string]string) (*exec.Cmd, error) {
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	env := os.Environ()
-	for k, v := range envMap {
-		env = append(env, fmt.Sprintf("%s=%s", k, v))
-	}
-	cmd.Env = env
-
-	if err := cmd.Start(); err != nil {
-		fmt.Printf("⚠️  Failed to start child process: %v\n", err)
-		return nil, err
-	}
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		select {
-		case sig := <-sigCh:
-			fmt.Printf("\nReceived signal %v, terminating child process tree...\n", sig)
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-
-			// Wait 5 seconds, then SIGKILL if it hasn't exited
-			time.AfterFunc(5*time.Second, func() {
-				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			})
-		case <-ctx.Done():
-			// Context canceled (e.g. from app teardown)
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-			time.AfterFunc(5*time.Second, func() {
-				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			})
-		}
-	}()
-
-	return cmd, nil
 }

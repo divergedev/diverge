@@ -89,7 +89,7 @@ func runCreate(cmd *cobra.Command, _ []string, app *App, configPath, envName, en
 	}
 
 	// Build the Environment CR
-	env, err := buildEnvironment(name, gitCtx, resolved, cfg, app, mrNumber)
+	env, err := buildEnvironment(cmd.Context(), name, gitCtx, resolved, cfg, app, mrNumber)
 	if err != nil {
 		return fmt.Errorf("failed to build environment: %w", err)
 	}
@@ -130,7 +130,7 @@ func generateEnvName(envType string, mr int, branch string) string {
 	return name
 }
 
-func buildEnvironment(name string, gitCtx *git.GitContext, resolved *config.ResolvedSettings, cfg *config.Config, app *App, mrNumber int) (*divergeiov1alpha1.Environment, error) {
+func buildEnvironment(ctx context.Context, name string, gitCtx *git.GitContext, resolved *config.ResolvedSettings, cfg *config.Config, app *App, mrNumber int) (*divergeiov1alpha1.Environment, error) {
 	env := &divergeiov1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -189,7 +189,7 @@ func buildEnvironment(name string, gitCtx *git.GitContext, resolved *config.Reso
 			servicePaths[svcName] = svc.Paths
 		}
 		detector := &changeset.GitChangeDetector{}
-		changed, err := detector.DetectChanges(context.TODO(), gitCtx.Project, gitCtx.Branch, "main", servicePaths)
+		changed, err := detector.DetectChanges(ctx, gitCtx.Project, gitCtx.Branch, "main", servicePaths)
 		if err != nil {
 			// Fall back to all services if detection fails
 			for svcName := range cfg.Services {

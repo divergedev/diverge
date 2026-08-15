@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"syscall"
 
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/kubernetes"
@@ -60,7 +59,7 @@ func Execute(version, commit, date string) {
 	lazyApp.Commit = commit
 	lazyApp.Date = date
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, os.Interrupt)
 	defer cancel()
 
 	err := lazyRootCmd.ExecuteContext(ctx)

@@ -95,6 +95,7 @@ func TestEnvExportCmd(t *testing.T) {
 			ServiceConfig: &divergeiov1alpha1.ServicePreviewConfig{
 				Env: []divergeiov1alpha1.EnvVar{
 					{Name: "INJECTED_VAR", Value: "value1"},
+					{Name: "BASE_VAR", Value: "overridden-by-async"},
 				},
 			},
 		},
@@ -180,7 +181,7 @@ func TestEnvExportCmd(t *testing.T) {
 			args:       []string{"--group", "mr-1"},
 			k8sObjects: []runtime.Object{podWeb},
 			crtObjects: []client.Object{pgSingle, envSingle},
-			wantOutput: "BASE_VAR=base1\nINJECTED_VAR=value1\n",
+			wantOutput: "BASE_VAR=overridden-by-async\nINJECTED_VAR=value1\n",
 		},
 		{
 			name:       "Multi-service group requires --service",
@@ -206,7 +207,7 @@ func TestEnvExportCmd(t *testing.T) {
 			args:       []string{"--group", "mr-1", "--format", "json"},
 			k8sObjects: []runtime.Object{podWeb},
 			crtObjects: []client.Object{pgSingle, envSingle},
-			wantOutput: "{\n  \"BASE_VAR\": \"base1\",\n  \"INJECTED_VAR\": \"value1\"\n}\n",
+			wantOutput: "{\n  \"BASE_VAR\": \"overridden-by-async\",\n  \"INJECTED_VAR\": \"value1\"\n}\n",
 		},
 	}
 

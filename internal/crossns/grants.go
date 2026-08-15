@@ -7,7 +7,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	gatewayv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
 // EnsureReferenceGrant creates a Gateway API ReferenceGrant allowing HTTPRoute
@@ -17,20 +17,20 @@ func EnsureReferenceGrant(ctx context.Context, c client.Client, fromNamespace, t
 		return nil
 	}
 
-	grant := &gatewayv1beta1.ReferenceGrant{
+	grant := &gatewayv1.ReferenceGrant{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("diverge-crossns-%s", fromNamespace),
 			Namespace: toNamespace,
 		},
-		Spec: gatewayv1beta1.ReferenceGrantSpec{
-			From: []gatewayv1beta1.ReferenceGrantFrom{
+		Spec: gatewayv1.ReferenceGrantSpec{
+			From: []gatewayv1.ReferenceGrantFrom{
 				{
 					Group:     "gateway.networking.k8s.io",
 					Kind:      "HTTPRoute",
-					Namespace: gatewayv1beta1.Namespace(fromNamespace),
+					Namespace: gatewayv1.Namespace(fromNamespace),
 				},
 			},
-			To: []gatewayv1beta1.ReferenceGrantTo{
+			To: []gatewayv1.ReferenceGrantTo{
 				{
 					Group: "",
 					Kind:  "Service",

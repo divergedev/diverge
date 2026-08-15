@@ -24,10 +24,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
-	"github.com/divergedev/diverge/internal/database"
 	"github.com/divergedev/diverge/internal/events"
 	"github.com/divergedev/diverge/internal/metrics"
 	"github.com/divergedev/diverge/internal/notifier"
+	"github.com/divergedev/diverge/pkg/database"
 )
 
 const (

@@ -11,7 +11,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
-	"github.com/divergedev/diverge/internal/database"
+	"github.com/divergedev/diverge/pkg/database"
 )
 
 type mockDatabaseProvider struct {

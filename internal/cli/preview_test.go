@@ -150,7 +150,7 @@ func TestPreviewStatusCmd(t *testing.T) {
 	app := &App{Client: c}
 
 	var buf bytes.Buffer
-	err := runPreviewStatus(app, "mr-42", &buf)
+	err := runPreviewStatus(context.Background(), app, "mr-42", &buf)
 	output := buf.String()
 
 	if err != nil {
@@ -171,7 +171,7 @@ func TestPreviewDeleteCmd_NotFound(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).Build()
 	app := &App{Client: c}
 
-	err := runPreviewDelete(app, "nonexistent", true)
+	err := runPreviewDelete(context.Background(), app, "nonexistent", true)
 	if err == nil {
 		t.Error("expected error for non-existent PreviewGroup")
 	}
@@ -190,7 +190,7 @@ func TestPreviewDeleteCmd_Force(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pg).Build()
 	app := &App{Client: c}
 
-	err := runPreviewDelete(app, "mr-42", true)
+	err := runPreviewDelete(context.Background(), app, "mr-42", true)
 	if err != nil {
 		t.Fatalf("force delete failed: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestPreviewStatusCmd_AsyncRoutes(t *testing.T) {
 	app := &App{Namespace: "default", Client: c}
 
 	var buf bytes.Buffer
-	err := runPreviewStatus(app, "mr-42", &buf)
+	err := runPreviewStatus(context.Background(), app, "mr-42", &buf)
 	if err != nil {
 		t.Fatalf("runPreviewStatus failed: %v", err)
 	}
