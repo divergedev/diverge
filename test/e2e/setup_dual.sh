@@ -10,8 +10,7 @@ k3d cluster create diverge-e2e-prod --no-lb --k3s-arg "--disable=traefik@server:
 echo "Installing CRDs on management cluster..."
 kubectl --context k3d-diverge-e2e-mgmt apply -f config/crd/bases/
 
-echo "Installing Gateway API CRDs..."
-kubectl --context k3d-diverge-e2e-mgmt apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
+echo "Installing Gateway API CRDs on production cluster..."
 kubectl --context k3d-diverge-e2e-prod apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
 
 echo "Deploying echo-server on production cluster..."
