@@ -11,8 +11,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	corev1 "k8s.io/api/core/v1"
-	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
@@ -51,7 +49,7 @@ func buildCLI(t *testing.T) {
 func TestE2E_DevCreatesPreviewGroup(t *testing.T) {
 	buildCLI(t)
 	c, _ := getKubeClient(t)
-	ctx := context.Background()
+	_ = context.Background()
 
 	// Start diverge dev in background
 	ctxCmd, cancelCmd := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -115,7 +113,7 @@ func TestE2E_HeadlessServiceAndEndpointSlice(t *testing.T) {
 func TestE2E_DevInterceptAndRelease(t *testing.T) {
 	buildCLI(t)
 	c, _ := getKubeClient(t)
-	ctx := context.Background()
+	_ = context.Background()
 
 	// 1. Create PreviewGroup
 	pg := &divergeiov1alpha1.PreviewGroup{

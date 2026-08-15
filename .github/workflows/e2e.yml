@@ -1,0 +1,50 @@
+name: E2E Dual Cluster Tests
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'internal/controller/**'
+      - 'internal/deployer/**'
+      - 'test/e2e/**'
+      - 'charts/**'
+  pull_request:
+    paths:
+      - 'internal/controller/**'
+      - 'internal/deployer/**'
+      - 'test/e2e/**'
+      - 'charts/**'
+  pull_request_target:
+    types: [labeled]
+
+jobs:
+  e2e:
+    if: >
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, '[run-e2e]')) ||
+      (github.event_name == 'pull_request_target' && contains(github.event.pull_request.labels.*.name, '[run-e2e]'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22' # or whatever version diverge uses
+
+      - name: Install k3d
+        run: curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+
+      - name: Run E2E Dual Setup
+        run: make e2e-dual-setup
+
+      - name: Run E2E Dual Tests
+        run: make e2e-dual
+        timeout-minutes: 10
+
+      - name: Teardown
+        if: always()
+        run: make e2e-dual-teardown

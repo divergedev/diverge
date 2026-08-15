@@ -80,6 +80,13 @@ func main() {
 	flag.StringVar(&webhookSecretToken, "webhook-secret-token", "", "The secret token for authenticating webhooks (prefer DIVERGE_WEBHOOK_SECRET env var).")
 	flag.StringVar(&defaultNamespace, "default-namespace", "default", "Default namespace to create environments in")
 
+	var kedaMinReplicas int64
+	var kedaMaxReplicas int64
+	var kedaCooldown int64
+	flag.Int64Var(&kedaMinReplicas, "keda-min-replicas", 0, "Minimum replicas for KEDA scaling")
+	flag.Int64Var(&kedaMaxReplicas, "keda-max-replicas", 3, "Maximum replicas for KEDA scaling")
+	flag.Int64Var(&kedaCooldown, "keda-cooldown", 300, "Cooldown period in seconds for KEDA scaling")
+
 	var manifestSourceType string
 	flag.StringVar(&manifestSourceType, "manifest-source-type", "configmap", "Manifest source type for direct deployer (configmap|url)")
 	var gitlabToken string
@@ -279,10 +286,13 @@ func main() {
 	// Wrap with KEDA Deployer (detects CRD automatically)
 	if deployProvider != "noop" {
 		deployerImpl = &deployer.KEDADeployer{
-			Inner:       deployerImpl,
-			Client:      mgr.GetClient(),
-			MinReplicas: 0,
-			MaxReplicas: 3,
+			Inner:  deployerImpl,
+			Client: mgr.GetClient(),
+			Config: deployer.KEDAConfig{
+				MinReplicas: kedaMinReplicas,
+				MaxReplicas: kedaMaxReplicas,
+				Cooldown:    kedaCooldown,
+			},
 		}
 	}
 

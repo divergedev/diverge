@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"sort"
 	"strings"
@@ -103,44 +104,9 @@ func syncBaselineEnv(ctx context.Context, clientset kubernetes.Interface, opts s
 		return 0, fmt.Errorf("%w: %q: %s", ErrInvalidServiceName, opts.ServiceName, strings.Join(errs, "; "))
 	}
 
-	// Find baseline pods by app label matching the service name
-	labelSelectors := []string{
-		fmt.Sprintf("app=%s,diverge.io/role=baseline", opts.ServiceName),
-		fmt.Sprintf("app=%s", opts.ServiceName),
-		fmt.Sprintf("app.kubernetes.io/name=%s", opts.ServiceName),
-	}
-
-	var pod *corev1.Pod
-	var lastErr error
-	for _, sel := range labelSelectors {
-		listCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		pods, err := clientset.CoreV1().Pods(opts.Namespace).List(listCtx, metav1.ListOptions{
-			LabelSelector: sel,
-			FieldSelector: "status.phase=Running",
-		})
-		cancel()
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		// Pick the first Running pod deterministically (sorted by name)
-		for i := range pods.Items {
-			if pods.Items[i].Status.Phase == corev1.PodRunning {
-				if pod == nil || pods.Items[i].Name < pod.Name {
-					pod = &pods.Items[i]
-				}
-			}
-		}
-		if pod != nil {
-			break
-		}
-	}
-
-	if pod == nil {
-		if lastErr != nil {
-			return 0, fmt.Errorf("for service %q in namespace %q: %w (last error: %v)", opts.ServiceName, opts.Namespace, ErrBaselinePodNotFound, lastErr)
-		}
-		return 0, fmt.Errorf("for service %q in namespace %q: %w", opts.ServiceName, opts.Namespace, ErrBaselinePodNotFound)
+	pod, err := findBaselinePod(ctx, clientset, opts.Namespace, opts.ServiceName)
+	if err != nil {
+		return 0, err
 	}
 
 	// Extract env vars from the first container
@@ -226,4 +192,159 @@ func describeValueSource(vs *corev1.EnvVarSource) string {
 		return fmt.Sprintf("resourceFieldRef:%s", vs.ResourceFieldRef.Resource)
 	}
 	return "unknown"
+}
+
+func findBaselinePod(ctx context.Context, clientset kubernetes.Interface, namespace, serviceName string) (*corev1.Pod, error) {
+	labelSelectors := []string{
+		fmt.Sprintf("app=%s,diverge.io/role=baseline", serviceName),
+		fmt.Sprintf("app=%s", serviceName),
+		fmt.Sprintf("app.kubernetes.io/name=%s", serviceName),
+	}
+
+	var pod *corev1.Pod
+	var lastErr error
+	for _, sel := range labelSelectors {
+		listCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		pods, err := clientset.CoreV1().Pods(namespace).List(listCtx, metav1.ListOptions{
+			LabelSelector: sel,
+			FieldSelector: "status.phase=Running",
+		})
+		cancel()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		for i := range pods.Items {
+			if pods.Items[i].Status.Phase == corev1.PodRunning {
+				if pod == nil || pods.Items[i].Name < pod.Name {
+					pod = &pods.Items[i]
+				}
+			}
+		}
+		if pod != nil {
+			break
+		}
+	}
+
+	if pod == nil {
+		if lastErr != nil {
+			return nil, fmt.Errorf("for service %q in namespace %q: %w (last error: %v)", serviceName, namespace, ErrBaselinePodNotFound, lastErr)
+		}
+		return nil, fmt.Errorf("for service %q in namespace %q: %w", serviceName, namespace, ErrBaselinePodNotFound)
+	}
+	return pod, nil
+}
+
+// resolveBaselineEnv resolves environment variables from a pod, including Secrets and ConfigMaps.
+func resolveBaselineEnv(ctx context.Context, clientset kubernetes.Interface, pod *corev1.Pod) (map[string]string, error) {
+	if len(pod.Spec.Containers) == 0 {
+		return nil, fmt.Errorf("pod %q has no containers", pod.Name)
+	}
+
+	container := pod.Spec.Containers[0]
+	envMap := make(map[string]string)
+	ns := pod.Namespace
+
+	hasSecret := false
+	for _, env := range container.Env {
+		if env.ValueFrom != nil && env.ValueFrom.SecretKeyRef != nil {
+			hasSecret = true
+			break
+		}
+	}
+	if !hasSecret {
+		for _, envFrom := range container.EnvFrom {
+			if envFrom.SecretRef != nil {
+				hasSecret = true
+				break
+			}
+		}
+	}
+
+	if hasSecret && !strings.Contains(ns, "preview") {
+		slog.Warn("resolving secrets from non-preview namespace", "namespace", ns)
+	}
+
+	isSecretVolume := func(v corev1.Volume) bool {
+		return v.Secret != nil || v.Projected != nil
+	}
+	for _, vol := range pod.Spec.Volumes {
+		if isSecretVolume(vol) {
+			slog.Warn("Volume-mounted secret detected. Diverge does not currently sync volume mounts for local development.", "volume", vol.Name)
+		}
+	}
+
+	getSecret := func(name string) (*corev1.Secret, error) {
+		secret, err := clientset.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("failed to get secret %q in namespace %q: %w", name, ns, err)
+		}
+		return secret, nil
+	}
+
+	getConfigMap := func(name string) (*corev1.ConfigMap, error) {
+		cm, err := clientset.CoreV1().ConfigMaps(ns).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("failed to get configmap %q in namespace %q: %w", name, ns, err)
+		}
+		return cm, nil
+	}
+
+	for _, env := range container.Env {
+		if isKubeInjected(env.Name) {
+			continue
+		}
+
+		if env.ValueFrom != nil {
+			if env.ValueFrom.SecretKeyRef != nil {
+				secret, err := getSecret(env.ValueFrom.SecretKeyRef.Name)
+				if err != nil {
+					return nil, err // Fail fast
+				}
+				if val, ok := secret.Data[env.ValueFrom.SecretKeyRef.Key]; ok {
+					envMap[env.Name] = string(val)
+				}
+			} else if env.ValueFrom.ConfigMapKeyRef != nil {
+				cm, err := getConfigMap(env.ValueFrom.ConfigMapKeyRef.Name)
+				if err != nil {
+					return nil, err
+				}
+				if val, ok := cm.Data[env.ValueFrom.ConfigMapKeyRef.Key]; ok {
+					envMap[env.Name] = string(val)
+				}
+			}
+		} else {
+			envMap[env.Name] = env.Value
+		}
+	}
+
+	for _, envFrom := range container.EnvFrom {
+		if envFrom.SecretRef != nil {
+			secret, err := getSecret(envFrom.SecretRef.Name)
+			if err != nil {
+				return nil, err // Fail fast
+			}
+			for k, v := range secret.Data {
+				key := envFrom.Prefix + k
+				if isKubeInjected(key) {
+					continue
+				}
+				envMap[key] = string(v)
+			}
+		} else if envFrom.ConfigMapRef != nil {
+			cm, err := getConfigMap(envFrom.ConfigMapRef.Name)
+			if err != nil {
+				return nil, err
+			}
+			for k, v := range cm.Data {
+				key := envFrom.Prefix + k
+				if isKubeInjected(key) {
+					continue
+				}
+				envMap[key] = string(v)
+			}
+		}
+	}
+
+	return envMap, nil
 }
