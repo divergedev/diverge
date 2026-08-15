@@ -47,4 +47,22 @@ k3d kubeconfig get diverge-e2e-mgmt > /tmp/mgmt-kubeconfig
 KUBECONFIG=/tmp/mgmt-kubeconfig /tmp/diverge-controller --deploy-provider=direct > /tmp/diverge-controller.log 2>&1 &
 echo $! > /tmp/diverge-controller.pid
 
+echo "Waiting for controller to be ready..."
+for i in $(seq 1 30); do
+  if curl -sf http://localhost:8081/healthz > /dev/null 2>&1; then
+    echo "Controller is ready!"
+    break
+  fi
+  if ! kill -0 $(cat /tmp/diverge-controller.pid) 2>/dev/null; then
+    echo "ERROR: Controller process died. Logs:"
+    cat /tmp/diverge-controller.log
+    exit 1
+  fi
+  sleep 1
+done
+
+# Show first few lines of controller log for debugging
+echo "=== Controller startup log ==="
+head -20 /tmp/diverge-controller.log
+
 echo "Dual-cluster E2E setup complete."
