@@ -13,10 +13,17 @@ import (
 )
 
 func TestInitCmd_DryRun(t *testing.T) {
-	// Override execCommandContext to avoid real commands
+	// Override execCommandContext and lookPath to avoid real commands/checks
 	origExecCommandContext := execCommandContext
-	defer func() { execCommandContext = origExecCommandContext }()
+	origLookPath := lookPath
+	defer func() {
+		execCommandContext = origExecCommandContext
+		lookPath = origLookPath
+	}()
 
+	lookPath = func(file string) (string, error) {
+		return "/usr/local/bin/" + file, nil
+	}
 	execCommandContext = func(ctx context.Context, command string, args ...string) *exec.Cmd {
 		// Just a dummy command that does nothing
 		return exec.CommandContext(ctx, "true")
