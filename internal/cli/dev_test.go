@@ -52,7 +52,7 @@ func TestDevCmd_InterceptAndRelease(t *testing.T) {
 	require.NoError(t, releaseCmd.Execute())
 
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "dev-test"}, pg))
-	assert.Equal(t, divergeiov1alpha1.ServiceModeImage, pg.Spec.Services[0].Mode)
+	assert.Equal(t, divergeiov1alpha1.ServiceModeBaseline, pg.Spec.Services[0].Mode)
 	assert.Empty(t, pg.Spec.Services[0].Endpoint)
 }
 

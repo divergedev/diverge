@@ -332,7 +332,11 @@ func runPreviewRelease(app *App, service, groupName string, ctx context.Context)
 	})
 
 	if i != -1 {
-		pg.Spec.Services[i].Mode = divergeiov1alpha1.ServiceModeImage
+		if pg.Spec.Services[i].Image == "" {
+			pg.Spec.Services[i].Mode = divergeiov1alpha1.ServiceModeBaseline
+		} else {
+			pg.Spec.Services[i].Mode = divergeiov1alpha1.ServiceModeImage
+		}
 		pg.Spec.Services[i].Endpoint = "" // clear endpoint
 	} else {
 		return fmt.Errorf("service %q not found in group %q", service, groupName)

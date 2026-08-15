@@ -105,7 +105,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			return ctrl.Result{}, fmt.Errorf("failed to add finalizer: %w", err)
 		}
 		if r.Notifier != nil {
-			tCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			tCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
 			if err := r.Notifier.PostEnvironmentCreated(tCtx, &env); err != nil {
 				logger.Error(err, "failed to post environment created notification")
@@ -113,7 +113,9 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			}
 		}
 		if r.StatusReporter != nil {
-			if err := r.StatusReporter.PostCommitStatus(ctx, &env, "pending", "Preview environment provisioning"); err != nil {
+			notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			defer cancel()
+			if err := r.StatusReporter.PostCommitStatus(notifyCtx, &env, "pending", "Preview environment provisioning"); err != nil {
 				logger.Error(err, "failed to post commit status")
 			}
 		}
@@ -133,7 +135,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			Message: err.Error(),
 		})
 		if r.Notifier != nil {
-			tCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			tCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
 			if notifyErr := r.Notifier.PostEnvironmentFailed(tCtx, &env, err.Error()); notifyErr != nil {
 				logger.Error(notifyErr, "failed to post environment failed notification")
@@ -150,7 +152,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	})
 
 	// 6. Ensure database
-	tCtxDB, cancelDB := context.WithTimeout(ctx, 30*time.Second)
+	tCtxDB, cancelDB := context.WithTimeout(ctx, 15*time.Second)
 	defer cancelDB()
 	dbStatus, err := r.DatabaseProvider.Provision(tCtxDB, &env)
 	if err != nil {
@@ -161,7 +163,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			Message: err.Error(),
 		})
 		if r.Notifier != nil {
-			tCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			tCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
 			if notifyErr := r.Notifier.PostEnvironmentFailed(tCtx, &env, err.Error()); notifyErr != nil {
 				logger.Error(notifyErr, "failed to post environment failed notification")
@@ -188,7 +190,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	// 7. Ensure routing
-	tCtxR, cancelR := context.WithTimeout(ctx, 30*time.Second)
+	tCtxR, cancelR := context.WithTimeout(ctx, 15*time.Second)
 	defer cancelR()
 	if err := r.Router.Reconcile(tCtxR, &env); err != nil {
 		meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
@@ -198,7 +200,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			Message: err.Error(),
 		})
 		if r.Notifier != nil {
-			tCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			tCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
 			if notifyErr := r.Notifier.PostEnvironmentFailed(tCtx, &env, err.Error()); notifyErr != nil {
 				logger.Error(notifyErr, "failed to post environment failed notification")
@@ -217,7 +219,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// 8. Deploy services
 	if r.Deployer != nil {
-		tCtxD, cancelD := context.WithTimeout(ctx, 30*time.Second)
+		tCtxD, cancelD := context.WithTimeout(ctx, 15*time.Second)
 		defer cancelD()
 		if err := r.Deployer.Deploy(tCtxD, &env); err != nil {
 			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
@@ -227,7 +229,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				Message: err.Error(),
 			})
 			if r.Notifier != nil {
-				tCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+				tCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 				defer cancel()
 				if notifyErr := r.Notifier.PostEnvironmentFailed(tCtx, &env, err.Error()); notifyErr != nil {
 					logger.Error(notifyErr, "failed to post environment failed notification")
@@ -257,7 +259,12 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// 11. Check TTL expiry and set timestamps
 	var requeueAfter time.Duration
-	if env.Spec.Lifecycle.TTL != nil && env.Status.CreatedAt != nil {
+	if env.Status.CreatedAt == nil {
+		now := metav1.Now()
+		env.Status.CreatedAt = &now
+	}
+
+	if env.Spec.Lifecycle.TTL != nil {
 		expiryTime := env.Status.CreatedAt.Add(env.Spec.Lifecycle.TTL.Duration)
 		env.Status.ExpiresAt = &metav1.Time{Time: expiryTime}
 		if time.Now().After(expiryTime) {
@@ -269,20 +276,19 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 		// C1: Requeue when TTL expires so the controller wakes up to delete
 		requeueAfter = time.Until(expiryTime)
-	} else if env.Status.CreatedAt == nil {
-		now := metav1.Now()
-		env.Status.CreatedAt = &now
 	}
 
 	if r.Notifier != nil && oldPhase != newPhase {
 		switch newPhase {
 		case divergeiov1alpha1.PhaseRunning:
 			if r.StatusReporter != nil {
-				if err := r.StatusReporter.PostCommitStatus(ctx, &env, "success", "Preview environment ready"); err != nil {
+				notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+				defer cancel()
+				if err := r.StatusReporter.PostCommitStatus(notifyCtx, &env, "success", "Preview environment ready"); err != nil {
 					logger.Error(err, "failed to post commit status")
 				}
 			}
-			tCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			tCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
 			if err := r.Notifier.PostEnvironmentReady(tCtx, &env); err != nil {
 				logger.Error(err, "failed to post environment ready notification")
@@ -290,11 +296,13 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			}
 		case divergeiov1alpha1.PhaseFailed:
 			if r.StatusReporter != nil {
-				if err := r.StatusReporter.PostCommitStatus(ctx, &env, "failed", "Preview environment failed"); err != nil {
+				notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+				defer cancel()
+				if err := r.StatusReporter.PostCommitStatus(notifyCtx, &env, "failed", "Preview environment failed"); err != nil {
 					logger.Error(err, "failed to post commit status")
 				}
 			}
-			tCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			tCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
 			if err := r.Notifier.PostEnvironmentFailed(tCtx, &env, "Environment failed to deploy"); err != nil {
 				logger.Error(err, "failed to post environment failed notification")
@@ -306,7 +314,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// Trigger tests independently of notifier (CR1: notifier may be noop)
 	if oldPhase != newPhase && newPhase == divergeiov1alpha1.PhaseRunning {
 		if r.TestRunner != nil && env.Spec.Testing != nil && env.Spec.Testing.Enabled {
-			tCtxT, cancelT := context.WithTimeout(ctx, 30*time.Second)
+			tCtxT, cancelT := context.WithTimeout(ctx, 15*time.Second)
 			defer cancelT()
 			runID, err := r.TestRunner.Trigger(tCtxT, &env)
 			if err != nil {
@@ -321,7 +329,9 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				}
 				r.Recorder.Event(&env, "Normal", "TestsTriggered", "Test run triggered")
 				if r.StatusReporter != nil {
-					_ = r.StatusReporter.PostCommitStatus(ctx, &env, "pending", "Tests running...")
+					notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+					_ = r.StatusReporter.PostCommitStatus(notifyCtx, &env, "pending", "Tests running...")
+					cancel()
 				}
 			}
 		}
@@ -351,7 +361,9 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 					if !testRequired {
 						commitState = "success" // non-blocking: don't prevent merge
 					}
-					_ = r.StatusReporter.PostCommitStatus(ctx, &env, commitState, "Tests timed out")
+					notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+					_ = r.StatusReporter.PostCommitStatus(notifyCtx, &env, commitState, "Tests timed out")
+					cancel()
 				}
 			} else {
 				// Poll CI for status
@@ -373,7 +385,9 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 						ts.CompletedAt = &now
 						r.Recorder.Event(&env, "Normal", "TestsPassed", result.Summary)
 						if r.StatusReporter != nil {
-							_ = r.StatusReporter.PostCommitStatus(ctx, &env, "success", result.Summary)
+							notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+							_ = r.StatusReporter.PostCommitStatus(notifyCtx, &env, "success", result.Summary)
+							cancel()
 						}
 					case divergeiov1alpha1.TestStateFailed:
 						now := metav1.Now()
@@ -384,14 +398,16 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 							if !testRequired {
 								commitState = "success" // non-blocking
 							}
-							_ = r.StatusReporter.PostCommitStatus(ctx, &env, commitState, result.Summary)
+							notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+							_ = r.StatusReporter.PostCommitStatus(notifyCtx, &env, commitState, result.Summary)
+							cancel()
 						}
 					}
 				}
 
 				// Requeue to poll again if still running
 				if ts.State == divergeiov1alpha1.TestStateRunning || ts.State == divergeiov1alpha1.TestStatePending {
-					if requeueAfter == 0 || requeueAfter > 30*time.Second {
+					if requeueAfter == 0 || requeueAfter > 15*time.Second {
 						requeueAfter = 30 * time.Second
 					}
 				}
@@ -426,13 +442,15 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		r.Recorder.Event(env, "Normal", "Terminating", "Teardown started")
 
 		if r.StatusReporter != nil {
-			if err := r.StatusReporter.PostCommitStatus(ctx, env, "canceled", "Preview environment torn down"); err != nil {
+			notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			defer cancel()
+			if err := r.StatusReporter.PostCommitStatus(notifyCtx, env, "canceled", "Preview environment torn down"); err != nil {
 				log.FromContext(ctx).Error(err, "failed to post commit status")
 			}
 		}
 
 		if r.Notifier != nil {
-			tCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			tCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
 			if err := r.Notifier.PostEnvironmentTeardown(tCtx, env); err != nil {
 				log.FromContext(ctx).Error(err, "failed to post environment teardown notification")
@@ -441,20 +459,20 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		}
 
 		if r.Deployer != nil {
-			tCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			tCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
 			if err := r.Deployer.Teardown(tCtx, env); err != nil {
 				return ctrl.Result{}, fmt.Errorf("failed to teardown deployments: %w", err)
 			}
 		}
 
-		tCtxR, cancelR := context.WithTimeout(ctx, 30*time.Second)
+		tCtxR, cancelR := context.WithTimeout(ctx, 15*time.Second)
 		defer cancelR()
 		if err := r.Router.Teardown(tCtxR, env); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to teardown routing: %w", err)
 		}
 
-		tCtxDB, cancelDB := context.WithTimeout(ctx, 30*time.Second)
+		tCtxDB, cancelDB := context.WithTimeout(ctx, 15*time.Second)
 		defer cancelDB()
 		if err := r.DatabaseProvider.Teardown(tCtxDB, env); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to teardown database: %w", err)
@@ -466,7 +484,7 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		// have resources-finalizer.argocd.argoproj.io.
 		if env.Spec.Deploy.Namespace == "create" {
 			if r.Deployer != nil {
-				tCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+				tCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 				defer cancel()
 				status, err := r.Deployer.Status(tCtx, env)
 				if err != nil {

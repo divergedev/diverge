@@ -31,7 +31,7 @@ import (
 
 const (
 	previewGroupFinalizer = "diverge.io/previewgroup-protection"
-	labelPreviewGroup     = "diverge.io/preview-group"
+	labelPreviewGroup     = "diverge.io/previewgroup"
 	labelManagedBy        = "diverge.io/managed-by"
 )
 
@@ -211,7 +211,9 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 			// Provision database if configured
 			if desiredEnv.Spec.Database.Mode != "" && r.DatabaseProvider != nil {
-				res, err := r.DatabaseProvider.Provision(ctx, desiredEnv)
+				dbCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+				res, err := r.DatabaseProvider.Provision(dbCtx, desiredEnv)
+				cancel()
 				if err != nil {
 					logger.Error(err, "failed to provision database for child Environment")
 				} else if res != nil && len(res.EnvVars) > 0 {
@@ -299,21 +301,27 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	if r.Notifier != nil {
-		if err := r.Notifier.UpdateGroupStatus(ctx, &pg); err != nil {
+		notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		if err := r.Notifier.UpdateGroupStatus(notifyCtx, &pg); err != nil {
 			logger.Error(err, "failed to update group status notification")
 		}
+		cancel()
 
 		prevPhase := statusBase.Status.Phase
 		if pg.Status.Phase != prevPhase {
 			switch pg.Status.Phase {
 			case divergeiov1alpha1.PreviewGroupPhaseRunning:
-				if err := r.Notifier.PostGroupReady(ctx, &pg); err != nil {
+				notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+				if err := r.Notifier.PostGroupReady(notifyCtx, &pg); err != nil {
 					logger.Error(err, "failed to post group ready notification")
 				}
+				cancel()
 			case divergeiov1alpha1.PreviewGroupPhaseFailed, divergeiov1alpha1.PreviewGroupPhaseDegraded:
-				if err := r.Notifier.PostGroupFailed(ctx, &pg, readyCondition.Reason); err != nil {
+				notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+				if err := r.Notifier.PostGroupFailed(notifyCtx, &pg, readyCondition.Reason); err != nil {
 					logger.Error(err, "failed to post group failed notification")
 				}
+				cancel()
 			}
 		}
 	}
@@ -346,9 +354,11 @@ func (r *PreviewGroupReconciler) handleTeardown(ctx context.Context, pg *diverge
 		child := &children[i]
 		if child.DeletionTimestamp.IsZero() {
 			if r.DatabaseProvider != nil && child.Spec.Database.Mode != "" {
-				if err := r.DatabaseProvider.Teardown(ctx, child); err != nil {
+				dbCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+				if err := r.DatabaseProvider.Teardown(dbCtx, child); err != nil {
 					logger.Error(err, "failed to teardown database for child Environment", "name", child.Name)
 				}
+				cancel()
 			}
 
 			if err := r.Delete(ctx, child); err != nil && !apierrors.IsNotFound(err) {
@@ -370,9 +380,11 @@ func (r *PreviewGroupReconciler) handleTeardown(ctx context.Context, pg *diverge
 
 	// All children gone — remove finalizer
 	if r.Notifier != nil {
-		if err := r.Notifier.PostGroupTeardown(ctx, pg); err != nil {
+		notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		if err := r.Notifier.PostGroupTeardown(notifyCtx, pg); err != nil {
 			logger.Error(err, "failed to post group teardown notification")
 		}
+		cancel()
 	}
 
 	controllerutil.RemoveFinalizer(pg, previewGroupFinalizer)
@@ -485,8 +497,9 @@ func (r *PreviewGroupReconciler) needsUpdate(existing, desired *divergeiov1alpha
 func (r *PreviewGroupReconciler) listChildEnvironments(ctx context.Context, pg *divergeiov1alpha1.PreviewGroup) ([]divergeiov1alpha1.Environment, error) {
 	var envList divergeiov1alpha1.EnvironmentList
 	if err := r.List(ctx, &envList,
+		client.InNamespace(pg.Namespace),
 		client.MatchingLabels{
-			labelPreviewGroup:              pg.Name,
+			"diverge.io/previewgroup":      pg.Name,
 			"app.kubernetes.io/managed-by": "diverge",
 		},
 	); err != nil {
@@ -577,7 +590,7 @@ func (r *PreviewGroupReconciler) cleanupRoutesAndEndpoints(ctx context.Context, 
 	var httpRouteList unstructured.UnstructuredList
 	httpRouteList.SetAPIVersion("gateway.networking.k8s.io/v1")
 	httpRouteList.SetKind("HTTPRouteList")
-	if err := r.List(ctx, &httpRouteList, client.MatchingLabels{"diverge.io/preview-group": pgName}); err != nil {
+	if err := r.List(ctx, &httpRouteList, client.MatchingLabels{"diverge.io/previewgroup": pgName}); err != nil {
 		return fmt.Errorf("failed to list HTTPRoutes: %w", err)
 	}
 	for i := range httpRouteList.Items {
@@ -590,7 +603,7 @@ func (r *PreviewGroupReconciler) cleanupRoutesAndEndpoints(ctx context.Context, 
 	var grpcRouteList unstructured.UnstructuredList
 	grpcRouteList.SetAPIVersion("gateway.networking.k8s.io/v1alpha2")
 	grpcRouteList.SetKind("GRPCRouteList")
-	if err := r.List(ctx, &grpcRouteList, client.MatchingLabels{"diverge.io/preview-group": pgName}); err != nil {
+	if err := r.List(ctx, &grpcRouteList, client.MatchingLabels{"diverge.io/previewgroup": pgName}); err != nil {
 		return fmt.Errorf("failed to list GRPCRoutes: %w", err)
 	}
 	for i := range grpcRouteList.Items {
@@ -604,7 +617,7 @@ func (r *PreviewGroupReconciler) cleanupRoutesAndEndpoints(ctx context.Context, 
 	endpointSliceList.SetAPIVersion("discovery.k8s.io/v1")
 	endpointSliceList.SetKind("EndpointSliceList")
 	if err := r.List(ctx, &endpointSliceList, client.MatchingLabels{
-		"diverge.io/preview-group":               pgName,
+		"diverge.io/previewgroup":                pgName,
 		"endpointslice.kubernetes.io/managed-by": "diverge",
 	}); err != nil {
 		return fmt.Errorf("failed to list EndpointSlices: %w", err)

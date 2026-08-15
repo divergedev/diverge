@@ -54,15 +54,16 @@ func (g *Generator) Generate(
 	var destNamespace string
 	if env.Spec.Deploy.Namespace == "create" {
 		destNamespace = env.PreviewNamespace()
-		if deniedNamespaces[env.Name] {
-			return nil, fmt.Errorf("destination namespace %q is forbidden", destNamespace)
-		}
 	} else {
 		// "same" mode (default): deploy in the CR's own namespace
 		destNamespace = env.Namespace
 		if destNamespace == "" {
 			destNamespace = "default"
 		}
+	}
+
+	if deniedNamespaces[destNamespace] {
+		return nil, fmt.Errorf("destination namespace %q is forbidden", destNamespace)
 	}
 
 	destServer := g.DestinationServer

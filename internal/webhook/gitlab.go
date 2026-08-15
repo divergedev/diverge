@@ -148,7 +148,7 @@ func (h *GitLabWebhookHandler) reconcileEnvironment(ctx context.Context, payload
 				}
 				image := fmt.Sprintf("%s:%s",
 					payload.Project.PathWithNamespace,
-					payload.ObjectAttributes.LastCommit.ID[:12])
+					safeSHA(payload.ObjectAttributes.LastCommit.ID, 12))
 				env.Spec.ServiceConfig = cfg.ToServicePreviewConfig(image)
 				env.Spec.Deploy.ChangedServices = []string{cfg.Spec.ServiceName}
 				env.Spec.Deploy.Namespace = "same"

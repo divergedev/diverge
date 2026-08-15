@@ -1,7 +1,6 @@
 package argocd
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
@@ -31,7 +30,7 @@ func TestGenerate(t *testing.T) {
 		{
 			name: "single service - default mode (same)",
 			env: &v1alpha1.Environment{
-				ObjectMeta: metav1.ObjectMeta{Name: "preview-mr-42", Namespace: "default", UID: "uid"},
+				ObjectMeta: metav1.ObjectMeta{Name: "preview-mr-42", Namespace: "test-ns", UID: "uid"},
 				Spec: v1alpha1.EnvironmentSpec{
 					Source: v1alpha1.EnvironmentSource{Branch: "feature-branch", MR: 42},
 				},
@@ -45,17 +44,17 @@ func TestGenerate(t *testing.T) {
 				app := apps[0]
 				assert.Equal(t, "argoproj.io/v1alpha1", app.GetAPIVersion())
 				assert.Equal(t, "Application", app.GetKind())
-				assert.Equal(t, "diverge-default-preview-mr-42-api", app.GetName())
+				assert.Equal(t, "diverge-test-ns-preview-mr-42-api", app.GetName())
 				assert.Equal(t, "argocd", app.GetNamespace())
 
 				labels := app.GetLabels()
 				assert.Equal(t, "preview-mr-42", labels["diverge.io/environment"])
-				assert.Equal(t, "default", labels["diverge.io/environment-namespace"])
+				assert.Equal(t, "test-ns", labels["diverge.io/environment-namespace"])
 				assert.Equal(t, "api", labels["diverge.io/service"])
 				assert.Equal(t, "diverge", labels["diverge.io/managed-by"])
 
 				annots := app.GetAnnotations()
-				assert.Equal(t, "default", annots["diverge.io/environment-namespace"])
+				assert.Equal(t, "test-ns", annots["diverge.io/environment-namespace"])
 				assert.Equal(t, "feature-branch", annots["diverge.io/source-branch"])
 				assert.Equal(t, "42", annots["diverge.io/source-mr"])
 
@@ -79,7 +78,7 @@ func TestGenerate(t *testing.T) {
 				assert.Equal(t, "abc123", param["value"])
 
 				ns, _, _ := unstructured.NestedString(app.Object, "spec", "destination", "namespace")
-				assert.Equal(t, "default", ns)
+				assert.Equal(t, "test-ns", ns)
 				srv, _, _ := unstructured.NestedString(app.Object, "spec", "destination", "server")
 				assert.Equal(t, "https://kubernetes.default.svc", srv)
 
@@ -105,7 +104,7 @@ func TestGenerate(t *testing.T) {
 		{
 			name: "single service - create mode",
 			env: &v1alpha1.Environment{
-				ObjectMeta: metav1.ObjectMeta{Name: "preview-mr-42", Namespace: "default", UID: "uid"},
+				ObjectMeta: metav1.ObjectMeta{Name: "preview-mr-42", Namespace: "test-ns", UID: "uid"},
 				Spec: v1alpha1.EnvironmentSpec{
 					Deploy: v1alpha1.EnvironmentDeploy{Namespace: "create"},
 					Source: v1alpha1.EnvironmentSource{Branch: "feature-branch", MR: 42},
@@ -125,7 +124,7 @@ func TestGenerate(t *testing.T) {
 		{
 			name: "multiple services",
 			env: &v1alpha1.Environment{
-				ObjectMeta: metav1.ObjectMeta{Name: "preview-mr-42", Namespace: "default", UID: "uid"},
+				ObjectMeta: metav1.ObjectMeta{Name: "preview-mr-42", Namespace: "test-ns", UID: "uid"},
 			},
 			changedServices: []string{"api", "web", "worker"},
 			configs: map[string]ServiceConfig{
@@ -143,15 +142,15 @@ func TestGenerate(t *testing.T) {
 					assert.Equal(t, "preview-mr-42", labels["diverge.io/environment"])
 					assert.NotEmpty(t, labels["diverge.io/service"])
 				}
-				assert.True(t, names["diverge-default-preview-mr-42-api"])
-				assert.True(t, names["diverge-default-preview-mr-42-web"])
-				assert.True(t, names["diverge-default-preview-mr-42-worker"])
+				assert.True(t, names["diverge-test-ns-preview-mr-42-api"])
+				assert.True(t, names["diverge-test-ns-preview-mr-42-web"])
+				assert.True(t, names["diverge-test-ns-preview-mr-42-worker"])
 			},
 		},
 		{
 			name: "delta deployment",
 			env: &v1alpha1.Environment{
-				ObjectMeta: metav1.ObjectMeta{Name: "preview-mr-42", Namespace: "default", UID: "uid"},
+				ObjectMeta: metav1.ObjectMeta{Name: "preview-mr-42", Namespace: "test-ns", UID: "uid"},
 			},
 			changedServices: []string{"api"},
 			configs: map[string]ServiceConfig{
@@ -161,13 +160,13 @@ func TestGenerate(t *testing.T) {
 			},
 			expectedApps: 1,
 			check: func(t *testing.T, env *v1alpha1.Environment, apps []*unstructured.Unstructured) {
-				assert.Equal(t, "diverge-default-preview-mr-42-api", apps[0].GetName())
+				assert.Equal(t, "diverge-test-ns-preview-mr-42-api", apps[0].GetName())
 			},
 		},
 		{
 			name: "empty services",
 			env: &v1alpha1.Environment{
-				ObjectMeta: metav1.ObjectMeta{Name: "preview-mr-42", Namespace: "default", UID: "uid"},
+				ObjectMeta: metav1.ObjectMeta{Name: "preview-mr-42", Namespace: "test-ns", UID: "uid"},
 			},
 			changedServices: []string{},
 			configs:         map[string]ServiceConfig{},
@@ -176,7 +175,7 @@ func TestGenerate(t *testing.T) {
 		{
 			name: "missing config",
 			env: &v1alpha1.Environment{
-				ObjectMeta: metav1.ObjectMeta{Name: "preview-mr-42", Namespace: "default", UID: "uid"},
+				ObjectMeta: metav1.ObjectMeta{Name: "preview-mr-42", Namespace: "test-ns", UID: "uid"},
 			},
 			changedServices: []string{"missing"},
 			configs:         map[string]ServiceConfig{},
@@ -185,23 +184,9 @@ func TestGenerate(t *testing.T) {
 		{
 			name: "denied namespace - create mode",
 			env: &v1alpha1.Environment{
-				ObjectMeta: metav1.ObjectMeta{Name: "kube-system", Namespace: "default", UID: "uid"},
+				ObjectMeta: metav1.ObjectMeta{Name: "kube-system", Namespace: "test-ns", UID: "uid"},
 				Spec: v1alpha1.EnvironmentSpec{
 					Deploy: v1alpha1.EnvironmentDeploy{Namespace: "create"},
-				},
-			},
-			changedServices: []string{"api"},
-			configs: map[string]ServiceConfig{
-				"api": {Name: "api", Tag: "v1", ChartPath: "charts/api"},
-			},
-			wantErr: fmt.Sprintf("destination namespace %q is forbidden", (&v1alpha1.Environment{ObjectMeta: metav1.ObjectMeta{Name: "kube-system", Namespace: "default"}}).PreviewNamespace()),
-		},
-		{
-			name: "denied namespace - same mode allowed",
-			env: &v1alpha1.Environment{
-				ObjectMeta: metav1.ObjectMeta{Name: "kube-system", Namespace: "default", UID: "uid"},
-				Spec: v1alpha1.EnvironmentSpec{
-					Deploy: v1alpha1.EnvironmentDeploy{Namespace: "same"},
 				},
 			},
 			changedServices: []string{"api"},
@@ -211,8 +196,22 @@ func TestGenerate(t *testing.T) {
 			expectedApps: 1,
 			check: func(t *testing.T, env *v1alpha1.Environment, apps []*unstructured.Unstructured) {
 				ns, _, _ := unstructured.NestedString(apps[0].Object, "spec", "destination", "namespace")
-				assert.Equal(t, "default", ns)
+				assert.Equal(t, env.PreviewNamespace(), ns)
 			},
+		},
+		{
+			name: "denied namespace - same mode blocked",
+			env: &v1alpha1.Environment{
+				ObjectMeta: metav1.ObjectMeta{Name: "preview-123", Namespace: "default", UID: "uid"},
+				Spec: v1alpha1.EnvironmentSpec{
+					Deploy: v1alpha1.EnvironmentDeploy{Namespace: "same"},
+				},
+			},
+			changedServices: []string{"api"},
+			configs: map[string]ServiceConfig{
+				"api": {Name: "api", Tag: "v1", ChartPath: "charts/api"},
+			},
+			wantErr: "destination namespace \"default\" is forbidden",
 		},
 		{
 			name: "kustomize source type",
@@ -254,7 +253,7 @@ func TestGenerate(t *testing.T) {
 		{
 			name: "kustomize source with tag only (no image)",
 			env: &v1alpha1.Environment{
-				ObjectMeta: metav1.ObjectMeta{Name: "preview-mr-50", Namespace: "default", UID: "uid"},
+				ObjectMeta: metav1.ObjectMeta{Name: "preview-mr-50", Namespace: "test-ns", UID: "uid"},
 			},
 			changedServices: []string{"api"},
 			configs: map[string]ServiceConfig{
@@ -275,7 +274,7 @@ func TestGenerate(t *testing.T) {
 		{
 			name: "helm source type explicit",
 			env: &v1alpha1.Environment{
-				ObjectMeta: metav1.ObjectMeta{Name: "preview-mr-42", Namespace: "default", UID: "uid"},
+				ObjectMeta: metav1.ObjectMeta{Name: "preview-mr-42", Namespace: "test-ns", UID: "uid"},
 			},
 			changedServices: []string{"api"},
 			configs: map[string]ServiceConfig{
