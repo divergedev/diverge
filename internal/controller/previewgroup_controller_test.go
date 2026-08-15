@@ -64,6 +64,9 @@ func TestPreviewGroupReconcile_CreateChildEnvironments(t *testing.T) {
 					Mode:      divergeiov1alpha1.ServiceModeImage,
 					Namespace: "product-rad",
 					Port:      8080,
+					AsyncRoutes: []divergeiov1alpha1.AsyncRouteSpec{
+						{Protocol: "kafka", Target: "payments-events"},
+					},
 				},
 				{
 					Name:      "consent-mgr",
@@ -103,6 +106,9 @@ func TestPreviewGroupReconcile_CreateChildEnvironments(t *testing.T) {
 	require.NotNil(t, childEnv.Spec.ServiceConfig)
 	assert.Equal(t, "registry.azra-ai.com/payments:mr-42", childEnv.Spec.ServiceConfig.Image)
 	assert.Equal(t, int32(8080), childEnv.Spec.ServiceConfig.Port)
+	require.Len(t, childEnv.Spec.Routing.AsyncRoutes, 1)
+	assert.Equal(t, "kafka", childEnv.Spec.Routing.AsyncRoutes[0].Protocol)
+	assert.Equal(t, "payments-events", childEnv.Spec.Routing.AsyncRoutes[0].Target)
 
 	baselineEnvName := childEnvironmentName("mr-42", "consent-mgr")
 	var baselineEnv divergeiov1alpha1.Environment
