@@ -42,6 +42,12 @@ kubectl --context k3d-diverge-e2e-mgmt wait --for=condition=programmed gateway/d
 echo "Building the controller..."
 go build -o /tmp/diverge-controller ./cmd/controller/
 
+echo "Generating self-signed webhook certs..."
+mkdir -p /tmp/k8s-webhook-server/serving-certs
+openssl req -x509 -newkey rsa:2048 -keyout /tmp/k8s-webhook-server/serving-certs/tls.key \
+  -out /tmp/k8s-webhook-server/serving-certs/tls.crt -days 1 -nodes \
+  -subj "/CN=localhost" 2>/dev/null
+
 echo "Starting the controller on management cluster..."
 k3d kubeconfig get diverge-e2e-mgmt > /tmp/mgmt-kubeconfig
 KUBECONFIG=/tmp/mgmt-kubeconfig /tmp/diverge-controller --deploy-provider=direct > /tmp/diverge-controller.log 2>&1 &
