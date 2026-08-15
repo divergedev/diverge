@@ -17,16 +17,3 @@ type DatabaseResult = pkgdb.DatabaseResult
 
 // DatabaseStatus aliases the public DatabaseStatus type...
 type DatabaseStatus = pkgdb.DatabaseStatus
-
-// ProviderConfig aliases the public ProviderConfig type...
-type ProviderConfig = pkgdb.ProviderConfig
-
-// ProviderFactory aliases the public ProviderFactory type...
-type ProviderFactory = pkgdb.ProviderFactory
-
-// Re-export registry functions for backward compatibility.
-var (
-	RegisterProvider    = pkgdb.RegisterProvider
-	GetProvider         = pkgdb.GetProvider
-	RegisteredProviders = pkgdb.RegisteredProviders
-)
