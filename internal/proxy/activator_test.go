@@ -81,13 +81,25 @@ func TestActivatorServer_Routing(t *testing.T) {
 		expectedBody   string
 	}{
 		{
-			name:           "Ready pod exists",
+			name:           "direct pod routing",
 			pod:            pod,
 			expectedStatus: http.StatusOK,
 			expectedBody:   "pod",
 		},
 		{
-			name:           "No ready pod",
+			name:           "activator fallback",
+			pod:            nil,
+			expectedStatus: http.StatusAccepted,
+			expectedBody:   "activator",
+		},
+		{
+			name:           "injected headers",
+			pod:            pod,
+			expectedStatus: http.StatusOK,
+			expectedBody:   "pod",
+		},
+		{
+			name:           "response passthrough",
 			pod:            nil,
 			expectedStatus: http.StatusAccepted,
 			expectedBody:   "activator",

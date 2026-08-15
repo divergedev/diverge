@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"regexp"
 	"testing"
 
@@ -69,12 +70,24 @@ func TestSchemaDatabaseProvider_Provision_Property(t *testing.T) {
 	})
 }
 
+type recordingExecutor struct {
+	called  bool
+	lastSQL string
+}
+
+func (r *recordingExecutor) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	r.called = true
+	r.lastSQL = query
+	return nil, nil
+}
+
 func TestSchemaDatabaseProvider_Property_ExecutorCalledOnValidNames(t *testing.T) {
 	rapid.Check(t, func(rt *rapid.T) {
 		// Generate valid env names
 		envName := rapid.StringMatching(`^[a-z0-9][a-z0-9_-]{0,50}$`).Draw(rt, "envName")
 
-		provider := &SchemaDatabaseProvider{AdminDSN: "postgres://invalid:invalid@localhost:1/db"}
+		rec := recordingExecutor{}
+		provider := &SchemaDatabaseProvider{AdminDSN: "postgres://invalid:invalid@localhost:1/db", Executor: &rec}
 		env := &v1alpha1.Environment{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: envName,
@@ -84,22 +97,24 @@ func TestSchemaDatabaseProvider_Property_ExecutorCalledOnValidNames(t *testing.T
 		res, err := provider.Provision(context.Background(), env)
 		require.NoError(t, err)
 
-		// It should fail at execution phase, not validation phase
 		assert.NotNil(t, res)
-		assert.False(t, res.Ready)
-		assert.Contains(t, res.Message, "failed to execute setup SQL")
-		// The requirement mentioned checking noopSQLExecutor.lastDSN, but since it doesn't
-		// exist, we verify the execution attempted by checking the execution error message
+		assert.True(t, res.Ready)
+		assert.True(t, rec.called)
 	})
 }
 
 func TestSchemaDatabaseProvider_Property_ExecutorNotCalledOnInvalidNames(t *testing.T) {
 	rapid.Check(t, func(rt *rapid.T) {
 		// Generate invalid env names
-		invalidStrGen := rapid.StringMatching(`[!@#\$%\^&\*\(\) \n\t]+`)
+		invalidStrGen := rapid.OneOf(
+			rapid.StringMatching(`[!@#\$%\^&\*\(\) \n\t]+`),
+			rapid.StringMatching(`[;'"/\\]+`),
+			rapid.Just(""),
+		)
 		envName := invalidStrGen.Draw(rt, "envName")
 
-		provider := &SchemaDatabaseProvider{AdminDSN: "postgres://invalid:invalid@localhost:1/db"}
+		rec := recordingExecutor{}
+		provider := &SchemaDatabaseProvider{AdminDSN: "postgres://invalid:invalid@localhost:1/db", Executor: &rec}
 		env := &v1alpha1.Environment{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: envName,
@@ -111,5 +126,6 @@ func TestSchemaDatabaseProvider_Property_ExecutorNotCalledOnInvalidNames(t *test
 		// It should fail at validation phase immediately, before opening database
 		assert.Nil(t, res)
 		assert.ErrorIs(t, err, ErrInvalidSchemaName)
+		assert.False(t, rec.called)
 	})
 }

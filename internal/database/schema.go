@@ -13,8 +13,13 @@ import (
 	"time"
 )
 
+type SQLExecutor interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
 type SchemaDatabaseProvider struct {
 	AdminDSN string
+	Executor SQLExecutor
 }
 
 var validSchemaName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
@@ -96,15 +101,21 @@ $$;`, schema)
 	setupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	db, err := sql.Open("pgx", p.AdminDSN)
-	if err != nil {
-		result.Ready = false
-		result.Message = fmt.Sprintf("failed to open database: %v", err)
-		return result, nil
+	var exec SQLExecutor
+	if p.Executor != nil {
+		exec = p.Executor
+	} else {
+		db, err := sql.Open("pgx", p.AdminDSN)
+		if err != nil {
+			result.Ready = false
+			result.Message = fmt.Sprintf("failed to open database: %v", err)
+			return result, nil
+		}
+		defer func() { _ = db.Close() }()
+		exec = db
 	}
-	defer func() { _ = db.Close() }()
 
-	_, err = db.ExecContext(setupCtx, setupSQL)
+	_, err = exec.ExecContext(setupCtx, setupSQL)
 	if err != nil {
 		result.Ready = false
 		result.Message = fmt.Sprintf("failed to execute setup SQL: %v", err)

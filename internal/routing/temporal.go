@@ -5,8 +5,9 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
+	corev1apply "k8s.io/client-go/applyconfigurations/core/v1"
+	metav1apply "k8s.io/client-go/applyconfigurations/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
@@ -37,34 +38,22 @@ func (p *TemporalProvider) Reconcile(ctx context.Context, env *v1alpha1.Environm
 		uidSuffix = env.Name
 	}
 
-	cm := &corev1.ConfigMap{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "v1",
-			Kind:       "ConfigMap",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("diverge-temporal-%s", uidSuffix),
-			Namespace: env.Namespace,
-			Labels: map[string]string{
-				"diverge.io/managed-by":  "diverge",
-				"diverge.io/environment": env.Name,
-			},
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion: v1alpha1.GroupVersion.String(),
-					Kind:       "Environment",
-					Name:       env.Name,
-					UID:        env.UID,
-				},
-			},
-		},
-		Data: map[string]string{
+	cmApply := corev1apply.ConfigMap(fmt.Sprintf("diverge-temporal-%s", uidSuffix), env.Namespace).
+		WithLabels(map[string]string{
+			"diverge.io/managed-by":  "diverge",
+			"diverge.io/environment": env.Name,
+		}).
+		WithOwnerReferences(metav1apply.OwnerReference().
+			WithAPIVersion(v1alpha1.GroupVersion.String()).
+			WithKind("Environment").
+			WithName(env.Name).
+			WithUID(env.UID)).
+		WithData(map[string]string{
 			"diverge-env":       env.Name,
 			"task-queue-suffix": env.Name, // Workers should use <queue>-<env>
-		},
-	}
+		})
 
-	if err := p.Client.Patch(ctx, cm, client.Apply, client.FieldOwner("diverge-controller")); err != nil { //nolint:staticcheck // typed SSA requires applyconfigurations
+	if err := p.Client.Apply(ctx, cmApply, client.FieldOwner("diverge-controller"), client.ForceOwnership); err != nil {
 		return fmt.Errorf("failed to apply temporal configmap: %w", err)
 	}
 

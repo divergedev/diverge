@@ -587,49 +587,73 @@ func childEnvironmentName(groupName, serviceName string) string {
 // cleanupRoutesAndEndpoints removes routing resources for a PreviewGroup
 func (r *PreviewGroupReconciler) cleanupRoutesAndEndpoints(ctx context.Context, pgName string) error {
 	// Delete HTTPRoute
-	var httpRouteList unstructured.UnstructuredList
-	httpRouteList.SetAPIVersion("gateway.networking.k8s.io/v1")
-	httpRouteList.SetKind("HTTPRouteList")
-	if err := r.List(ctx, &httpRouteList, client.MatchingLabels{"diverge.io/previewgroup": pgName}); err != nil {
-		return fmt.Errorf("failed to list HTTPRoutes: %w", err)
-	}
-	for i := range httpRouteList.Items {
-		if err := r.Delete(ctx, &httpRouteList.Items[i]); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("failed to delete HTTPRoute: %w", err)
+	err := func() error {
+		cleanupCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		var httpRouteList unstructured.UnstructuredList
+		httpRouteList.SetAPIVersion("gateway.networking.k8s.io/v1")
+		httpRouteList.SetKind("HTTPRouteList")
+		if err := r.List(cleanupCtx, &httpRouteList, client.MatchingLabels{"diverge.io/previewgroup": pgName}); err != nil {
+			return fmt.Errorf("failed to list HTTPRoutes: %w", err)
 		}
+		for i := range httpRouteList.Items {
+			if err := r.Delete(cleanupCtx, &httpRouteList.Items[i]); err != nil && !apierrors.IsNotFound(err) {
+				return fmt.Errorf("failed to delete HTTPRoute: %w", err)
+			}
+		}
+		return nil
+	}()
+	if err != nil {
+		return err
 	}
 
 	// Delete GRPCRoute
-	var grpcRouteList unstructured.UnstructuredList
-	grpcRouteList.SetAPIVersion("gateway.networking.k8s.io/v1alpha2")
-	grpcRouteList.SetKind("GRPCRouteList")
-	if err := r.List(ctx, &grpcRouteList, client.MatchingLabels{"diverge.io/previewgroup": pgName}); err != nil {
-		return fmt.Errorf("failed to list GRPCRoutes: %w", err)
-	}
-	for i := range grpcRouteList.Items {
-		if err := r.Delete(ctx, &grpcRouteList.Items[i]); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("failed to delete GRPCRoute: %w", err)
+	err = func() error {
+		cleanupCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		var grpcRouteList unstructured.UnstructuredList
+		grpcRouteList.SetAPIVersion("gateway.networking.k8s.io/v1alpha2")
+		grpcRouteList.SetKind("GRPCRouteList")
+		if err := r.List(cleanupCtx, &grpcRouteList, client.MatchingLabels{"diverge.io/previewgroup": pgName}); err != nil {
+			return fmt.Errorf("failed to list GRPCRoutes: %w", err)
 		}
+		for i := range grpcRouteList.Items {
+			if err := r.Delete(cleanupCtx, &grpcRouteList.Items[i]); err != nil && !apierrors.IsNotFound(err) {
+				return fmt.Errorf("failed to delete GRPCRoute: %w", err)
+			}
+		}
+		return nil
+	}()
+	if err != nil {
+		return err
 	}
 
 	// Delete EndpointSlices
-	var endpointSliceList unstructured.UnstructuredList
-	endpointSliceList.SetAPIVersion("discovery.k8s.io/v1")
-	endpointSliceList.SetKind("EndpointSliceList")
-	if err := r.List(ctx, &endpointSliceList, client.MatchingLabels{
-		"diverge.io/previewgroup":                pgName,
-		"endpointslice.kubernetes.io/managed-by": "diverge",
-	}); err != nil {
-		return fmt.Errorf("failed to list EndpointSlices: %w", err)
-	}
-	for i := range endpointSliceList.Items {
-		eps := &endpointSliceList.Items[i]
-		uid := eps.GetUID()
-		if err := r.Delete(ctx, eps, &client.DeleteOptions{
-			Preconditions: &metav1.Preconditions{UID: &uid},
-		}); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("failed to delete EndpointSlice: %w", err)
+	err = func() error {
+		cleanupCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		var endpointSliceList unstructured.UnstructuredList
+		endpointSliceList.SetAPIVersion("discovery.k8s.io/v1")
+		endpointSliceList.SetKind("EndpointSliceList")
+		if err := r.List(cleanupCtx, &endpointSliceList, client.MatchingLabels{
+			"diverge.io/previewgroup":                pgName,
+			"endpointslice.kubernetes.io/managed-by": "diverge",
+		}); err != nil {
+			return fmt.Errorf("failed to list EndpointSlices: %w", err)
 		}
+		for i := range endpointSliceList.Items {
+			eps := &endpointSliceList.Items[i]
+			uid := eps.GetUID()
+			if err := r.Delete(cleanupCtx, eps, &client.DeleteOptions{
+				Preconditions: &metav1.Preconditions{UID: &uid},
+			}); err != nil && !apierrors.IsNotFound(err) {
+				return fmt.Errorf("failed to delete EndpointSlice: %w", err)
+			}
+		}
+		return nil
+	}()
+	if err != nil {
+		return err
 	}
 	return nil
 }

@@ -182,7 +182,7 @@ func TestGenerate(t *testing.T) {
 			wantErr:         "service config not found for \"missing\"",
 		},
 		{
-			name: "denied namespace - create mode",
+			name: "create mode - preview namespace for kube-system env",
 			env: &v1alpha1.Environment{
 				ObjectMeta: metav1.ObjectMeta{Name: "kube-system", Namespace: "test-ns", UID: "uid"},
 				Spec: v1alpha1.EnvironmentSpec{

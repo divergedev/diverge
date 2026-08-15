@@ -11,7 +11,9 @@ import (
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
+	corev1apply "k8s.io/client-go/applyconfigurations/core/v1"
+	discoveryv1apply "k8s.io/client-go/applyconfigurations/discovery/v1"
+	metav1apply "k8s.io/client-go/applyconfigurations/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
@@ -66,21 +68,14 @@ func (d *LocalDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) e
 	}
 
 	// Create or Update Headless Service
-	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      svcName,
-			Namespace: targetNS,
-			Labels:    labels,
-		},
-		Spec: corev1.ServiceSpec{
-			Type:      corev1.ServiceTypeClusterIP,
-			ClusterIP: corev1.ClusterIPNone, // headless
-			Ports:     []corev1.ServicePort{{Name: "http", Port: port}},
-		},
-	}
-	svc.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Service"})
+	svcApply := corev1apply.Service(svcName, targetNS).
+		WithLabels(labels).
+		WithSpec(corev1apply.ServiceSpec().
+			WithType(corev1.ServiceTypeClusterIP).
+			WithClusterIP(corev1.ClusterIPNone).
+			WithPorts(corev1apply.ServicePort().WithName("http").WithPort(port)))
 
-	err = d.Client.Patch(ctx, svc, client.Apply, client.FieldOwner("diverge"), client.ForceOwnership) //nolint:staticcheck // typed SSA requires applyconfigurations
+	err = d.Client.Apply(ctx, svcApply, client.FieldOwner("diverge"), client.ForceOwnership)
 	if err != nil {
 		return fmt.Errorf("failed to apply headless service: %w", err)
 	}
@@ -94,40 +89,26 @@ func (d *LocalDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) e
 	epsLabels["endpointslice.kubernetes.io/managed-by"] = "diverge"
 	epsLabels["kubernetes.io/service-name"] = svcName
 
-	eps := &discoveryv1.EndpointSlice{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      svcName,
-			Namespace: targetNS,
-			Labels:    epsLabels,
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion: "v1",
-					Kind:       "Service",
-					Name:       svc.Name,
-					UID:        svc.UID,
-				},
-			},
-		},
-		AddressType: discoveryv1.AddressTypeIPv4,
-		Endpoints: []discoveryv1.Endpoint{
-			{
-				Addresses: []string{host},
-				Conditions: discoveryv1.EndpointConditions{
-					Ready: &isReady,
-				},
-			},
-		},
-		Ports: []discoveryv1.EndpointPort{
-			{
-				Name: nil, // can be named, but nil is fine if single port
-				Port: &port,
-			},
-		},
+	// To set the owner reference properly, we need the UID of the created service.
+	var actualSvc corev1.Service
+	if err := d.Client.Get(ctx, client.ObjectKey{Name: svcName, Namespace: targetNS}, &actualSvc); err != nil {
+		return fmt.Errorf("failed to get headless service to set owner reference: %w", err)
 	}
-	eps.SetGroupVersionKind(schema.GroupVersionKind{Group: "discovery.k8s.io", Version: "v1", Kind: "EndpointSlice"})
 
-	err = d.Client.Patch(ctx, eps, client.Apply, client.FieldOwner("diverge"), client.ForceOwnership) //nolint:staticcheck // typed SSA requires applyconfigurations
-	if err != nil {
+	epsApply := discoveryv1apply.EndpointSlice(svcName, targetNS).
+		WithLabels(epsLabels).
+		WithOwnerReferences(metav1apply.OwnerReference().
+			WithAPIVersion("v1").
+			WithKind("Service").
+			WithName(svcName).
+			WithUID(actualSvc.UID)).
+		WithAddressType(discoveryv1.AddressTypeIPv4).
+		WithEndpoints(discoveryv1apply.Endpoint().
+			WithAddresses(host).
+			WithConditions(discoveryv1apply.EndpointConditions().WithReady(isReady))).
+		WithPorts(discoveryv1apply.EndpointPort().WithPort(port))
+
+	if err := d.Client.Apply(ctx, epsApply, client.FieldOwner("diverge"), client.ForceOwnership); err != nil {
 		return fmt.Errorf("failed to apply endpointslice: %w", err)
 	}
 
