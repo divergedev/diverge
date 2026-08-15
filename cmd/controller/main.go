@@ -80,6 +80,13 @@ func main() {
 	flag.StringVar(&webhookSecretToken, "webhook-secret-token", "", "The secret token for authenticating webhooks (prefer DIVERGE_WEBHOOK_SECRET env var).")
 	flag.StringVar(&defaultNamespace, "default-namespace", "default", "Default namespace to create environments in")
 
+	var kedaMinReplicas int64
+	var kedaMaxReplicas int64
+	var kedaCooldown int64
+	flag.Int64Var(&kedaMinReplicas, "keda-min-replicas", 0, "Minimum replicas for KEDA scaling")
+	flag.Int64Var(&kedaMaxReplicas, "keda-max-replicas", 3, "Maximum replicas for KEDA scaling")
+	flag.Int64Var(&kedaCooldown, "keda-cooldown", 300, "Cooldown period in seconds for KEDA scaling")
+
 	var manifestSourceType string
 	flag.StringVar(&manifestSourceType, "manifest-source-type", "configmap", "Manifest source type for direct deployer (configmap|url)")
 	var gitlabToken string
@@ -92,6 +99,22 @@ func main() {
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
+
+	if kedaMinReplicas < 0 {
+		setupLog.Error(fmt.Errorf("--keda-min-replicas must be >= 0, got %d", kedaMinReplicas), "invalid flag")
+		os.Exit(1)
+	}
+	if kedaMaxReplicas == 0 {
+		kedaMaxReplicas = 3 // default
+	}
+	if kedaMaxReplicas < kedaMinReplicas {
+		setupLog.Error(fmt.Errorf("--keda-max-replicas (%d) must be >= --keda-min-replicas (%d)", kedaMaxReplicas, kedaMinReplicas), "invalid flag")
+		os.Exit(1)
+	}
+	if kedaCooldown < 0 {
+		setupLog.Error(fmt.Errorf("--keda-cooldown must be >= 0, got %d", kedaCooldown), "invalid flag")
+		os.Exit(1)
+	}
 
 	// C2: Read secrets from environment variables (take precedence over flags)
 	notifierToken := os.Getenv("DIVERGE_NOTIFIER_TOKEN")
@@ -279,10 +302,13 @@ func main() {
 	// Wrap with KEDA Deployer (detects CRD automatically)
 	if deployProvider != "noop" {
 		deployerImpl = &deployer.KEDADeployer{
-			Inner:       deployerImpl,
-			Client:      mgr.GetClient(),
-			MinReplicas: 0,
-			MaxReplicas: 3,
+			Inner:  deployerImpl,
+			Client: mgr.GetClient(),
+			Config: deployer.KEDAConfig{
+				MinReplicas: kedaMinReplicas,
+				MaxReplicas: kedaMaxReplicas,
+				Cooldown:    kedaCooldown,
+			},
 		}
 	}
 

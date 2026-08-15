@@ -11,31 +11,35 @@ Instead of deploying full duplicates of complex microservice architectures, Dive
 flowchart TD
     A[Developer opens MR] --> B[GitLab/GitHub Webhook Event]
     B --> C[Diverge Webhook Handler]
-    C -->|Creates/Updates| D[Environment CR]
-    D --> E[Diverge Controller]
+    C -->|Creates/Updates| D[PreviewGroup CR]
+    D -->|Manages| E[PreviewGroup Controller]
+    E -->|Creates| F[Environment CRs]
+    F --> G[Diverge Controller]
 
     subgraph Diverge Operator
-        E --> F[Changeset Detector]
-        E --> G[Database Provider]
-        E --> H[Routing Engine]
-        E --> N[Notifier]
-        E --> S[Status Reporter]
+        G --> H[Changeset Detector]
+        G --> I[Database Provider]
+        G --> J[Routing Engine]
+        G --> N[Notifier]
+        G --> S[Status Reporter]
     end
 
-    F -->|Analyzes .diverge.yaml| I[Argo CD Application CRs / Deployments]
-    G -->|Provisions DB| J[Database Instances]
+    F -->|Analyzes .diverge.yaml| ARGO[Argo CD Application CRs / Deployments]
+    G -->|Provisions DB| DB_INST[Database Instances]
     H -->|Creates VirtualService| K[Istio Ingress & Diverge Proxy]
     N -->|Status Feedback| B
 
-    I --> L[Changed Services]
+    ARGO --> L[Changed Services]
     K -->|Header Routing| L
     K -->|Fallback| M[Baseline Services]
 ```
 
 ## Components
 
-- **Controller**: The Kubernetes controller (reconciler) that watches `Environment` Custom Resources (CRs). It orchestrates the entire deployment lifecycle, executing state transitions.
+- **PreviewGroup Controller**: Orchestrates multiple `Environment` CRs from a single `PreviewGroup` CR, representing an entire MR's changes together. Ensures all preview services share routing, labels, and lifecycle.
+- **Controller**: The Kubernetes controller (reconciler) that watches `Environment` Custom Resources (CRs). It orchestrates the deployment lifecycle, executing state transitions.
   - **Controller Watches**: The controller uses `Owns()` to watch child resources such as `Job` (migrations), `Deployment`, and `Service` (preview pods). This ensures that if child resources are modified or deleted, the controller automatically re-reconciles to restore the desired state.
+- **Activator Proxy**: Wakes up idle scaled-to-zero preview pods. It holds requests until the backend is ready, then seamlessly proxies the traffic, injecting necessary routing headers.
 - **Proxy**: A reverse proxy that assists with header-based routing, seamlessly directing traffic to the correct preview environment.
 - **CLI**: A command-line tool (`diverge`) allowing developers to interact with and manage preview environments directly from their terminal.
 - **Webhook Handler**: An HTTP server that listens to GitLab/GitHub webhook events (e.g., MR open, update, merge, close). It translates these events into Kubernetes `Environment` CRs, applying labels for configuration overrides based on MR details.
@@ -49,9 +53,15 @@ flowchart TD
 
 ## CRD Design
 
-The core of Diverge is the `Environment` Custom Resource Definition (CRD).
+The core of Diverge involves the `PreviewGroup` and `Environment` Custom Resource Definitions (CRDs).
 
-### Spec
+### PreviewGroup
+The `PreviewGroup` acts as the entrypoint for an MR's preview. It defines:
+- **Source**: SCM details (gitlab, github) and MR ID.
+- **Routing**: Shared routing rules (e.g., header key `x-preview-env`).
+- **Services**: A list of microservices included in this preview (mode: image, local, or baseline).
+
+### Environment Spec
 The `EnvironmentSpec` dictates the desired state:
 - `Source`: Provider (e.g., gitlab), Project name, MR ID, and Branch.
 - `Deploy`: Deployment mode (`delta` or `full`), list of changed services, baseline reference, and `namespaceLabels` (custom labels applied to the preview namespace, e.g., `istio.io/dataplane-mode: ambient`).
@@ -83,6 +93,10 @@ Diverge supports multiple routing strategies depending on cluster configuration:
 - **Gateway API**: Generates Gateway API `HTTPRoute` resources for header-based routing. When `ServicePreviewConfig.PathPrefix` is set, the generated route combines header matching with a `PathPrefix` path match, scoping it to specific API paths (e.g., `/api/payments`) to avoid unintentionally shadowing the entire baseline service.
 - **Namespace isolation**: Deploys the entire environment into a dedicated, isolated Kubernetes namespace.
 - **Subdomain**: Exposes the environment via a unique subdomain (e.g., `mr-123.preview.example.com`).
+
+## Scale-to-Zero
+
+To minimize cost, Diverge integrates with KEDA HTTP Add-on (`HTTPScaledObject`) for **Scale-to-Zero** capability. Idle preview environments scale down to 0 replicas. When a request hits the cluster with the correct preview header, the **Activator Proxy** holds the request, wakes up the corresponding preview pod, and proxies the traffic once the pod is ready. This can yield upwards of 90% resource savings for rarely-accessed preview environments.
 
 ## Database Modes
 
@@ -134,11 +148,14 @@ Diverge seamlessly integrates into the modern cloud-native stack:
 Diverge incorporates secure-by-default design principles:
 - **Webhook Security**: Employs constant-time token validation to prevent timing attacks.
 - **Input Validation**: Enforces strict YAML parsing (disallowing unknown fields) and validates `HeaderKey` values against RFC 7230 token format constraints.
-- **SHA Validation**: Commit SHAs are validated against a hex-only regex (`^[0-9a-fA-F]{4,64}$`) before use in API URLs, preventing path traversal via crafted SHA values.
+- **Safe SHA Validation**: Commit SHAs are validated against a hex-only regex (`^[0-9a-fA-F]{4,64}$`) safely without panicking, preventing path traversal via crafted SHA values.
 - **Path Traversal Prevention**: Ensures GitHub/GitLab notifier providers are safeguarded against path traversal vulnerabilities in project paths and commit SHAs.
-- **Label Validation**: Namespace label keys and values are validated using `k8s.io/apimachinery/pkg/util/validation` before being applied to preview namespaces. `diverge.io/*` labels are protected from user override.
-- **SQL Injection Prevention**: Schema names are validated against a strict regex (`^[a-z][a-z0-9_]{0,62}$`) before use in DDL statements, since parameterized queries cannot be used for schema operations.
+- **Label Validation**: Namespace label keys and values are strictly validated using `k8s.io/apimachinery/pkg/util/validation` before being applied. `diverge.io/*` labels are protected from user override.
+- **SQL Injection Prevention**: Schema names are validated against a strict regex (`^[a-z][a-z0-9_]{0,62}$`) before use in DDL statements, since parameterized queries cannot be used for schema operations. The `SQLExecutor` ensures safe execution.
+- **ArgoCD Security**: Enforces namespace bypass prevention for ArgoCD Application generation.
+- **Network Security**: Uses IPv6-safe pod URLs.
 - **Resource Constraints**: Applies context timeouts on all external network and API calls to prevent hanging routines.
+- **Safe Resource Updates**: Uses Typed Server-Side Apply (SSA) for accurate and safe API object modifications.
 - **Least Privilege**: The controller runs with strictly RBAC-scoped permissions, acquiring only the access necessary for its operational scope.
 
 ## Observability

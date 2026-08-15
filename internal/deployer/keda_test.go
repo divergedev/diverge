@@ -42,7 +42,15 @@ func TestKEDADeployer_Deploy_WithCRD(t *testing.T) {
 	c := fake.NewClientBuilder().Build()
 
 	// Create the deployer
-	d := &KEDADeployer{Inner: inner, Client: c}
+	d := &KEDADeployer{
+		Inner:  inner,
+		Client: c,
+		Config: KEDAConfig{
+			MinReplicas: 0,
+			MaxReplicas: 3,
+			Cooldown:    300,
+		},
+	}
 	env := &v1alpha1.Environment{}
 	env.Name = "test-env"
 	env.Namespace = "test-ns"
@@ -72,6 +80,86 @@ func TestKEDADeployer_Deploy_WithCRD(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, "test-env", scaleTarget)
+
+	serviceTarget, found, err := unstructured.NestedString(hso.Object, "spec", "scaleTargetRef", "service")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "test-env", serviceTarget)
+
+	portTarget, found, err := unstructured.NestedInt64(hso.Object, "spec", "scaleTargetRef", "port")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, int64(80), portTarget)
+
+	cooldown, found, err := unstructured.NestedInt64(hso.Object, "spec", "scaledownPeriod")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, int64(300), cooldown)
+}
+
+func TestKEDADeployer_Deploy_MultiService_PBT(t *testing.T) {
+	inner := &mockDeployer{}
+	c := fake.NewClientBuilder().Build()
+	d := &KEDADeployer{
+		Inner:  inner,
+		Client: c,
+		Config: KEDAConfig{
+			MinReplicas: 1,
+			MaxReplicas: 5,
+			Cooldown:    120,
+		},
+	}
+
+	envNames := []string{"pr-123", "staging", "demo-env"}
+	serviceNames := []string{"api", "web", "worker-node"}
+
+	for _, eName := range envNames {
+		for _, sName := range serviceNames {
+			t.Run(eName+"-"+sName, func(t *testing.T) {
+				env := &v1alpha1.Environment{}
+				env.Name = eName
+				env.Namespace = "test-ns"
+				env.Spec.Deploy.Namespace = "same"
+				env.Spec.ServiceConfig = &v1alpha1.ServicePreviewConfig{
+					ServiceName: sName,
+					Port:        8080,
+				}
+
+				err := d.Deploy(context.Background(), env)
+				require.NoError(t, err)
+
+				expectedName := eName + "-" + sName
+				hso := &unstructured.Unstructured{}
+				hso.SetGroupVersionKind(hsoGVK)
+				err = c.Get(context.Background(), client.ObjectKey{Name: expectedName, Namespace: "test-ns"}, hso)
+				require.NoError(t, err)
+
+				scaleTarget, found, err := unstructured.NestedString(hso.Object, "spec", "scaleTargetRef", "name")
+				require.NoError(t, err)
+				require.True(t, found)
+				assert.Equal(t, expectedName, scaleTarget)
+
+				service, found, err := unstructured.NestedString(hso.Object, "spec", "scaleTargetRef", "service")
+				require.NoError(t, err)
+				require.True(t, found)
+				assert.Equal(t, expectedName, service)
+
+				port, found, err := unstructured.NestedInt64(hso.Object, "spec", "scaleTargetRef", "port")
+				require.NoError(t, err)
+				require.True(t, found)
+				assert.Equal(t, int64(8080), port)
+
+				min, _, _ := unstructured.NestedInt64(hso.Object, "spec", "replicas", "min")
+				assert.Equal(t, int64(1), min)
+
+				max, _, _ := unstructured.NestedInt64(hso.Object, "spec", "replicas", "max")
+				assert.Equal(t, int64(5), max)
+
+				cooldown, _, _ := unstructured.NestedInt64(hso.Object, "spec", "scaledownPeriod")
+				assert.Equal(t, int64(120), cooldown)
+			})
+		}
+	}
 }
 
 func TestKEDADeployer_Deploy_NoCRD(t *testing.T) {

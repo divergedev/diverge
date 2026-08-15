@@ -92,23 +92,23 @@ type fakeDetector struct {
 	username     string
 }
 
-func (f fakeDetector) DetectTailscaleIP() (string, error) {
+func (f fakeDetector) DetectLocalIP(ctx context.Context) (string, error) {
 	return f.tailscaleIP, f.tailscaleErr
 }
 
-func (f fakeDetector) DetectGitBranch() (string, error) {
+func (f fakeDetector) DetectGitBranch(ctx context.Context) (string, error) {
 	return f.gitBranch, f.gitBranchErr
 }
 
-func (f fakeDetector) DetectServiceName() (string, error) {
+func (f fakeDetector) DetectServiceName(ctx context.Context) (string, error) {
 	return f.serviceName, f.serviceErr
 }
 
-func (f fakeDetector) DetectUsername() string {
+func (f fakeDetector) DetectUsername(ctx context.Context) (string, error) {
 	if f.username == "" {
-		return "dev"
+		return "dev", nil
 	}
-	return f.username
+	return f.username, nil
 }
 
 func runDevTestSetup(t *testing.T, detector EnvironmentDetector) (*App, client.Client, *cobra.Command, context.CancelFunc) {
@@ -138,7 +138,7 @@ func TestRunDev_CreatesPreviewGroup(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runDev(app, "", 0, "", "inject", cmd, WithEnvironmentDetector(detector))
+		errCh <- runDev(app, "", 0, "", "inject", nil, cmd, WithEnvironmentDetector(detector))
 	}()
 
 	var pg divergeiov1alpha1.PreviewGroup
@@ -175,7 +175,7 @@ func TestRunDev_UsesExplicitFlags(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runDev(app, "backend", 9090, "10.0.0.1", "inject", cmd, WithEnvironmentDetector(detector))
+		errCh <- runDev(app, "backend", 9090, "10.0.0.1", "inject", nil, cmd, WithEnvironmentDetector(detector))
 	}()
 
 	var pg divergeiov1alpha1.PreviewGroup
@@ -199,7 +199,7 @@ func TestRunDev_TailscaleError(t *testing.T) {
 	app, _, cmd, cancel := runDevTestSetup(t, detector)
 	defer cancel()
 
-	err := runDev(app, "web", 0, "", "inject", cmd, WithEnvironmentDetector(detector))
+	err := runDev(app, "web", 0, "", "inject", nil, cmd, WithEnvironmentDetector(detector))
 	require.ErrorIs(t, err, ErrTailscaleNotFound)
 }
 
@@ -212,7 +212,7 @@ func TestRunDev_DefaultPort(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runDev(app, "", 0, "", "inject", cmd, WithEnvironmentDetector(detector))
+		errCh <- runDev(app, "", 0, "", "inject", nil, cmd, WithEnvironmentDetector(detector))
 	}()
 
 	var pg divergeiov1alpha1.PreviewGroup
@@ -236,7 +236,7 @@ func TestRunDev_SlugifiesBranch(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runDev(app, "", 0, "", "inject", cmd, WithEnvironmentDetector(detector))
+		errCh <- runDev(app, "", 0, "", "inject", nil, cmd, WithEnvironmentDetector(detector))
 	}()
 
 	var pg divergeiov1alpha1.PreviewGroup
@@ -261,7 +261,7 @@ func TestRunDev_FallbackBranch(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runDev(app, "", 0, "", "inject", cmd, WithEnvironmentDetector(detector))
+		errCh <- runDev(app, "", 0, "", "inject", nil, cmd, WithEnvironmentDetector(detector))
 	}()
 
 	var pg divergeiov1alpha1.PreviewGroup
@@ -285,7 +285,7 @@ func TestRunDev_GroupNameFormat(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runDev(app, "", 0, "", "inject", cmd, WithEnvironmentDetector(detector))
+		errCh <- runDev(app, "", 0, "", "inject", nil, cmd, WithEnvironmentDetector(detector))
 	}()
 
 	var pg divergeiov1alpha1.PreviewGroup
@@ -307,7 +307,7 @@ func TestRunDev_CleanupOnContextCancel(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runDev(app, "", 0, "", "inject", cmd, WithEnvironmentDetector(detector))
+		errCh <- runDev(app, "", 0, "", "inject", nil, cmd, WithEnvironmentDetector(detector))
 	}()
 
 	var pg divergeiov1alpha1.PreviewGroup
@@ -332,7 +332,7 @@ func TestRunDev_ServiceNameFromConfig(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runDev(app, "", 0, "", "inject", cmd, WithEnvironmentDetector(detector))
+		errCh <- runDev(app, "", 0, "", "inject", nil, cmd, WithEnvironmentDetector(detector))
 	}()
 
 	var pg divergeiov1alpha1.PreviewGroup
@@ -355,7 +355,7 @@ func TestRunDev_CleansUpOnSignal(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runDev(app, "", 0, "", "inject", cmd, WithEnvironmentDetector(detector))
+		errCh <- runDev(app, "", 0, "", "inject", nil, cmd, WithEnvironmentDetector(detector))
 	}()
 
 	var pg divergeiov1alpha1.PreviewGroup
@@ -407,7 +407,7 @@ func TestRunDev_CleanupTimeout(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runDev(app, "", 0, "", "inject", cmd, WithEnvironmentDetector(detector))
+		errCh <- runDev(app, "", 0, "", "inject", nil, cmd, WithEnvironmentDetector(detector))
 	}()
 
 	require.Eventually(t, func() bool {
@@ -436,7 +436,7 @@ func TestRunDev_OwnerFieldSet(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runDev(app, "", 0, "", "inject", cmd, WithEnvironmentDetector(detector))
+		errCh <- runDev(app, "", 0, "", "inject", nil, cmd, WithEnvironmentDetector(detector))
 	}()
 
 	var pg divergeiov1alpha1.PreviewGroup
@@ -469,7 +469,7 @@ func TestRunDev_CollisionDifferentOwner(t *testing.T) {
 	}
 	require.NoError(t, c.Create(context.Background(), pg))
 
-	err := runDev(app, "", 0, "", "inject", cmd, WithEnvironmentDetector(detectorBob))
+	err := runDev(app, "", 0, "", "inject", nil, cmd, WithEnvironmentDetector(detectorBob))
 	require.Error(t, err)
 	require.ErrorContains(t, err, "preview group collision")
 	require.ErrorContains(t, err, "owned by \"alice\" (you are \"bob\")")
@@ -494,7 +494,7 @@ func TestRunDev_SameOwnerUpdates(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runDev(app, "", 0, "", "inject", cmd, WithEnvironmentDetector(detector))
+		errCh <- runDev(app, "", 0, "", "inject", nil, cmd, WithEnvironmentDetector(detector))
 	}()
 
 	var updatedPg divergeiov1alpha1.PreviewGroup
@@ -510,4 +510,47 @@ func TestRunDev_SameOwnerUpdates(t *testing.T) {
 
 	cancel()
 	<-errCh
+}
+
+func TestRunChildProcess_Simple(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	cmd, err := runChildProcess(ctx, []string{"echo", "hello"}, nil)
+	require.NoError(t, err)
+	err = cmd.Wait()
+	require.NoError(t, err)
+}
+
+func TestRunChildProcess_Fail(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	cmd, err := runChildProcess(ctx, []string{"false"}, nil)
+	require.NoError(t, err)
+	err = cmd.Wait()
+	require.Error(t, err)
+}
+
+func TestRunChildProcess_EnvInjection(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	envMap := map[string]string{"DIVERGE_TEST_VAR": "42"}
+	cmd, err := runChildProcess(ctx, []string{"sh", "-c", "if [ \"$DIVERGE_TEST_VAR\" != \"42\" ]; then exit 1; fi"}, envMap)
+	require.NoError(t, err)
+	err = cmd.Wait()
+	require.NoError(t, err, "child process failed, env var was not injected")
+}
+
+func TestRunChildProcess_CancelPropagation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	cmd, err := runChildProcess(ctx, []string{"sleep", "10"}, nil)
+	require.NoError(t, err)
+
+	cancel()
+
+	err = cmd.Wait()
+	require.Error(t, err)
 }

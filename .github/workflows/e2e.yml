@@ -1,0 +1,46 @@
+name: E2E Dual Cluster Tests
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'internal/controller/**'
+      - 'internal/deployer/**'
+      - 'test/e2e/**'
+      - 'charts/**'
+  pull_request:
+    types: [labeled, synchronize, opened]
+
+jobs:
+  e2e:
+    if: >
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-e2e'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Install k3d
+        run: curl -s https://raw.githubusercontent.com/k3d-io/k3d/v5.7.5/install.sh | bash
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Run E2E Dual Setup
+        run: ./test/e2e/setup_dual.sh
+
+      - name: Run E2E Dual Tests
+        run: go test -tags=e2e_dual -v -count=1 -timeout=10m ./test/e2e/...
+        timeout-minutes: 10
+
+      - name: Teardown
+        if: always()
+        run: ./test/e2e/teardown_dual.sh
