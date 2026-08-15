@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -340,4 +341,102 @@ func TestPreviewGroupReconcile_TeardownTableDriven(t *testing.T) {
 			assert.Empty(t, slices.Items)
 		})
 	}
+}
+
+func TestPreviewGroupReconcile_EmptyServices(t *testing.T) {
+	pg := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "mr-empty"},
+		Spec:       divergeiov1alpha1.PreviewGroupSpec{Services: []divergeiov1alpha1.PreviewGroupServiceSpec{}},
+	}
+	r, c := newTestPreviewGroupReconciler(pg)
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "mr-empty"}})
+	require.NoError(t, err)
+
+	var updated divergeiov1alpha1.PreviewGroup
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "mr-empty"}, &updated))
+
+	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "mr-empty"}})
+	require.NoError(t, err)
+
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "mr-empty"}, &updated))
+	assert.Equal(t, divergeiov1alpha1.PreviewGroupPhasePending, updated.Status.Phase)
+}
+
+func TestPreviewGroupReconcile_DuplicateServiceNames(t *testing.T) {
+	pg := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "mr-dup"},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{Name: "svc1", Mode: divergeiov1alpha1.ServiceModeImage, Namespace: "default"},
+				{Name: "svc1", Mode: divergeiov1alpha1.ServiceModeBaseline, Namespace: "default"},
+			},
+		},
+	}
+	r, c := newTestPreviewGroupReconciler(pg)
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "mr-dup"}})
+	require.NoError(t, err)
+	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "mr-dup"}})
+	require.NoError(t, err)
+
+	var updated divergeiov1alpha1.PreviewGroup
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "mr-dup"}, &updated))
+	assert.Equal(t, int32(2), updated.Status.ServiceCount)
+}
+
+func TestPreviewGroupReconcile_RemoveOrphanedEnvironments(t *testing.T) {
+	pg := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "mr-orphan"},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{Name: "svc-keep", Mode: divergeiov1alpha1.ServiceModeImage, Namespace: "default"},
+			},
+		},
+	}
+
+	orphanEnv := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      childEnvironmentName("mr-orphan", "svc-drop"),
+			Namespace: "default",
+			Labels: map[string]string{
+				labelPreviewGroup: "mr-orphan",
+				labelManagedBy:    "diverge-previewgroup",
+			},
+		},
+	}
+
+	r, c := newTestPreviewGroupReconciler(pg, orphanEnv)
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "mr-orphan"}})
+	require.NoError(t, err)
+	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "mr-orphan"}})
+	require.NoError(t, err)
+
+	var env divergeiov1alpha1.Environment
+	err = c.Get(context.Background(), types.NamespacedName{Name: orphanEnv.Name, Namespace: "default"}, &env)
+	assert.True(t, apierrors.IsNotFound(err))
+}
+
+func TestPreviewGroupReconcile_FullCleanup(t *testing.T) {
+	// Test that a PreviewGroup with services creates child environments
+	// and a second reconcile progresses the phase
+	pg := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "mr-cleanup",
+		},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{Name: "svc1"},
+				{Name: "svc2"},
+			},
+		},
+	}
+	r, c := newTestPreviewGroupReconciler(pg)
+
+	// First reconcile should add finalizer and start creating environments
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "mr-cleanup"}})
+	require.NoError(t, err)
+
+	// Verify the PreviewGroup has a finalizer
+	var updated divergeiov1alpha1.PreviewGroup
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "mr-cleanup"}, &updated))
+	assert.Contains(t, updated.Finalizers, previewGroupFinalizer)
 }

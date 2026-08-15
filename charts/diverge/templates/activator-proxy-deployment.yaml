@@ -10,16 +10,27 @@ spec:
   replicas: {{ .Values.activatorProxy.replicas }}
   selector:
     matchLabels:
+      {{- include "diverge.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: activator-proxy
   template:
     metadata:
       labels:
+        {{- include "diverge.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: activator-proxy
     spec:
       serviceAccountName: {{ include "diverge.fullname" . }}-activator-proxy
       containers:
         - name: activator-proxy
           image: "{{ .Values.activatorProxy.image.repository }}:{{ .Values.activatorProxy.image.tag }}"
+          args:
+            - "--port={{ .Values.activatorProxy.port }}"
+            - "--activator-url={{ .Values.activatorProxy.activatorUrl }}"
+            - "--target-namespace={{ .Values.activatorProxy.targetNamespace }}"
+            - "--target-selector={{ .Values.activatorProxy.targetSelector }}"
+            - "--target-port={{ .Values.activatorProxy.targetPort }}"
+            {{- if .Values.activatorProxy.targetRevision }}
+            - "--target-revision={{ .Values.activatorProxy.targetRevision }}"
+            {{- end }}
           ports:
             - containerPort: {{ .Values.activatorProxy.port }}
           env:

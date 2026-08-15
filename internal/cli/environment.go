@@ -55,7 +55,7 @@ func (d *DefaultEnvironmentDetector) DetectLocalIP(ctx context.Context) (string,
 				case *net.IPAddr:
 					ip = v.IP
 				}
-				if ip == nil || ip.IsLoopback() {
+				if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
 					continue
 				}
 				ip = ip.To4()

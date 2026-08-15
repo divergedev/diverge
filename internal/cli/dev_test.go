@@ -511,3 +511,46 @@ func TestRunDev_SameOwnerUpdates(t *testing.T) {
 	cancel()
 	<-errCh
 }
+
+func TestRunChildProcess_Simple(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	cmd, err := runChildProcess(ctx, []string{"echo", "hello"}, nil)
+	require.NoError(t, err)
+	err = cmd.Wait()
+	require.NoError(t, err)
+}
+
+func TestRunChildProcess_Fail(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	cmd, err := runChildProcess(ctx, []string{"false"}, nil)
+	require.NoError(t, err)
+	err = cmd.Wait()
+	require.Error(t, err)
+}
+
+func TestRunChildProcess_EnvInjection(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	envMap := map[string]string{"DIVERGE_TEST_VAR": "42"}
+	cmd, err := runChildProcess(ctx, []string{"sh", "-c", "if [ \"$DIVERGE_TEST_VAR\" != \"42\" ]; then exit 1; fi"}, envMap)
+	require.NoError(t, err)
+	err = cmd.Wait()
+	require.NoError(t, err, "child process failed, env var was not injected")
+}
+
+func TestRunChildProcess_CancelPropagation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	cmd, err := runChildProcess(ctx, []string{"sleep", "10"}, nil)
+	require.NoError(t, err)
+
+	cancel()
+
+	err = cmd.Wait()
+	require.Error(t, err)
+}

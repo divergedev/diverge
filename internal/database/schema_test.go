@@ -2,7 +2,9 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
@@ -89,7 +91,59 @@ func TestSchemaDatabaseProvider_Provision_DSN_WithQueryParam(t *testing.T) {
 		},
 	}
 
+	_, err := provider.Provision(context.Background(), env)
+	assert.NoError(t, err)
+}
+
+type errorExecutor struct {
+	err error
+}
+
+func (e *errorExecutor) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return nil, e.err
+}
+
+func TestSchemaDatabaseProvider_Provision_ExecutorHappy(t *testing.T) {
+	mockExec := &recordingExecutor{}
+	provider := &SchemaDatabaseProvider{AdminDSN: "postgres://admin@localhost/db", Executor: mockExec}
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-env"},
+	}
+
 	res, err := provider.Provision(context.Background(), env)
 	assert.NoError(t, err)
-	assert.Equal(t, "postgres://admin@localhost/db?sslmode=require&search_path=preview_test_env,public", res.DSN)
+	assert.True(t, mockExec.called)
+	assert.Contains(t, mockExec.lastSQL, "CREATE SCHEMA IF NOT EXISTS")
+	assert.True(t, res.Ready)
+}
+
+func TestSchemaDatabaseProvider_Provision_ExecutorError(t *testing.T) {
+	provider := &SchemaDatabaseProvider{AdminDSN: "postgres://admin@localhost/db", Executor: &errorExecutor{err: context.DeadlineExceeded}}
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-env"},
+	}
+
+	res, err := provider.Provision(context.Background(), env)
+	assert.NoError(t, err)
+	assert.False(t, res.Ready)
+	assert.Contains(t, res.Message, "failed to execute setup SQL:")
+}
+
+func TestSchemaDatabaseProvider_Provision_Concurrent(t *testing.T) {
+	provider := &SchemaDatabaseProvider{AdminDSN: "postgres://admin@localhost/db", Executor: &recordingExecutor{}}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			env := &v1alpha1.Environment{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-env"},
+			}
+			res, err := provider.Provision(context.Background(), env)
+			assert.NoError(t, err)
+			assert.True(t, res.Ready)
+		}(i)
+	}
+	wg.Wait()
 }

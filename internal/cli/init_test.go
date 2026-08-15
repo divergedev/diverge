@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -12,13 +13,13 @@ import (
 )
 
 func TestInitCmd_DryRun(t *testing.T) {
-	// Override execCommand to avoid real commands
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
+	// Override execCommandContext to avoid real commands
+	origExecCommandContext := execCommandContext
+	defer func() { execCommandContext = origExecCommandContext }()
 
-	execCommand = func(command string, args ...string) *exec.Cmd {
+	execCommandContext = func(ctx context.Context, command string, args ...string) *exec.Cmd {
 		// Just a dummy command that does nothing
-		return exec.Command("true")
+		return exec.CommandContext(ctx, "true")
 	}
 
 	app := &App{}
@@ -79,18 +80,18 @@ func TestInitCmd_MissingPrerequisites(t *testing.T) {
 
 func TestInitCmd_Flags(t *testing.T) {
 	// Test without gateway and sample app
-	origExecCommand := execCommand
+	origExecCommandContext := execCommandContext
 	origLookPath := lookPath
 	defer func() {
-		execCommand = origExecCommand
+		execCommandContext = origExecCommandContext
 		lookPath = origLookPath
 	}()
 
 	lookPath = func(file string) (string, error) {
 		return "/usr/local/bin/" + file, nil
 	}
-	execCommand = func(command string, args ...string) *exec.Cmd {
-		return exec.Command("true")
+	execCommandContext = func(ctx context.Context, command string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "true")
 	}
 
 	app := &App{}

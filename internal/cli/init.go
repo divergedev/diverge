@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -18,8 +20,8 @@ type initOptions struct {
 }
 
 var (
-	lookPath    = exec.LookPath
-	execCommand = exec.Command
+	lookPath           = exec.LookPath
+	execCommandContext = exec.CommandContext
 )
 
 func newInitCmd(app *App) *cobra.Command {
@@ -29,7 +31,7 @@ func newInitCmd(app *App) *cobra.Command {
 		Use:   "init",
 		Short: "Initialize a ready-to-use local development playground",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runInit(opts)
+			return runInit(cmd.Context(), opts)
 		},
 	}
 
@@ -42,7 +44,7 @@ func newInitCmd(app *App) *cobra.Command {
 	return cmd
 }
 
-func runInit(opts *initOptions) error {
+func runInit(ctx context.Context, opts *initOptions) error {
 	totalSteps := 5
 	if opts.installGateway {
 		totalSteps++
@@ -66,7 +68,9 @@ func runInit(opts *initOptions) error {
 			fmt.Fprintf(os.Stderr, "  (dry-run) %s\n", cmdStr)
 			return nil
 		}
-		cmd := execCommand(name, args...)
+		cmdCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		defer cancel()
+		cmd := execCommandContext(cmdCtx, name, args...)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("command failed: %s\n%s", cmdStr, string(out))
@@ -155,8 +159,12 @@ func runInit(opts *initOptions) error {
 	if opts.installSampleApp {
 		printStep("Deploying sample app...")
 		if !opts.dryRun {
-			_ = runCmd("kubectl", "create", "deployment", "echo-server", "--image=ealen/echo-server")
-			_ = runCmd("kubectl", "expose", "deployment", "echo-server", "--port=8080", "--target-port=80")
+			if err := runCmd("kubectl", "create", "deployment", "echo-server", "--image=ealen/echo-server"); err != nil {
+				return err
+			}
+			if err := runCmd("kubectl", "expose", "deployment", "echo-server", "--port=8080", "--target-port=80"); err != nil {
+				return err
+			}
 		} else {
 			fmt.Fprintf(os.Stderr, "  (dry-run) kubectl create deployment echo-server --image=ealen/echo-server\n")
 			fmt.Fprintf(os.Stderr, "  (dry-run) kubectl expose deployment echo-server --port=8080 --target-port=80\n")
