@@ -17,7 +17,7 @@ import (
 func buildFakeClient() client.Client {
 	scheme := runtime.NewScheme()
 	_ = clientgoscheme.AddToScheme(scheme)
-	_ = gatewayv1beta1.AddToScheme(scheme)
+	_ = gatewayv1beta1.Install(scheme)
 	return fake.NewClientBuilder().WithScheme(scheme).Build()
 }
 

@@ -7,6 +7,7 @@ import (
 
 	"github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"pgregory.net/rapid"
 )
@@ -65,5 +66,50 @@ func TestSchemaDatabaseProvider_Provision_Property(t *testing.T) {
 		assert.Contains(t, res.DSN, "search_path="+expectedSchema)
 		assert.Equal(t, expectedSchema, res.EnvVars["DIVERGE_PREVIEW_SCHEMA"])
 		assert.Contains(t, res.SetupSQL, expectedSchema)
+	})
+}
+
+func TestSchemaDatabaseProvider_Property_ExecutorCalledOnValidNames(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		// Generate valid env names
+		envName := rapid.StringMatching(`^[a-z0-9][a-z0-9_-]{0,50}$`).Draw(rt, "envName")
+
+		provider := &SchemaDatabaseProvider{AdminDSN: "postgres://invalid:invalid@localhost:1/db"}
+		env := &v1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: envName,
+			},
+		}
+
+		res, err := provider.Provision(context.Background(), env)
+		require.NoError(t, err)
+
+		// It should fail at execution phase, not validation phase
+		assert.NotNil(t, res)
+		assert.False(t, res.Ready)
+		assert.Contains(t, res.Message, "failed to execute setup SQL")
+		// The requirement mentioned checking noopSQLExecutor.lastDSN, but since it doesn't
+		// exist, we verify the execution attempted by checking the execution error message
+	})
+}
+
+func TestSchemaDatabaseProvider_Property_ExecutorNotCalledOnInvalidNames(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		// Generate invalid env names
+		invalidStrGen := rapid.StringMatching(`[!@#\$%\^&\*\(\) \n\t]+`)
+		envName := invalidStrGen.Draw(rt, "envName")
+
+		provider := &SchemaDatabaseProvider{AdminDSN: "postgres://invalid:invalid@localhost:1/db"}
+		env := &v1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: envName,
+			},
+		}
+
+		res, err := provider.Provision(context.Background(), env)
+
+		// It should fail at validation phase immediately, before opening database
+		assert.Nil(t, res)
+		assert.ErrorIs(t, err, ErrInvalidSchemaName)
 	})
 }

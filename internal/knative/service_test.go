@@ -25,9 +25,9 @@ func TestBuildKnativeService_Basic(t *testing.T) {
 	assert.Equal(t, "IgnoreExtraneous", svc.Annotations["argocd.argoproj.io/compare-options"])
 	assert.Equal(t, "0", svc.Annotations["autoscaling.knative.dev/min-scale"])
 
-	require.Len(t, svc.Spec.ConfigurationSpec.Template.Spec.PodSpec.Containers, 1)
-	assert.Equal(t, "nginx:latest", svc.Spec.ConfigurationSpec.Template.Spec.PodSpec.Containers[0].Image)
-	assert.Equal(t, int32(8080), svc.Spec.ConfigurationSpec.Template.Spec.PodSpec.Containers[0].Ports[0].ContainerPort)
+	require.Len(t, svc.Spec.Template.Spec.Containers, 1)
+	assert.Equal(t, "nginx:latest", svc.Spec.Template.Spec.Containers[0].Image)
+	assert.Equal(t, int32(8080), svc.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort)
 }
 
 func TestBuildKnativeService_NilLabels(t *testing.T) {
@@ -69,5 +69,5 @@ func TestBuildKnativeService_ValidLabelsPassthrough(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "valid", svc.Labels["custom"])
-	assert.Equal(t, "valid", svc.Spec.ConfigurationSpec.Template.Labels["custom"])
+	assert.Equal(t, "valid", svc.Spec.Template.Labels["custom"])
 }

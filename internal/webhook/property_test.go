@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"hegel.dev/go/hegel"
 	"pgregory.net/rapid"
 )
@@ -54,6 +55,51 @@ func TestNormalizeGitHubAction_Property(t *testing.T) {
 			// valid
 		default:
 			t.Fatalf("unexpected normalized action: %s", normalized)
+		}
+	})
+}
+
+func TestSafeSHA_Property_NeverPanics(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		s := rapid.String().Draw(rt, "s")
+		maxLen := rapid.IntRange(0, 1000).Draw(rt, "maxLen")
+
+		require.NotPanics(t, func() {
+			_ = safeSHA(s, maxLen)
+		})
+	})
+}
+
+func TestSafeSHA_Property_LengthBound(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		s := rapid.String().Draw(rt, "s")
+		maxLen := rapid.IntRange(0, 1000).Draw(rt, "maxLen")
+
+		res := safeSHA(s, maxLen)
+		require.LessOrEqual(t, len(res), maxLen)
+	})
+}
+
+func TestSafeSHA_Property_Prefix(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		s := rapid.String().Draw(rt, "s")
+		maxLen := rapid.IntRange(0, 1000).Draw(rt, "maxLen")
+
+		if len(s) > maxLen {
+			res := safeSHA(s, maxLen)
+			require.Equal(t, s[:maxLen], res)
+		}
+	})
+}
+
+func TestSafeSHA_Property_Identity(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		s := rapid.String().Draw(rt, "s")
+		maxLen := rapid.IntRange(0, 1000).Draw(rt, "maxLen")
+
+		if len(s) <= maxLen {
+			res := safeSHA(s, maxLen)
+			require.Equal(t, s, res)
 		}
 	})
 }
