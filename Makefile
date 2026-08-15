@@ -43,13 +43,25 @@ lint: ## Run golangci-lint
 test: manifests generate fmt vet ## Run tests.
 	go test ./... -coverprofile cover.out
 
-.PHONY: e2e-setup e2e e2e-teardown
-e2e-setup:
-	nix develop -c ./test/e2e/setup.sh
-e2e:
-	nix develop -c go test -tags=e2e -v -count=1 ./test/e2e/...
-e2e-teardown:
-	nix develop -c ./test/e2e/teardown.sh
+.PHONY: e2e-setup e2e-run e2e-teardown e2e
+
+e2e-setup: ## Create Kind cluster and install CRDs
+	kind get clusters | grep -q diverge-e2e || kind create cluster --name diverge-e2e --config test/e2e/kind-config.yaml
+	$(MAKE) docker-build
+	kind load docker-image divergedev/diverge:latest --name diverge-e2e
+	kubectl apply -f config/crd/bases/
+
+e2e-run: ## Run E2E tests
+	go test -tags=e2e -v -count=1 -timeout=10m ./test/e2e/...
+
+e2e-teardown: ## Delete Kind cluster
+	kind delete cluster --name diverge-e2e
+
+e2e: e2e-setup ## Full E2E cycle
+	@$(MAKE) e2e-run; \
+	status=$$?; \
+	$(MAKE) e2e-teardown; \
+	exit $$status
 
 e2e-dual-setup:
 	nix develop -c ./test/e2e/setup_dual.sh
