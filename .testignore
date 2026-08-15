@@ -1,0 +1,75 @@
+# .testignore — Go source files exempt from test co-location checks.
+# Supports glob patterns. One pattern per line.
+# These are files that legitimately don't need individual test files
+# (registration stubs, type definitions, noop implementations, etc.)
+
+# Registration stubs (init() only, tested via integration)
+internal/**/noop_register.go
+internal/**/*_register.go
+
+# Provider registries (thin glue, tested via integration)
+internal/**/providers.go
+
+# Noop/stub implementations (no logic to test)
+internal/**/noop.go
+internal/deployer/noop.go
+internal/notifier/noop.go
+internal/notifier/noop_status.go
+internal/routing/noop.go
+
+# Instrumented wrappers (generated-like, delegation only)
+internal/**/instrumented.go
+
+# Type definitions (no logic, tested via PBT on types)
+internal/argocd/types.go
+
+# Event recorder (thin wrapper around k8s recorder)
+internal/events/recorder.go
+
+# CLI commands pending test coverage (tracked as tech debt)
+# Remove these as tests are added:
+internal/cli/environment.go
+internal/cli/logs.go
+
+# Router interface (tested via implementations)
+internal/routing/router.go
+
+# Test helpers (testing infrastructure, not product code)
+internal/testing/helpers.go
+internal/testing/github.go
+internal/testing/gitlab.go
+internal/testing/noop.go
+
+# Process management (platform-specific, tested via integration)
+internal/cli/process_unix.go
+internal/cli/process_windows.go
+
+# Webhook config fetchers (API clients, tested via integration)
+internal/webhook/config_fetcher_github.go
+internal/webhook/config_fetcher_gitlab.go
+
+# Notifier implementations (API clients, tested via integration)
+internal/notifier/github_status.go
+internal/notifier/gitlab.go
+internal/notifier/gitlab_status.go
+internal/notifier/previewgroup_templates.go
+
+# Deployer implementations (tested via integration)
+internal/deployer/argocd.go
+internal/deployer/fetcher_configmap.go
+internal/deployer/fetcher_url.go
+
+# Async webhook (tested via provisioner integration)
+internal/async/webhook.go
+
+# Database (pending removal in modernize PR)
+internal/database/provider.go
+internal/database/schemaprovider/schema_security.go
+
+# Proxy pages (static content, tested via E2E)
+internal/proxy/pages.go
+
+
+# pkg/ re-exports and interfaces
+pkg/database/provider.go
+pkg/database/registry.go

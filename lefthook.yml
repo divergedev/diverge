@@ -42,3 +42,9 @@ pre-push:
     check-generated-stale:
       glob: "*.{proto,go}"
       run: ./scripts/check-gen.sh
+    check-pbt-coverage:
+      glob: "api/**/*_types.go"
+      run: ./scripts/check-pbt-coverage.sh
+    check-test-files:
+      glob: "{internal,pkg}/**/*.go"
+      run: ./scripts/check-test-coverage.sh
