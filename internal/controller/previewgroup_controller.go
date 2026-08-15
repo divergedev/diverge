@@ -474,8 +474,9 @@ func (r *PreviewGroupReconciler) buildChildEnvironment(
 			Database:      dbConfig,
 			ServiceConfig: serviceConfig,
 			Deploy: divergeiov1alpha1.EnvironmentDeploy{
-				Mode:      "delta",
-				Namespace: "same",
+				Mode:            "delta",
+				Namespace:       "same",
+				ChangedServices: []string{svc.Name},
 			},
 		},
 	}
