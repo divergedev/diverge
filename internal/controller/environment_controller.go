@@ -235,6 +235,9 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			tCtxA, cancelA := context.WithTimeout(ctx, 30*time.Second)
 			result, err := r.AsyncProvisioner.Provision(tCtxA, &env, route)
 			cancelA()
+			if err == nil && result == nil {
+				err = async.ErrNilProvisionResult
+			}
 			if err != nil {
 				meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 					Type:    "AsyncRoutingReady",
@@ -253,7 +256,18 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		if env.Spec.ServiceConfig == nil {
 			env.Spec.ServiceConfig = &divergeiov1alpha1.ServicePreviewConfig{}
 		}
-		env.Spec.ServiceConfig.Env = append(env.Spec.ServiceConfig.Env, asyncEnvVars...)
+		// Merge async env vars, detecting conflicts
+		merged, err := mergeEnvVars(env.Spec.ServiceConfig.Env, asyncEnvVars)
+		if err != nil {
+			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+				Type:    "AsyncRoutingReady",
+				Status:  metav1.ConditionFalse,
+				Reason:  "EnvVarConflict",
+				Message: err.Error(),
+			})
+			return r.updateStatusWithRequeue(ctx, &env, statusBase, err, 0)
+		}
+		env.Spec.ServiceConfig.Env = merged
 		meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 			Type:    "AsyncRoutingReady",
 			Status:  metav1.ConditionTrue,
@@ -689,4 +703,26 @@ func (r *EnvironmentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
 		Complete(r)
+}
+
+func mergeEnvVars(existing, asyncVars []divergeiov1alpha1.EnvVar) ([]divergeiov1alpha1.EnvVar, error) {
+	out := make([]divergeiov1alpha1.EnvVar, len(existing))
+	copy(out, existing)
+
+	for _, asyncVar := range asyncVars {
+		conflict := false
+		for _, e := range out {
+			if e.Name == asyncVar.Name {
+				if e.Value != asyncVar.Value {
+					return nil, fmt.Errorf("env var conflict for %q: existing=%q vs async=%q", asyncVar.Name, e.Value, asyncVar.Value)
+				}
+				conflict = true
+				break
+			}
+		}
+		if !conflict {
+			out = append(out, asyncVar)
+		}
+	}
+	return out, nil
 }

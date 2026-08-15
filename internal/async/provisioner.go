@@ -3,9 +3,13 @@ package async
 
 import (
 	"context"
+	"errors"
 
 	v1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 )
+
+// ErrNilProvisionResult is returned when a provisioner returns nil result without an error.
+var ErrNilProvisionResult = errors.New("provisioner returned nil result")
 
 // ProvisionResult contains the result of provisioning an async route.
 type ProvisionResult struct {

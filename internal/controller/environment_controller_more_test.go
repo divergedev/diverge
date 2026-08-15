@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -267,6 +268,11 @@ func TestReconcile_AsyncRouting(t *testing.T) {
 	require.NotNil(t, dep.lastEnv.Spec.ServiceConfig)
 	assert.Contains(t, dep.lastEnv.Spec.ServiceConfig.Env, divergeiov1alpha1.EnvVar{Name: "TEST_SQS_URL", Value: "http://sqs"})
 	assert.Equal(t, divergeiov1alpha1.PhaseRunning, updatedEnv.Status.Phase)
+
+	condition := meta.FindStatusCondition(updatedEnv.Status.Conditions, "AsyncRoutingReady")
+	require.NotNil(t, condition)
+	assert.Equal(t, metav1.ConditionTrue, condition.Status)
+	assert.Equal(t, "AsyncProvisioned", condition.Reason)
 }
 
 func TestReconcile_AsyncProvisionFailure(t *testing.T) {
@@ -304,6 +310,11 @@ func TestReconcile_AsyncProvisionFailure(t *testing.T) {
 	require.NoError(t, client.Get(context.Background(), req.NamespacedName, updatedEnv))
 
 	assert.Equal(t, divergeiov1alpha1.EnvironmentPhase(""), updatedEnv.Status.Phase)
+
+	condition := meta.FindStatusCondition(updatedEnv.Status.Conditions, "AsyncRoutingReady")
+	require.NotNil(t, condition)
+	assert.Equal(t, metav1.ConditionFalse, condition.Status)
+	assert.Equal(t, "AsyncProvisionFailed", condition.Reason)
 }
 
 func TestReconcile_AsyncTeardown(t *testing.T) {
