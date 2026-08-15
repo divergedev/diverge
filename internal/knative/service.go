@@ -1,15 +1,27 @@
 package knative
 
 import (
+	"fmt"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 	knservingv1 "knative.dev/serving/pkg/apis/serving/v1"
 )
 
 // BuildKnativeService builds a Knative Service for a preview environment pod.
-func BuildKnativeService(name, namespace, image string, port int32, labels, annotations map[string]string) *knservingv1.Service {
+func BuildKnativeService(name, namespace, image string, port int32, labels, annotations map[string]string) (*knservingv1.Service, error) {
 	if labels == nil {
 		labels = make(map[string]string)
+	} else {
+		for k, v := range labels {
+			if errs := validation.IsQualifiedName(k); len(errs) > 0 {
+				return nil, fmt.Errorf("invalid label key %q: %v", k, errs)
+			}
+			if errs := validation.IsValidLabelValue(v); len(errs) > 0 {
+				return nil, fmt.Errorf("invalid label value %q: %v", v, errs)
+			}
+		}
 	}
 	// Add diverge.io/managed-by labels
 	labels["diverge.io/managed-by"] = "diverge"
@@ -54,5 +66,5 @@ func BuildKnativeService(name, namespace, image string, port int32, labels, anno
 				},
 			},
 		},
-	}
+	}, nil
 }

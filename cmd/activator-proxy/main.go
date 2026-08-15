@@ -61,7 +61,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	server, err := proxy.NewActivatorServer(cfg, kubeClient)
+	server, err := proxy.NewActivatorServer(ctx, cfg, kubeClient)
 	if err != nil {
 		logger.Error(err, "Failed to initialize activator proxy server")
 		os.Exit(1)

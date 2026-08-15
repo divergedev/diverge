@@ -52,8 +52,17 @@ spec:
         diverge.io/managed-by: diverge
     spec:
       serviceAccountName: activator-proxy
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: activator-proxy
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           image: us-docker.pkg.dev/austin-demo-diverge/diverge/activator-proxy:latest
           args:
             - --port=8091

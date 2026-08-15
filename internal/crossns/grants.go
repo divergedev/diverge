@@ -2,6 +2,7 @@ package crossns
 
 import (
 	"context"
+	"fmt"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -18,7 +19,7 @@ func EnsureReferenceGrant(ctx context.Context, c client.Client, fromNamespace, t
 
 	grant := &gatewayv1beta1.ReferenceGrant{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "diverge-crossns-grant",
+			Name:      fmt.Sprintf("diverge-crossns-%s", fromNamespace),
 			Namespace: toNamespace,
 		},
 		Spec: gatewayv1beta1.ReferenceGrantSpec{
