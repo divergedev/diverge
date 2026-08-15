@@ -55,6 +55,36 @@ func newStatusCmd(app *App) *cobra.Command {
 				cmd.Printf("  Header: %s: %s\n", env.Spec.Routing.HeaderKey, env.Spec.Routing.HeaderValue)
 			}
 
+			if len(env.Spec.Routing.AsyncRoutes) > 0 {
+				cmd.Println("\nAsync Routes:")
+				for _, route := range env.Spec.Routing.AsyncRoutes {
+					envVar := route.EnvVarMapping[route.Target]
+					if envVar == "" && len(route.EnvVarMapping) > 0 {
+						for _, v := range route.EnvVarMapping {
+							envVar = v
+							break
+						}
+					}
+					if envVar == "" {
+						envVar = divergeiov1alpha1.DefaultEnvVarForProtocol(route.Protocol)
+					}
+					cmd.Printf("  %-8s → %-14s (%s)\n", route.Protocol, route.Target, envVar)
+				}
+
+				asyncStatus := "⏳ Pending"
+				for _, cond := range env.Status.Conditions {
+					if cond.Type == "AsyncRoutingReady" {
+						if string(cond.Status) == "True" {
+							asyncStatus = "✅ Provisioned"
+						} else {
+							asyncStatus = "❌ " + cond.Reason
+						}
+						break
+					}
+				}
+				cmd.Printf("Async Status: %s\n", asyncStatus)
+			}
+
 			return nil
 		},
 	}

@@ -223,3 +223,66 @@ func TestPhaseEmoji(t *testing.T) {
 		}
 	}
 }
+
+func TestPreviewStatusCmd_AsyncRoutes(t *testing.T) {
+	s := runtime.NewScheme()
+	_ = divergeiov1alpha1.AddToScheme(s)
+
+	pg := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "mr-42",
+		},
+		Status: divergeiov1alpha1.PreviewGroupStatus{
+			Services: []divergeiov1alpha1.PreviewGroupServiceStatus{
+				{
+					Name:            "payments-api",
+					EnvironmentName: "env-payments-api",
+					Namespace:       "default",
+				},
+			},
+			Conditions: []metav1.Condition{
+				{
+					Type:   "AsyncRoutingReady",
+					Status: "True",
+				},
+			},
+		},
+	}
+
+	childEnv := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "env-payments-api",
+			Namespace: "default",
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Routing: divergeiov1alpha1.EnvironmentRouting{
+				AsyncRoutes: []divergeiov1alpha1.AsyncRouteSpec{
+					{
+						Protocol: "temporal",
+						Target:   "payments-queue",
+					},
+				},
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pg, childEnv).Build()
+	app := &App{Namespace: "default", Client: c}
+
+	var buf bytes.Buffer
+	err := runPreviewStatus(app, "mr-42", &buf)
+	if err != nil {
+		t.Fatalf("runPreviewStatus failed: %v", err)
+	}
+
+	output := buf.String()
+	if !bytes.Contains([]byte(output), []byte("Async Routes:")) {
+		t.Error("output doesn't contain Async Routes:")
+	}
+	if !bytes.Contains([]byte(output), []byte("temporal → payments-queue")) {
+		t.Error("output doesn't contain route details")
+	}
+	if !bytes.Contains([]byte(output), []byte("Async Status: ✅ Provisioned")) {
+		t.Error("output doesn't contain provisioned status")
+	}
+}

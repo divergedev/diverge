@@ -289,6 +289,48 @@ func runPreviewStatus(app *App, name string, out io.Writer) error {
 	}
 	_ = w.Flush()
 
+	// Check for async routes in child environments
+	var asyncRoutes []divergeiov1alpha1.AsyncRouteSpec
+	for _, svc := range pg.Status.Services {
+		if svc.EnvironmentName != "" {
+			var childEnv divergeiov1alpha1.Environment
+			if err := c.Get(context.TODO(), types.NamespacedName{Name: svc.EnvironmentName, Namespace: app.Namespace}, &childEnv); err == nil {
+				asyncRoutes = append(asyncRoutes, childEnv.Spec.Routing.AsyncRoutes...)
+			}
+		}
+	}
+
+	if len(asyncRoutes) > 0 {
+		_, _ = fmt.Fprintln(out)
+		_, _ = fmt.Fprintln(out, "   Async Routes:")
+		for _, route := range asyncRoutes {
+			envVar := route.EnvVarMapping[route.Target]
+			if envVar == "" && len(route.EnvVarMapping) > 0 {
+				for _, v := range route.EnvVarMapping {
+					envVar = v
+					break
+				}
+			}
+			if envVar == "" {
+				envVar = divergeiov1alpha1.DefaultEnvVarForProtocol(route.Protocol)
+			}
+			_, _ = fmt.Fprintf(out, "     %-8s → %-14s (%s)\n", route.Protocol, route.Target, envVar)
+		}
+
+		asyncStatus := "⏳ Pending"
+		for _, cond := range pg.Status.Conditions {
+			if cond.Type == "AsyncRoutingReady" {
+				if cond.Status == metav1.ConditionTrue {
+					asyncStatus = "✅ Provisioned"
+				} else {
+					asyncStatus = "❌ " + cond.Reason
+				}
+				break
+			}
+		}
+		_, _ = fmt.Fprintf(out, "   Async Status: %s\n", asyncStatus)
+	}
+
 	// Conditions
 	if len(pg.Status.Conditions) > 0 {
 		_, _ = fmt.Fprintln(out)
