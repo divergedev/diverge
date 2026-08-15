@@ -3,8 +3,12 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
-	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"sigs.k8s.io/yaml"
 )
 
 func TestProvidersListCmd(t *testing.T) {
@@ -12,61 +16,98 @@ func TestProvidersListCmd(t *testing.T) {
 	// Intentionally leave app.Client and app.Clientset nil
 	// to prove that the command does not require a kube client.
 
-	t.Run("table output", func(t *testing.T) {
-		cmd := newProvidersCmd(app)
-		var buf bytes.Buffer
-		cmd.SetOut(&buf)
-		cmd.SetArgs([]string{"list"})
+	tests := []struct {
+		name      string
+		args      []string
+		checkFunc func(t *testing.T, out string)
+	}{
+		{
+			name: "table output",
+			args: []string{"providers", "list"},
+			checkFunc: func(t *testing.T, out string) {
+				assert.Contains(t, out, "--- router ---")
+				assert.Contains(t, out, "NAME")
+				assert.Contains(t, out, "DESCRIPTION")
+				known := []string{"gateway", "direct", "noop", "temporal", "kafka"}
+				for _, k := range known {
+					assert.Contains(t, out, k)
+				}
+			},
+		},
+		{
+			name: "json output",
+			args: []string{"providers", "list", "-o", "json"},
+			checkFunc: func(t *testing.T, out string) {
+				var providers []ProviderInfo
+				err := json.Unmarshal([]byte(out), &providers)
+				require.NoError(t, err)
+				require.NotEmpty(t, providers)
 
-		err := cmd.Execute()
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+				found := false
+				for _, p := range providers {
+					if p.Name == "gateway" {
+						found = true
+						break
+					}
+				}
+				assert.True(t, found, "missing known provider 'gateway' in JSON output")
+			},
+		},
+		{
+			name: "yaml output",
+			args: []string{"providers", "list", "-o", "yaml"},
+			checkFunc: func(t *testing.T, out string) {
+				var providers []ProviderInfo
+				err := yaml.Unmarshal([]byte(out), &providers)
+				require.NoError(t, err)
+				require.NotEmpty(t, providers)
 
-		out := buf.String()
-		if !strings.Contains(out, "--- router ---") || !strings.Contains(out, "NAME") || !strings.Contains(out, "DESCRIPTION") {
-			t.Errorf("missing headers in output:\n%s", out)
-		}
+				found := false
+				for _, p := range providers {
+					if p.Name == "gateway" {
+						found = true
+						break
+					}
+				}
+				assert.True(t, found, "missing known provider 'gateway' in YAML output")
+			},
+		},
+		{
+			name: "alias plugins",
+			args: []string{"plugins", "list"},
+			checkFunc: func(t *testing.T, out string) {
+				assert.Contains(t, out, "--- router ---")
+			},
+		},
+		{
+			name: "alias plugin",
+			args: []string{"plugin", "list"},
+			checkFunc: func(t *testing.T, out string) {
+				assert.Contains(t, out, "--- router ---")
+			},
+		},
+		{
+			name: "alias provider",
+			args: []string{"provider", "list"},
+			checkFunc: func(t *testing.T, out string) {
+				assert.Contains(t, out, "--- router ---")
+			},
+		},
+	}
 
-		// Known providers
-		known := []string{"gateway", "direct", "noop", "temporal", "kafka"}
-		for _, k := range known {
-			if !strings.Contains(out, k) {
-				t.Errorf("missing known provider %q in output", k)
-			}
-		}
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := &cobra.Command{Use: "root"}
+			root.AddCommand(newProvidersCmd(app))
 
-	t.Run("json output", func(t *testing.T) {
-		cmd := newProvidersCmd(app)
-		var buf bytes.Buffer
-		cmd.SetOut(&buf)
-		cmd.SetArgs([]string{"list", "-o", "json"})
+			var buf bytes.Buffer
+			root.SetOut(&buf)
+			root.SetArgs(tt.args)
 
-		err := cmd.Execute()
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+			err := root.Execute()
+			require.NoError(t, err)
 
-		var providers []ProviderInfo
-		if err := json.Unmarshal(buf.Bytes(), &providers); err != nil {
-			t.Fatalf("invalid json output: %v", err)
-		}
-
-		if len(providers) == 0 {
-			t.Errorf("expected non-empty json output")
-		}
-
-		// Check for some known providers in JSON
-		found := false
-		for _, p := range providers {
-			if p.Name == "gateway" {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("missing known provider 'gateway' in JSON output")
-		}
-	})
+			tt.checkFunc(t, buf.String())
+		})
+	}
 }
