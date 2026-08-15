@@ -65,7 +65,7 @@ dockers:
       - "ghcr.io/divergedev/diverge:{{ .Tag }}-amd64"
     dockerfile: Dockerfile.goreleaser
     use: buildx
-    builds:
+    ids:
       - diverge-controller
       - diverge-proxy
     build_flag_templates:
@@ -77,7 +77,7 @@ dockers:
       - "ghcr.io/divergedev/diverge:{{ .Tag }}-arm64"
     dockerfile: Dockerfile.goreleaser
     use: buildx
-    builds:
+    ids:
       - diverge-controller
       - diverge-proxy
     build_flag_templates:
@@ -89,7 +89,7 @@ dockers:
       - "ghcr.io/divergedev/activator-proxy:{{ .Tag }}-amd64"
     dockerfile: Dockerfile.activator-proxy
     use: buildx
-    builds:
+    ids:
       - diverge-activator-proxy
     build_flag_templates:
       - "--platform=linux/amd64"
@@ -100,7 +100,7 @@ dockers:
       - "ghcr.io/divergedev/activator-proxy:{{ .Tag }}-arm64"
     dockerfile: Dockerfile.activator-proxy
     use: buildx
-    builds:
+    ids:
       - diverge-activator-proxy
     build_flag_templates:
       - "--platform=linux/arm64"

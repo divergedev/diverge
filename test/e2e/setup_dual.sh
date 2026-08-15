@@ -20,8 +20,7 @@ kubectl --context k3d-diverge-e2e-mgmt create deployment echo-server --image=eal
 kubectl --context k3d-diverge-e2e-mgmt expose deployment echo-server --port=80 --target-port=80 || true
 
 echo "Installing Envoy Gateway on management cluster..."
-helm repo add envoy-gateway https://envoyproxy.github.io/gateway/helm --force-update
-helm install eg envoy-gateway/envoy-gateway -n envoy-gateway-system --create-namespace --kube-context k3d-diverge-e2e-mgmt --wait
+helm install eg oci://docker.io/envoyproxy/gateway-helm --version v1.2.6 -n envoy-gateway-system --create-namespace --kube-context k3d-diverge-e2e-mgmt --wait
 
 echo "Creating Gateway resource..."
 cat <<EOF | kubectl --context k3d-diverge-e2e-mgmt apply -f -
