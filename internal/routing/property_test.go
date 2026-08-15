@@ -6,17 +6,32 @@ import (
 
 	"github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/stretchr/testify/require"
+	"hegel.dev/go/hegel"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"pgregory.net/rapid"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
+func genDNS1123(ht *hegel.T) string {
+	chars := []string{"a", "b", "0", "1", "-"}
+	first := hegel.Draw(ht, hegel.SampledFrom([]string{"a", "b", "0", "1"}))
+	length := hegel.Draw(ht, hegel.Integers(0, 8))
+	if length == 0 {
+		return first
+	}
+	res := first
+	for i := 0; i < length-1; i++ {
+		res += hegel.Draw(ht, hegel.SampledFrom(chars))
+	}
+	res += hegel.Draw(ht, hegel.SampledFrom([]string{"a", "b", "0", "1"}))
+	return res
+}
+
 func TestIstioRouterPropertyTeardown(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		name := rapid.StringMatching(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`).Draw(t, "name")
-		ns := rapid.StringMatching(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`).Draw(t, "namespace")
+	hegel.Test(t, func(ht *hegel.T) {
+		name := genDNS1123(ht)
+		ns := genDNS1123(ht)
 
 		// Seed the fake client with a managed AuthorizationPolicy
 		policy := &unstructured.Unstructured{}
@@ -44,6 +59,6 @@ func TestIstioRouterPropertyTeardown(t *testing.T) {
 		}
 
 		err := router.Teardown(context.Background(), env)
-		require.NoError(t, err, "Teardown should not error for valid environments")
+		require.NoError(ht, err, "Teardown should not error for valid environments")
 	})
 }

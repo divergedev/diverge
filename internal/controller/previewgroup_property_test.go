@@ -8,7 +8,6 @@ import (
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 	"hegel.dev/go/hegel"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"pgregory.net/rapid"
 )
 
 func TestChildEnvironmentName_DNSValid(t *testing.T) {
@@ -104,11 +103,27 @@ func TestDerivePreviewGroupPhase_AnyFailedNotAllRunning(t *testing.T) {
 	})
 }
 
+var dnsFirstChars = []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
+var dnsMidChars = []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "-"}
+
+func genDNSName(ht *hegel.T) string {
+	length := hegel.Draw(ht, hegel.Integers(1, 63))
+	first := hegel.Draw(ht, hegel.SampledFrom(dnsFirstChars))
+	if length == 1 {
+		return first
+	}
+	rest := ""
+	for i := 0; i < length-2; i++ {
+		rest += hegel.Draw(ht, hegel.SampledFrom(dnsMidChars))
+	}
+	return first + rest + hegel.Draw(ht, hegel.SampledFrom(dnsFirstChars))
+}
+
 func TestChildEnvLabelInvariant_Property(t *testing.T) {
-	rapid.Check(t, func(rt *rapid.T) {
-		pgName := rapid.StringMatching(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`).Draw(rt, "pgName")
-		svcName := rapid.String().Draw(rt, "svcName")
-		envName := rapid.String().Draw(rt, "envName")
+	hegel.Test(t, func(ht *hegel.T) {
+		pgName := genDNSName(ht)
+		svcName := hegel.Draw(ht, hegel.Text())
+		envName := hegel.Draw(ht, hegel.Text())
 
 		pg := &divergeiov1alpha1.PreviewGroup{
 			ObjectMeta: metav1.ObjectMeta{
@@ -127,10 +142,10 @@ func TestChildEnvLabelInvariant_Property(t *testing.T) {
 		// labelManagedBy    = "diverge.io/managed-by" (with value "diverge-previewgroup")
 		// See internal/controller/previewgroup_controller.go
 		if env.Labels["diverge.io/previewgroup"] != pgName {
-			t.Fatalf("expected previewgroup label to be %q, got %q", pgName, env.Labels["diverge.io/previewgroup"])
+			ht.Fatalf("expected previewgroup label to be %q, got %q", pgName, env.Labels["diverge.io/previewgroup"])
 		}
 		if env.Labels["diverge.io/managed-by"] != "diverge-previewgroup" {
-			t.Fatalf("expected managed-by label to be %q, got %q", "diverge-previewgroup", env.Labels["diverge.io/managed-by"])
+			ht.Fatalf("expected managed-by label to be %q, got %q", "diverge-previewgroup", env.Labels["diverge.io/managed-by"])
 		}
 	})
 }
