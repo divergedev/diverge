@@ -6,18 +6,18 @@ import (
 	"testing"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"hegel.dev/go/hegel"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"pgregory.net/rapid"
 )
 
 func TestServiceConfigFetcher_Property(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
+	hegel.Test(t, func(ht *hegel.T) {
 		fetcher := &ServiceConfigFetcher{}
 
-		envName := rapid.StringMatching(`^[a-z0-9-]{1,20}$`).Draw(t, "envName")
-		svcName := rapid.StringMatching(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`).Draw(t, "serviceName")
-		port := rapid.Int32Range(1, 65535).Draw(t, "port")
-		image := rapid.StringMatching(`^[a-zA-Z0-9-./:]+$`).Draw(t, "image")
+		envName := genString(ht, []string{"a", "b", "0", "1", "-"}, 1, 20)
+		svcName := genDNS1123(ht)
+		port := int32(hegel.Draw(ht, hegel.Integers(1, 65535)))
+		image := genString(ht, []string{"a", "A", "0", "-", ".", "/", ":"}, 1, 20)
 
 		cfg := &v1alpha1.ServicePreviewConfig{
 			ServiceName: svcName,
@@ -25,15 +25,18 @@ func TestServiceConfigFetcher_Property(t *testing.T) {
 			Image:       image,
 		}
 
-		numEnvs := rapid.IntRange(0, 5).Draw(t, "numEnvs")
+		numEnvs := hegel.Draw(ht, hegel.Integers(0, 5))
 		seenEnv := make(map[string]bool)
 		for len(cfg.Env) < numEnvs {
-			name := rapid.StringMatching(`^[A-Z_][A-Z0-9_]*$`).Draw(t, "envName")
+			first := hegel.Draw(ht, hegel.SampledFrom([]string{"A", "_"}))
+			rest := genString(ht, []string{"A", "B", "0", "_"}, 0, 10)
+			name := first + rest
+
 			if !seenEnv[name] && name != "APP_VERSION" {
 				seenEnv[name] = true
 				cfg.Env = append(cfg.Env, v1alpha1.EnvVar{
 					Name:  name,
-					Value: rapid.String().Draw(t, "envValue"),
+					Value: hegel.Draw(ht, hegel.Text().MinSize(0).MaxSize(20)),
 				})
 			}
 		}
@@ -49,12 +52,12 @@ func TestServiceConfigFetcher_Property(t *testing.T) {
 
 		objs, err := fetcher.Fetch(context.Background(), env)
 		if err != nil {
-			t.Fatalf("Fetch failed: %v", err)
+			ht.Fatalf("Fetch failed: %v", err)
 		}
 
 		// Always produces exactly 2 objects (Deployment + Service)
 		if len(objs) != 2 {
-			t.Fatalf("expected 2 objects, got %d", len(objs))
+			ht.Fatalf("expected 2 objects, got %d", len(objs))
 		}
 
 		deploy := objs[0]
@@ -62,10 +65,10 @@ func TestServiceConfigFetcher_Property(t *testing.T) {
 
 		// Generated objects have correct GVK
 		if deploy.GetAPIVersion() != "apps/v1" || deploy.GetKind() != "Deployment" {
-			t.Errorf("expected apps/v1 Deployment, got %s %s", deploy.GetAPIVersion(), deploy.GetKind())
+			ht.Errorf("expected apps/v1 Deployment, got %s %s", deploy.GetAPIVersion(), deploy.GetKind())
 		}
 		if svc.GetAPIVersion() != "v1" || svc.GetKind() != "Service" {
-			t.Errorf("expected v1 Service, got %s %s", svc.GetAPIVersion(), svc.GetKind())
+			ht.Errorf("expected v1 Service, got %s %s", svc.GetAPIVersion(), svc.GetKind())
 		}
 
 		// All objects have diverge labels
@@ -78,7 +81,7 @@ func TestServiceConfigFetcher_Property(t *testing.T) {
 			labels := obj.GetLabels()
 			for k, v := range expectedLabels {
 				if labels[k] != v {
-					t.Errorf("object %d missing label %s=%s", objIdx, k, v)
+					ht.Errorf("object %d missing label %s=%s", objIdx, k, v)
 				}
 			}
 		}
@@ -86,10 +89,10 @@ func TestServiceConfigFetcher_Property(t *testing.T) {
 		// Names are deterministic
 		expectedName := fmt.Sprintf("%s-%s", envName, svcName)
 		if deploy.GetName() != expectedName {
-			t.Errorf("expected deploy name %s, got %s", expectedName, deploy.GetName())
+			ht.Errorf("expected deploy name %s, got %s", expectedName, deploy.GetName())
 		}
 		if svc.GetName() != expectedName {
-			t.Errorf("expected svc name %s, got %s", expectedName, svc.GetName())
+			ht.Errorf("expected svc name %s, got %s", expectedName, svc.GetName())
 		}
 
 		// Port propagation
@@ -101,38 +104,38 @@ func TestServiceConfigFetcher_Property(t *testing.T) {
 		ports := container["ports"].([]interface{})
 		containerPort := ports[0].(map[string]interface{})["containerPort"].(int64)
 		if containerPort != int64(port) {
-			t.Errorf("expected container port %d, got %d", port, containerPort)
+			ht.Errorf("expected container port %d, got %d", port, containerPort)
 		}
 
 		svcSpec := svc.Object["spec"].(map[string]interface{})
 		svcPorts := svcSpec["ports"].([]interface{})
 		svcPortMap := svcPorts[0].(map[string]interface{})
 		if svcPortMap["port"].(int64) != int64(port) {
-			t.Errorf("expected service port %d, got %d", port, svcPortMap["port"])
+			ht.Errorf("expected service port %d, got %d", port, svcPortMap["port"])
 		}
 		if svcPortMap["targetPort"].(int64) != int64(port) {
-			t.Errorf("expected service targetPort %d, got %d", port, svcPortMap["targetPort"])
+			ht.Errorf("expected service targetPort %d, got %d", port, svcPortMap["targetPort"])
 		}
 
 		// Env vars are injected
 		containerEnvs, ok := container["env"].([]interface{})
 		if !ok {
-			t.Fatalf("expected env to be []interface{}")
+			ht.Fatalf("expected env to be []interface{}")
 		}
 		if len(containerEnvs) != len(cfg.Env)+1 {
-			t.Fatalf("expected %d env vars, got %d", len(cfg.Env)+1, len(containerEnvs))
+			ht.Fatalf("expected %d env vars, got %d", len(cfg.Env)+1, len(containerEnvs))
 		}
 
 		// APP_VERSION is first
 		appVersionMap := containerEnvs[0].(map[string]interface{})
 		if appVersionMap["name"].(string) != "APP_VERSION" || appVersionMap["value"].(string) != envName {
-			t.Errorf("expected first env var to be APP_VERSION=%s", envName)
+			ht.Errorf("expected first env var to be APP_VERSION=%s", envName)
 		}
 
 		for i, e := range cfg.Env {
 			m := containerEnvs[i+1].(map[string]interface{})
 			if m["name"].(string) != e.Name || m["value"].(string) != e.Value {
-				t.Errorf("expected env[%d] %s=%s, got %s=%s", i, e.Name, e.Value, m["name"], m["value"])
+				ht.Errorf("expected env[%d] %s=%s, got %s=%s", i, e.Name, e.Value, m["name"], m["value"])
 			}
 		}
 	})

@@ -6,73 +6,99 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
-	"pgregory.net/rapid"
+	"hegel.dev/go/hegel"
 )
 
+func genString(ht *hegel.T, chars []string, min, max int) string {
+	length := hegel.Draw(ht, hegel.Integers(min, max))
+	if length == 0 {
+		return ""
+	}
+	res := ""
+	for i := 0; i < length; i++ {
+		res += hegel.Draw(ht, hegel.SampledFrom(chars))
+	}
+	return res
+}
+
+func genDNS1123(ht *hegel.T) string {
+	chars := []string{"a", "b", "0", "1", "-"}
+	first := hegel.Draw(ht, hegel.SampledFrom([]string{"a", "b", "0", "1"}))
+	length := hegel.Draw(ht, hegel.Integers(0, 8))
+	if length == 0 {
+		return first
+	}
+	res := first
+	for i := 0; i < length-1; i++ {
+		res += hegel.Draw(ht, hegel.SampledFrom(chars))
+	}
+	res += hegel.Draw(ht, hegel.SampledFrom([]string{"a", "b", "0", "1"}))
+	return res
+}
+
 func TestParseDotDivergeConfig_NoPanic(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		data := rapid.SliceOf(rapid.Byte()).Draw(t, "data")
-		_, _ = ParseDotDivergeConfig(data)
+	hegel.Test(t, func(ht *hegel.T) {
+		data := hegel.Draw(ht, hegel.Text().MinSize(0).MaxSize(100))
+		_, _ = ParseDotDivergeConfig([]byte(data))
 	})
 }
 
 func TestParseDotDivergeConfig_Roundtrip(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
+	hegel.Test(t, func(ht *hegel.T) {
 		cfg := DotDivergeConfig{
-			APIVersion: rapid.StringMatching(`^[a-zA-Z0-9./]*$`).Draw(t, "APIVersion"),
-			Kind:       rapid.StringMatching(`^[a-zA-Z0-9]*$`).Draw(t, "Kind"),
+			APIVersion: genString(ht, []string{"a", "A", "0", ".", "/"}, 0, 10),
+			Kind:       genString(ht, []string{"a", "A", "0"}, 0, 10),
 		}
-		cfg.Metadata.Name = rapid.StringMatching(`^[a-zA-Z0-9-]*$`).Draw(t, "Name")
-		cfg.Spec.Namespace = rapid.StringMatching(`^[a-zA-Z0-9-]*$`).Draw(t, "Namespace")
-		// generate valid DNS-1123 name for serviceName
-		cfg.Spec.ServiceName = rapid.StringMatching(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`).Draw(t, "ServiceName")
-		cfg.Spec.Port = rapid.Int32Range(1, 65535).Draw(t, "Port")
-		cfg.Spec.Routing.ParentRef = rapid.StringMatching(`^[a-zA-Z0-9-]*$`).Draw(t, "ParentRef")
-		cfg.Spec.Routing.HeaderKey = rapid.StringMatching(`^[a-zA-Z0-9-]*$`).Draw(t, "HeaderKey")
+		cfg.Metadata.Name = genString(ht, []string{"a", "A", "0", "-"}, 0, 10)
+		cfg.Spec.Namespace = genString(ht, []string{"a", "A", "0", "-"}, 0, 10)
+		cfg.Spec.ServiceName = genDNS1123(ht)
+		cfg.Spec.Port = int32(hegel.Draw(ht, hegel.Integers(1, 65535)))
+		cfg.Spec.Routing.ParentRef = genString(ht, []string{"a", "A", "0", "-"}, 0, 10)
+		cfg.Spec.Routing.HeaderKey = genString(ht, []string{"a", "A", "0", "-"}, 0, 10)
 
-		numEnvs := rapid.IntRange(0, 5).Draw(t, "numEnvs")
+		numEnvs := hegel.Draw(ht, hegel.Integers(0, 5))
 		for i := 0; i < numEnvs; i++ {
+			envNameFirst := hegel.Draw(ht, hegel.SampledFrom([]string{"A", "B", "_"}))
+			envNameRest := genString(ht, []string{"A", "B", "0", "_"}, 0, 10)
 			cfg.Spec.Container.Env = append(cfg.Spec.Container.Env, struct {
 				Name  string `yaml:"name"`
 				Value string `yaml:"value"`
 			}{
-				Name:  rapid.StringMatching(`^[A-Z_][A-Z0-9_]*$`).Draw(t, "EnvName"),
-				Value: rapid.StringMatching(`^[a-zA-Z0-9._/-]*$`).Draw(t, "EnvValue"),
+				Name:  envNameFirst + envNameRest,
+				Value: genString(ht, []string{"a", "A", "0", ".", "_", "/", "-"}, 0, 10),
 			})
 		}
 
 		b, err := yaml.Marshal(&cfg)
-		if err != nil {
-			t.Fatalf("failed to marshal: %v", err)
-		}
+		require.NoError(ht, err, "failed to marshal")
 
 		parsed, err := ParseDotDivergeConfig(b)
-		require.NoError(t, err, "failed to parse marshaled config")
+		require.NoError(ht, err, "failed to parse marshaled config")
 
-		assert.Equal(t, cfg.APIVersion, parsed.APIVersion)
-		assert.Equal(t, cfg.Kind, parsed.Kind)
-		assert.Equal(t, cfg.Metadata.Name, parsed.Metadata.Name)
-		assert.Equal(t, cfg.Spec.ServiceName, parsed.Spec.ServiceName)
-		assert.Equal(t, cfg.Spec.Port, parsed.Spec.Port)
-		assert.Equal(t, cfg.Spec.Namespace, parsed.Spec.Namespace)
-		assert.Equal(t, cfg.Spec.Routing.ParentRef, parsed.Spec.Routing.ParentRef)
-		assert.Equal(t, cfg.Spec.Routing.HeaderKey, parsed.Spec.Routing.HeaderKey)
+		assert.Equal(ht, cfg.APIVersion, parsed.APIVersion)
+		assert.Equal(ht, cfg.Kind, parsed.Kind)
+		assert.Equal(ht, cfg.Metadata.Name, parsed.Metadata.Name)
+		assert.Equal(ht, cfg.Spec.ServiceName, parsed.Spec.ServiceName)
+		assert.Equal(ht, cfg.Spec.Port, parsed.Spec.Port)
+		assert.Equal(ht, cfg.Spec.Namespace, parsed.Spec.Namespace)
+		assert.Equal(ht, cfg.Spec.Routing.ParentRef, parsed.Spec.Routing.ParentRef)
+		assert.Equal(ht, cfg.Spec.Routing.HeaderKey, parsed.Spec.Routing.HeaderKey)
 
-		require.Len(t, parsed.Spec.Container.Env, len(cfg.Spec.Container.Env))
+		require.Len(ht, parsed.Spec.Container.Env, len(cfg.Spec.Container.Env))
 		for i, env := range cfg.Spec.Container.Env {
-			assert.Equal(t, env.Name, parsed.Spec.Container.Env[i].Name)
-			assert.Equal(t, env.Value, parsed.Spec.Container.Env[i].Value)
+			assert.Equal(ht, env.Name, parsed.Spec.Container.Env[i].Name)
+			assert.Equal(ht, env.Value, parsed.Spec.Container.Env[i].Value)
 		}
 	})
 }
 
 func TestToServicePreviewConfig_PreservesFields(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		svcName := rapid.StringMatching(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`).Draw(t, "ServiceName")
-		port := rapid.Int32Range(1, 65535).Draw(t, "Port")
-		parentRef := rapid.String().Draw(t, "ParentRef")
-		headerKey := rapid.String().Draw(t, "HeaderKey")
-		image := rapid.String().Draw(t, "Image")
+	hegel.Test(t, func(ht *hegel.T) {
+		svcName := genDNS1123(ht)
+		port := int32(hegel.Draw(ht, hegel.Integers(1, 65535)))
+		parentRef := hegel.Draw(ht, hegel.Text().MinSize(0).MaxSize(20))
+		headerKey := hegel.Draw(ht, hegel.Text().MinSize(0).MaxSize(20))
+		image := hegel.Draw(ht, hegel.Text().MinSize(0).MaxSize(20))
 
 		cfg := &DotDivergeConfig{}
 		cfg.Spec.ServiceName = svcName
@@ -82,43 +108,27 @@ func TestToServicePreviewConfig_PreservesFields(t *testing.T) {
 
 		spc := cfg.ToServicePreviewConfig(image)
 
-		if spc.ServiceName != svcName {
-			t.Fatalf("ServiceName mismatch: got %q, want %q", spc.ServiceName, svcName)
-		}
-		if spc.Port != port {
-			t.Fatalf("Port mismatch: got %d, want %d", spc.Port, port)
-		}
-		if spc.ParentRef != parentRef {
-			t.Fatalf("ParentRef mismatch: got %q, want %q", spc.ParentRef, parentRef)
-		}
-		if spc.HeaderKey != headerKey {
-			t.Fatalf("HeaderKey mismatch: got %q, want %q", spc.HeaderKey, headerKey)
-		}
-		if spc.Image != image {
-			t.Fatalf("Image mismatch: got %q, want %q", spc.Image, image)
-		}
+		require.Equalf(ht, svcName, spc.ServiceName, "ServiceName mismatch: got %q, want %q", spc.ServiceName, svcName)
+		require.Equalf(ht, port, spc.Port, "Port mismatch: got %d, want %d", spc.Port, port)
+		require.Equalf(ht, parentRef, spc.ParentRef, "ParentRef mismatch: got %q, want %q", spc.ParentRef, parentRef)
+		require.Equalf(ht, headerKey, spc.HeaderKey, "HeaderKey mismatch: got %q, want %q", spc.HeaderKey, headerKey)
+		require.Equalf(ht, image, spc.Image, "Image mismatch: got %q, want %q", spc.Image, image)
 	})
 }
 
 func TestParseDotDivergeConfig_PortDefault(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		svcName := rapid.StringMatching(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`).Draw(t, "ServiceName")
+	hegel.Test(t, func(ht *hegel.T) {
+		svcName := genDNS1123(ht)
 		cfg := DotDivergeConfig{}
 		cfg.Spec.ServiceName = svcName
 		cfg.Spec.Port = 0
 
 		b, err := yaml.Marshal(&cfg)
-		if err != nil {
-			t.Fatalf("failed to marshal: %v", err)
-		}
+		require.NoError(ht, err, "failed to marshal")
 
 		parsed, err := ParseDotDivergeConfig(b)
-		if err != nil {
-			t.Fatalf("failed to parse: %v", err)
-		}
+		require.NoError(ht, err, "failed to parse")
 
-		if parsed.Spec.Port != 8080 {
-			t.Fatalf("expected port 8080, got %d", parsed.Spec.Port)
-		}
+		require.Equalf(ht, int32(8080), parsed.Spec.Port, "expected port 8080, got %d", parsed.Spec.Port)
 	})
 }
