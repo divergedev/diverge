@@ -29,8 +29,8 @@ func TestPreviewGroupReconcile_Teardown(t *testing.T) {
 			Name:      "pg-test-group-web-12345678",
 			Namespace: "default",
 			Labels: map[string]string{
-				labelPreviewGroup:              "test-group",
-				"app.kubernetes.io/managed-by": "diverge",
+				labelPreviewGroup: "test-group",
+				labelManagedBy:    "diverge-previewgroup",
 			},
 		},
 	}
@@ -54,7 +54,7 @@ func TestPreviewGroupReconcile_Teardown(t *testing.T) {
 	// Second reconcile sees no children, removes finalizer
 	res, err = r.Reconcile(context.Background(), req)
 	require.NoError(t, err)
-	assert.False(t, res.Requeue)
+	assert.True(t, res.IsZero())
 
 	// Check finalizer is gone
 	var updatedPg divergeiov1alpha1.PreviewGroup
@@ -82,8 +82,8 @@ func TestPreviewGroupReconcile_OrphanCleanup(t *testing.T) {
 			Name:      orphanEnvName,
 			Namespace: "default",
 			Labels: map[string]string{
-				labelPreviewGroup:              "test-group",
-				"app.kubernetes.io/managed-by": "diverge",
+				labelPreviewGroup: "test-group",
+				labelManagedBy:    "diverge-previewgroup",
 			},
 		},
 	}

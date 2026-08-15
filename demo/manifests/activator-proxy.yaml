@@ -1,0 +1,115 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: activator-proxy
+  namespace: default
+  labels:
+    diverge.io/managed-by: diverge
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: activator-proxy
+  namespace: default
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: activator-proxy
+  namespace: default
+subjects:
+  - kind: ServiceAccount
+    name: activator-proxy
+    namespace: default
+roleRef:
+  kind: Role
+  name: activator-proxy
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: activator-proxy
+  namespace: default
+  labels:
+    app: activator-proxy
+    diverge.io/managed-by: diverge
+  annotations:
+    argocd.argoproj.io/compare-options: IgnoreExtraneous
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: activator-proxy
+  template:
+    metadata:
+      labels:
+        app: activator-proxy
+        diverge.io/managed-by: diverge
+    spec:
+      serviceAccountName: activator-proxy
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: activator-proxy
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          image: us-docker.pkg.dev/austin-demo-diverge/diverge/activator-proxy:latest
+          args:
+            - --port=8091
+            - --activator-url=http://activator-service.knative-serving.svc.cluster.local
+            - --target-namespace=default
+            - --target-selector=serving.knative.dev/service=preview-app
+            - --target-port=3000
+            - --target-revision=preview-app-00003
+          ports:
+            - name: http
+              containerPort: 8091
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8091
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8091
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: activator-proxy
+  namespace: default
+  labels:
+    app: activator-proxy
+    diverge.io/managed-by: diverge
+  annotations:
+    argocd.argoproj.io/compare-options: IgnoreExtraneous
+spec:
+  selector:
+    app: activator-proxy
+  ports:
+    - name: http
+      port: 8091
+      targetPort: 8091
+      protocol: TCP

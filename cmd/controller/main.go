@@ -31,6 +31,7 @@ import (
 	"github.com/divergedev/diverge/internal/controller"
 	"github.com/divergedev/diverge/internal/database"
 	"github.com/divergedev/diverge/internal/deployer"
+	"github.com/divergedev/diverge/internal/events"
 	_ "github.com/divergedev/diverge/internal/metrics"
 	"github.com/divergedev/diverge/internal/notifier"
 	"github.com/divergedev/diverge/internal/routing"
@@ -314,7 +315,7 @@ func main() {
 	if err = (&controller.EnvironmentReconciler{
 		Client:           mgr.GetClient(),
 		Scheme:           mgr.GetScheme(),
-		Recorder:         mgr.GetEventRecorderFor("diverge-controller"),
+		Recorder:         events.NewRecorder(mgr.GetEventRecorder("diverge-controller")),
 		Router:           routerImpl,
 		DatabaseProvider: dbProviderImpl,
 		ChangeDetector:   detectorImpl,
@@ -343,7 +344,7 @@ func main() {
 	if err = (&controller.PreviewGroupReconciler{
 		Client:           mgr.GetClient(),
 		Scheme:           mgr.GetScheme(),
-		Recorder:         mgr.GetEventRecorderFor("diverge-previewgroup"),
+		Recorder:         events.NewRecorder(mgr.GetEventRecorder("diverge-previewgroup")),
 		Notifier:         pgNotifierImpl,
 		StatusReporter:   statusReporterImpl,
 		DatabaseProvider: dbProviderImpl,

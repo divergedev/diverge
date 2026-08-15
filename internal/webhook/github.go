@@ -160,7 +160,7 @@ func (h *GitHubWebhookHandler) reconcileEnvironment(ctx context.Context, payload
 				}
 				image := fmt.Sprintf("%s:%s",
 					payload.Repository.FullName,
-					payload.PullRequest.Head.SHA[:12])
+					safeSHA(payload.PullRequest.Head.SHA, 12))
 				env.Spec.ServiceConfig = cfg.ToServicePreviewConfig(image)
 				env.Spec.Deploy.ChangedServices = []string{cfg.Spec.ServiceName}
 				env.Spec.Deploy.Namespace = "same"

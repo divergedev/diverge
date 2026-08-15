@@ -84,7 +84,7 @@ func (d *KNativeDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment)
 			return fmt.Errorf("failed to create knative service: %w", err)
 		}
 	} else {
-		err = d.Client.Patch(ctx, ksvc, client.Apply, client.FieldOwner("diverge"), client.ForceOwnership)
+		err = d.Client.Apply(ctx, client.ApplyConfigurationFromUnstructured(ksvc), client.FieldOwner("diverge"), client.ForceOwnership)
 		if err != nil {
 			return fmt.Errorf("failed to apply knative service: %w", err)
 		}

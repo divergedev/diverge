@@ -5,7 +5,8 @@ metadata:
 rules:
   # Diverge CRDs
   - apiGroups: ["diverge.io"]
-    resources: [environments, environments/status, environments/finalizers]
+    resources: [environments, environments/status, environments/finalizers,
+                previewgroups, previewgroups/status, previewgroups/finalizers]
     verbs: [get, list, watch, create, update, patch, delete]
   # Core K8s - Namespaces
   - apiGroups: [""]
@@ -30,10 +31,13 @@ rules:
   - apiGroups: ["gateway.networking.k8s.io"]
     resources: [httproutes]
     verbs: [get, list, watch, create, update, patch, delete]
-  # Events
+  # Events (legacy + new events.k8s.io API)
   - apiGroups: [""]
     resources: [events]
     verbs: [create, patch]
+  - apiGroups: ["events.k8s.io"]
+    resources: [events]
+    verbs: [create, patch, update]
   # Leader election
   - apiGroups: ["coordination.k8s.io"]
     resources: [leases]

@@ -10,10 +10,16 @@ import (
 	"github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/jackc/pgx/v5"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"time"
 )
+
+type SQLExecutor interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
 
 type SchemaDatabaseProvider struct {
 	AdminDSN string
+	Executor SQLExecutor
 }
 
 var validSchemaName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
@@ -81,7 +87,7 @@ $$;`, schema)
 		dsn += "?search_path=" + schema + ",public"
 	}
 
-	return &DatabaseResult{
+	result := &DatabaseResult{
 		DSN: dsn,
 		EnvVars: map[string]string{
 			"DATABASE_URL":           dsn,
@@ -89,8 +95,34 @@ $$;`, schema)
 		},
 		SetupSQL: fmt.Sprintf("SET LOCAL search_path TO %s, public;\n", schema) + setupSQL,
 		Ready:    true,
-		Message:  "Schema Provisioned SQL generated",
-	}, nil
+		Message:  "Schema Provisioned SQL executed",
+	}
+
+	setupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	var exec SQLExecutor
+	if p.Executor != nil {
+		exec = p.Executor
+	} else {
+		db, err := sql.Open("pgx", p.AdminDSN)
+		if err != nil {
+			result.Ready = false
+			result.Message = fmt.Sprintf("failed to open database: %v", err)
+			return result, nil
+		}
+		defer func() { _ = db.Close() }()
+		exec = db
+	}
+
+	_, err = exec.ExecContext(setupCtx, setupSQL)
+	if err != nil {
+		result.Ready = false
+		result.Message = fmt.Sprintf("failed to execute setup SQL: %v", err)
+		return result, nil
+	}
+
+	return result, nil
 }
 
 func (p *SchemaDatabaseProvider) Teardown(ctx context.Context, env *v1alpha1.Environment) error {

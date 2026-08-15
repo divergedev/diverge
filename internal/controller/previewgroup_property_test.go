@@ -7,6 +7,8 @@ import (
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 	"hegel.dev/go/hegel"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"pgregory.net/rapid"
 )
 
 func TestChildEnvironmentName_DNSValid(t *testing.T) {
@@ -98,6 +100,37 @@ func TestDerivePreviewGroupPhase_AnyFailedNotAllRunning(t *testing.T) {
 		phase := derivePreviewGroupPhase(services)
 		if phase != divergeiov1alpha1.PreviewGroupPhaseDegraded {
 			ht.Errorf("expected degraded")
+		}
+	})
+}
+
+func TestChildEnvLabelInvariant_Property(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		pgName := rapid.StringMatching(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`).Draw(rt, "pgName")
+		svcName := rapid.String().Draw(rt, "svcName")
+		envName := rapid.String().Draw(rt, "envName")
+
+		pg := &divergeiov1alpha1.PreviewGroup{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: pgName,
+			},
+		}
+		svc := divergeiov1alpha1.PreviewGroupServiceSpec{
+			Name: svcName,
+		}
+
+		r := &PreviewGroupReconciler{}
+		env := r.buildChildEnvironment(pg, svc, envName, "default")
+
+		// Verify child env has the exact labels required by listChildEnvironments
+		// labelPreviewGroup = "diverge.io/previewgroup"
+		// labelManagedBy    = "diverge.io/managed-by" (with value "diverge-previewgroup")
+		// See internal/controller/previewgroup_controller.go
+		if env.Labels["diverge.io/previewgroup"] != pgName {
+			t.Fatalf("expected previewgroup label to be %q, got %q", pgName, env.Labels["diverge.io/previewgroup"])
+		}
+		if env.Labels["diverge.io/managed-by"] != "diverge-previewgroup" {
+			t.Fatalf("expected managed-by label to be %q, got %q", "diverge-previewgroup", env.Labels["diverge.io/managed-by"])
 		}
 	})
 }

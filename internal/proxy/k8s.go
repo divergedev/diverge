@@ -189,7 +189,7 @@ func (l *K8sEnvironmentLister) GetEnvironment(ctx context.Context, name string) 
 	defer l.mu.RUnlock()
 	env, ok := l.envCache[name]
 	if !ok {
-		return nil, fmt.Errorf("environment not found")
+		return nil, ErrEnvironmentNotFound
 	}
 	return &env, nil
 }

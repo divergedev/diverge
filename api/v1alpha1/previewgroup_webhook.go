@@ -8,18 +8,15 @@ import (
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
 // SetupPreviewGroupWebhookWithManager registers the validating webhook.
 func SetupPreviewGroupWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(&PreviewGroup{}).
+	return ctrl.NewWebhookManagedBy(mgr, &PreviewGroup{}).
 		WithValidator(&previewGroupValidator{}).
 		Complete()
 }
@@ -29,28 +26,20 @@ func SetupPreviewGroupWebhookWithManager(mgr ctrl.Manager) error {
 // previewGroupValidator validates PreviewGroup resources.
 type previewGroupValidator struct{}
 
-var _ webhook.CustomValidator = &previewGroupValidator{}
+var _ admission.Validator[*PreviewGroup] = &previewGroupValidator{}
 
 // ValidateCreate validates a new PreviewGroup.
-func (v *previewGroupValidator) ValidateCreate(_ context.Context, obj runtime.Object) (admission.Warnings, error) {
-	pg, ok := obj.(*PreviewGroup)
-	if !ok {
-		return nil, fmt.Errorf("expected PreviewGroup, got %T", obj)
-	}
+func (v *previewGroupValidator) ValidateCreate(_ context.Context, pg *PreviewGroup) (admission.Warnings, error) {
 	return nil, validatePreviewGroup(pg).ToAggregate()
 }
 
 // ValidateUpdate validates an updated PreviewGroup.
-func (v *previewGroupValidator) ValidateUpdate(_ context.Context, _ runtime.Object, newObj runtime.Object) (admission.Warnings, error) {
-	pg, ok := newObj.(*PreviewGroup)
-	if !ok {
-		return nil, fmt.Errorf("expected PreviewGroup, got %T", newObj)
-	}
-	return nil, validatePreviewGroup(pg).ToAggregate()
+func (v *previewGroupValidator) ValidateUpdate(_ context.Context, _ *PreviewGroup, newPG *PreviewGroup) (admission.Warnings, error) {
+	return nil, validatePreviewGroup(newPG).ToAggregate()
 }
 
 // ValidateDelete is a no-op for deletion.
-func (v *previewGroupValidator) ValidateDelete(_ context.Context, _ runtime.Object) (admission.Warnings, error) {
+func (v *previewGroupValidator) ValidateDelete(_ context.Context, _ *PreviewGroup) (admission.Warnings, error) {
 	return nil, nil
 }
 

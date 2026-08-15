@@ -11,7 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	k8sevents "k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -19,6 +19,7 @@ import (
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/database"
 	"github.com/divergedev/diverge/internal/deployer"
+	"github.com/divergedev/diverge/internal/events"
 )
 
 type mockDeployer struct {
@@ -102,7 +103,7 @@ func newTestReconciler(t *testing.T, env *divergeiov1alpha1.Environment, dbResul
 	r := &EnvironmentReconciler{
 		Client:           client,
 		Scheme:           getTestScheme(),
-		Recorder:         record.NewFakeRecorder(10),
+		Recorder:         events.NewRecorder(k8sevents.NewFakeRecorder(10)),
 		Deployer:         dep,
 		Router:           rot,
 		DatabaseProvider: db,

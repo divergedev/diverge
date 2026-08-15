@@ -186,8 +186,8 @@ func TestPreviewGroupReconciler_DB_Teardown_CalledOnDelete(t *testing.T) {
 			Name:      envName,
 			Namespace: "ns1",
 			Labels: map[string]string{
-				labelPreviewGroup:              "mr-db-3",
-				"app.kubernetes.io/managed-by": "diverge",
+				labelPreviewGroup: "mr-db-3",
+				labelManagedBy:    "diverge-previewgroup",
 			},
 		},
 		Spec: divergeiov1alpha1.EnvironmentSpec{

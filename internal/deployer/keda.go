@@ -93,12 +93,11 @@ func (d *KEDADeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) er
 		}
 	} else {
 		// Resource exists, patch via SSA
-		patch := client.Apply
-		opts := []client.PatchOption{
+		opts := []client.ApplyOption{
 			client.FieldOwner("diverge-keda-deployer"),
 			client.ForceOwnership,
 		}
-		if err := d.Client.Patch(ctx, hso, patch, opts...); err != nil {
+		if err := d.Client.Apply(ctx, client.ApplyConfigurationFromUnstructured(hso), opts...); err != nil {
 			return fmt.Errorf("failed to apply HTTPScaledObject: %w", err)
 		}
 	}
