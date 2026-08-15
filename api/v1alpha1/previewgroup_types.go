@@ -139,8 +139,8 @@ type ResourceOverride struct {
 
 // PreviewGroupRouting configures how traffic reaches preview services.
 type PreviewGroupRouting struct {
-	// Mode is the routing mode. Only "header" is supported in v1.
-	// +kubebuilder:validation:Enum=header
+	// Mode is the routing mode.
+	// +kubebuilder:validation:Enum=header;subdomain
 	// +kubebuilder:default=header
 	// +optional
 	Mode string `json:"mode,omitempty"`
@@ -161,6 +161,10 @@ type PreviewGroupRouting struct {
 	// (e.g. "https://mr-42.preview.dev.azra-ai.com").
 	// +optional
 	ExternalURL string `json:"externalUrl,omitempty"`
+
+	// BaseDomain is the base domain for subdomain routing.
+	// +optional
+	BaseDomain string `json:"baseDomain,omitempty"`
 }
 
 // PreviewGroupLifecycle configures automatic cleanup and TTL for the group.

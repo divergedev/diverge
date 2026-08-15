@@ -61,9 +61,37 @@ type EnvironmentDeploy struct {
 	Manifests *ManifestSource `json:"manifests,omitempty"`
 }
 
+// AsyncRouteSpec defines an async routing target for event-driven services.
+type AsyncRouteSpec struct {
+	// Protocol is the async protocol type.
+	// +kubebuilder:validation:Enum=temporal;kafka
+	Protocol string `json:"protocol"`
+
+	// Target is the baseline resource name (e.g., task queue name or topic name).
+	Target string `json:"target"`
+
+	// EnvVarMapping maps provisioned targets to environment variable names.
+	// If empty, sensible defaults are used based on protocol:
+	// - temporal: TEMPORAL_TASK_QUEUE
+	// - kafka: KAFKA_CONSUMER_GROUP
+	// +optional
+	EnvVarMapping map[string]string `json:"envVarMapping,omitempty"`
+}
+
+// DefaultEnvVarForProtocol returns the default environment variable name for a protocol.
+func DefaultEnvVarForProtocol(protocol string) string {
+	switch protocol {
+	case "temporal":
+		return "TEMPORAL_TASK_QUEUE"
+	case "kafka":
+		return "KAFKA_CONSUMER_GROUP"
+	default:
+		return ""
+	}
+}
+
 // EnvironmentRouting defines the routing configuration
 type EnvironmentRouting struct {
-	// +kubebuilder:validation:Enum=header;namespace;subdomain
 	// +kubebuilder:validation:Enum=header;namespace;subdomain
 	Mode string `json:"mode,omitempty"` // header, namespace, subdomain
 	// +kubebuilder:validation:Enum=istio;gateway
@@ -73,6 +101,13 @@ type EnvironmentRouting struct {
 	HeaderValue string `json:"headerValue,omitempty"`
 	ExternalURL string `json:"externalUrl,omitempty"`
 	DevIP       string `json:"devIP,omitempty"`
+	// BaseDomain is the base domain for subdomain routing (e.g., "preview.app.dev").
+	// When mode is "subdomain", HTTPRoutes are created with hostname "<env-name>.<baseDomain>".
+	// +optional
+	BaseDomain string `json:"baseDomain,omitempty"`
+	// AsyncRoutes defines async routing targets for event-driven backends.
+	// +optional
+	AsyncRoutes []AsyncRouteSpec `json:"asyncRoutes,omitempty"`
 }
 
 // EnvironmentDatabase defines the database configuration
