@@ -15,7 +15,9 @@ import (
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -52,12 +54,24 @@ func NewFramework(mgmtContext, prodContext string) (*Framework, error) {
 		return nil, fmt.Errorf("failed to load prod config: %w", err)
 	}
 
-	mgmtClient, err := client.New(mgmtCfg, client.Options{})
+	// Register schemes BEFORE creating clients — client.New copies the scheme
+	scheme := runtime.NewScheme()
+	_ = clientgoscheme.AddToScheme(scheme)
+	_ = divergev1.AddToScheme(scheme)
+	_ = gatewayv1.AddToScheme(scheme)
+
+	// Bump rate limits for CI polling
+	mgmtCfg.QPS = 50
+	mgmtCfg.Burst = 100
+	prodCfg.QPS = 50
+	prodCfg.Burst = 100
+
+	mgmtClient, err := client.New(mgmtCfg, client.Options{Scheme: scheme})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create mgmt client: %w", err)
 	}
 
-	prodClient, err := client.New(prodCfg, client.Options{})
+	prodClient, err := client.New(prodCfg, client.Options{Scheme: scheme})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create prod client: %w", err)
 	}
@@ -71,15 +85,6 @@ func NewFramework(mgmtContext, prodContext string) (*Framework, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create prod clientset: %w", err)
 	}
-
-	// Register Gateway API and Diverge schemes
-	scheme := mgmtClient.Scheme()
-	_ = divergev1.AddToScheme(scheme)
-	_ = gatewayv1.AddToScheme(scheme)
-
-	scheme = prodClient.Scheme()
-	_ = divergev1.AddToScheme(scheme)
-	_ = gatewayv1.AddToScheme(scheme)
 
 	return &Framework{
 		MgmtClient:    mgmtClient,
