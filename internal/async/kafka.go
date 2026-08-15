@@ -12,6 +12,43 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+// KafkaAdmin abstracts the Kafka admin operations for testability.
+type KafkaAdmin interface {
+	CreateTopics(ctx context.Context, partitions int32, replication int16, configs map[string]*string, topics ...string) (kadm.CreateTopicResponses, error)
+	DeleteTopics(ctx context.Context, topics ...string) (kadm.DeleteTopicResponses, error)
+	Close()
+}
+
+// KafkaAdminFactory creates KafkaAdmin instances. Defaults to real kadm.Client.
+type KafkaAdminFactory func(brokers []string) (KafkaAdmin, error)
+
+func defaultAdminFactory(brokers []string) (KafkaAdmin, error) {
+	client, err := kgo.NewClient(kgo.SeedBrokers(brokers...))
+	if err != nil {
+		return nil, err
+	}
+	admin := kadm.NewClient(client)
+	return &realKafkaAdmin{admin: admin, client: client}, nil
+}
+
+type realKafkaAdmin struct {
+	admin  *kadm.Client
+	client *kgo.Client
+}
+
+func (r *realKafkaAdmin) CreateTopics(ctx context.Context, partitions int32, replication int16, configs map[string]*string, topics ...string) (kadm.CreateTopicResponses, error) {
+	return r.admin.CreateTopics(ctx, partitions, replication, configs, topics...)
+}
+
+func (r *realKafkaAdmin) DeleteTopics(ctx context.Context, topics ...string) (kadm.DeleteTopicResponses, error) {
+	return r.admin.DeleteTopics(ctx, topics...)
+}
+
+func (r *realKafkaAdmin) Close() {
+	r.admin.Close()
+	r.client.Close()
+}
+
 // KafkaProvisioner provisions Kafka topics and consumer groups for preview environments
 // using the Kafka AdminClient API. Compatible with Apache Kafka, AutoMQ, Redpanda,
 // MSK, and any Kafka-protocol broker.
@@ -19,6 +56,15 @@ type KafkaProvisioner struct {
 	Brokers           []string
 	NumPartitions     int32
 	ReplicationFactor int16
+	AdminFactory      KafkaAdminFactory // nil = use real kadm
+}
+
+func (k *KafkaProvisioner) getAdmin() (KafkaAdmin, error) {
+	factory := k.AdminFactory
+	if factory == nil {
+		factory = defaultAdminFactory
+	}
+	return factory(k.Brokers)
 }
 
 // Name returns the provisioner name.
@@ -28,13 +74,10 @@ func (k *KafkaProvisioner) Name() string { return "kafka" }
 func (k *KafkaProvisioner) Provision(ctx context.Context, env *v1alpha1.Environment, route v1alpha1.AsyncRouteSpec) (*ProvisionResult, error) {
 	target := fmt.Sprintf("%s-%s", route.Target, env.Name)
 
-	client, err := kgo.NewClient(kgo.SeedBrokers(k.Brokers...))
+	admin, err := k.getAdmin()
 	if err != nil {
 		return nil, fmt.Errorf("kafka client error: %w", err)
 	}
-	defer client.Close()
-
-	admin := kadm.NewClient(client)
 	defer admin.Close()
 
 	// Create topic with preview-specific name
@@ -75,13 +118,10 @@ func (k *KafkaProvisioner) Provision(ctx context.Context, env *v1alpha1.Environm
 func (k *KafkaProvisioner) Teardown(ctx context.Context, env *v1alpha1.Environment, route v1alpha1.AsyncRouteSpec) error {
 	target := fmt.Sprintf("%s-%s", route.Target, env.Name)
 
-	client, err := kgo.NewClient(kgo.SeedBrokers(k.Brokers...))
+	admin, err := k.getAdmin()
 	if err != nil {
 		return fmt.Errorf("kafka client error: %w", err)
 	}
-	defer client.Close()
-
-	admin := kadm.NewClient(client)
 	defer admin.Close()
 
 	resp, err := admin.DeleteTopics(ctx, target)
