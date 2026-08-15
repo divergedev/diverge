@@ -11,12 +11,13 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	k8sevents "k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/events"
 )
 
 func newTestScheme() *runtime.Scheme {
@@ -35,7 +36,7 @@ func newTestPreviewGroupReconciler(objs ...client.Object) (*PreviewGroupReconcil
 	r := &PreviewGroupReconciler{
 		Client:   c,
 		Scheme:   s,
-		Recorder: record.NewFakeRecorder(20),
+		Recorder: events.NewRecorder(k8sevents.NewFakeRecorder(20)),
 	}
 	return r, c
 }

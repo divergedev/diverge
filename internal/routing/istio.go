@@ -101,7 +101,7 @@ func (r *IstioRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment) 
 
 	u.Object["spec"] = spec
 
-	if err := r.Client.Patch(ctx, u, client.Apply, client.ForceOwnership, client.FieldOwner("diverge")); err != nil {
+	if err := r.Client.Apply(ctx, client.ApplyConfigurationFromUnstructured(u), client.ForceOwnership, client.FieldOwner("diverge")); err != nil {
 		return fmt.Errorf("failed to apply AuthorizationPolicy: %w", err)
 	}
 

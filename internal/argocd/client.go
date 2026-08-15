@@ -38,7 +38,7 @@ func NewClient(k8sClient client.Client, namespace string) *Client {
 // ApplyApplication creates or updates an Argo CD Application using server-side apply.
 func (c *Client) ApplyApplication(ctx context.Context, app *unstructured.Unstructured) error {
 	app.SetNamespace(c.namespace)
-	return c.k8sClient.Patch(ctx, app, client.Apply, client.FieldOwner("diverge-controller"), client.ForceOwnership)
+	return c.k8sClient.Apply(ctx, client.ApplyConfigurationFromUnstructured(app), client.FieldOwner("diverge-controller"), client.ForceOwnership)
 }
 
 // ApplyApplications applies a batch of Application resources.

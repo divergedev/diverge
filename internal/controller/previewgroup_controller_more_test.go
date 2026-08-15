@@ -54,7 +54,7 @@ func TestPreviewGroupReconcile_Teardown(t *testing.T) {
 	// Second reconcile sees no children, removes finalizer
 	res, err = r.Reconcile(context.Background(), req)
 	require.NoError(t, err)
-	assert.False(t, res.Requeue)
+	assert.True(t, res.IsZero())
 
 	// Check finalizer is gone
 	var updatedPg divergeiov1alpha1.PreviewGroup

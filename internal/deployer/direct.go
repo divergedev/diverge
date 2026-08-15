@@ -92,12 +92,11 @@ func (d *DirectDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) 
 			}
 		} else {
 			// Resource exists, patch via SSA
-			patch := client.Apply
-			opts := []client.PatchOption{
+			opts := []client.ApplyOption{
 				client.FieldOwner("diverge-direct-deployer"),
 				client.ForceOwnership,
 			}
-			if err := d.Client.Patch(ctx, obj, patch, opts...); err != nil {
+			if err := d.Client.Apply(ctx, client.ApplyConfigurationFromUnstructured(obj), opts...); err != nil {
 				return fmt.Errorf("failed to apply %s %s/%s: %w",
 					obj.GetKind(), obj.GetNamespace(), obj.GetName(), err)
 			}

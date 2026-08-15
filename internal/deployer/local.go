@@ -80,7 +80,7 @@ func (d *LocalDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) e
 	}
 	svc.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Service"})
 
-	err = d.Client.Patch(ctx, svc, client.Apply, client.FieldOwner("diverge"), client.ForceOwnership)
+	err = d.Client.Patch(ctx, svc, client.Apply, client.FieldOwner("diverge"), client.ForceOwnership) //nolint:staticcheck // typed SSA requires applyconfigurations
 	if err != nil {
 		return fmt.Errorf("failed to apply headless service: %w", err)
 	}
@@ -126,7 +126,7 @@ func (d *LocalDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) e
 	}
 	eps.SetGroupVersionKind(schema.GroupVersionKind{Group: "discovery.k8s.io", Version: "v1", Kind: "EndpointSlice"})
 
-	err = d.Client.Patch(ctx, eps, client.Apply, client.FieldOwner("diverge"), client.ForceOwnership)
+	err = d.Client.Patch(ctx, eps, client.Apply, client.FieldOwner("diverge"), client.ForceOwnership) //nolint:staticcheck // typed SSA requires applyconfigurations
 	if err != nil {
 		return fmt.Errorf("failed to apply endpointslice: %w", err)
 	}

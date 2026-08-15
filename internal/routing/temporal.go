@@ -64,7 +64,7 @@ func (p *TemporalProvider) Reconcile(ctx context.Context, env *v1alpha1.Environm
 		},
 	}
 
-	if err := p.Client.Patch(ctx, cm, client.Apply, client.FieldOwner("diverge-controller")); err != nil {
+	if err := p.Client.Patch(ctx, cm, client.Apply, client.FieldOwner("diverge-controller")); err != nil { //nolint:staticcheck // typed SSA requires applyconfigurations
 		return fmt.Errorf("failed to apply temporal configmap: %w", err)
 	}
 
