@@ -1,7 +1,3 @@
-// Package registry provides a generic, thread-safe provider registry
-// for Diverge extension points. Each provider kind (router, deployer,
-// database, notifier) instantiates its own Registry[T] to manage
-// named provider factories.
 package registry
 
 import (
@@ -14,21 +10,16 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// Deps holds the universal dependencies passed to provider factories.
+// Deps holds universal dependencies passed to provider factories.
 type Deps struct {
-	// Client is the controller-runtime Kubernetes client.
 	Client client.Client
-	// Scheme is the runtime scheme with registered API types.
 	Scheme *runtime.Scheme
-	// Logger is a structured logger for the provider.
 	Logger logr.Logger
 }
 
 // Provider describes a named provider factory.
 type Provider[T any] struct {
-	// Create constructs the provider from the given dependencies.
-	Create func(deps Deps) (T, error)
-	// Description is a one-line summary shown in --help output.
+	Create      func(deps Deps) (T, error)
 	Description string
 }
 
@@ -39,17 +30,10 @@ type Registry[T any] struct {
 	providers map[string]Provider[T]
 }
 
-// New creates a new Registry for the given provider kind.
 func New[T any](kind string) *Registry[T] {
-	return &Registry[T]{
-		kind:      kind,
-		providers: make(map[string]Provider[T]),
-	}
+	return &Registry[T]{kind: kind, providers: make(map[string]Provider[T])}
 }
 
-// Register adds a named provider factory to the registry.
-// It panics if the name is already registered or if the factory is nil.
-// This is typically called from init() functions.
 func (r *Registry[T]) Register(name string, p Provider[T]) {
 	if p.Create == nil {
 		panic(fmt.Sprintf("%s provider %q: Create function must not be nil", r.kind, name))
@@ -62,8 +46,6 @@ func (r *Registry[T]) Register(name string, p Provider[T]) {
 	r.providers[name] = p
 }
 
-// Create looks up a provider by name and invokes its factory.
-// Returns a descriptive error listing available providers if not found.
 func (r *Registry[T]) Create(name string, deps Deps) (T, error) {
 	r.mu.RLock()
 	p, ok := r.providers[name]
@@ -75,7 +57,6 @@ func (r *Registry[T]) Create(name string, deps Deps) (T, error) {
 	return p.Create(deps)
 }
 
-// List returns the sorted names of all registered providers.
 func (r *Registry[T]) List() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -87,7 +68,13 @@ func (r *Registry[T]) List() []string {
 	return names
 }
 
-// Describe returns a map of provider names to their descriptions.
+func (r *Registry[T]) Has(name string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.providers[name]
+	return ok
+}
+
 func (r *Registry[T]) Describe() map[string]string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -97,3 +84,5 @@ func (r *Registry[T]) Describe() map[string]string {
 	}
 	return desc
 }
+
+// Plugin registry implemented

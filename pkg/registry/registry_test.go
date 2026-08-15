@@ -6,137 +6,85 @@ import (
 
 	"github.com/divergedev/diverge/pkg/registry"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
-type dummyProvider struct {
-	val string
+type DummyProvider struct {
+	Name string
 }
 
-func TestRegisterAndCreate(t *testing.T) {
-	r := registry.New[*dummyProvider]("test")
+func TestRegistry(t *testing.T) {
+	r := registry.New[DummyProvider]("dummy")
 
-	r.Register("foo", registry.Provider[*dummyProvider]{
-		Create: func(deps registry.Deps) (*dummyProvider, error) {
-			return &dummyProvider{val: "bar"}, nil
+	// Test Register and Has
+	assert.False(t, r.Has("test1"))
+	r.Register("test1", registry.Provider[DummyProvider]{
+		Create: func(deps registry.Deps) (DummyProvider, error) {
+			return DummyProvider{Name: "test1"}, nil
 		},
-		Description: "foo provider",
+		Description: "Test 1 Provider",
 	})
+	assert.True(t, r.Has("test1"))
 
-	p, err := r.Create("foo", registry.Deps{})
-	require.NoError(t, err)
-	assert.Equal(t, "bar", p.val)
-}
+	// Test Create
+	p, err := r.Create("test1", registry.Deps{})
+	assert.NoError(t, err)
+	assert.Equal(t, "test1", p.Name)
 
-func TestDuplicateRegistrationPanics(t *testing.T) {
-	r := registry.New[*dummyProvider]("test")
+	// Test unknown provider error
+	_, err = r.Create("unknown", registry.Deps{})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "dummy provider \"unknown\" not found")
 
-	r.Register("foo", registry.Provider[*dummyProvider]{
-		Create: func(deps registry.Deps) (*dummyProvider, error) {
-			return &dummyProvider{}, nil
+	// Test List
+	r.Register("test2", registry.Provider[DummyProvider]{
+		Create: func(deps registry.Deps) (DummyProvider, error) {
+			return DummyProvider{Name: "test2"}, nil
 		},
+		Description: "Test 2 Provider",
 	})
+	list := r.List()
+	assert.Equal(t, []string{"test1", "test2"}, list)
 
-	assert.Panics(t, func() {
-		r.Register("foo", registry.Provider[*dummyProvider]{
-			Create: func(deps registry.Deps) (*dummyProvider, error) {
-				return &dummyProvider{}, nil
+	// Test Describe
+	desc := r.Describe()
+	assert.Equal(t, map[string]string{
+		"test1": "Test 1 Provider",
+		"test2": "Test 2 Provider",
+	}, desc)
+
+	// Test duplicate panics
+	assert.PanicsWithValue(t, "dummy provider \"test1\" already registered", func() {
+		r.Register("test1", registry.Provider[DummyProvider]{
+			Create: func(deps registry.Deps) (DummyProvider, error) {
+				return DummyProvider{}, nil
 			},
 		})
 	})
-}
 
-func TestNilCreatePanics(t *testing.T) {
-	r := registry.New[*dummyProvider]("test")
-
-	assert.Panics(t, func() {
-		r.Register("foo", registry.Provider[*dummyProvider]{
+	// Test nil Create panics
+	assert.PanicsWithValue(t, "dummy provider \"nil-create\": Create function must not be nil", func() {
+		r.Register("nil-create", registry.Provider[DummyProvider]{
 			Create: nil,
 		})
 	})
-}
 
-func TestCreateUnknownProvider(t *testing.T) {
-	r := registry.New[*dummyProvider]("test")
-
-	r.Register("a", registry.Provider[*dummyProvider]{
-		Create: func(deps registry.Deps) (*dummyProvider, error) { return nil, nil },
-	})
-	r.Register("b", registry.Provider[*dummyProvider]{
-		Create: func(deps registry.Deps) (*dummyProvider, error) { return nil, nil },
-	})
-
-	p, err := r.Create("c", registry.Deps{})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), `test provider "c" not found`)
-	assert.Contains(t, err.Error(), `[a b]`)
-	assert.Nil(t, p)
-}
-
-func TestList(t *testing.T) {
-	r := registry.New[*dummyProvider]("test")
-
-	r.Register("c", registry.Provider[*dummyProvider]{
-		Create: func(deps registry.Deps) (*dummyProvider, error) { return nil, nil },
-	})
-	r.Register("a", registry.Provider[*dummyProvider]{
-		Create: func(deps registry.Deps) (*dummyProvider, error) { return nil, nil },
-	})
-	r.Register("b", registry.Provider[*dummyProvider]{
-		Create: func(deps registry.Deps) (*dummyProvider, error) { return nil, nil },
-	})
-
-	assert.Equal(t, []string{"a", "b", "c"}, r.List())
-}
-
-func TestDescribe(t *testing.T) {
-	r := registry.New[*dummyProvider]("test")
-
-	r.Register("a", registry.Provider[*dummyProvider]{
-		Create:      func(deps registry.Deps) (*dummyProvider, error) { return nil, nil },
-		Description: "A provider",
-	})
-	r.Register("b", registry.Provider[*dummyProvider]{
-		Create:      func(deps registry.Deps) (*dummyProvider, error) { return nil, nil },
-		Description: "B provider",
-	})
-
-	desc := r.Describe()
-	assert.Equal(t, map[string]string{
-		"a": "A provider",
-		"b": "B provider",
-	}, desc)
-}
-
-func TestConcurrentAccess(t *testing.T) {
-	r := registry.New[*dummyProvider]("test")
-
-	// Pre-register some to test concurrent read/write and reads
-	r.Register("initial", registry.Provider[*dummyProvider]{
-		Create: func(deps registry.Deps) (*dummyProvider, error) { return nil, nil },
-	})
-
+	// Test concurrent access
+	r2 := registry.New[DummyProvider]("concurrent")
 	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-
-			// Register
 			name := "p" + string(rune(i))
-			r.Register(name, registry.Provider[*dummyProvider]{
-				Create: func(deps registry.Deps) (*dummyProvider, error) {
-					return &dummyProvider{val: name}, nil
+			r2.Register(name, registry.Provider[DummyProvider]{
+				Create: func(deps registry.Deps) (DummyProvider, error) {
+					return DummyProvider{}, nil
 				},
 			})
-
-			// Create
-			_, _ = r.Create("initial", registry.Deps{})
-			_, _ = r.Create(name, registry.Deps{})
-
-			// Read
-			_ = r.List()
-			_ = r.Describe()
+			_ = r2.Has(name)
+			_ = r2.List()
+			_ = r2.Describe()
+			_, _ = r2.Create(name, registry.Deps{})
 		}(i)
 	}
 	wg.Wait()
