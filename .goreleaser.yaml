@@ -14,6 +14,26 @@ builds:
       - arm64
     ldflags:
       - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+  - id: diverge-controller-slim
+    main: cmd/controller/main.go
+    binary: diverge-controller
+    flags:
+      - -trimpath
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+    tags:
+      - no_knative
+      - no_schema
+      - no_temporal
+      - no_kafka
   - id: diverge
     main: cmd/diverge/main.go
     binary: diverge
@@ -28,6 +48,27 @@ builds:
       - arm64
     ldflags:
       - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+  - id: diverge-slim
+    main: cmd/diverge/main.go
+    binary: diverge
+    flags:
+      - -trimpath
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+    tags:
+      - no_knative
+      - no_schema
+      - no_temporal
+      - no_kafka
   - id: diverge-proxy
     main: cmd/proxy/main.go
     binary: diverge-proxy
@@ -84,6 +125,30 @@ dockers:
       - "--platform=linux/arm64"
     goos: linux
     goarch: arm64
+  - id: diverge-slim-amd64
+    image_templates:
+      - "ghcr.io/divergedev/diverge:{{ .Tag }}-slim-amd64"
+    dockerfile: Dockerfile.goreleaser
+    use: buildx
+    ids:
+      - diverge-controller-slim
+      - diverge-proxy
+    build_flag_templates:
+      - "--platform=linux/amd64"
+    goos: linux
+    goarch: amd64
+  - id: diverge-slim-arm64
+    image_templates:
+      - "ghcr.io/divergedev/diverge:{{ .Tag }}-slim-arm64"
+    dockerfile: Dockerfile.goreleaser
+    use: buildx
+    ids:
+      - diverge-controller-slim
+      - diverge-proxy
+    build_flag_templates:
+      - "--platform=linux/arm64"
+    goos: linux
+    goarch: arm64
   - id: activator-proxy-amd64
     image_templates:
       - "ghcr.io/divergedev/activator-proxy:{{ .Tag }}-amd64"
@@ -115,6 +180,14 @@ docker_manifests:
     image_templates:
       - "ghcr.io/divergedev/diverge:{{ .Tag }}-amd64"
       - "ghcr.io/divergedev/diverge:{{ .Tag }}-arm64"
+  - name_template: "ghcr.io/divergedev/diverge:{{ .Tag }}-slim"
+    image_templates:
+      - "ghcr.io/divergedev/diverge:{{ .Tag }}-slim-amd64"
+      - "ghcr.io/divergedev/diverge:{{ .Tag }}-slim-arm64"
+  - name_template: "ghcr.io/divergedev/diverge:slim"
+    image_templates:
+      - "ghcr.io/divergedev/diverge:{{ .Tag }}-slim-amd64"
+      - "ghcr.io/divergedev/diverge:{{ .Tag }}-slim-arm64"
   - name_template: "ghcr.io/divergedev/activator-proxy:{{ .Tag }}"
     image_templates:
       - "ghcr.io/divergedev/activator-proxy:{{ .Tag }}-amd64"
