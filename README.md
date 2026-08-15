@@ -11,7 +11,7 @@
   <a href="https://github.com/divergedev/diverge"><img src="https://img.shields.io/badge/Go-1.26-00ADD8.svg" alt="Go Version"></a>
 </p>
 
-Environment-as-a-service engine for Kubernetes. Diverge creates ephemeral preview environments triggered by merge request events, with delta deployment (only deploy changed services), configurable database provisioning, and Istio-based header routing.
+Environment-as-a-service engine for Kubernetes. Diverge creates ephemeral preview environments triggered by merge request events, with delta deployment (only deploy changed services), configurable database provisioning, and Gateway API / Istio-based header routing. Extensible via a pluggable provider registry.
 
 Documentation: [https://divergedev.com](https://divergedev.com)
 
@@ -21,6 +21,7 @@ Documentation: [https://divergedev.com](https://divergedev.com)
 
 ## Key Features
 *   **PreviewGroup Orchestration**: Manage multiple child environments and services under a single CR tied directly to an MR/PR. Automatic orphan cleanup and label-based ownership.
+*   **Provider Registry**: Pluggable, extensible architecture — add new routing, deployer, notifier, or database providers with a single file. Zero changes to the controller.
 *   **Scale-to-Zero**: Idle preview environments automatically scale to zero via KEDA HTTP Add-on (`HTTPScaledObject`). The interceptor wakes up pods on the first request, resulting in 90%+ resource savings for idle MRs.
 *   **Activator Proxy**: Smart routing that directs traffic to the pod when ready. Includes `X-Preview-Env` header injection and a shared informer for efficient pod state tracking.
 *   **Delta Deployment**: Only deploy what changed, falling back to a baseline for unmodified services.
@@ -30,14 +31,15 @@ Documentation: [https://divergedev.com](https://divergedev.com)
 *   **MR-Triggered Lifecycle**: Environments spin up when a Merge Request opens and tear down upon merge/close.
 *   **Merge Gating**: GitLab/GitHub commit status checks (`diverge/preview`) block merges until environments are healthy.
 *   **Argo CD & Direct Deploy**: Argo CD GitOps (`Application` CRs) and No-ArgoCD mode (`DirectDeployer`) for Helm charts and Kustomize overlays.
+*   **Environment Export**: `diverge env export` extracts environment variables from preview pods for local development (dotenv, JSON, shell formats).
 *   **Test Integration**: CI trigger and polling support to run automated tests against preview environments.
-*   **Prometheus Metrics**: Exposes metrics for environment lifecycles and controller health monitoring.
+*   **Prometheus Metrics**: Reconciliation duration, deployment status, route counts, active environments, and preview group gauges.
 *   **Namespace Labels**: Custom labels on preview namespaces (e.g., `istio.io/dataplane-mode: ambient` for zero-trust mTLS).
 *   **Security Hardened**: Webhook secret constant-time comparison, RFC 7230 header validation, safe SHA handling, ArgoCD namespace bypass prevention, IPv6-safe pod URLs, typed Server-Side Apply (SSA), and strict label validation.
 *   **Finalizer-Based Lifecycle**: Kubernetes finalizers ensure clean teardown of all resources (routing, database, ArgoCD apps) even during force-deletes.
 *   **TTL Auto-Expiry**: Automatic environment cleanup after configurable TTL with requeue-based expiry.
 *   **Multi-SCM Notifiers**: GitLab MR comments and GitHub PR comments with status updates.
-*   **Proto Foundation**: Protobuf-defined domain types with ConnectRPC service definition for future API server.
+*   **E2E Tested**: Dual-cluster end-to-end tests with k3d, Envoy Gateway, and real CRD reconciliation.
 
 ## Security
 Diverge takes security seriously. The platform features strict CRD OpenAPI validation, context timeouts on all external calls, and prevention mechanisms for shell/markdown injection in templates. The controller uses RBAC-scoped clients to ensure it only has the permissions it needs. Webhook interactions are secured using constant-time comparisons for secrets and RFC 7230-compliant header validation. Recent hardening includes ArgoCD namespace bypass prevention, safe SHA handling to eliminate panics, IPv6-safe pod URLs, comprehensive label validation, and Typed Server-Side Apply (SSA) to ensure safe resource updates.
@@ -86,19 +88,24 @@ The `diverge` CLI helps you manage environments efficiently:
 *   `diverge status` - Check the status of an environment
 *   `diverge open` - Open the preview URL in your browser
 *   `diverge logs` - Stream logs for a preview environment
+*   `diverge dev` - Local development mode with preview routing
+*   `diverge env export` - Export environment variables (dotenv, JSON, shell)
+*   `diverge preview` - Create preview environments from CLI
 *   `diverge validate` - Validate your `.diverge.yaml`
 *   `diverge delete` - Delete an environment
 *   `diverge version` - Show CLI version
 
 ## Installation
 
-The easiest way to install Diverge is via Helm:
+Install via Helm:
 
 ```bash
 helm repo add diverge https://charts.divergedev.io
 helm repo update
 helm install diverge diverge/diverge --namespace diverge-system --create-namespace
 ```
+
+Or download the binary from [Releases](https://github.com/divergedev/diverge/releases).
 
 ## Development
 
@@ -117,15 +124,19 @@ Currently, the project contains **147 tests** utilizing table-driven tests, `tes
 
 ## Roadmap
 
-- [x] **CI Actions Node 22 Bump** (#25) — Migrate GitHub Actions to Node 22 runtime
-- [x] **Godoc Coverage** (#26) — Complete documentation for all exported functions
+- [x] **Provider Registry** — Pluggable provider architecture with generic `Registry[T]`
+- [x] **Environment Export** — `diverge env export` for local dev workflows
+- [x] **E2E Tests** — Dual-cluster k3d tests with Envoy Gateway
+- [x] **Prometheus Metrics** — Reconciliation, deployment, routing metrics
+- [x] **Godoc Coverage** — 80%+ documentation on exported symbols
 - [x] **GitLab/GitHub Commit Statuses** — Merge gating via `diverge/preview` commit status checks
 - [x] **Schema-per-Environment** — SQL-based schema provisioning with SchemaProvider
-- [x] **Namespace Labels** — Custom labels on preview namespaces (Istio Ambient mTLS)
 - [x] **Proto Foundation** — Protobuf domain types + ConnectRPC service definition
-- [ ] **WebSocket Support** (#6) — Full WebSocket proxying for real-time preview environments
-- [ ] **Controller EnvTest + E2E** (#9) — Comprehensive controller integration tests with envtest
+- [ ] **Async Router** — Preview environments for event-driven backends (Kafka, Temporal)
+- [ ] **Subdomain Routing** — Browser-accessible frontend preview environments
+- [ ] **Slim Build** — Build tags to exclude ArgoCD/Temporal for smaller binaries
 - [ ] **ConnectRPC API Server** (#12) — gRPC/ConnectRPC API server for environment management
+- [ ] **WebSocket Support** (#6) — Full WebSocket proxying for real-time preview environments
 
 ## License
 Apache 2.0

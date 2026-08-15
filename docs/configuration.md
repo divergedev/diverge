@@ -112,6 +112,33 @@ Key parameters:
 | `routing.defaultMode` | `header` | Default routing mode if not specified. |
 | `database.defaultMode` | `shared` | Default database mode if not specified. |
 
+## CLI Configuration
+
+Diverge can be configured via CLI flags in the controller `main.go`:
+
+| Flag | Default | Description |
+|---|---|---|
+| `--deploy-provider` | `noop` | Deployment provider (`direct`, `argocd`, `knative`, `noop`). |
+| `--routing-provider` | `gateway` | Routing provider (`gateway`, `istio`, `composite`, `noop`). |
+| `--database-provider` | `none` | Database provider (`schema`, `none`). |
+| `--notifier-provider` | `noop` | Notification provider (`github`, `gitlab`, `noop`). |
+
+### Provider-Specific Flags
+Because providers self-register, some flags are tied to specific providers (registered in their `*_register.go` files):
+- **Direct Deployer**: `--manifest-source-type` (`configmap`, `url`, `serviceconfig`).
+- **ArgoCD Deployer**: `--argo-namespace`, `--argo-repo-url`.
+- **GitLab Notifier**: `--gitlab-token`, `--gitlab-url`.
+
+## CLI Commands
+
+### Env Export
+The `diverge env export` command allows you to export environment variables from a baseline pod. This is useful for running your local preview environments seamlessly.
+
+```bash
+diverge env export --service payments --format dotenv > .env.preview
+```
+Supported formats: `dotenv`, `json`, `shell`.
+
 ## Environment Variables
 
 The Diverge controller can be configured via environment variables (usually injected via the Helm chart):

@@ -37,7 +37,7 @@ flowchart TD
 ## Components
 
 - **PreviewGroup Controller**: Orchestrates multiple `Environment` CRs from a single `PreviewGroup` CR, representing an entire MR's changes together. Ensures all preview services share routing, labels, and lifecycle.
-- **Controller**: The Kubernetes controller (reconciler) that watches `Environment` Custom Resources (CRs). It orchestrates the deployment lifecycle, executing state transitions.
+- **Controller**: The Kubernetes controller (reconciler) that watches `Environment` Custom Resources (CRs). It orchestrates the deployment lifecycle, executing state transitions. The controller uses a Provider Registry to dynamically instantiate its integrations (routing, deployment, etc.) without hardcoded switch statements.
   - **Controller Watches**: The controller uses `Owns()` to watch child resources such as `Job` (migrations), `Deployment`, and `Service` (preview pods). This ensures that if child resources are modified or deleted, the controller automatically re-reconciles to restore the desired state.
 - **Activator Proxy**: Wakes up idle scaled-to-zero preview pods. It holds requests until the backend is ready, then seamlessly proxies the traffic, injecting necessary routing headers.
 - **Proxy**: A reverse proxy that assists with header-based routing, seamlessly directing traffic to the correct preview environment.
@@ -50,6 +50,17 @@ flowchart TD
 - **Notifier**: (Optional) Sends status updates back to the Version Control System (like GitLab/GitHub MR/PR comments) regarding deployment progress and preview URLs.
 - **Status Reporter**: Posts commit status checks to GitLab/GitHub for merge gating. Supports `pending`, `running`, `success`, `failed`, and `canceled` states with platform-specific mapping. Includes SHA validation (hex-only regex) to prevent path traversal.
 - **API Server** (Coming soon - Issue #12): A forthcoming gRPC/ConnectRPC API server for extended environment management and integration. Proto definitions are in `proto/diverge/v1alpha1/`.
+
+## Provider Registry Pattern
+
+Diverge uses a generic `Registry[T]` (located in `pkg/registry/`) to manage its integrations, such as routing, deploying, testing, databases, and notifiers. This self-registration pattern allows you to add custom providers easily.
+
+The flow works as follows:
+1. **Define a Registry**: Each integration point has a global `Registry[T]`.
+2. **Self-Registration**: Providers register themselves via their package's `init()` function (e.g., in `*_register.go` files) using `Providers.Register()`.
+3. **Instantiation**: The `main.go` instantiates the selected provider via `Providers.Create(name, deps)`.
+
+This design makes Diverge highly extensible. Adding a new provider requires creating just one file and zero changes to the core controller `main.go`.
 
 ## CRD Design
 
