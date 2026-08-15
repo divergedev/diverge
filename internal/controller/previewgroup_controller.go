@@ -432,6 +432,7 @@ func (r *PreviewGroupReconciler) buildChildEnvironment(
 		HeaderKey:   pg.Spec.Routing.HeaderKey,
 		HeaderValue: pg.Spec.Routing.HeaderValue,
 		ExternalURL: pg.Spec.Routing.ExternalURL,
+		AsyncRoutes: svc.AsyncRoutes,
 	}
 	if routingConfig.Mode == "" {
 		routingConfig.Mode = "header"
