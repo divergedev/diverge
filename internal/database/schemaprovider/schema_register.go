@@ -1,4 +1,6 @@
-package database
+//go:build !no_schema
+
+package schemaprovider
 
 import (
 	"context"

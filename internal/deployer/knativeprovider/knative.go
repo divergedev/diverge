@@ -1,4 +1,6 @@
-package deployer
+//go:build !no_knative
+
+package knativeprovider
 
 import (
 	"context"
@@ -11,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/deployer"
 )
 
 // KNativeDeployer represents the configuration or state for this type.
@@ -113,7 +116,7 @@ func (d *KNativeDeployer) Teardown(ctx context.Context, env *v1alpha1.Environmen
 }
 
 // Status performs its designated operation.
-func (d *KNativeDeployer) Status(ctx context.Context, env *v1alpha1.Environment) ([]ServiceStatus, error) {
+func (d *KNativeDeployer) Status(ctx context.Context, env *v1alpha1.Environment) ([]deployer.ServiceStatus, error) {
 	targetNS := d.targetNamespace(env)
 
 	ksvc := &unstructured.Unstructured{}
@@ -121,7 +124,7 @@ func (d *KNativeDeployer) Status(ctx context.Context, env *v1alpha1.Environment)
 
 	err := d.Client.Get(ctx, client.ObjectKey{Name: env.Name, Namespace: targetNS}, ksvc)
 
-	status := ServiceStatus{
+	status := deployer.ServiceStatus{
 		Name:       env.Name,
 		Service:    env.Name,
 		SyncStatus: "Applied",
@@ -130,7 +133,7 @@ func (d *KNativeDeployer) Status(ctx context.Context, env *v1alpha1.Environment)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			status.Health = "Missing"
-			return []ServiceStatus{status}, nil
+			return []deployer.ServiceStatus{status}, nil
 		}
 		return nil, fmt.Errorf("failed to get knative service: %w", err)
 	}
@@ -166,5 +169,5 @@ func (d *KNativeDeployer) Status(ctx context.Context, env *v1alpha1.Environment)
 		status.Message = fmt.Sprintf("status.url: %s", url)
 	}
 
-	return []ServiceStatus{status}, nil
+	return []deployer.ServiceStatus{status}, nil
 }
