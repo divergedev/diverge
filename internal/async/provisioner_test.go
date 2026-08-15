@@ -151,6 +151,24 @@ func TestNoopProvisioner_UnknownProtocol(t *testing.T) {
 	assert.Empty(t, res.EnvVars, "unknown protocol should not inject default env vars")
 }
 
+func TestNoopProvisioner_CustomEnvVarMapping(t *testing.T) {
+	p := &NoopProvisioner{}
+	env := &v1alpha1.Environment{ObjectMeta: metav1.ObjectMeta{Name: "test-env"}}
+	route := v1alpha1.AsyncRouteSpec{
+		Protocol: "temporal",
+		Target:   "payments",
+		EnvVarMapping: map[string]string{
+			"MY_QUEUE": "{{ .ResolvedTarget }}",
+		},
+	}
+
+	res, err := p.Provision(context.Background(), env, route)
+	require.NoError(t, err)
+	assert.Equal(t, "payments-test-env", res.EnvVars["MY_QUEUE"])
+	_, hasDefault := res.EnvVars["TEMPORAL_TASK_QUEUE"]
+	assert.False(t, hasDefault, "custom mapping should not inject default env var")
+}
+
 func TestDefaultEnvVarForProtocol(t *testing.T) {
 	assert.Equal(t, "TEMPORAL_TASK_QUEUE", v1alpha1.DefaultEnvVarForProtocol("temporal"))
 	assert.Equal(t, "KAFKA_CONSUMER_GROUP", v1alpha1.DefaultEnvVarForProtocol("kafka"))

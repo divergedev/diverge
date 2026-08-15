@@ -20,6 +20,12 @@ func (n *NoopProvisioner) Provision(_ context.Context, env *v1alpha1.Environment
 		if defaultVar := v1alpha1.DefaultEnvVarForProtocol(route.Protocol); defaultVar != "" {
 			envVars[defaultVar] = target
 		}
+	} else {
+		for envVar, tmpl := range route.EnvVarMapping {
+			if tmpl == "{{ .ResolvedTarget }}" || tmpl == "" {
+				envVars[envVar] = target
+			}
+		}
 	}
 
 	return &ProvisionResult{

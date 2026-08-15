@@ -118,6 +118,9 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 	if env.Spec.Routing.Mode == "subdomain" && env.Spec.Routing.BaseDomain != "" {
 		// Subdomain mode: route by hostname, no header match needed
 		hostname := fmt.Sprintf("%s.%s", env.Name, env.Spec.Routing.BaseDomain)
+		if len(hostname) > 253 {
+			return fmt.Errorf("derived hostname %q exceeds 253 characters", hostname)
+		}
 		hostnames = append(hostnames, hostname)
 		// No header matches - all traffic to this hostname goes to preview
 		matchRule := map[string]interface{}{}

@@ -15,10 +15,9 @@ import (
 )
 
 // Property: for any valid env name and base domain, subdomain routing
-// always produces a valid hostname in the HTTPRoute
+// always produces a valid hostname in the HTTPRoute.
 func TestGatewaySubdomainProperty_HostnameFormat(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		// Generate valid k8s names (lowercase, alphanumeric, dashes, max 63 chars)
 		envName := rapid.StringMatching(`^[a-z][a-z0-9-]{0,20}[a-z0-9]$`).Draw(t, "envName")
 		baseDomain := rapid.StringMatching(`^[a-z][a-z0-9-]{0,10}\.[a-z]{2,5}$`).Draw(t, "baseDomain")
 		svc := rapid.StringMatching(`^[a-z][a-z0-9-]{0,10}[a-z0-9]$`).Draw(t, "svc")
@@ -29,23 +28,18 @@ func TestGatewaySubdomainProperty_HostnameFormat(t *testing.T) {
 		env := &v1alpha1.Environment{
 			ObjectMeta: metav1.ObjectMeta{Name: envName, Namespace: "default"},
 			Spec: v1alpha1.EnvironmentSpec{
-				Deploy: v1alpha1.EnvironmentDeploy{ChangedServices: []string{svc}},
-				Routing: v1alpha1.EnvironmentRouting{
-					Mode:       "subdomain",
-					BaseDomain: baseDomain,
-				},
+				Deploy:  v1alpha1.EnvironmentDeploy{ChangedServices: []string{svc}},
+				Routing: v1alpha1.EnvironmentRouting{Mode: "subdomain", BaseDomain: baseDomain},
 			},
 		}
 
 		err := r.Reconcile(context.Background(), env)
 		require.NoError(t, err)
 
-		// Fetch the created route
 		u := &unstructured.Unstructured{}
 		u.SetAPIVersion("gateway.networking.k8s.io/v1")
 		u.SetKind("HTTPRoute")
-		routeName := envName + "-" + svc
-		err = c.Get(context.Background(), client.ObjectKey{Name: routeName, Namespace: "default"}, u)
+		err = c.Get(context.Background(), client.ObjectKey{Name: envName + "-" + svc, Namespace: "default"}, u)
 		require.NoError(t, err)
 
 		// Property 1: hostnames is set and contains exactly one entry
@@ -75,7 +69,7 @@ func TestGatewaySubdomainProperty_HostnameFormat(t *testing.T) {
 	})
 }
 
-// Property: header mode is unchanged (regression test)
+// Property: header mode is unchanged (regression test).
 func TestGatewayHeaderModeProperty_StillWorks(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		envName := rapid.StringMatching(`^[a-z][a-z0-9-]{0,20}[a-z0-9]$`).Draw(t, "envName")
@@ -88,11 +82,8 @@ func TestGatewayHeaderModeProperty_StillWorks(t *testing.T) {
 		env := &v1alpha1.Environment{
 			ObjectMeta: metav1.ObjectMeta{Name: envName, Namespace: "default"},
 			Spec: v1alpha1.EnvironmentSpec{
-				Deploy: v1alpha1.EnvironmentDeploy{ChangedServices: []string{svc}},
-				Routing: v1alpha1.EnvironmentRouting{
-					Mode:        "header",
-					HeaderValue: headerVal,
-				},
+				Deploy:  v1alpha1.EnvironmentDeploy{ChangedServices: []string{svc}},
+				Routing: v1alpha1.EnvironmentRouting{Mode: "header", HeaderValue: headerVal},
 			},
 		}
 

@@ -120,3 +120,34 @@ func TestGatewayRouter_GetExternalURL_Subdomain(t *testing.T) {
 	url := r.GetExternalURL(env)
 	assert.Equal(t, "https://test-env.preview.dev.local", url)
 }
+
+func TestGatewayRouter_Reconcile_SubdomainOversizedHostname(t *testing.T) {
+	c := fake.NewClientBuilder().Build()
+	r := &GatewayRouter{Client: c, Namespace: "default"}
+
+	longDomain := ""
+	for i := 0; i < 250; i++ {
+		longDomain += "a"
+	}
+	longDomain += ".com"
+
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-env",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Deploy: v1alpha1.EnvironmentDeploy{
+				ChangedServices: []string{"web"},
+			},
+			Routing: v1alpha1.EnvironmentRouting{
+				Mode:       "subdomain",
+				BaseDomain: longDomain,
+			},
+		},
+	}
+
+	err := r.Reconcile(context.Background(), env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds 253 characters")
+}
