@@ -2,6 +2,7 @@ package routing
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -149,5 +150,5 @@ func TestGatewayRouter_Reconcile_SubdomainOversizedHostname(t *testing.T) {
 
 	err := r.Reconcile(context.Background(), env)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "exceeds 253 characters")
+	assert.True(t, errors.Is(err, ErrHostnameTooLong))
 }

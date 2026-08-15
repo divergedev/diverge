@@ -10,8 +10,11 @@ import (
 // NoopProvisioner is a no-op provisioner that returns the target unchanged.
 type NoopProvisioner struct{}
 
+// Name returns the provisioner name.
 func (n *NoopProvisioner) Name() string { return "noop" }
 
+// Provision returns a resolved target of "<target>-<envName>" and populates
+// default or custom environment variables without creating real infrastructure.
 func (n *NoopProvisioner) Provision(_ context.Context, env *v1alpha1.Environment, route v1alpha1.AsyncRouteSpec) (*ProvisionResult, error) {
 	envVars := make(map[string]string)
 	target := fmt.Sprintf("%s-%s", route.Target, env.Name)
@@ -34,6 +37,7 @@ func (n *NoopProvisioner) Provision(_ context.Context, env *v1alpha1.Environment
 	}, nil
 }
 
+// Teardown is a no-op since no real infrastructure was created.
 func (n *NoopProvisioner) Teardown(_ context.Context, _ *v1alpha1.Environment, _ v1alpha1.AsyncRouteSpec) error {
 	return nil
 }

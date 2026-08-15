@@ -2,6 +2,7 @@ package routing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -24,6 +25,10 @@ type GatewayRouter struct {
 }
 
 var _ Router = (*GatewayRouter)(nil)
+
+// ErrHostnameTooLong is returned when a derived subdomain hostname exceeds the
+// DNS maximum of 253 characters.
+var ErrHostnameTooLong = errors.New("derived hostname exceeds 253 characters")
 
 // Reconcile creates or updates routing resources for each changed service
 // in the environment, configuring header-based routing rules.
@@ -119,7 +124,7 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 		// Subdomain mode: route by hostname, no header match needed
 		hostname := fmt.Sprintf("%s.%s", env.Name, env.Spec.Routing.BaseDomain)
 		if len(hostname) > 253 {
-			return fmt.Errorf("derived hostname %q exceeds 253 characters", hostname)
+			return fmt.Errorf("%w: %q (%d chars)", ErrHostnameTooLong, hostname, len(hostname))
 		}
 		hostnames = append(hostnames, hostname)
 		// No header matches - all traffic to this hostname goes to preview

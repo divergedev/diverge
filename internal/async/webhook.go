@@ -31,6 +31,7 @@ type WebhookResponse struct {
 	EnvVars        map[string]string `json:"envVars"`
 }
 
+// NewWebhookProvisioner creates a WebhookProvisioner targeting the given endpoint URL.
 func NewWebhookProvisioner(endpoint string) *WebhookProvisioner {
 	return &WebhookProvisioner{
 		Endpoint:   endpoint,
@@ -38,8 +39,11 @@ func NewWebhookProvisioner(endpoint string) *WebhookProvisioner {
 	}
 }
 
+// Name returns the provisioner name.
 func (w *WebhookProvisioner) Name() string { return "webhook" }
 
+// Provision calls the webhook endpoint to create async infrastructure and returns
+// the resolved target and environment variables to inject into preview pods.
 func (w *WebhookProvisioner) Provision(ctx context.Context, env *v1alpha1.Environment, route v1alpha1.AsyncRouteSpec) (*ProvisionResult, error) {
 	req := WebhookRequest{
 		Action:      "provision",
@@ -75,6 +79,7 @@ func (w *WebhookProvisioner) Provision(ctx context.Context, env *v1alpha1.Enviro
 	}, nil
 }
 
+// Teardown calls the webhook endpoint to remove async infrastructure for the given route.
 func (w *WebhookProvisioner) Teardown(ctx context.Context, env *v1alpha1.Environment, route v1alpha1.AsyncRouteSpec) error {
 	req := WebhookRequest{
 		Action:      "teardown",

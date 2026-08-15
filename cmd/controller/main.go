@@ -21,6 +21,7 @@ import (
 	webhookserver "sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/async"
 	"github.com/divergedev/diverge/internal/changeset"
 	"github.com/divergedev/diverge/internal/controller"
 	"github.com/divergedev/diverge/internal/database"
@@ -58,6 +59,7 @@ func main() {
 	var webhookSecretToken string
 	var notifierProvider string
 	var defaultNamespace string
+	var asyncProvider string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -69,6 +71,7 @@ func main() {
 	flag.StringVar(&deployProvider, "deploy-provider", "noop", "Deployment provider (argocd|noop|direct|knative)")
 	flag.StringVar(&databaseProvider, "database-provider", "none", "Database provider (schema|none)")
 	flag.StringVar(&notifierProvider, "notifier-provider", "noop", "Notification provider (gitlab|github|noop)")
+	flag.StringVar(&asyncProvider, "async-provider", "noop", "Async provisioning provider (noop, webhook)")
 	flag.StringVar(&webhookSecretToken, "webhook-secret-token", "", "The secret token for authenticating webhooks (prefer DIVERGE_WEBHOOK_SECRET env var).")
 	flag.StringVar(&defaultNamespace, "default-namespace", "default", "Default namespace to create environments in")
 
@@ -205,6 +208,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	if asyncProvider == "" {
+		asyncProvider = "noop"
+	}
+	asyncProviderImpl, err := async.Providers.Create(asyncProvider, deps)
+	if err != nil {
+		setupLog.Error(err, "creating async provisioner", "provider", asyncProvider)
+		os.Exit(1)
+	}
+
 	if err = (&controller.EnvironmentReconciler{
 		Client:           mgr.GetClient(),
 		Scheme:           mgr.GetScheme(),
@@ -216,6 +228,7 @@ func main() {
 		StatusReporter:   statusReporterImpl,
 		Deployer:         deployerImpl,
 		TestRunner:       testRunnerImpl,
+		AsyncProvisioner: asyncProviderImpl,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Environment")
 		os.Exit(1)
