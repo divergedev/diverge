@@ -96,16 +96,23 @@ func newProvidersCmd(app *App) *cobra.Command {
 			for _, provider := range allProviders {
 				if provider.Kind != currentKind {
 					if currentKind != "" {
-						_, _ = fmt.Fprintln(w)
+						if _, err := fmt.Fprintln(w); err != nil {
+							return err
+						}
 					}
-					_, _ = fmt.Fprintf(w, "--- %s ---\n", provider.Kind)
-					_, _ = fmt.Fprintln(w, "NAME\tDESCRIPTION")
+					if _, err := fmt.Fprintf(w, "--- %s ---\n", provider.Kind); err != nil {
+						return err
+					}
+					if _, err := fmt.Fprintln(w, "NAME\tDESCRIPTION"); err != nil {
+						return err
+					}
 					currentKind = provider.Kind
 				}
-				_, _ = fmt.Fprintf(w, "%s\t%s\n", provider.Name, provider.Description)
+				if _, err := fmt.Fprintf(w, "%s\t%s\n", provider.Name, provider.Description); err != nil {
+					return err
+				}
 			}
-			_ = w.Flush()
-			return nil
+			return w.Flush()
 		},
 	}
 
