@@ -102,6 +102,10 @@ type PreviewGroupServiceSpec struct {
 	// +optional
 	Protocol ServiceProtocol `json:"protocol,omitempty"`
 
+	// AsyncRoutes defines async routing targets to provision for this service.
+	// +optional
+	AsyncRoutes []AsyncRouteSpec `json:"asyncRoutes,omitempty"`
+
 	// ImagePullPolicy overrides the container image pull policy.
 	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
 	// +optional
