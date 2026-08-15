@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"net"
 	"os"
@@ -19,28 +20,22 @@ var (
 
 // EnvironmentDetector abstracts OS/network dependencies for testability.
 type EnvironmentDetector interface {
-	// DetectTailscaleIP returns the local Tailscale IPv4 address.
-	// It scans net.Interfaces() for interfaces named 'tailscale0', 'utun*', or 'wg0'.
-	DetectTailscaleIP() (string, error)
+	// DetectLocalIP returns the developer's routable IP (e.g., Tailscale).
+	DetectLocalIP(ctx context.Context) (string, error)
 
 	// DetectGitBranch returns the current git branch name.
-	DetectGitBranch() (string, error)
+	DetectGitBranch(ctx context.Context) (string, error)
 
 	// DetectServiceName returns the service name from .diverge.yaml or cwd.
-	DetectServiceName() (string, error)
+	DetectServiceName(ctx context.Context) (string, error)
 
 	// DetectUsername returns the current OS username.
-	DetectUsername() string
+	DetectUsername(ctx context.Context) (string, error)
 }
 
 type DefaultEnvironmentDetector struct{}
 
-var tailscaleCGNAT = func() *net.IPNet {
-	_, n, _ := net.ParseCIDR("100.64.0.0/10")
-	return n
-}()
-
-func (d *DefaultEnvironmentDetector) DetectTailscaleIP() (string, error) {
+func (d *DefaultEnvironmentDetector) DetectLocalIP(ctx context.Context) (string, error) {
 	interfaces, err := net.Interfaces()
 	if err != nil {
 		return "", err
@@ -65,17 +60,39 @@ func (d *DefaultEnvironmentDetector) DetectTailscaleIP() (string, error) {
 				}
 				ip = ip.To4()
 				if ip != nil {
-					if tailscaleCGNAT.Contains(ip) {
-						return ip.String(), nil
-					}
+					return ip.String(), nil
 				}
+			}
+		}
+	}
+
+	// Fallback
+	for _, iface := range interfaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+				continue
+			}
+			ip = ip.To4()
+			if ip != nil {
+				return ip.String(), nil
 			}
 		}
 	}
 	return "", ErrTailscaleNotFound
 }
 
-func (d *DefaultEnvironmentDetector) DetectGitBranch() (string, error) {
+func (d *DefaultEnvironmentDetector) DetectGitBranch(ctx context.Context) (string, error) {
 	gitCtx, err := git.Detect()
 	if err != nil || gitCtx == nil || gitCtx.Branch == "" {
 		return "", ErrNoGitRepo
@@ -83,7 +100,7 @@ func (d *DefaultEnvironmentDetector) DetectGitBranch() (string, error) {
 	return gitCtx.Branch, nil
 }
 
-func (d *DefaultEnvironmentDetector) DetectServiceName() (string, error) {
+func (d *DefaultEnvironmentDetector) DetectServiceName(ctx context.Context) (string, error) {
 	cfg, err := config.Load(".diverge.yaml")
 	if err == nil && len(cfg.Services) > 0 {
 		for k := range cfg.Services {
@@ -97,10 +114,10 @@ func (d *DefaultEnvironmentDetector) DetectServiceName() (string, error) {
 	return filepath.Base(cwd), nil
 }
 
-func (d *DefaultEnvironmentDetector) DetectUsername() string {
+func (d *DefaultEnvironmentDetector) DetectUsername(ctx context.Context) (string, error) {
 	u, err := user.Current()
 	if err == nil && u != nil && u.Username != "" {
-		return strings.ToLower(u.Username)
+		return strings.ToLower(u.Username), nil
 	}
-	return "dev"
+	return "dev", nil
 }

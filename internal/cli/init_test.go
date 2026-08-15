@@ -2,98 +2,109 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"os"
-	"strings"
+	"os/exec"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestInitCreatesFile(t *testing.T) {
-	tmpDir := t.TempDir()
-	originalWD, err := os.Getwd()
-	require.NoError(t, err)
-	defer func() {
-		err := os.Chdir(originalWD)
-		require.NoError(t, err)
-	}()
+func TestInitCmd_DryRun(t *testing.T) {
+	// Override execCommand to avoid real commands
+	origExecCommand := execCommand
+	defer func() { execCommand = origExecCommand }()
 
-	err = os.Chdir(tmpDir)
-	require.NoError(t, err)
+	execCommand = func(command string, args ...string) *exec.Cmd {
+		// Just a dummy command that does nothing
+		return exec.Command("true")
+	}
 
 	app := &App{}
 	cmd := newInitCmd(app)
-	var buf bytes.Buffer
-	cmd.SetOut(&buf)
-	cmd.SetArgs([]string{})
+	cmd.SetArgs([]string{"--dry-run"})
 
-	err = cmd.Execute()
+	// We need to capture stderr because runInit prints to os.Stderr
+	oldStderr := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+
+	err := cmd.Execute()
+
+	_ = w.Close()
+	os.Stderr = oldStderr
+	var outBuf bytes.Buffer
+	_, _ = outBuf.ReadFrom(r)
+
 	require.NoError(t, err)
 
-	content, err := os.ReadFile(".diverge.yaml")
-	require.NoError(t, err)
-
-	yamlStr := string(content)
-	assert.Contains(t, yamlStr, "version: \"1\"")
-	assert.Contains(t, yamlStr, "services:")
-	assert.Contains(t, yamlStr, "deploy:")
+	out := outBuf.String()
+	assert.Contains(t, out, "(dry-run) k3d cluster create diverge-dev")
+	assert.Contains(t, out, "(dry-run) helm install eg oci://docker.io/envoyproxy/gateway-helm")
+	assert.Contains(t, out, "(dry-run) helm install diverge charts/diverge/")
+	assert.Contains(t, out, "✅ Diverge playground ready!")
 }
 
-func TestInitWontOverwriteWithoutConfirm(t *testing.T) {
-	tmpDir := t.TempDir()
-	originalWD, err := os.Getwd()
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = os.Chdir(originalWD) })
+func TestInitCmd_MissingPrerequisites(t *testing.T) {
+	origLookPath := lookPath
+	defer func() { lookPath = origLookPath }()
 
-	err = os.Chdir(tmpDir)
-	require.NoError(t, err)
-
-	err = os.WriteFile(".diverge.yaml", []byte("existing content"), 0644)
-	require.NoError(t, err)
+	lookPath = func(file string) (string, error) {
+		if file == "helm" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
 
 	app := &App{}
 	cmd := newInitCmd(app)
-	var buf bytes.Buffer
-	cmd.SetOut(&buf)
-	cmd.SetIn(strings.NewReader("n\n"))
-	cmd.SetArgs([]string{})
+	cmd.SetArgs([]string{"--dry-run"})
 
-	err = cmd.Execute()
-	require.NoError(t, err)
+	// capture stderr
+	oldStderr := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
 
-	content, err := os.ReadFile(".diverge.yaml")
-	require.NoError(t, err)
-	assert.Equal(t, "existing content", string(content))
+	err := cmd.Execute()
+
+	_ = w.Close()
+	os.Stderr = oldStderr
+	var outBuf bytes.Buffer
+	_, _ = outBuf.ReadFrom(r)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing prerequisites: helm")
 }
 
-func TestInitOverwriteWithConfirm(t *testing.T) {
-	tmpDir := t.TempDir()
-	originalWD, err := os.Getwd()
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = os.Chdir(originalWD) })
+func TestInitCmd_Flags(t *testing.T) {
+	// Test without gateway and sample app
+	origExecCommand := execCommand
+	defer func() { execCommand = origExecCommand }()
 
-	err = os.Chdir(tmpDir)
-	require.NoError(t, err)
-
-	err = os.WriteFile(".diverge.yaml", []byte("old content"), 0644)
-	require.NoError(t, err)
+	execCommand = func(command string, args ...string) *exec.Cmd {
+		return exec.Command("true")
+	}
 
 	app := &App{}
 	cmd := newInitCmd(app)
-	var buf bytes.Buffer
-	cmd.SetOut(&buf)
-	cmd.SetIn(strings.NewReader("y\n"))
-	cmd.SetArgs([]string{})
+	cmd.SetArgs([]string{"--dry-run", "--install-gateway=false", "--install-sample-app=false", "--cluster-name=test-cluster"})
 
-	err = cmd.Execute()
+	oldStderr := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+
+	err := cmd.Execute()
+
+	_ = w.Close()
+	os.Stderr = oldStderr
+	var outBuf bytes.Buffer
+	_, _ = outBuf.ReadFrom(r)
+
 	require.NoError(t, err)
+	out := outBuf.String()
 
-	content, err := os.ReadFile(".diverge.yaml")
-	require.NoError(t, err)
-
-	yamlStr := string(content)
-	assert.NotEqual(t, "old content", yamlStr, "file should be overwritten")
-	assert.Contains(t, yamlStr, "version: \"1\"")
-	assert.Contains(t, buf.String(), "Successfully created")
+	assert.Contains(t, out, "k3d cluster create test-cluster")
+	assert.NotContains(t, out, "Installing Envoy Gateway")
+	assert.NotContains(t, out, "Deploying sample app")
 }

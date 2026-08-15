@@ -92,23 +92,23 @@ type fakeDetector struct {
 	username     string
 }
 
-func (f fakeDetector) DetectTailscaleIP() (string, error) {
+func (f fakeDetector) DetectLocalIP(ctx context.Context) (string, error) {
 	return f.tailscaleIP, f.tailscaleErr
 }
 
-func (f fakeDetector) DetectGitBranch() (string, error) {
+func (f fakeDetector) DetectGitBranch(ctx context.Context) (string, error) {
 	return f.gitBranch, f.gitBranchErr
 }
 
-func (f fakeDetector) DetectServiceName() (string, error) {
+func (f fakeDetector) DetectServiceName(ctx context.Context) (string, error) {
 	return f.serviceName, f.serviceErr
 }
 
-func (f fakeDetector) DetectUsername() string {
+func (f fakeDetector) DetectUsername(ctx context.Context) (string, error) {
 	if f.username == "" {
-		return "dev"
+		return "dev", nil
 	}
-	return f.username
+	return f.username, nil
 }
 
 func runDevTestSetup(t *testing.T, detector EnvironmentDetector) (*App, client.Client, *cobra.Command, context.CancelFunc) {

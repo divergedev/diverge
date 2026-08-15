@@ -1,0 +1,38 @@
+{{- if .Values.activatorProxy.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "diverge.fullname" . }}-activator-proxy
+  labels:
+    {{- include "diverge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: activator-proxy
+spec:
+  replicas: {{ .Values.activatorProxy.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: activator-proxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: activator-proxy
+    spec:
+      serviceAccountName: {{ include "diverge.fullname" . }}-activator-proxy
+      containers:
+        - name: activator-proxy
+          image: "{{ .Values.activatorProxy.image.repository }}:{{ .Values.activatorProxy.image.tag }}"
+          ports:
+            - containerPort: {{ .Values.activatorProxy.port }}
+          env:
+            - name: ACTIVATOR_PORT
+              value: "{{ .Values.activatorProxy.port }}"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.activatorProxy.port }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: {{ .Values.activatorProxy.port }}
+          resources:
+            {{- toYaml .Values.activatorProxy.resources | nindent 12 }}
+{{- end }}

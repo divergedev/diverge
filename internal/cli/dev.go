@@ -75,7 +75,7 @@ func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, e
 	// 1. Auto-detect service name
 	serviceName := serviceFlag
 	if serviceName == "" {
-		s, err := detector.DetectServiceName()
+		s, err := detector.DetectServiceName(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to detect service name: %w. Use --service flag", err)
 		}
@@ -88,7 +88,7 @@ func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, e
 	// 2. Auto-detect endpoint
 	endpointIP := endpointFlag
 	if endpointIP == "" {
-		ip, err := detector.DetectTailscaleIP()
+		ip, err := detector.DetectLocalIP(ctx)
 		if err != nil {
 			return err
 		}
@@ -104,7 +104,7 @@ func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, e
 
 	// 4. Construct header value
 	headerValue := "local-dev"
-	branch, err := detector.DetectGitBranch()
+	branch, err := detector.DetectGitBranch(ctx)
 	if err == nil && branch != "" {
 		headerValue = git.SlugifyBranch(branch)
 	} else if err != nil {
@@ -112,7 +112,7 @@ func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, e
 	}
 
 	// 5. Construct group name
-	username := detector.DetectUsername()
+	username, _ := detector.DetectUsername(ctx)
 	groupName := fmt.Sprintf("dev-%s-%s", username, serviceName)
 
 	// Normalize group name

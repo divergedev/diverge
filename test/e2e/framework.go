@@ -1,4 +1,4 @@
-//go:build e2e
+//go:build e2e || e2e_dual
 
 // Package e2e provides a test framework for end-to-end testing of the
 // Diverge controller and environment lifecycle.

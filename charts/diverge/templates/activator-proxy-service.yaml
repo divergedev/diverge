@@ -1,0 +1,18 @@
+{{- if .Values.activatorProxy.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "diverge.fullname" . }}-activator-proxy
+  labels:
+    {{- include "diverge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: activator-proxy
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.activatorProxy.port }}
+      targetPort: {{ .Values.activatorProxy.port }}
+      protocol: TCP
+      name: http
+  selector:
+    app.kubernetes.io/component: activator-proxy
+{{- end }}
