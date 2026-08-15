@@ -22,7 +22,7 @@ type AsyncRouter struct {
 	Providers []AsyncProvider
 }
 
-// Reconcile performs its designated operation.
+// Reconcile iterates over all AsyncProviders and returns a joined error if any fail.
 func (r *AsyncRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment) error {
 	var errs []error
 	for _, p := range r.Providers {

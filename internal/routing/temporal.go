@@ -17,9 +17,7 @@ const (
 	temporalProviderName = "temporal"
 )
 
-// TemporalProvider implements AsyncProvider for Temporal workflow routing.
-// It creates a ConfigMap in the preview namespace containing the environment
-// configuration that the Temporal SDK propagator reads at startup.
+// TemporalProvider creates and deletes Temporal TaskQueue resources for preview environments.
 type TemporalProvider struct {
 	Client client.Client
 }

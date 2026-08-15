@@ -32,7 +32,7 @@ type CompositeRouter struct {
 	Routers map[string]Router // named routers: "sync", "async", etc.
 }
 
-// Reconcile performs its designated operation.
+// Reconcile reconciles all sub-routers; partial success is possible, returns first error encountered.
 func (r *CompositeRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment) error {
 	var succeeded []string
 	failed := make(map[string]error)

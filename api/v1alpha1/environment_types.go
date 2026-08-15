@@ -104,11 +104,11 @@ type ManifestSource struct {
 type TestTriggerType string
 
 const (
-	// TestTriggerGitLabPipeline ...
+	// TestTriggerGitLabPipeline triggers an external GitLab pipeline to run tests.
 	TestTriggerGitLabPipeline TestTriggerType = "gitlab-pipeline"
-	// TestTriggerGitHubDispatch ...
+	// TestTriggerGitHubDispatch triggers a GitHub repository dispatch event to run tests.
 	TestTriggerGitHubDispatch TestTriggerType = "github-dispatch"
-	// TestTriggerWebhook ...
+	// TestTriggerWebhook POSTs to an external webhook URL to run tests.
 	TestTriggerWebhook TestTriggerType = "webhook"
 )
 
@@ -147,15 +147,15 @@ type TestingSpec struct {
 type TestState string
 
 const (
-	// TestStatePending ...
+	// TestStatePending indicates the test run is queued or starting.
 	TestStatePending TestState = "pending"
-	// TestStateRunning ...
+	// TestStateRunning indicates the test run is currently executing.
 	TestStateRunning TestState = "running"
-	// TestStatePassed ...
+	// TestStatePassed indicates the test run completed successfully.
 	TestStatePassed TestState = "passed"
-	// TestStateFailed ...
+	// TestStateFailed indicates the test run completed with errors or test failures.
 	TestStateFailed TestState = "failed"
-	// TestStateTimedOut ...
+	// TestStateTimedOut indicates the test run did not complete within the configured timeout.
 	TestStateTimedOut TestState = "timed-out"
 )
 

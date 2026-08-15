@@ -7,7 +7,7 @@ import (
 	"github.com/divergedev/diverge/pkg/sdk"
 )
 
-// DefaultHeaderKey ...
+// DefaultHeaderKey is used by the middleware to extract the X-Diverge-Env header and inject it into the request context.
 const DefaultHeaderKey = sdk.DefaultHeaderKey
 
 // PropagateEnvironment returns middleware that propagates the x-diverge-env
@@ -46,7 +46,7 @@ type roundTripper struct {
 	base http.RoundTripper
 }
 
-// RoundTrip performs its designated operation.
+// RoundTrip injects the environment context into outgoing requests.
 func (rt *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	env := sdk.EnvironmentFromContext(req.Context())
 	if env != "" {

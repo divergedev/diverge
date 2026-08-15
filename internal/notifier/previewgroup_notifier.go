@@ -14,9 +14,9 @@ import (
 )
 
 var (
-	// ErrNotGitLabSource ...
+	// ErrNotGitLabSource indicates the project is not a GitLab project
 	ErrNotGitLabSource = errors.New("preview group source is not gitlab")
-	// ErrMissingMergeRequest ...
+	// ErrMissingMergeRequest indicates no merge request is associated
 	ErrMissingMergeRequest = errors.New("preview group has no merge request number")
 )
 

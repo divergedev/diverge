@@ -93,7 +93,7 @@ type wrappedStream struct {
 	ctx context.Context
 }
 
-// Context performs its designated operation.
+// Context preserves the Diverge environment context across gRPC calls.
 func (w *wrappedStream) Context() context.Context {
 	return w.ctx
 }

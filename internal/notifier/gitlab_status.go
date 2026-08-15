@@ -12,14 +12,14 @@ import (
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
 
-// GitLabStatusReporter represents the configuration or state for this type.
+// GitLabStatusReporter reports commit statuses to GitLab.
 type GitLabStatusReporter struct {
 	BaseURL    string
 	Token      string
 	HTTPClient *http.Client
 }
 
-// NewGitLabStatusReporter performs its designated operation.
+// NewGitLabStatusReporter creates a reporter that updates GitLab commit statuses via the Commits API.
 func NewGitLabStatusReporter(baseURL, token string) *GitLabStatusReporter {
 	return &GitLabStatusReporter{
 		BaseURL: baseURL,

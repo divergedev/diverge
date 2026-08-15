@@ -12,14 +12,14 @@ import (
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
 
-// GitHubStatusReporter represents the configuration or state for this type.
+// GitHubStatusReporter reports commit statuses to GitHub.
 type GitHubStatusReporter struct {
 	BaseURL    string
 	Token      string
 	HTTPClient *http.Client
 }
 
-// NewGitHubStatusReporter performs its designated operation.
+// NewGitHubStatusReporter creates a reporter that updates GitHub commit statuses via the Statuses API.
 func NewGitHubStatusReporter(baseURL, token string) *GitHubStatusReporter {
 	if baseURL == "" {
 		baseURL = "https://api.github.com"

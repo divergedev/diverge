@@ -15,16 +15,14 @@ type DatabaseProvider = pkgdb.DatabaseProvider
 // DatabaseResult represents the configuration or state for this type.
 type DatabaseResult = pkgdb.DatabaseResult
 
-// DatabaseResult represents the configuration or state for this type.
+// DatabaseStatus aliases the public DatabaseStatus type...
 type DatabaseStatus = pkgdb.DatabaseStatus
 
-// DatabaseStatus represents the configuration or state for this type.
+// ProviderConfig aliases the public ProviderConfig type...
 type ProviderConfig = pkgdb.ProviderConfig
 
-// ProviderConfig represents the configuration or state for this type.
+// ProviderFactory aliases the public ProviderFactory type...
 type ProviderFactory = pkgdb.ProviderFactory
-
-// ProviderFactory ...
 
 // Re-export registry functions for backward compatibility.
 var (

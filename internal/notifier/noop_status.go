@@ -6,10 +6,10 @@ import (
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
 
-// NoopStatusReporter represents the configuration or state for this type.
+// NoopStatusReporter suppresses commit status reporting; PostCommitStatus returns nil.
 type NoopStatusReporter struct{}
 
-// PostCommitStatus performs its designated operation.
+// PostCommitStatus intentionally performs no notification; returns nil.
 func (n *NoopStatusReporter) PostCommitStatus(ctx context.Context, env *v1alpha1.Environment, state, description string) error {
 	return nil
 }

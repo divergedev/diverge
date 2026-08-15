@@ -14,9 +14,9 @@ import (
 )
 
 var (
-	// ErrTailscaleNotFound ...
+	// ErrTailscaleNotFound indicates that no suitable local network interface could be found during detector fallback.
 	ErrTailscaleNotFound = errors.New("tailscale interface not found: make sure tailscale is running or pass --endpoint")
-	// ErrNoGitRepo ...
+	// ErrNoGitRepo indicates that the detector failed to find a git repository in the current directory.
 	ErrNoGitRepo = errors.New("not in a git repository")
 )
 
@@ -35,7 +35,7 @@ type EnvironmentDetector interface {
 	DetectUsername(ctx context.Context) (string, error)
 }
 
-// DefaultEnvironmentDetector represents the configuration or state for this type.
+// DefaultEnvironmentDetector provides actual OS/network detection implementations.
 type DefaultEnvironmentDetector struct{}
 
 // DetectLocalIP performs its designated operation.

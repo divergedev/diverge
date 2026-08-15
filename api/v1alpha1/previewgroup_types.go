@@ -8,19 +8,19 @@ import (
 type PreviewGroupPhase string
 
 const (
-	// PreviewGroupPhasePending ...
+	// PreviewGroupPhasePending indicates the preview group has been created but deployment hasn't started.
 	PreviewGroupPhasePending PreviewGroupPhase = "Pending"
-	// PreviewGroupPhaseDeploying ...
+	// PreviewGroupPhaseDeploying indicates one or more services in the group are currently deploying.
 	PreviewGroupPhaseDeploying PreviewGroupPhase = "Deploying"
-	// PreviewGroupPhaseRunning ...
+	// PreviewGroupPhaseRunning indicates all services in the group are deployed and running successfully.
 	PreviewGroupPhaseRunning PreviewGroupPhase = "Running"
-	// PreviewGroupPhaseDegraded ...
+	// PreviewGroupPhaseDegraded indicates the group is mostly running but one or more services are failing.
 	PreviewGroupPhaseDegraded PreviewGroupPhase = "Degraded"
-	// PreviewGroupPhaseFailed ...
+	// PreviewGroupPhaseFailed indicates the deployment of the preview group has failed critically.
 	PreviewGroupPhaseFailed PreviewGroupPhase = "Failed"
-	// PreviewGroupPhaseTerminating ...
+	// PreviewGroupPhaseTerminating indicates the preview group is currently being torn down and deleted.
 	PreviewGroupPhaseTerminating PreviewGroupPhase = "Terminating"
-	// PreviewGroupPhaseAbandoned ...
+	// PreviewGroupPhaseAbandoned indicates the preview group was abandoned or orphaned by its creator.
 	PreviewGroupPhaseAbandoned PreviewGroupPhase = "Abandoned"
 )
 

@@ -15,7 +15,7 @@ type InstrumentedRouter struct {
 	Mode  string
 }
 
-// Reconcile performs its designated operation.
+// Reconcile delegates to Inner and records routing duration and outcome metrics.
 func (r *InstrumentedRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment) error {
 	timer := prometheus.NewTimer(metrics.RoutingReconcileDuration.WithLabelValues(r.Mode))
 	defer timer.ObserveDuration()

@@ -237,7 +237,7 @@ type GitHubPreviewGroupNotifier struct {
 	HTTPClient *http.Client
 }
 
-// NewGitHubPreviewGroupNotifier performs its designated operation.
+// NewGitHubPreviewGroupNotifier creates a GitHub-backed notifier that posts preview group status to pull request comments using the GitHub API.
 func NewGitHubPreviewGroupNotifier(baseURL, token string) *GitHubPreviewGroupNotifier {
 	if baseURL == "" {
 		baseURL = "https://api.github.com"

@@ -4,7 +4,7 @@ import "context"
 
 type contextKey struct{}
 
-// DefaultHeaderKey ...
+// DefaultHeaderKey is used to extract the preview environment name from the X-Diverge-Env HTTP header.
 const DefaultHeaderKey = "x-diverge-env"
 
 // WithEnvironment returns a context with the environment name set.

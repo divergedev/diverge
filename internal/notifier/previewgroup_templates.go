@@ -68,7 +68,7 @@ const pgTeardownTmplStr = `## 🗑️ Diverge Preview — Destroyed
 Environment ` + "`{{.Name | sanitize}}`" + ` has been cleaned up.
 **Reason:** {{.Reason | sanitize}}`
 
-// PreviewGroupTemplateData represents the configuration or state for this type.
+// PreviewGroupTemplateData holds the template payload for rendering preview group Markdown comments.
 type PreviewGroupTemplateData struct {
 	Name         string
 	Branch       string
