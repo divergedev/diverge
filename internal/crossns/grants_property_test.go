@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"hegel.dev/go/hegel"
-	gatewayv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
 func TestEnsureReferenceGrant_Property_Uniqueness(t *testing.T) {
@@ -26,7 +26,7 @@ func TestEnsureReferenceGrant_Property_Uniqueness(t *testing.T) {
 		err = EnsureReferenceGrant(context.Background(), c, ns2, "to-ns")
 		require.NoError(ht, err)
 
-		var grants gatewayv1beta1.ReferenceGrantList
+		var grants gatewayv1.ReferenceGrantList
 		err = c.List(context.Background(), &grants)
 		require.NoError(ht, err)
 		assert.Len(ht, grants.Items, 2)
@@ -46,12 +46,12 @@ func TestEnsureReferenceGrant_Property_Determinism(t *testing.T) {
 		err = EnsureReferenceGrant(context.Background(), c2, ns, "to-ns")
 		require.NoError(ht, err)
 
-		var grants1 gatewayv1beta1.ReferenceGrantList
+		var grants1 gatewayv1.ReferenceGrantList
 		err = c1.List(context.Background(), &grants1)
 		require.NoError(ht, err)
 		require.Len(ht, grants1.Items, 1)
 
-		var grants2 gatewayv1beta1.ReferenceGrantList
+		var grants2 gatewayv1.ReferenceGrantList
 		err = c2.List(context.Background(), &grants2)
 		require.NoError(ht, err)
 		require.Len(ht, grants2.Items, 1)
@@ -84,7 +84,7 @@ func TestEnsureReferenceGrant_Property_ValidDNS(t *testing.T) {
 		err := EnsureReferenceGrant(context.Background(), c, ns, "to-ns")
 		require.NoError(ht, err)
 
-		var grants gatewayv1beta1.ReferenceGrantList
+		var grants gatewayv1.ReferenceGrantList
 		err = c.List(context.Background(), &grants)
 		require.NoError(ht, err)
 		require.Len(ht, grants.Items, 1)

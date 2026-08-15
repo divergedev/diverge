@@ -75,14 +75,18 @@ func newProvidersCmd(app *App) *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("failed to marshal JSON: %w", err)
 				}
-				cmd.Println(string(b))
+				if _, err := fmt.Fprintln(cmd.OutOrStdout(), string(b)); err != nil {
+					return err
+				}
 				return nil
 			case "yaml":
 				b, err := yaml.Marshal(allProviders)
 				if err != nil {
 					return fmt.Errorf("failed to marshal YAML: %w", err)
 				}
-				cmd.Println(string(b))
+				if _, err := fmt.Fprintln(cmd.OutOrStdout(), string(b)); err != nil {
+					return err
+				}
 				return nil
 			case "table", "":
 				// Fallthrough to table

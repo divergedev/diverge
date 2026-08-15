@@ -94,7 +94,7 @@ Examples:
 	return cmd
 }
 
-func runPreviewCreate(_ *cobra.Command, app *App, name string, services []string, headerKey, headerValue, ttl string, mrNumber int, dryRun bool) error {
+func runPreviewCreate(cmd *cobra.Command, app *App, name string, services []string, headerKey, headerValue, ttl string, mrNumber int, dryRun bool) error {
 	// Detect git context
 	gitCtx, err := git.Detect()
 	if err != nil {
@@ -163,7 +163,7 @@ func runPreviewCreate(_ *cobra.Command, app *App, name string, services []string
 		return fmt.Errorf("failed to create Kubernetes client: %w", err)
 	}
 
-	if err := c.Create(context.TODO(), pg); err != nil {
+	if err := c.Create(cmd.Context(), pg); err != nil {
 		return fmt.Errorf("failed to create PreviewGroup: %w", err)
 	}
 
@@ -237,20 +237,20 @@ func newPreviewStatusCmd(app *App) *cobra.Command {
 		Short: "Show status of a preview group",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPreviewStatus(app, args[0], cmd.OutOrStdout())
+			return runPreviewStatus(cmd.Context(), app, args[0], cmd.OutOrStdout())
 		},
 	}
 	return cmd
 }
 
-func runPreviewStatus(app *App, name string, out io.Writer) error {
+func runPreviewStatus(ctx context.Context, app *App, name string, out io.Writer) error {
 	c, _, err := app.KubeClient()
 	if err != nil {
 		return fmt.Errorf("failed to create Kubernetes client: %w", err)
 	}
 
 	var pg divergeiov1alpha1.PreviewGroup
-	if err := c.Get(context.TODO(), types.NamespacedName{Name: name}, &pg); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: name}, &pg); err != nil {
 		return fmt.Errorf("PreviewGroup %q not found: %w", name, err)
 	}
 
@@ -294,7 +294,7 @@ func runPreviewStatus(app *App, name string, out io.Writer) error {
 	for _, svc := range pg.Status.Services {
 		if svc.EnvironmentName != "" {
 			var childEnv divergeiov1alpha1.Environment
-			if err := c.Get(context.TODO(), types.NamespacedName{Name: svc.EnvironmentName, Namespace: app.Namespace}, &childEnv); err == nil {
+			if err := c.Get(ctx, types.NamespacedName{Name: svc.EnvironmentName, Namespace: app.Namespace}, &childEnv); err == nil {
 				asyncRoutes = append(asyncRoutes, childEnv.Spec.Routing.AsyncRoutes...)
 			}
 		}
@@ -359,14 +359,14 @@ func newPreviewDeleteCmd(app *App) *cobra.Command {
 		Short: "Delete a preview group and all its child environments",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPreviewDelete(app, args[0], force)
+			return runPreviewDelete(cmd.Context(), app, args[0], force)
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "skip confirmation")
 	return cmd
 }
 
-func runPreviewDelete(app *App, name string, force bool) error {
+func runPreviewDelete(ctx context.Context, app *App, name string, force bool) error {
 	c, _, err := app.KubeClient()
 	if err != nil {
 		return fmt.Errorf("failed to create Kubernetes client: %w", err)
@@ -374,7 +374,7 @@ func runPreviewDelete(app *App, name string, force bool) error {
 
 	// Verify it exists
 	var pg divergeiov1alpha1.PreviewGroup
-	if err := c.Get(context.TODO(), types.NamespacedName{Name: name}, &pg); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: name}, &pg); err != nil {
 		return fmt.Errorf("PreviewGroup %q not found: %w", name, err)
 	}
 
@@ -388,7 +388,7 @@ func runPreviewDelete(app *App, name string, force bool) error {
 		}
 	}
 
-	if err := c.Delete(context.TODO(), &pg); err != nil {
+	if err := c.Delete(ctx, &pg); err != nil {
 		return fmt.Errorf("failed to delete PreviewGroup: %w", err)
 	}
 

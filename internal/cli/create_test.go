@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -92,7 +93,7 @@ func TestBuildEnvironment(t *testing.T) {
 
 	app := &App{Namespace: "diverge-system"}
 
-	env, err := buildEnvironment("preview-mr-42", gitCtx, resolved, cfg, app, 42)
+	env, err := buildEnvironment(context.Background(), "preview-mr-42", gitCtx, resolved, cfg, app, 42)
 	require.NoError(t, err)
 
 	// Verify metadata
@@ -142,7 +143,7 @@ func TestBuildEnvironmentNilConfig(t *testing.T) {
 
 	app := &App{Namespace: "default"}
 
-	env, err := buildEnvironment("staging-main", gitCtx, resolved, nil, app, 0)
+	env, err := buildEnvironment(context.Background(), "staging-main", gitCtx, resolved, nil, app, 0)
 	require.NoError(t, err)
 
 	assert.Equal(t, "staging-main", env.Name)
@@ -178,7 +179,7 @@ func TestBuildEnvironmentLabelOverrides(t *testing.T) {
 
 	app := &App{Namespace: "preview"}
 
-	env, err := buildEnvironment("preview-mr-99", gitCtx, resolved, &config.Config{Version: "1"}, app, 99)
+	env, err := buildEnvironment(context.Background(), "preview-mr-99", gitCtx, resolved, &config.Config{Version: "1"}, app, 99)
 	require.NoError(t, err)
 
 	assert.Equal(t, "full", env.Spec.Deploy.Mode)
@@ -204,7 +205,7 @@ func TestBuildEnvironmentInvalidTTL(t *testing.T) {
 
 	app := &App{Namespace: "default"}
 
-	_, err := buildEnvironment("test", gitCtx, resolved, nil, app, 0)
+	_, err := buildEnvironment(context.Background(), "staging-main", gitCtx, resolved, nil, app, 0)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid TTL")
 }
