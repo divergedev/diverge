@@ -12,12 +12,14 @@ import (
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
 
+// GitHubStatusReporter represents the configuration or state for this type.
 type GitHubStatusReporter struct {
 	BaseURL    string
 	Token      string
 	HTTPClient *http.Client
 }
 
+// NewGitHubStatusReporter performs its designated operation.
 func NewGitHubStatusReporter(baseURL, token string) *GitHubStatusReporter {
 	if baseURL == "" {
 		baseURL = "https://api.github.com"
@@ -31,6 +33,7 @@ func NewGitHubStatusReporter(baseURL, token string) *GitHubStatusReporter {
 	}
 }
 
+// PostCommitStatus performs its designated operation.
 func (g *GitHubStatusReporter) PostCommitStatus(ctx context.Context, env *v1alpha1.Environment, state, description string) error {
 	if env.Spec.Source.Provider != "github" {
 		return fmt.Errorf("environment is not from github")

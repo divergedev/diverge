@@ -56,6 +56,7 @@ type PreviewGroupReconciler struct {
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes;grpcroutes,verbs=list;delete
 // +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=list;delete
 
+// Reconcile performs its designated operation.
 func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, retErr error) {
 	logger := log.FromContext(ctx)
 

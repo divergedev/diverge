@@ -23,6 +23,7 @@ type ConfigMapFetcher struct {
 	Client client.Client
 }
 
+// Fetch performs its designated operation.
 func (f *ConfigMapFetcher) Fetch(ctx context.Context, env *v1alpha1.Environment) ([]unstructured.Unstructured, error) {
 	// Determine target namespace
 	ns := env.Namespace

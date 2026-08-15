@@ -25,6 +25,7 @@ var hsoListGVK = schema.GroupVersionKind{
 	Kind:    "HTTPScaledObjectList",
 }
 
+// KEDAConfig represents the configuration or state for this type.
 type KEDAConfig struct {
 	// TODO: move to CRD PreviewGroupServiceSpec in v2.0
 	MinReplicas int64
@@ -32,12 +33,14 @@ type KEDAConfig struct {
 	Cooldown    int64
 }
 
+// KEDADeployer represents the configuration or state for this type.
 type KEDADeployer struct {
 	Inner  Deployer
 	Client client.Client
 	Config KEDAConfig
 }
 
+// Deploy performs its designated operation.
 func (d *KEDADeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) error {
 	logger := log.FromContext(ctx).WithName("keda-deployer")
 
@@ -136,6 +139,7 @@ func (d *KEDADeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) er
 	return nil
 }
 
+// Teardown performs its designated operation.
 func (d *KEDADeployer) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
 	logger := log.FromContext(ctx).WithName("keda-deployer")
 
@@ -164,6 +168,7 @@ func (d *KEDADeployer) Teardown(ctx context.Context, env *v1alpha1.Environment) 
 	return d.Inner.Teardown(ctx, env)
 }
 
+// Status performs its designated operation.
 func (d *KEDADeployer) Status(ctx context.Context, env *v1alpha1.Environment) ([]ServiceStatus, error) {
 	innerStatus, err := d.Inner.Status(ctx, env)
 	if err != nil {

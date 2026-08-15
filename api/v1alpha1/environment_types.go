@@ -104,9 +104,12 @@ type ManifestSource struct {
 type TestTriggerType string
 
 const (
+	// TestTriggerGitLabPipeline ...
 	TestTriggerGitLabPipeline TestTriggerType = "gitlab-pipeline"
+	// TestTriggerGitHubDispatch ...
 	TestTriggerGitHubDispatch TestTriggerType = "github-dispatch"
-	TestTriggerWebhook        TestTriggerType = "webhook"
+	// TestTriggerWebhook ...
+	TestTriggerWebhook TestTriggerType = "webhook"
 )
 
 // TestTriggerSpec defines how to trigger a test run.
@@ -144,10 +147,15 @@ type TestingSpec struct {
 type TestState string
 
 const (
-	TestStatePending  TestState = "pending"
-	TestStateRunning  TestState = "running"
-	TestStatePassed   TestState = "passed"
-	TestStateFailed   TestState = "failed"
+	// TestStatePending ...
+	TestStatePending TestState = "pending"
+	// TestStateRunning ...
+	TestStateRunning TestState = "running"
+	// TestStatePassed ...
+	TestStatePassed TestState = "passed"
+	// TestStateFailed ...
+	TestStateFailed TestState = "failed"
+	// TestStateTimedOut ...
 	TestStateTimedOut TestState = "timed-out"
 )
 
@@ -230,10 +238,15 @@ type EnvironmentSpec struct {
 type EnvironmentPhase string
 
 const (
-	PhasePending     EnvironmentPhase = "Pending"
-	PhaseDeploying   EnvironmentPhase = "Deploying"
-	PhaseRunning     EnvironmentPhase = "Running"
-	PhaseFailed      EnvironmentPhase = "Failed"
+	// PhasePending ...
+	PhasePending EnvironmentPhase = "Pending"
+	// PhaseDeploying ...
+	PhaseDeploying EnvironmentPhase = "Deploying"
+	// PhaseRunning ...
+	PhaseRunning EnvironmentPhase = "Running"
+	// PhaseFailed ...
+	PhaseFailed EnvironmentPhase = "Failed"
+	// PhaseTerminating ...
 	PhaseTerminating EnvironmentPhase = "Terminating"
 )
 

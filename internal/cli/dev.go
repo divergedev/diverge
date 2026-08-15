@@ -23,15 +23,19 @@ import (
 	"github.com/divergedev/diverge/internal/git"
 )
 
+// ErrCollision defines a package-level variable.
 var ErrCollision = errors.New("preview group collision")
 
+// DevOptions represents the configuration or state for this type.
 type DevOptions struct {
 	Detector       EnvironmentDetector
 	resolvedEnvMap map[string]string
 }
 
+// DevOption represents the configuration or state for this type.
 type DevOption func(*DevOptions)
 
+// WithEnvironmentDetector performs its designated operation.
 func WithEnvironmentDetector(d EnvironmentDetector) DevOption {
 	return func(o *DevOptions) { o.Detector = d }
 }

@@ -20,10 +20,13 @@ import (
 )
 
 var (
+	// ErrInvalidEndpoint ...
 	ErrInvalidEndpoint = errors.New("invalid endpoint format: expected host:port")
+	// ErrMissingEndpoint ...
 	ErrMissingEndpoint = errors.New("local mode requires endpoint to be set")
 )
 
+// LocalDeployer represents the configuration or state for this type.
 type LocalDeployer struct {
 	Client client.Client
 }
@@ -36,6 +39,7 @@ func (d *LocalDeployer) targetNamespace(env *v1alpha1.Environment) string {
 	return targetNS
 }
 
+// Deploy performs its designated operation.
 func (d *LocalDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) error {
 	if env.Spec.ServiceConfig == nil || env.Spec.ServiceConfig.Endpoint == "" {
 		return ErrMissingEndpoint
@@ -115,6 +119,7 @@ func (d *LocalDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) e
 	return nil
 }
 
+// Teardown performs its designated operation.
 func (d *LocalDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
 	targetNS := d.targetNamespace(env)
 	svcName := env.Name
@@ -142,6 +147,7 @@ func (d *LocalDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment)
 	return nil
 }
 
+// Status performs its designated operation.
 func (d *LocalDeployer) Status(ctx context.Context, env *v1alpha1.Environment) ([]ServiceStatus, error) {
 	targetNS := d.targetNamespace(env)
 	svcName := env.Name

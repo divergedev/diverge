@@ -8,13 +8,20 @@ import (
 type PreviewGroupPhase string
 
 const (
-	PreviewGroupPhasePending     PreviewGroupPhase = "Pending"
-	PreviewGroupPhaseDeploying   PreviewGroupPhase = "Deploying"
-	PreviewGroupPhaseRunning     PreviewGroupPhase = "Running"
-	PreviewGroupPhaseDegraded    PreviewGroupPhase = "Degraded"
-	PreviewGroupPhaseFailed      PreviewGroupPhase = "Failed"
+	// PreviewGroupPhasePending ...
+	PreviewGroupPhasePending PreviewGroupPhase = "Pending"
+	// PreviewGroupPhaseDeploying ...
+	PreviewGroupPhaseDeploying PreviewGroupPhase = "Deploying"
+	// PreviewGroupPhaseRunning ...
+	PreviewGroupPhaseRunning PreviewGroupPhase = "Running"
+	// PreviewGroupPhaseDegraded ...
+	PreviewGroupPhaseDegraded PreviewGroupPhase = "Degraded"
+	// PreviewGroupPhaseFailed ...
+	PreviewGroupPhaseFailed PreviewGroupPhase = "Failed"
+	// PreviewGroupPhaseTerminating ...
 	PreviewGroupPhaseTerminating PreviewGroupPhase = "Terminating"
-	PreviewGroupPhaseAbandoned   PreviewGroupPhase = "Abandoned"
+	// PreviewGroupPhaseAbandoned ...
+	PreviewGroupPhaseAbandoned PreviewGroupPhase = "Abandoned"
 )
 
 // ServiceMode defines how a service participates in a preview group.

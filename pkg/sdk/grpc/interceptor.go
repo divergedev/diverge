@@ -93,6 +93,7 @@ type wrappedStream struct {
 	ctx context.Context
 }
 
+// Context performs its designated operation.
 func (w *wrappedStream) Context() context.Context {
 	return w.ctx
 }

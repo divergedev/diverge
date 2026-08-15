@@ -13,6 +13,7 @@ import (
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
 
+// KNativeDeployer represents the configuration or state for this type.
 type KNativeDeployer struct {
 	Client client.Client
 }
@@ -25,6 +26,7 @@ func (d *KNativeDeployer) targetNamespace(env *v1alpha1.Environment) string {
 	return targetNS
 }
 
+// Deploy performs its designated operation.
 func (d *KNativeDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) error {
 	targetNS := d.targetNamespace(env)
 
@@ -93,6 +95,7 @@ func (d *KNativeDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment)
 	return nil
 }
 
+// Teardown performs its designated operation.
 func (d *KNativeDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
 	targetNS := d.targetNamespace(env)
 
@@ -109,6 +112,7 @@ func (d *KNativeDeployer) Teardown(ctx context.Context, env *v1alpha1.Environmen
 	return nil
 }
 
+// Status performs its designated operation.
 func (d *KNativeDeployer) Status(ctx context.Context, env *v1alpha1.Environment) ([]ServiceStatus, error) {
 	targetNS := d.targetNamespace(env)
 

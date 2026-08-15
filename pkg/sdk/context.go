@@ -4,6 +4,7 @@ import "context"
 
 type contextKey struct{}
 
+// DefaultHeaderKey ...
 const DefaultHeaderKey = "x-diverge-env"
 
 // WithEnvironment returns a context with the environment name set.

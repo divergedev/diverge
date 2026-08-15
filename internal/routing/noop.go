@@ -11,6 +11,11 @@ type NoopRouter struct{}
 
 var _ Router = (*NoopRouter)(nil)
 
+// Reconcile performs its designated operation.
 func (r *NoopRouter) Reconcile(_ context.Context, _ *v1alpha1.Environment) error { return nil }
-func (r *NoopRouter) Teardown(_ context.Context, _ *v1alpha1.Environment) error  { return nil }
-func (r *NoopRouter) GetExternalURL(_ *v1alpha1.Environment) string              { return "" }
+
+// Teardown performs its designated operation.
+func (r *NoopRouter) Teardown(_ context.Context, _ *v1alpha1.Environment) error { return nil }
+
+// GetExternalURL performs its designated operation.
+func (r *NoopRouter) GetExternalURL(_ *v1alpha1.Environment) string { return "" }

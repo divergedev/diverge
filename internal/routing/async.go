@@ -22,6 +22,7 @@ type AsyncRouter struct {
 	Providers []AsyncProvider
 }
 
+// Reconcile performs its designated operation.
 func (r *AsyncRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment) error {
 	var errs []error
 	for _, p := range r.Providers {
@@ -32,6 +33,7 @@ func (r *AsyncRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment) 
 	return errors.Join(errs...)
 }
 
+// Teardown performs its designated operation.
 func (r *AsyncRouter) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
 	// Reverse order, collect all errors
 	var errs []error
@@ -43,6 +45,7 @@ func (r *AsyncRouter) Teardown(ctx context.Context, env *v1alpha1.Environment) e
 	return errors.Join(errs...)
 }
 
+// GetExternalURL performs its designated operation.
 func (r *AsyncRouter) GetExternalURL(env *v1alpha1.Environment) string {
 	return "" // Async has no URL
 }

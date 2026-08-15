@@ -15,6 +15,7 @@ type InstrumentedDeployer struct {
 	Name  string
 }
 
+// Deploy performs its designated operation.
 func (d *InstrumentedDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) error {
 	timer := prometheus.NewTimer(metrics.DeployDuration.WithLabelValues(d.Name))
 	defer timer.ObserveDuration()
@@ -25,6 +26,7 @@ func (d *InstrumentedDeployer) Deploy(ctx context.Context, env *v1alpha1.Environ
 	return err
 }
 
+// Teardown performs its designated operation.
 func (d *InstrumentedDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
 	err := d.Inner.Teardown(ctx, env)
 	if err != nil {
@@ -33,6 +35,7 @@ func (d *InstrumentedDeployer) Teardown(ctx context.Context, env *v1alpha1.Envir
 	return err
 }
 
+// Status performs its designated operation.
 func (d *InstrumentedDeployer) Status(ctx context.Context, env *v1alpha1.Environment) ([]ServiceStatus, error) {
 	status, err := d.Inner.Status(ctx, env)
 	if err != nil {

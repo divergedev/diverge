@@ -18,6 +18,7 @@ type PartialFailureError struct {
 	Failed    map[string]error
 }
 
+// Error performs its designated operation.
 func (e *PartialFailureError) Error() string {
 	var msgs []string
 	for name, err := range e.Failed {
@@ -31,6 +32,7 @@ type CompositeRouter struct {
 	Routers map[string]Router // named routers: "sync", "async", etc.
 }
 
+// Reconcile performs its designated operation.
 func (r *CompositeRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment) error {
 	var succeeded []string
 	failed := make(map[string]error)
@@ -51,6 +53,7 @@ func (r *CompositeRouter) Reconcile(ctx context.Context, env *v1alpha1.Environme
 	return nil
 }
 
+// Teardown performs its designated operation.
 func (r *CompositeRouter) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
 	var errs []error
 	for _, router := range r.Routers {
@@ -61,6 +64,7 @@ func (r *CompositeRouter) Teardown(ctx context.Context, env *v1alpha1.Environmen
 	return errors.Join(errs...)
 }
 
+// GetExternalURL performs its designated operation.
 func (r *CompositeRouter) GetExternalURL(env *v1alpha1.Environment) string {
 	for _, router := range r.Routers {
 		if url := router.GetExternalURL(env); url != "" {

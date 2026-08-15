@@ -14,8 +14,10 @@ import (
 )
 
 var (
+	// ErrTailscaleNotFound ...
 	ErrTailscaleNotFound = errors.New("tailscale interface not found: make sure tailscale is running or pass --endpoint")
-	ErrNoGitRepo         = errors.New("not in a git repository")
+	// ErrNoGitRepo ...
+	ErrNoGitRepo = errors.New("not in a git repository")
 )
 
 // EnvironmentDetector abstracts OS/network dependencies for testability.
@@ -33,8 +35,10 @@ type EnvironmentDetector interface {
 	DetectUsername(ctx context.Context) (string, error)
 }
 
+// DefaultEnvironmentDetector represents the configuration or state for this type.
 type DefaultEnvironmentDetector struct{}
 
+// DetectLocalIP performs its designated operation.
 func (d *DefaultEnvironmentDetector) DetectLocalIP(ctx context.Context) (string, error) {
 	interfaces, err := net.Interfaces()
 	if err != nil {
@@ -92,6 +96,7 @@ func (d *DefaultEnvironmentDetector) DetectLocalIP(ctx context.Context) (string,
 	return "", ErrTailscaleNotFound
 }
 
+// DetectGitBranch performs its designated operation.
 func (d *DefaultEnvironmentDetector) DetectGitBranch(ctx context.Context) (string, error) {
 	gitCtx, err := git.Detect()
 	if err != nil || gitCtx == nil || gitCtx.Branch == "" {
@@ -100,6 +105,7 @@ func (d *DefaultEnvironmentDetector) DetectGitBranch(ctx context.Context) (strin
 	return gitCtx.Branch, nil
 }
 
+// DetectServiceName performs its designated operation.
 func (d *DefaultEnvironmentDetector) DetectServiceName(ctx context.Context) (string, error) {
 	cfg, err := config.Load(".diverge.yaml")
 	if err == nil && len(cfg.Services) > 0 {
@@ -114,6 +120,7 @@ func (d *DefaultEnvironmentDetector) DetectServiceName(ctx context.Context) (str
 	return filepath.Base(cwd), nil
 }
 
+// DetectUsername performs its designated operation.
 func (d *DefaultEnvironmentDetector) DetectUsername(ctx context.Context) (string, error) {
 	u, err := user.Current()
 	if err == nil && u != nil && u.Username != "" {

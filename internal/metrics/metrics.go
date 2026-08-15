@@ -9,6 +9,7 @@ import (
 )
 
 var (
+	// EnvironmentsActive ...
 	EnvironmentsActive = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "diverge",
@@ -17,6 +18,7 @@ var (
 		},
 	)
 
+	// PreviewGroupsActive ...
 	PreviewGroupsActive = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "diverge",
@@ -25,6 +27,7 @@ var (
 		},
 	)
 
+	// ReconcileTotal ...
 	ReconcileTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "diverge",
@@ -34,6 +37,7 @@ var (
 		[]string{"controller", "result"},
 	)
 
+	// ReconcileDuration ...
 	ReconcileDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "diverge",
@@ -44,6 +48,7 @@ var (
 		[]string{"controller"},
 	)
 
+	// DeploymentDuration ...
 	DeploymentDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "diverge",
@@ -54,6 +59,7 @@ var (
 		[]string{"deployer"},
 	)
 
+	// RoutesConfigured ...
 	RoutesConfigured = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "diverge",
@@ -63,6 +69,7 @@ var (
 		[]string{"type"},
 	)
 
+	// EnvironmentTTLRemaining ...
 	EnvironmentTTLRemaining = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "diverge_environment_ttl_remaining_seconds",
@@ -71,6 +78,7 @@ var (
 		[]string{"environment", "namespace"},
 	)
 
+	// ReconcileOutcomes ...
 	ReconcileOutcomes = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "diverge_reconcile_outcomes_total",
@@ -79,6 +87,7 @@ var (
 		[]string{"result"},
 	)
 
+	// EnvironmentTransitions ...
 	EnvironmentTransitions = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "diverge_environment_transitions_total",
@@ -87,6 +96,7 @@ var (
 		[]string{"from_phase", "to_phase", "provider"},
 	)
 
+	// SubsystemErrors ...
 	SubsystemErrors = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "diverge_subsystem_errors_total",
@@ -95,6 +105,7 @@ var (
 		[]string{"subsystem", "operation"},
 	)
 
+	// DatabaseProvisionDuration ...
 	DatabaseProvisionDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "diverge_database_provision_duration_seconds",
@@ -104,6 +115,7 @@ var (
 		[]string{"mode"},
 	)
 
+	// DeployDuration ...
 	DeployDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "diverge_deploy_duration_seconds",
@@ -113,6 +125,7 @@ var (
 		[]string{"deployer"},
 	)
 
+	// RoutingReconcileDuration ...
 	RoutingReconcileDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "diverge_routing_reconcile_duration_seconds",
@@ -122,6 +135,7 @@ var (
 		[]string{"mode"},
 	)
 
+	// WebhookProcessDuration ...
 	WebhookProcessDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "diverge_webhook_process_duration_seconds",

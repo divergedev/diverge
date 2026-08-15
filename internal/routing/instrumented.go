@@ -15,6 +15,7 @@ type InstrumentedRouter struct {
 	Mode  string
 }
 
+// Reconcile performs its designated operation.
 func (r *InstrumentedRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment) error {
 	timer := prometheus.NewTimer(metrics.RoutingReconcileDuration.WithLabelValues(r.Mode))
 	defer timer.ObserveDuration()
@@ -25,6 +26,7 @@ func (r *InstrumentedRouter) Reconcile(ctx context.Context, env *v1alpha1.Enviro
 	return err
 }
 
+// Teardown performs its designated operation.
 func (r *InstrumentedRouter) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
 	err := r.Inner.Teardown(ctx, env)
 	if err != nil {
@@ -33,6 +35,7 @@ func (r *InstrumentedRouter) Teardown(ctx context.Context, env *v1alpha1.Environ
 	return err
 }
 
+// GetExternalURL performs its designated operation.
 func (r *InstrumentedRouter) GetExternalURL(env *v1alpha1.Environment) string {
 	return r.Inner.GetExternalURL(env)
 }
