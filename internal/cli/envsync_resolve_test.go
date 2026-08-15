@@ -2,13 +2,18 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 func TestResolveSecretKeyRef(t *testing.T) {
@@ -168,6 +173,9 @@ func TestResolveMixed(t *testing.T) {
 
 func TestResolveRBACError(t *testing.T) {
 	clientset := fake.NewSimpleClientset() // Secret does not exist
+	clientset.PrependReactor("get", "secrets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "db-credentials", fmt.Errorf("RBAC denied"))
+	})
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-pod", Namespace: "preview-test"},
@@ -192,6 +200,40 @@ func TestResolveRBACError(t *testing.T) {
 
 	_, err := resolveBaselineEnv(context.Background(), clientset, pod)
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), "forbidden")
+}
+
+func TestResolveEnvOverridesEnvFrom(t *testing.T) {
+	clientset := fake.NewSimpleClientset(&corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-cm", Namespace: "preview-test"},
+		Data:       map[string]string{"DB_HOST": "from-envfrom"},
+	})
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-pod", Namespace: "preview-test"},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{
+					EnvFrom: []corev1.EnvFromSource{
+						{
+							ConfigMapRef: &corev1.ConfigMapEnvSource{
+								LocalObjectReference: corev1.LocalObjectReference{Name: "my-cm"},
+							},
+						},
+					},
+					Env: []corev1.EnvVar{
+						{
+							Name: "DB_HOST", Value: "from-env",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	envMap, err := resolveBaselineEnv(context.Background(), clientset, pod)
+	require.NoError(t, err)
+	assert.Equal(t, "from-env", envMap["DB_HOST"])
 }
 
 func TestResolveFiltersInfraVars(t *testing.T) {

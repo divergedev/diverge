@@ -38,7 +38,9 @@ func installCRDs(t *testing.T, contextName string) {
 	t.Helper()
 	// Note: Path assumes test runs from diverge root or we need relative paths.
 	// We will use "../../config/crd/bases/" since test runs in test/e2e/
-	cmd := exec.Command("kubectl", "apply", "--context="+contextName, "-f", "../../config/crd/bases/")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "kubectl", "apply", "--context="+contextName, "-f", "../../config/crd/bases/")
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "failed to install CRDs: %s", string(out))
 }
@@ -65,6 +67,9 @@ spec:
       containers:
       - name: echo-server
         image: ealen/echo-server:0.9.2
+        env:
+        - name: ECHO_MSG
+          value: "baseline"
         ports:
         - containerPort: 80
 ---
@@ -98,7 +103,9 @@ spec:
 
 func applyManifest(t *testing.T, contextName, yamlContent string) {
 	t.Helper()
-	cmd := exec.Command("kubectl", "apply", "--context="+contextName, "-f", "-")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "kubectl", "apply", "--context="+contextName, "-f", "-")
 	cmd.Stdin = strings.NewReader(yamlContent)
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "failed to apply manifest: %s", string(out))
@@ -106,7 +113,9 @@ func applyManifest(t *testing.T, contextName, yamlContent string) {
 
 func deleteManifest(t *testing.T, contextName, yamlContent string) {
 	t.Helper()
-	cmd := exec.Command("kubectl", "delete", "--context="+contextName, "-f", "-")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "kubectl", "delete", "--context="+contextName, "-f", "-")
 	cmd.Stdin = strings.NewReader(yamlContent)
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "failed to delete manifest: %s", string(out))
@@ -124,10 +133,10 @@ func getGatewayIP(t *testing.T, contextName, gatewayName, namespace string) stri
 	require.NoError(t, err)
 
 	var ip string
-	WaitForCondition(t, 2*time.Minute, 2*time.Second, func() (bool, error) {
+	WaitForCondition(t, 2*time.Minute, 2*time.Second, func(ctx context.Context) (bool, error) {
 		// Get gateway via kubectl since Gateway API is dynamically typed in go if we don't have generated clients,
 		// or we can use dynamic client. But simpler with kubectl.
-		cmd := exec.Command("kubectl", "get", "gateway", gatewayName, "-n", namespace, "--context="+contextName, "-o", "jsonpath={.status.addresses[0].value}")
+		cmd := exec.CommandContext(ctx, "kubectl", "get", "gateway", gatewayName, "-n", namespace, "--context="+contextName, "-o", "jsonpath={.status.addresses[0].value}")
 		out, err := cmd.Output()
 		if err == nil && len(out) > 0 {
 			ip = string(out)

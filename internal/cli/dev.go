@@ -257,10 +257,15 @@ func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, e
 
 	if len(args) > 0 {
 		fmt.Printf("🚀 Starting child process: %v\n", args)
-		childCmd := runChildProcess(ctx, args, devOpts.resolvedEnvMap)
+		childCmd, err := runChildProcess(ctx, args, devOpts.resolvedEnvMap)
+		if err != nil {
+			return fmt.Errorf("failed to start child process: %w", err)
+		}
 		if childCmd != nil {
 			// Wait for the child command to finish or context to be canceled
-			_ = childCmd.Wait()
+			if err := childCmd.Wait(); err != nil {
+				return fmt.Errorf("child process failed: %w", err)
+			}
 		}
 	} else {
 		fmt.Println("Press Ctrl+C to stop dev session...")
@@ -375,7 +380,7 @@ func runPreviewRelease(app *App, service, groupName string, ctx context.Context)
 	return nil
 }
 
-func runChildProcess(ctx context.Context, args []string, envMap map[string]string) *exec.Cmd {
+func runChildProcess(ctx context.Context, args []string, envMap map[string]string) (*exec.Cmd, error) {
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdin = os.Stdin
@@ -390,7 +395,7 @@ func runChildProcess(ctx context.Context, args []string, envMap map[string]strin
 
 	if err := cmd.Start(); err != nil {
 		fmt.Printf("⚠️  Failed to start child process: %v\n", err)
-		return nil
+		return nil, err
 	}
 
 	sigCh := make(chan os.Signal, 1)
@@ -415,5 +420,5 @@ func runChildProcess(ctx context.Context, args []string, envMap map[string]strin
 		}
 	}()
 
-	return cmd
+	return cmd, nil
 }

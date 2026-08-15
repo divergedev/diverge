@@ -10,20 +10,14 @@ on:
       - 'test/e2e/**'
       - 'charts/**'
   pull_request:
-    paths:
-      - 'internal/controller/**'
-      - 'internal/deployer/**'
-      - 'test/e2e/**'
-      - 'charts/**'
-  pull_request_target:
-    types: [labeled]
+    types: [labeled, synchronize, opened]
 
 jobs:
   e2e:
     if: >
       github.event_name == 'push' ||
-      (github.event_name == 'pull_request') ||
-      (github.event_name == 'pull_request_target' && contains(github.event.pull_request.labels.*.name, 'run-e2e'))
+      contains(github.event.pull_request.labels.*.name, 'run-e2e') ||
+      github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -36,7 +30,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Install k3d
-        run: curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+        run: curl -s https://raw.githubusercontent.com/k3d-io/k3d/v5.7.5/install.sh | bash
 
       - name: Install Helm
         uses: azure/setup-helm@v4

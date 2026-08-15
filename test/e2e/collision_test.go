@@ -41,6 +41,9 @@ func TestE2E_CollisionDetection(t *testing.T) {
 					Namespace: "default",
 					Image:     "ealen/echo-server:0.9.2",
 					Mode:      divergev1.ServiceModeImage,
+					Env: []divergev1.EnvVar{
+						{Name: "ECHO_MSG", Value: "dev-a"},
+					},
 				},
 			},
 		},
@@ -64,6 +67,9 @@ func TestE2E_CollisionDetection(t *testing.T) {
 					Namespace: "default",
 					Image:     "ealen/echo-server:0.9.2",
 					Mode:      divergev1.ServiceModeImage,
+					Env: []divergev1.EnvVar{
+						{Name: "ECHO_MSG", Value: "dev-b"},
+					},
 				},
 			},
 		},
@@ -95,26 +101,28 @@ func TestE2E_CollisionDetection(t *testing.T) {
 	// 7. Dev A tears down → Dev B still works
 	// 8. Dev B tears down → baseline still works
 
-	gatewayIP := "127.0.0.1" // fallback for single cluster
+	gatewayIP := getGatewayIP(t, "k3d-diverge-e2e-mgmt", "diverge-gateway", "default")
+	if gatewayIP == "" {
+		t.Skip("Gateway not reachable")
+	}
 	url := fmt.Sprintf("http://%s:80", gatewayIP)
 
 	// 4. Send request with x-diverge-env: dev-a
-	codeA, _ := SendHTTPRequest(t, url, map[string]string{"x-diverge-env": "dev-a"})
-	// Assuming 200 or at least no error for the purpose of the test structure
+	codeA, bodyA := SendHTTPRequest(t, url, map[string]string{"x-diverge-env": "dev-a"})
 	if codeA == 200 {
-		assert.Equal(t, 200, codeA)
+		assert.Contains(t, bodyA, "\"ECHO_MSG\":\"dev-a\"")
 	}
 
 	// 5. Send request with x-diverge-env: dev-b
-	codeB, _ := SendHTTPRequest(t, url, map[string]string{"x-diverge-env": "dev-b"})
+	codeB, bodyB := SendHTTPRequest(t, url, map[string]string{"x-diverge-env": "dev-b"})
 	if codeB == 200 {
-		assert.Equal(t, 200, codeB)
+		assert.Contains(t, bodyB, "\"ECHO_MSG\":\"dev-b\"")
 	}
 
 	// 6. Send request with no header
-	codeBase, _ := SendHTTPRequest(t, url, nil)
+	codeBase, bodyBase := SendHTTPRequest(t, url, nil)
 	if codeBase == 200 {
-		assert.Equal(t, 200, codeBase)
+		assert.Contains(t, bodyBase, "baseline")
 	}
 
 	// 7. Dev A tears down -> Dev B still works

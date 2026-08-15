@@ -49,7 +49,6 @@ func TestResolveBaselineEnvProperties(t *testing.T) {
 		return true
 	}
 
-	if err := quick.Check(f, nil); err != nil {
-		t.Error(err)
-	}
+	err := quick.Check(f, nil)
+	require.NoError(t, err)
 }

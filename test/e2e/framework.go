@@ -90,10 +90,10 @@ func NewFramework(mgmtContext, prodContext string) (*Framework, error) {
 }
 
 // WaitForCondition polls until the condition function returns true, an error, or the timeout is reached.
-func WaitForCondition(t *testing.T, timeout, interval time.Duration, conditionFn wait.ConditionFunc) {
+func WaitForCondition(t *testing.T, timeout, interval time.Duration, conditionFn wait.ConditionWithContextFunc) {
 	t.Helper()
 	err := wait.PollUntilContextTimeout(context.Background(), interval, timeout, true, func(ctx context.Context) (bool, error) {
-		return conditionFn()
+		return conditionFn(ctx)
 	})
 	require.NoError(t, err, "condition not met within timeout")
 }
@@ -101,8 +101,8 @@ func WaitForCondition(t *testing.T, timeout, interval time.Duration, conditionFn
 // WaitForPodReady waits for a pod matching the label selector to become ready in the given namespace.
 func WaitForPodReady(t *testing.T, clientset *kubernetes.Clientset, namespace, labelSelector string, timeout time.Duration) {
 	t.Helper()
-	WaitForCondition(t, timeout, 2*time.Second, func() (bool, error) {
-		pods, err := clientset.CoreV1().Pods(namespace).List(context.TODO(), metav1.ListOptions{LabelSelector: labelSelector})
+	WaitForCondition(t, timeout, 2*time.Second, func(ctx context.Context) (bool, error) {
+		pods, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
 		if err != nil {
 			return false, err
 		}
@@ -120,8 +120,8 @@ func WaitForPodReady(t *testing.T, clientset *kubernetes.Clientset, namespace, l
 // WaitForResource waits for a resource to be created and readable via the controller-runtime client.
 func WaitForResource(t *testing.T, c client.Client, key client.ObjectKey, obj client.Object, timeout time.Duration) {
 	t.Helper()
-	WaitForCondition(t, timeout, 2*time.Second, func() (bool, error) {
-		err := c.Get(context.TODO(), key, obj)
+	WaitForCondition(t, timeout, 2*time.Second, func(ctx context.Context) (bool, error) {
+		err := c.Get(ctx, key, obj)
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				return false, nil
@@ -135,8 +135,8 @@ func WaitForResource(t *testing.T, c client.Client, key client.ObjectKey, obj cl
 // WaitForResourceGone waits for a resource to be deleted.
 func WaitForResourceGone(t *testing.T, c client.Client, key client.ObjectKey, obj client.Object, timeout time.Duration) {
 	t.Helper()
-	WaitForCondition(t, timeout, 2*time.Second, func() (bool, error) {
-		err := c.Get(context.TODO(), key, obj)
+	WaitForCondition(t, timeout, 2*time.Second, func(ctx context.Context) (bool, error) {
+		err := c.Get(ctx, key, obj)
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				return true, nil

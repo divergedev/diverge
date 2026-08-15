@@ -52,6 +52,9 @@ func TestE2E_DualCluster_PreviewRouting(t *testing.T) {
 					Namespace: "default",
 					Image:     "ealen/echo-server:0.9.2",
 					Mode:      divergev1.ServiceModeImage,
+					Env: []divergev1.EnvVar{
+						{Name: "ECHO_MSG", Value: "preview"},
+					},
 				},
 			},
 		},
@@ -71,21 +74,20 @@ func TestE2E_DualCluster_PreviewRouting(t *testing.T) {
 	// wait for gateway ip
 	gatewayIP := getGatewayIP(t, "k3d-diverge-e2e-prod", "diverge-gateway", "default")
 	if gatewayIP == "" {
-		// Try fallback to localhost if port forward or NodePort
-		gatewayIP = "127.0.0.1"
+		t.Skip("Gateway not reachable")
 	}
 	url := fmt.Sprintf("http://%s:80", gatewayIP) // Or gateway port
 
 	// 6. Send baseline request
-	_, _ = SendHTTPRequest(t, url, nil)
-	// it should hit baseline, but in this setup the baseline gateway route might not be deployed by deployEchoServer.
-	// Actually, wait, does `echo-server` have a baseline route?
-	// If it doesn't, we can just assert it doesn't fail catastrophically.
-	// But let's assume baseline exists if we are testing preview routing.
+	codeBase, bodyBase := SendHTTPRequest(t, url, nil)
+	assert.Equal(t, 200, codeBase)
+	assert.Contains(t, bodyBase, "baseline")
+	assert.NotContains(t, bodyBase, "\"ECHO_MSG\":\"preview\"")
 
 	// 7. Send preview request
-	codePreview, _ := SendHTTPRequest(t, url, map[string]string{"x-diverge-env": "preview"})
+	codePreview, bodyPreview := SendHTTPRequest(t, url, map[string]string{"x-diverge-env": "preview"})
 	assert.Equal(t, 200, codePreview)
+	assert.Contains(t, bodyPreview, "\"ECHO_MSG\":\"preview\"")
 
 	// 8. Delete Environment -> verify cleanup
 	err = fw.MgmtClient.Delete(context.Background(), pg)

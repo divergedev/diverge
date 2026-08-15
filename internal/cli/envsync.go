@@ -195,6 +195,10 @@ func describeValueSource(vs *corev1.EnvVarSource) string {
 }
 
 func findBaselinePod(ctx context.Context, clientset kubernetes.Interface, namespace, serviceName string) (*corev1.Pod, error) {
+	if errs := validation.IsValidLabelValue(serviceName); len(errs) > 0 {
+		return nil, fmt.Errorf("invalid service name %q: %s", serviceName, strings.Join(errs, "; "))
+	}
+
 	labelSelectors := []string{
 		fmt.Sprintf("app=%s,diverge.io/role=baseline", serviceName),
 		fmt.Sprintf("app=%s", serviceName),
@@ -275,7 +279,9 @@ func resolveBaselineEnv(ctx context.Context, clientset kubernetes.Interface, pod
 	}
 
 	getSecret := func(name string) (*corev1.Secret, error) {
-		secret, err := clientset.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
+		getCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		secret, err := clientset.CoreV1().Secrets(ns).Get(getCtx, name, metav1.GetOptions{})
 		if err != nil {
 			return nil, fmt.Errorf("failed to get secret %q in namespace %q: %w", name, ns, err)
 		}
@@ -283,39 +289,13 @@ func resolveBaselineEnv(ctx context.Context, clientset kubernetes.Interface, pod
 	}
 
 	getConfigMap := func(name string) (*corev1.ConfigMap, error) {
-		cm, err := clientset.CoreV1().ConfigMaps(ns).Get(ctx, name, metav1.GetOptions{})
+		getCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		cm, err := clientset.CoreV1().ConfigMaps(ns).Get(getCtx, name, metav1.GetOptions{})
 		if err != nil {
 			return nil, fmt.Errorf("failed to get configmap %q in namespace %q: %w", name, ns, err)
 		}
 		return cm, nil
-	}
-
-	for _, env := range container.Env {
-		if isKubeInjected(env.Name) {
-			continue
-		}
-
-		if env.ValueFrom != nil {
-			if env.ValueFrom.SecretKeyRef != nil {
-				secret, err := getSecret(env.ValueFrom.SecretKeyRef.Name)
-				if err != nil {
-					return nil, err // Fail fast
-				}
-				if val, ok := secret.Data[env.ValueFrom.SecretKeyRef.Key]; ok {
-					envMap[env.Name] = string(val)
-				}
-			} else if env.ValueFrom.ConfigMapKeyRef != nil {
-				cm, err := getConfigMap(env.ValueFrom.ConfigMapKeyRef.Name)
-				if err != nil {
-					return nil, err
-				}
-				if val, ok := cm.Data[env.ValueFrom.ConfigMapKeyRef.Key]; ok {
-					envMap[env.Name] = string(val)
-				}
-			}
-		} else {
-			envMap[env.Name] = env.Value
-		}
 	}
 
 	for _, envFrom := range container.EnvFrom {
@@ -343,6 +323,34 @@ func resolveBaselineEnv(ctx context.Context, clientset kubernetes.Interface, pod
 				}
 				envMap[key] = string(v)
 			}
+		}
+	}
+
+	for _, env := range container.Env {
+		if isKubeInjected(env.Name) {
+			continue
+		}
+
+		if env.ValueFrom != nil {
+			if env.ValueFrom.SecretKeyRef != nil {
+				secret, err := getSecret(env.ValueFrom.SecretKeyRef.Name)
+				if err != nil {
+					return nil, err // Fail fast
+				}
+				if val, ok := secret.Data[env.ValueFrom.SecretKeyRef.Key]; ok {
+					envMap[env.Name] = string(val)
+				}
+			} else if env.ValueFrom.ConfigMapKeyRef != nil {
+				cm, err := getConfigMap(env.ValueFrom.ConfigMapKeyRef.Name)
+				if err != nil {
+					return nil, err
+				}
+				if val, ok := cm.Data[env.ValueFrom.ConfigMapKeyRef.Key]; ok {
+					envMap[env.Name] = string(val)
+				}
+			}
+		} else {
+			envMap[env.Name] = env.Value
 		}
 	}
 

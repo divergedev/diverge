@@ -100,6 +100,22 @@ func main() {
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
+	if kedaMinReplicas < 0 {
+		setupLog.Error(fmt.Errorf("--keda-min-replicas must be >= 0, got %d", kedaMinReplicas), "invalid flag")
+		os.Exit(1)
+	}
+	if kedaMaxReplicas == 0 {
+		kedaMaxReplicas = 3 // default
+	}
+	if kedaMaxReplicas < kedaMinReplicas {
+		setupLog.Error(fmt.Errorf("--keda-max-replicas (%d) must be >= --keda-min-replicas (%d)", kedaMaxReplicas, kedaMinReplicas), "invalid flag")
+		os.Exit(1)
+	}
+	if kedaCooldown < 0 {
+		setupLog.Error(fmt.Errorf("--keda-cooldown must be >= 0, got %d", kedaCooldown), "invalid flag")
+		os.Exit(1)
+	}
+
 	// C2: Read secrets from environment variables (take precedence over flags)
 	notifierToken := os.Getenv("DIVERGE_NOTIFIER_TOKEN")
 	if gitlabToken == "" {

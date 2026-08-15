@@ -21,8 +21,8 @@ Documentation: [https://divergedev.com](https://divergedev.com)
 
 ## Key Features
 *   **PreviewGroup Orchestration**: Manage multiple child environments and services under a single CR tied directly to an MR/PR. Automatic orphan cleanup and label-based ownership.
-*   **Scale-to-Zero**: Idle preview environments automatically scale to zero via Knative Serving. An Activator proxy wakes up pods on the first request, resulting in 90%+ resource savings for idle MRs.
-*   **Activator Proxy**: Smart routing that directs traffic to the pod when ready, falling back to the Knative activator. Includes `X-Preview-Env` header injection and a shared informer for efficient pod state tracking.
+*   **Scale-to-Zero**: Idle preview environments automatically scale to zero via KEDA HTTP Add-on (`HTTPScaledObject`). The interceptor wakes up pods on the first request, resulting in 90%+ resource savings for idle MRs.
+*   **Activator Proxy**: Smart routing that directs traffic to the pod when ready. Includes `X-Preview-Env` header injection and a shared informer for efficient pod state tracking.
 *   **Delta Deployment**: Only deploy what changed, falling back to a baseline for unmodified services.
 *   **Header-Based Routing & Gateway API**: Leverages Gateway API, Istio, and the Diverge Proxy to route traffic seamlessly using HTTP headers.
 *   **Configurable DB Modes**: Options for shared, schema, snapshot, or fresh databases for your environments.
@@ -48,7 +48,7 @@ Diverge consists of 4 main components compiled into a single consolidated Docker
 
 1.  **Controller (`diverge-controller`)**: The Kubernetes operator that watches for `PreviewGroup` and `Environment` Custom Resources (CRs), reconciles them, and provisions the necessary resources (like Argo CD `Application` CRs, databases, etc.).
 2.  **Proxy (`diverge-proxy`)**: A reverse proxy that helps facilitate header-based routing to preview environments.
-3.  **Activator (`diverge-activator`)**: A proxy for scale-to-zero workloads. Wakes up sleeping Knative pods on the first request and seamlessly routes traffic once they are ready.
+3.  **Activator (`diverge-activator`)**: A proxy for scale-to-zero workloads. Wakes up sleeping pods on the first request and seamlessly routes traffic once they are ready.
 4.  **CLI (`diverge`)**: A powerful CLI to interact with Diverge environments directly from your terminal.
 
 ## PreviewGroup Example

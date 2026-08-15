@@ -80,8 +80,15 @@ func TestInitCmd_MissingPrerequisites(t *testing.T) {
 func TestInitCmd_Flags(t *testing.T) {
 	// Test without gateway and sample app
 	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
+	origLookPath := lookPath
+	defer func() {
+		execCommand = origExecCommand
+		lookPath = origLookPath
+	}()
 
+	lookPath = func(file string) (string, error) {
+		return "/usr/local/bin/" + file, nil
+	}
 	execCommand = func(command string, args ...string) *exec.Cmd {
 		return exec.Command("true")
 	}

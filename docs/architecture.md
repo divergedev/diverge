@@ -24,12 +24,12 @@ flowchart TD
         G --> S[Status Reporter]
     end
 
-    F -->|Analyzes .diverge.yaml| I[Argo CD Application CRs / Deployments]
-    G -->|Provisions DB| J[Database Instances]
+    F -->|Analyzes .diverge.yaml| ARGO[Argo CD Application CRs / Deployments]
+    G -->|Provisions DB| DB_INST[Database Instances]
     H -->|Creates VirtualService| K[Istio Ingress & Diverge Proxy]
     N -->|Status Feedback| B
 
-    I --> L[Changed Services]
+    ARGO --> L[Changed Services]
     K -->|Header Routing| L
     K -->|Fallback| M[Baseline Services]
 ```
@@ -96,7 +96,7 @@ Diverge supports multiple routing strategies depending on cluster configuration:
 
 ## Scale-to-Zero
 
-To minimize cost, Diverge integrates with Knative Serving for **Scale-to-Zero** capability. Idle preview environments scale down to 0 replicas. When a request hits the cluster with the correct preview header, the **Activator Proxy** holds the request, wakes up the corresponding preview pod, and proxies the traffic once the pod is ready. This can yield upwards of 90% resource savings for rarely-accessed preview environments.
+To minimize cost, Diverge integrates with KEDA HTTP Add-on (`HTTPScaledObject`) for **Scale-to-Zero** capability. Idle preview environments scale down to 0 replicas. When a request hits the cluster with the correct preview header, the **Activator Proxy** holds the request, wakes up the corresponding preview pod, and proxies the traffic once the pod is ready. This can yield upwards of 90% resource savings for rarely-accessed preview environments.
 
 ## Database Modes
 

@@ -182,7 +182,7 @@ Set `--database-provider=schema` in your deployment or `database` spec in the YA
 
 ## 11. Scale-to-Zero Integration
 
-PreviewGroup natively integrates with Knative Serving to automatically scale idle preview services down to zero replicas.
+PreviewGroup natively integrates with KEDA HTTP Add-on (`HTTPScaledObject`) to automatically scale idle preview services down to zero replicas.
 When configured, environments that receive no traffic for a period will sleep, saving cluster resources. The Diverge **Activator Proxy** intercepts the first request to a sleeping environment, wakes it up, and seamlessly routes the traffic without dropping the request.
 
 ## 12. Troubleshooting
