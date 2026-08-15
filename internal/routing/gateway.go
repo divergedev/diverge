@@ -2,6 +2,7 @@ package routing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -24,6 +25,10 @@ type GatewayRouter struct {
 }
 
 var _ Router = (*GatewayRouter)(nil)
+
+// ErrHostnameTooLong is returned when a derived subdomain hostname exceeds the
+// DNS maximum of 253 characters.
+var ErrHostnameTooLong = errors.New("derived hostname exceeds 253 characters")
 
 // Reconcile creates or updates routing resources for each changed service
 // in the environment, configuring header-based routing rules.
@@ -112,22 +117,47 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 		"diverge.io/managed-by":  "diverge",
 	})
 
-	matchRule := map[string]interface{}{
-		"headers": []interface{}{
-			map[string]interface{}{
-				"type":  "Exact",
-				"name":  headerKey,
-				"value": headerValue,
-			},
-		},
-	}
-	if kind == "HTTPRoute" {
-		if cfg := env.Spec.ServiceConfig; cfg != nil && cfg.PathPrefix != "" {
-			matchRule["path"] = map[string]interface{}{
-				"type":  "PathPrefix",
-				"value": cfg.PathPrefix,
+	var hostnames []interface{}
+	var matches []interface{}
+
+	if env.Spec.Routing.Mode == "subdomain" && env.Spec.Routing.BaseDomain != "" {
+		// Subdomain mode: route by hostname, no header match needed
+		hostname := fmt.Sprintf("%s.%s", env.Name, env.Spec.Routing.BaseDomain)
+		if len(hostname) > 253 {
+			return fmt.Errorf("%w: %q (%d chars)", ErrHostnameTooLong, hostname, len(hostname))
+		}
+		hostnames = append(hostnames, hostname)
+		// No header matches - all traffic to this hostname goes to preview
+		matchRule := map[string]interface{}{}
+		if kind == "HTTPRoute" {
+			if cfg := env.Spec.ServiceConfig; cfg != nil && cfg.PathPrefix != "" {
+				matchRule["path"] = map[string]interface{}{
+					"type":  "PathPrefix",
+					"value": cfg.PathPrefix,
+				}
 			}
 		}
+		matches = []interface{}{matchRule}
+	} else {
+		// Header mode (default): match on header
+		matchRule := map[string]interface{}{
+			"headers": []interface{}{
+				map[string]interface{}{
+					"type":  "Exact",
+					"name":  headerKey,
+					"value": headerValue,
+				},
+			},
+		}
+		if kind == "HTTPRoute" {
+			if cfg := env.Spec.ServiceConfig; cfg != nil && cfg.PathPrefix != "" {
+				matchRule["path"] = map[string]interface{}{
+					"type":  "PathPrefix",
+					"value": cfg.PathPrefix,
+				}
+			}
+		}
+		matches = []interface{}{matchRule}
 	}
 
 	parentRef := map[string]interface{}{
@@ -139,7 +169,7 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 	}
 
 	rule := map[string]interface{}{
-		"matches": []interface{}{matchRule},
+		"matches": matches,
 		"backendRefs": []interface{}{
 			map[string]interface{}{
 				"name": fmt.Sprintf("%s-%s", env.Name, svc),
@@ -148,7 +178,7 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 		},
 	}
 
-	if !isServiceName(parentRefName) {
+	if !isServiceName(parentRefName) && env.Spec.Routing.Mode != "subdomain" {
 		rule["filters"] = []interface{}{
 			map[string]interface{}{
 				"type": "RequestHeaderModifier",
@@ -162,6 +192,9 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 	spec := map[string]interface{}{
 		"parentRefs": []interface{}{parentRef},
 		"rules":      []interface{}{rule},
+	}
+	if len(hostnames) > 0 {
+		spec["hostnames"] = hostnames
 	}
 
 	existing := &unstructured.Unstructured{}
@@ -292,6 +325,9 @@ func (r *GatewayRouter) Teardown(ctx context.Context, env *v1alpha1.Environment)
 func (r *GatewayRouter) GetExternalURL(env *v1alpha1.Environment) string {
 	if env.Spec.Routing.ExternalURL != "" {
 		return strings.ReplaceAll(env.Spec.Routing.ExternalURL, "{env}", env.Name)
+	}
+	if env.Spec.Routing.Mode == "subdomain" && env.Spec.Routing.BaseDomain != "" {
+		return fmt.Sprintf("https://%s.%s", env.Name, env.Spec.Routing.BaseDomain)
 	}
 	return ""
 }

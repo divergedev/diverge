@@ -20,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/async"
 	"github.com/divergedev/diverge/internal/changeset"
 	"github.com/divergedev/diverge/internal/database"
 	"github.com/divergedev/diverge/internal/deployer"
@@ -44,6 +45,7 @@ type EnvironmentReconciler struct {
 	StatusReporter   notifier.StatusReporter
 	Deployer         deployer.Deployer
 	TestRunner       divtesting.TestRunner
+	AsyncProvisioner async.Provisioner
 }
 
 // +kubebuilder:rbac:groups=diverge.io,resources=environments,verbs=get;list;watch;create;update;patch;delete
@@ -225,6 +227,40 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		Message: "Routing is ready",
 	})
 	env.Status.URL = r.Router.GetExternalURL(&env)
+
+	// 7.5. Ensure async routing
+	if len(env.Spec.Routing.AsyncRoutes) > 0 && r.AsyncProvisioner != nil {
+		var asyncEnvVars []divergeiov1alpha1.EnvVar
+		for _, route := range env.Spec.Routing.AsyncRoutes {
+			tCtxA, cancelA := context.WithTimeout(ctx, 30*time.Second)
+			result, err := r.AsyncProvisioner.Provision(tCtxA, &env, route)
+			cancelA()
+			if err != nil {
+				meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+					Type:    "AsyncRoutingReady",
+					Status:  metav1.ConditionFalse,
+					Reason:  "AsyncProvisionFailed",
+					Message: fmt.Sprintf("async provision failed for %s/%s: %s", route.Protocol, route.Target, err.Error()),
+				})
+				r.Recorder.Event(&env, "Warning", "AsyncProvisionFailed", fmt.Sprintf("async provision failed for %s/%s: %s", route.Protocol, route.Target, err.Error()))
+				return r.updateStatusWithRequeue(ctx, &env, statusBase, err, 0)
+			}
+			for k, v := range result.EnvVars {
+				asyncEnvVars = append(asyncEnvVars, divergeiov1alpha1.EnvVar{Name: k, Value: v})
+			}
+		}
+		// Inject async env vars into service config
+		if env.Spec.ServiceConfig == nil {
+			env.Spec.ServiceConfig = &divergeiov1alpha1.ServicePreviewConfig{}
+		}
+		env.Spec.ServiceConfig.Env = append(env.Spec.ServiceConfig.Env, asyncEnvVars...)
+		meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+			Type:    "AsyncRoutingReady",
+			Status:  metav1.ConditionTrue,
+			Reason:  "AsyncProvisioned",
+			Message: fmt.Sprintf("%d async routes provisioned", len(env.Spec.Routing.AsyncRoutes)),
+		})
+	}
 
 	// 8. Deploy services
 	if r.Deployer != nil {
@@ -463,6 +499,18 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 			defer cancel()
 			if err := r.Deployer.Teardown(tCtx, env); err != nil {
 				return ctrl.Result{}, fmt.Errorf("failed to teardown deployments: %w", err)
+			}
+		}
+
+		// Teardown async routes
+		if len(env.Spec.Routing.AsyncRoutes) > 0 && r.AsyncProvisioner != nil {
+			for _, route := range env.Spec.Routing.AsyncRoutes {
+				tCtxA, cancelA := context.WithTimeout(ctx, 15*time.Second)
+				if err := r.AsyncProvisioner.Teardown(tCtxA, env, route); err != nil {
+					cancelA()
+					return ctrl.Result{}, fmt.Errorf("failed to teardown async route %s/%s: %w", route.Protocol, route.Target, err)
+				}
+				cancelA()
 			}
 		}
 

@@ -16,7 +16,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"errors"
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/async"
 	"github.com/divergedev/diverge/internal/database"
 	"github.com/divergedev/diverge/internal/deployer"
 	"github.com/divergedev/diverge/internal/events"
@@ -28,10 +30,12 @@ type mockDeployer struct {
 	status         []deployer.ServiceStatus
 	deployCalled   bool
 	teardownCalled bool
+	lastEnv        *divergeiov1alpha1.Environment
 }
 
 func (m *mockDeployer) Deploy(ctx context.Context, env *divergeiov1alpha1.Environment) error {
 	m.deployCalled = true
+	m.lastEnv = env.DeepCopy()
 	return m.deployErr
 }
 func (m *mockDeployer) Teardown(ctx context.Context, env *divergeiov1alpha1.Environment) error {
@@ -202,4 +206,134 @@ func TestReconcile_TTL(t *testing.T) {
 	updatedEnv := &divergeiov1alpha1.Environment{}
 	require.NoError(t, client.Get(context.Background(), req.NamespacedName, updatedEnv))
 	assert.NotNil(t, updatedEnv.DeletionTimestamp)
+}
+
+type fakeProvisioner struct {
+	provisionResult *async.ProvisionResult
+	provisionErr    error
+	teardownErr     error
+	provisionCalls  int
+	teardownCalls   int
+}
+
+func (f *fakeProvisioner) Name() string { return "fake" }
+func (f *fakeProvisioner) Provision(ctx context.Context, env *divergeiov1alpha1.Environment, route divergeiov1alpha1.AsyncRouteSpec) (*async.ProvisionResult, error) {
+	f.provisionCalls++
+	return f.provisionResult, f.provisionErr
+}
+func (f *fakeProvisioner) Teardown(ctx context.Context, env *divergeiov1alpha1.Environment, route divergeiov1alpha1.AsyncRouteSpec) error {
+	f.teardownCalls++
+	return f.teardownErr
+}
+
+func TestReconcile_AsyncRouting(t *testing.T) {
+	env := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-env",
+			Namespace:  "default",
+			Finalizers: []string{environmentFinalizer},
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Deploy: divergeiov1alpha1.EnvironmentDeploy{
+				Namespace: "create",
+			},
+			Routing: divergeiov1alpha1.EnvironmentRouting{
+				AsyncRoutes: []divergeiov1alpha1.AsyncRouteSpec{
+					{Protocol: "sqs", Target: "test-queue"},
+				},
+			},
+		},
+	}
+	r, client, dep, _, _ := newTestReconciler(t, env.DeepCopy(), &database.DatabaseResult{Ready: true}, "https://test.com")
+
+	fp := &fakeProvisioner{
+		provisionResult: &async.ProvisionResult{
+			EnvVars: map[string]string{"TEST_SQS_URL": "http://sqs"},
+		},
+	}
+	r.AsyncProvisioner = fp
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-env", Namespace: "default"}}
+	res, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	assert.Empty(t, res)
+
+	assert.Equal(t, 1, fp.provisionCalls)
+
+	updatedEnv := &divergeiov1alpha1.Environment{}
+	require.NoError(t, client.Get(context.Background(), req.NamespacedName, updatedEnv))
+
+	require.NotNil(t, dep.lastEnv)
+	require.NotNil(t, dep.lastEnv.Spec.ServiceConfig)
+	assert.Contains(t, dep.lastEnv.Spec.ServiceConfig.Env, divergeiov1alpha1.EnvVar{Name: "TEST_SQS_URL", Value: "http://sqs"})
+	assert.Equal(t, divergeiov1alpha1.PhaseRunning, updatedEnv.Status.Phase)
+}
+
+func TestReconcile_AsyncProvisionFailure(t *testing.T) {
+	env := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-env",
+			Namespace:  "default",
+			Finalizers: []string{environmentFinalizer},
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Deploy: divergeiov1alpha1.EnvironmentDeploy{
+				Namespace: "create",
+			},
+			Routing: divergeiov1alpha1.EnvironmentRouting{
+				AsyncRoutes: []divergeiov1alpha1.AsyncRouteSpec{
+					{Protocol: "sqs", Target: "test-queue"},
+				},
+			},
+		},
+	}
+	r, client, _, _, _ := newTestReconciler(t, env.DeepCopy(), &database.DatabaseResult{Ready: true}, "https://test.com")
+
+	fp := &fakeProvisioner{
+		provisionErr: errors.New("provision fail"),
+	}
+	r.AsyncProvisioner = fp
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-env", Namespace: "default"}}
+	_, err := r.Reconcile(context.Background(), req)
+	require.Error(t, err)
+
+	assert.Equal(t, 1, fp.provisionCalls)
+
+	updatedEnv := &divergeiov1alpha1.Environment{}
+	require.NoError(t, client.Get(context.Background(), req.NamespacedName, updatedEnv))
+
+	assert.Equal(t, divergeiov1alpha1.EnvironmentPhase(""), updatedEnv.Status.Phase)
+}
+
+func TestReconcile_AsyncTeardown(t *testing.T) {
+	now := metav1.Now()
+	env := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "test-env",
+			Namespace:         "default",
+			Finalizers:        []string{environmentFinalizer},
+			DeletionTimestamp: &now,
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Deploy: divergeiov1alpha1.EnvironmentDeploy{
+				Namespace: "create",
+			},
+			Routing: divergeiov1alpha1.EnvironmentRouting{
+				AsyncRoutes: []divergeiov1alpha1.AsyncRouteSpec{
+					{Protocol: "sqs", Target: "test-queue"},
+				},
+			},
+		},
+	}
+	r, _, _, _, _ := newTestReconciler(t, env.DeepCopy(), nil, "")
+	fp := &fakeProvisioner{}
+	r.AsyncProvisioner = fp
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-env", Namespace: "default"}}
+	res, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	assert.Empty(t, res)
+
+	assert.Equal(t, 1, fp.teardownCalls)
 }
