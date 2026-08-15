@@ -102,6 +102,7 @@ func addCommands(root *cobra.Command, app *App) {
 	root.AddCommand(newOpenCmd(app))
 	root.AddCommand(newPluginsCmd(app))
 	root.AddCommand(newPreviewCmd(app))
+	root.AddCommand(newProvidersCmd(app))
 	root.AddCommand(newStatusCmd(app))
 	root.AddCommand(newValidateCmd(app))
 	root.AddCommand(newVersionCmd(app))
