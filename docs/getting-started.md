@@ -23,8 +23,8 @@ The easiest way to install Diverge is via Helm.
 helm repo add diverge https://charts.divergedev.io
 helm repo update
 
-# Install the Diverge operator
-helm install diverge diverge/diverge --namespace diverge-system --create-namespace
+# Install the Diverge operator (v0.1.0 Release)
+helm install diverge diverge/diverge --version v0.1.0 --namespace diverge-system --create-namespace
 ```
 
 Alternatively, to install from source for development:
@@ -138,3 +138,13 @@ kubectl delete environment preview-mr-1
 ```
 
 The Diverge controller will intercept the deletion, run the teardown logic (cleaning up Istio rules, database schemas, etc.), and remove the environment.
+
+## Exporting Environment Variables
+
+If you need to connect your local development setup to the baseline environment's dependencies, you can use the `env export` command to fetch the environment variables from the baseline pod:
+
+```bash
+diverge env export --service frontend --format dotenv > .env.preview
+```
+
+This exports the environment variables in a `.env` format, ready to be used by your local development server. Supported formats include `dotenv`, `json`, and `shell`.
