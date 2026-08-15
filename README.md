@@ -41,6 +41,15 @@ Documentation: [https://divergedev.com](https://divergedev.com)
 *   **Multi-SCM Notifiers**: GitLab MR comments and GitHub PR comments with status updates.
 *   **E2E Tested**: Dual-cluster end-to-end tests with k3d, Envoy Gateway, and real CRD reconciliation.
 
+### Async Routing
+
+Diverge provides fully isolated preview environments for asynchronous workloads.
+*   **Subdomain vs Header Routing**: Use `mode: subdomain` for frontend-to-backend workflows without passing custom headers.
+*   **Available Providers**: Supported provisioners include Temporal, Kafka, Noop, and Webhook.
+*   **Slim Builds**: Use `no_temporal` and `no_kafka` build tags for smaller binaries.
+
+See the [Async Routing Guide](docs/async-routing.md) for full configuration details and YAML examples.
+
 ## Security
 Diverge takes security seriously. The platform features strict CRD OpenAPI validation, context timeouts on all external calls, and prevention mechanisms for shell/markdown injection in templates. The controller uses RBAC-scoped clients to ensure it only has the permissions it needs. Webhook interactions are secured using constant-time comparisons for secrets and RFC 7230-compliant header validation. Recent hardening includes ArgoCD namespace bypass prevention, safe SHA handling to eliminate panics, IPv6-safe pod URLs, comprehensive label validation, and Typed Server-Side Apply (SSA) to ensure safe resource updates.
 
