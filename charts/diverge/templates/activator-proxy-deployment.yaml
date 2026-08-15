@@ -24,9 +24,9 @@ spec:
           image: "{{ .Values.activatorProxy.image.repository }}:{{ .Values.activatorProxy.image.tag }}"
           args:
             - "--port={{ .Values.activatorProxy.port }}"
-            - "--activator-url={{ .Values.activatorProxy.activatorUrl }}"
+            - "--activator-url={{ required "activatorProxy.activatorUrl is required" .Values.activatorProxy.activatorUrl }}"
             - "--target-namespace={{ .Values.activatorProxy.targetNamespace }}"
-            - "--target-selector={{ .Values.activatorProxy.targetSelector }}"
+            - "--target-selector={{ required "activatorProxy.targetSelector is required" .Values.activatorProxy.targetSelector }}"
             - "--target-port={{ .Values.activatorProxy.targetPort }}"
             {{- if .Values.activatorProxy.targetRevision }}
             - "--target-revision={{ .Values.activatorProxy.targetRevision }}"

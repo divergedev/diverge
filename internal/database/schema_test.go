@@ -91,8 +91,9 @@ func TestSchemaDatabaseProvider_Provision_DSN_WithQueryParam(t *testing.T) {
 		},
 	}
 
-	_, err := provider.Provision(context.Background(), env)
+	res, err := provider.Provision(context.Background(), env)
 	assert.NoError(t, err)
+	assert.Contains(t, res.DSN, "sslmode=require")
 }
 
 type errorExecutor struct {
@@ -130,13 +131,14 @@ func TestSchemaDatabaseProvider_Provision_ExecutorError(t *testing.T) {
 }
 
 func TestSchemaDatabaseProvider_Provision_Concurrent(t *testing.T) {
-	provider := &SchemaDatabaseProvider{AdminDSN: "postgres://admin@localhost/db", Executor: &recordingExecutor{}}
-
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
+			// Each goroutine gets its own executor to avoid races
+			mockExec := &recordingExecutor{}
+			provider := &SchemaDatabaseProvider{AdminDSN: "postgres://admin@localhost/db", Executor: mockExec}
 			env := &v1alpha1.Environment{
 				ObjectMeta: metav1.ObjectMeta{Name: "test-env"},
 			}
