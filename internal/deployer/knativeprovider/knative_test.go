@@ -1,4 +1,6 @@
-package deployer
+//go:build !no_knative
+
+package knativeprovider
 
 import (
 	"context"

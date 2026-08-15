@@ -69,6 +69,10 @@ e2e-istio:
 build: manifests generate fmt vet ## Build manager binary.
 	go build -o bin/diverge-controller cmd/controller/main.go
 
+.PHONY: build-slim
+build-slim: ## Build slim manager binary without heavy providers
+	nix develop -c go build -tags=no_knative,no_schema -o /tmp/diverge-controller-slim ./cmd/controller/
+
 .PHONY: build-all
 build-all: build build-cli build-proxy ## Build all binaries.
 

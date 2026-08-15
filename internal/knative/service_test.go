@@ -1,3 +1,5 @@
+//go:build !no_knative
+
 package knative
 
 import (

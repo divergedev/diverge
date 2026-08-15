@@ -1,4 +1,6 @@
-package database
+//go:build !no_schema
+
+package schemaprovider
 
 import (
 	"context"
@@ -8,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	pkgdb "github.com/divergedev/diverge/pkg/database"
 	"github.com/jackc/pgx/v5"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"time"
@@ -41,7 +44,7 @@ func sanitizeEnvName(name string) (string, error) {
 }
 
 // Provision performs its designated operation.
-func (p *SchemaDatabaseProvider) Provision(ctx context.Context, env *v1alpha1.Environment) (*DatabaseResult, error) {
+func (p *SchemaDatabaseProvider) Provision(ctx context.Context, env *v1alpha1.Environment) (*pkgdb.DatabaseResult, error) {
 	envName, err := sanitizeEnvName(env.Name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to sanitize environment name: %w", err)
@@ -91,7 +94,7 @@ $$;`, schema)
 		dsn += "?search_path=" + schema + ",public"
 	}
 
-	result := &DatabaseResult{
+	result := &pkgdb.DatabaseResult{
 		DSN: dsn,
 		EnvVars: map[string]string{
 			"DATABASE_URL":           dsn,
@@ -162,7 +165,7 @@ func (p *SchemaDatabaseProvider) Teardown(ctx context.Context, env *v1alpha1.Env
 }
 
 // Status performs its designated operation.
-func (p *SchemaDatabaseProvider) Status(ctx context.Context, env *v1alpha1.Environment) (*DatabaseStatus, error) {
+func (p *SchemaDatabaseProvider) Status(ctx context.Context, env *v1alpha1.Environment) (*pkgdb.DatabaseStatus, error) {
 	envName, err := sanitizeEnvName(env.Name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to sanitize environment name: %w", err)
@@ -182,14 +185,14 @@ func (p *SchemaDatabaseProvider) Status(ctx context.Context, env *v1alpha1.Envir
 	}
 
 	if exists {
-		return &DatabaseStatus{
+		return &pkgdb.DatabaseStatus{
 			Provisioned: true,
 			SchemaName:  schema,
 			Message:     "Schema exists",
 		}, nil
 	}
 
-	return &DatabaseStatus{
+	return &pkgdb.DatabaseStatus{
 		Provisioned: false,
 		SchemaName:  schema,
 		Message:     "Schema does not exist",
