@@ -18,11 +18,18 @@ jobs:
       - name: Build
         run: go build ./...
       - name: Test
-        run: go test ./... -race -coverprofile=coverage.out
+        run: |
+          PACKAGES=$(go list ./... | grep -v '/gen/' | grep -v '/test/' | tr '\n' ' ')
+          go test $PACKAGES -race -coverprofile=coverage.out
       - name: Coverage Check
         run: |
           COVERAGE=$(go tool cover -func=coverage.out | grep total: | awk '{print $3}' | tr -d '%')
-          echo "Total coverage: $COVERAGE%"
+          echo "Total coverage: ${COVERAGE}%"
+          if (( $(echo "$COVERAGE < 60" | bc -l) )); then
+            echo "::error::Coverage ${COVERAGE}% is below the 60% threshold"
+            exit 1
+          fi
+          echo "✅ Coverage ${COVERAGE}% meets threshold"
       - name: Vet
         run: go vet ./...
 
@@ -80,3 +87,12 @@ jobs:
             exit 1
           fi
           echo "✅ Generated files are up-to-date"
+
+  test-guardrails:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check PBT coverage for CRD types
+        run: bash scripts/check-pbt-coverage.sh
+      - name: Check test file co-location
+        run: bash scripts/check-test-coverage.sh
