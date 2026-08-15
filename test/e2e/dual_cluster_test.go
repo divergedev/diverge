@@ -66,13 +66,13 @@ func TestE2E_DualCluster_PreviewRouting(t *testing.T) {
 		_ = fw.MgmtClient.Delete(context.Background(), pg)
 	})
 
-	// 5. Wait for HTTPRoute + EndpointSlice on prod
+	// 5. Wait for HTTPRoute + EndpointSlice on mgmt (testing compatibility mode)
 	// wait for resources
 	route := &gatewayv1.HTTPRoute{}
-	WaitForResource(t, fw.ProdClient, client.ObjectKey{Name: "echo-server-preview", Namespace: "default"}, route, 3*time.Minute)
+	WaitForResource(t, fw.MgmtClient, client.ObjectKey{Name: "echo-server-preview", Namespace: "default"}, route, 3*time.Minute)
 
 	// wait for gateway ip
-	gatewayIP := getGatewayIP(t, "k3d-diverge-e2e-prod", "diverge-gateway", "default")
+	gatewayIP := getGatewayIP(t, "k3d-diverge-e2e-mgmt", "diverge-gateway", "default")
 	if gatewayIP == "" {
 		t.Skip("Gateway not reachable")
 	}
@@ -93,7 +93,7 @@ func TestE2E_DualCluster_PreviewRouting(t *testing.T) {
 	err = fw.MgmtClient.Delete(context.Background(), pg)
 	require.NoError(t, err)
 
-	WaitForResourceGone(t, fw.ProdClient, client.ObjectKey{Name: "echo-server-preview", Namespace: "default"}, route, 2*time.Minute)
+	WaitForResourceGone(t, fw.MgmtClient, client.ObjectKey{Name: "echo-server-preview", Namespace: "default"}, route, 2*time.Minute)
 }
 
 func TestE2E_DualCluster_Teardown(t *testing.T) {
@@ -131,10 +131,10 @@ func TestE2E_DualCluster_Teardown(t *testing.T) {
 	require.NoError(t, err)
 
 	route := &gatewayv1.HTTPRoute{}
-	WaitForResource(t, fw.ProdClient, client.ObjectKey{Name: "echo-server-teardown", Namespace: "default"}, route, 3*time.Minute)
+	WaitForResource(t, fw.MgmtClient, client.ObjectKey{Name: "echo-server-teardown", Namespace: "default"}, route, 3*time.Minute)
 
 	err = fw.MgmtClient.Delete(context.Background(), pg)
 	require.NoError(t, err)
 
-	WaitForResourceGone(t, fw.ProdClient, client.ObjectKey{Name: "echo-server-teardown", Namespace: "default"}, route, 2*time.Minute)
+	WaitForResourceGone(t, fw.MgmtClient, client.ObjectKey{Name: "echo-server-teardown", Namespace: "default"}, route, 2*time.Minute)
 }

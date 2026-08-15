@@ -26,6 +26,7 @@ import (
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/database"
 	"github.com/divergedev/diverge/internal/events"
+	"github.com/divergedev/diverge/internal/metrics"
 	"github.com/divergedev/diverge/internal/notifier"
 )
 
@@ -63,6 +64,16 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	startTime := time.Now()
+	defer func() {
+		metrics.ReconcileDuration.WithLabelValues("previewgroup").Observe(time.Since(startTime).Seconds())
+		if retErr != nil {
+			metrics.ReconcileTotal.WithLabelValues("previewgroup", "error").Inc()
+		} else {
+			metrics.ReconcileTotal.WithLabelValues("previewgroup", "success").Inc()
+		}
+	}()
+
 	// Capture pre-mutation baseline for status patch
 	statusBase := pg.DeepCopy()
 
@@ -77,6 +88,7 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		if err := r.Update(ctx, &pg); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to add finalizer: %w", err)
 		}
+		metrics.PreviewGroupsActive.Inc()
 		r.Recorder.Event(&pg, "Normal", "Created", "PreviewGroup created")
 		return ctrl.Result{}, nil
 	}
@@ -391,6 +403,7 @@ func (r *PreviewGroupReconciler) handleTeardown(ctx context.Context, pg *diverge
 	if err := r.Update(ctx, pg); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to remove finalizer: %w", err)
 	}
+	metrics.PreviewGroupsActive.Dec()
 
 	r.Recorder.Event(pg, "Normal", "Terminated", "Teardown complete")
 	return ctrl.Result{}, nil

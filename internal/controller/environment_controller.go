@@ -65,11 +65,17 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	startTime := time.Now()
+
 	// Track reconcile outcome — single defer covers all return paths
 	defer func() {
+		metrics.ReconcileDuration.WithLabelValues("environment").Observe(time.Since(startTime).Seconds())
+
 		if retErr != nil {
+			metrics.ReconcileTotal.WithLabelValues("environment", "error").Inc()
 			metrics.ReconcileOutcomes.WithLabelValues("error").Inc()
 		} else {
+			metrics.ReconcileTotal.WithLabelValues("environment", "success").Inc()
 			metrics.ReconcileOutcomes.WithLabelValues("success").Inc()
 		}
 
@@ -105,6 +111,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		if err := r.Update(ctx, &env); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to add finalizer: %w", err)
 		}
+		metrics.EnvironmentsActive.Inc()
 		if r.Notifier != nil {
 			tCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
@@ -422,15 +429,6 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		metrics.EnvironmentTransitions.WithLabelValues(
 			string(oldPhase), string(newPhase), env.Spec.Source.Provider,
 		).Inc()
-		// Update active environments gauge: decrement old phase, increment new
-		if oldPhase != "" {
-			metrics.EnvironmentsActive.WithLabelValues(
-				string(oldPhase), env.Spec.Source.Provider,
-			).Dec()
-		}
-		metrics.EnvironmentsActive.WithLabelValues(
-			string(newPhase), env.Spec.Source.Provider,
-		).Inc()
 	}
 	return res, err
 }
@@ -511,14 +509,7 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 			return ctrl.Result{}, fmt.Errorf("failed to remove finalizer: %w", err)
 		}
 
-		// Decrement active environments gauge after successful finalizer
-		// removal — this is idempotent because the finalizer is gone,
-		// so subsequent reconciles skip this block entirely.
-		if env.Status.Phase != "" {
-			metrics.EnvironmentsActive.WithLabelValues(
-				string(env.Status.Phase), env.Spec.Source.Provider,
-			).Dec()
-		}
+		metrics.EnvironmentsActive.Dec()
 
 		r.Recorder.Event(env, "Normal", "Terminated", "Teardown complete")
 	}

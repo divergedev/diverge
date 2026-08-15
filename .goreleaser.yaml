@@ -8,6 +8,7 @@ builds:
       - -trimpath
     goos:
       - linux
+      - darwin
     goarch:
       - amd64
       - arm64
@@ -34,6 +35,20 @@ builds:
       - -trimpath
     goos:
       - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+  - id: diverge-activator-proxy
+    main: cmd/activator-proxy/main.go
+    binary: diverge-activator-proxy
+    flags:
+      - -trimpath
+    goos:
+      - linux
+      - darwin
     goarch:
       - amd64
       - arm64
@@ -45,28 +60,52 @@ archives:
       - src: README*
       - src: LICENSE*
 dockers:
-  - image_templates:
+  - id: diverge-amd64
+    image_templates:
       - "ghcr.io/divergedev/diverge:{{ .Tag }}-amd64"
     dockerfile: Dockerfile.goreleaser
     use: buildx
+    builds:
+      - diverge-controller
+      - diverge-proxy
     build_flag_templates:
       - "--platform=linux/amd64"
     goos: linux
     goarch: amd64
-    extra_files:
-      - diverge-controller
-      - diverge-proxy
-  - image_templates:
+  - id: diverge-arm64
+    image_templates:
       - "ghcr.io/divergedev/diverge:{{ .Tag }}-arm64"
     dockerfile: Dockerfile.goreleaser
     use: buildx
+    builds:
+      - diverge-controller
+      - diverge-proxy
     build_flag_templates:
       - "--platform=linux/arm64"
     goos: linux
     goarch: arm64
-    extra_files:
-      - diverge-controller
-      - diverge-proxy
+  - id: activator-proxy-amd64
+    image_templates:
+      - "ghcr.io/divergedev/activator-proxy:{{ .Tag }}-amd64"
+    dockerfile: Dockerfile.activator-proxy
+    use: buildx
+    builds:
+      - diverge-activator-proxy
+    build_flag_templates:
+      - "--platform=linux/amd64"
+    goos: linux
+    goarch: amd64
+  - id: activator-proxy-arm64
+    image_templates:
+      - "ghcr.io/divergedev/activator-proxy:{{ .Tag }}-arm64"
+    dockerfile: Dockerfile.activator-proxy
+    use: buildx
+    builds:
+      - diverge-activator-proxy
+    build_flag_templates:
+      - "--platform=linux/arm64"
+    goos: linux
+    goarch: arm64
 docker_manifests:
   - name_template: "ghcr.io/divergedev/diverge:{{ .Tag }}"
     image_templates:
@@ -76,6 +115,14 @@ docker_manifests:
     image_templates:
       - "ghcr.io/divergedev/diverge:{{ .Tag }}-amd64"
       - "ghcr.io/divergedev/diverge:{{ .Tag }}-arm64"
+  - name_template: "ghcr.io/divergedev/activator-proxy:{{ .Tag }}"
+    image_templates:
+      - "ghcr.io/divergedev/activator-proxy:{{ .Tag }}-amd64"
+      - "ghcr.io/divergedev/activator-proxy:{{ .Tag }}-arm64"
+  - name_template: "ghcr.io/divergedev/activator-proxy:latest"
+    image_templates:
+      - "ghcr.io/divergedev/activator-proxy:{{ .Tag }}-amd64"
+      - "ghcr.io/divergedev/activator-proxy:{{ .Tag }}-arm64"
 checksum:
   name_template: 'checksums.txt'
   algorithm: sha256
