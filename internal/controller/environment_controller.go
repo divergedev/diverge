@@ -235,6 +235,9 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			tCtxA, cancelA := context.WithTimeout(ctx, 30*time.Second)
 			result, err := r.AsyncProvisioner.Provision(tCtxA, &env, route)
 			cancelA()
+			if err == nil && result == nil {
+				err = async.ErrNilProvisionResult
+			}
 			if err != nil {
 				meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 					Type:    "AsyncRoutingReady",
@@ -253,7 +256,30 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		if env.Spec.ServiceConfig == nil {
 			env.Spec.ServiceConfig = &divergeiov1alpha1.ServicePreviewConfig{}
 		}
-		env.Spec.ServiceConfig.Env = append(env.Spec.ServiceConfig.Env, asyncEnvVars...)
+		// Merge async env vars, detecting conflicts
+		for _, asyncVar := range asyncEnvVars {
+			conflict := false
+			for _, existing := range env.Spec.ServiceConfig.Env {
+				if existing.Name == asyncVar.Name {
+					if existing.Value != asyncVar.Value {
+						// Conflict: same name, different value
+						err := fmt.Errorf("env var conflict for %q: existing=%q vs async=%q", asyncVar.Name, existing.Value, asyncVar.Value)
+						meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+							Type:    "AsyncRoutingReady",
+							Status:  metav1.ConditionFalse,
+							Reason:  "EnvVarConflict",
+							Message: err.Error(),
+						})
+						return r.updateStatusWithRequeue(ctx, &env, statusBase, err, 0)
+					}
+					conflict = true // identical mapping, skip
+					break
+				}
+			}
+			if !conflict {
+				env.Spec.ServiceConfig.Env = append(env.Spec.ServiceConfig.Env, asyncVar)
+			}
+		}
 		meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 			Type:    "AsyncRoutingReady",
 			Status:  metav1.ConditionTrue,
