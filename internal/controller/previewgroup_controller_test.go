@@ -296,7 +296,7 @@ func TestPreviewGroupReconcile_TeardownTableDriven(t *testing.T) {
 			eps1.SetNamespace("platform-core")
 			eps1.SetUID(epsUID)
 			eps1.SetLabels(map[string]string{
-				"diverge.io/preview-group":               "mr-99",
+				"diverge.io/previewgroup":                "mr-99",
 				"endpointslice.kubernetes.io/managed-by": "diverge",
 			})
 
@@ -306,7 +306,7 @@ func TestPreviewGroupReconcile_TeardownTableDriven(t *testing.T) {
 			route1.SetName("auth-svc-mr-99")
 			route1.SetNamespace("platform-core")
 			route1.SetLabels(map[string]string{
-				"diverge.io/preview-group": "mr-99",
+				"diverge.io/previewgroup": "mr-99",
 			})
 
 			r, c := newTestPreviewGroupReconciler(pg, eps1, route1)

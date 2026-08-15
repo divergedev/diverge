@@ -499,8 +499,8 @@ func (r *PreviewGroupReconciler) listChildEnvironments(ctx context.Context, pg *
 	if err := r.List(ctx, &envList,
 		client.InNamespace(pg.Namespace),
 		client.MatchingLabels{
-			"diverge.io/previewgroup":      pg.Name,
-			"app.kubernetes.io/managed-by": "diverge",
+			"diverge.io/previewgroup": pg.Name,
+			labelManagedBy:            "diverge-previewgroup",
 		},
 	); err != nil {
 		return nil, err
