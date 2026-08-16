@@ -3,8 +3,11 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
+	"time"
 
 	"connectrpc.com/connect"
+	authorizationv1 "k8s.io/api/authorization/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -12,14 +15,19 @@ import (
 	"github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
 	"github.com/divergedev/diverge/api/v1alpha1"
 	domain "github.com/divergedev/diverge/gen/domain/github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
+	"github.com/divergedev/diverge/internal/server/streaming"
 )
 
 type PreviewGroupService struct {
-	client client.Client
+	client      client.Client
+	informerMgr *streaming.InformerManager
 }
 
-func NewPreviewGroupService(c client.Client) divergev1alpha1connect.PreviewGroupServiceHandler {
-	return &PreviewGroupService{client: c}
+func NewPreviewGroupService(c client.Client, informerMgr *streaming.InformerManager) divergev1alpha1connect.PreviewGroupServiceHandler {
+	return &PreviewGroupService{
+		client:      c,
+		informerMgr: informerMgr,
+	}
 }
 
 func (s *PreviewGroupService) CreatePreviewGroup(ctx context.Context, req *connect.Request[pb.CreatePreviewGroupRequest]) (*connect.Response[pb.CreatePreviewGroupResponse], error) {
@@ -99,6 +107,112 @@ func (s *PreviewGroupService) DeletePreviewGroup(ctx context.Context, req *conne
 	return connect.NewResponse(&pb.DeletePreviewGroupResponse{}), nil
 }
 
+func (s *PreviewGroupService) authorizeAction(ctx context.Context, verb, namespace string) error {
+	sar := &authorizationv1.SubjectAccessReview{
+		Spec: authorizationv1.SubjectAccessReviewSpec{
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				Namespace: namespace,
+				Verb:      verb,
+				Group:     "diverge.dev",
+				Resource:  "previewgroups",
+			},
+		},
+	}
+	if err := s.client.Create(ctx, sar); err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("authorization check failed: %w", err))
+	}
+	if !sar.Status.Allowed {
+		return connect.NewError(connect.CodePermissionDenied, errors.New("permission denied"))
+	}
+	return nil
+}
+
 func (s *PreviewGroupService) WatchPreviewGroups(ctx context.Context, req *connect.Request[pb.WatchPreviewGroupsRequest], stream *connect.ServerStream[pb.WatchPreviewGroupsResponse]) error {
-	return connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
+	if s.informerMgr == nil {
+		return connect.NewError(connect.CodeUnimplemented, errors.New("informer manager is not configured"))
+	}
+
+	select {
+	case StreamSemaphore <- struct{}{}:
+		defer func() { <-StreamSemaphore }()
+	default:
+		return connect.NewError(connect.CodeResourceExhausted, errors.New("too many concurrent streams"))
+	}
+
+	streamCtx, cancel := context.WithTimeout(ctx, 4*time.Hour)
+	defer cancel()
+
+	namespace := req.Msg.Namespace
+	if namespace != "" {
+		if err := s.authorizeAction(streamCtx, "watch", namespace); err != nil {
+			return err
+		}
+	}
+
+	// List initial state
+	var list v1alpha1.PreviewGroupList
+	opts := []client.ListOption{}
+	if namespace != "" {
+		opts = append(opts, client.InNamespace(namespace))
+	}
+	if err := s.client.List(streamCtx, &list, opts...); err != nil {
+		return connect.NewError(connect.CodeInternal, err)
+	}
+
+	sub := s.informerMgr.PgBroadcaster.Subscribe(streamCtx)
+	defer s.informerMgr.PgBroadcaster.Unsubscribe(sub.ID())
+
+	for i := range list.Items {
+		crd := &list.Items[i]
+		dom, _ := CRDPgToDomain(crd)
+		if dom != nil {
+			if err := stream.Send(&pb.WatchPreviewGroupsResponse{
+				Type:            pb.WatchEventType_WATCH_EVENT_TYPE_ADDED,
+				PreviewGroup:    dom.ToProto(),
+				ResourceVersion: crd.ResourceVersion,
+			}); err != nil {
+				return err
+			}
+		}
+	}
+
+	for {
+		select {
+		case <-streamCtx.Done():
+			return nil
+		case event, ok := <-sub.Events():
+			if !ok {
+				return connect.NewError(connect.CodeResourceExhausted, errors.New("event buffer overflow, please reconnect"))
+			}
+
+			if namespace != "" && event.Object.Namespace != namespace {
+				continue
+			}
+
+			dom, err := CRDPgToDomain(event.Object)
+			if err != nil || dom == nil {
+				continue
+			}
+
+			var eventType pb.WatchEventType
+			switch event.Type {
+			case "ADDED":
+				eventType = pb.WatchEventType_WATCH_EVENT_TYPE_ADDED
+			case "MODIFIED":
+				eventType = pb.WatchEventType_WATCH_EVENT_TYPE_MODIFIED
+			case "DELETED":
+				eventType = pb.WatchEventType_WATCH_EVENT_TYPE_DELETED
+			default:
+				eventType = pb.WatchEventType_WATCH_EVENT_TYPE_UNSPECIFIED
+			}
+
+			if err := stream.Send(&pb.WatchPreviewGroupsResponse{
+				Type:            eventType,
+				PreviewGroup:    dom.ToProto(),
+				ResourceVersion: event.Version,
+			}); err != nil {
+				return err
+			}
+		}
+	}
 }
