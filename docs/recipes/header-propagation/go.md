@@ -1,6 +1,6 @@
 # Go Header Propagation Recipe
 
-This recipe demonstrates how to propagate the `x-preview-env` header across both HTTP (net/http) and gRPC services in Go.
+This recipe demonstrates how to propagate the `x-diverge-env` header across both HTTP (net/http) and gRPC services in Go.
 
 ## 1. HTTP Middleware (Inbound)
 
@@ -14,12 +14,12 @@ import (
 	"net/http"
 )
 
-const PreviewEnvHeader = "x-preview-env"
+const PreviewEnvHeader = "x-diverge-env"
 
 type contextKey string
 const PreviewEnvContextKey = contextKey(PreviewEnvHeader)
 
-// PreviewEnvMiddleware extracts the x-preview-env header and adds it to the context
+// PreviewEnvMiddleware extracts the x-diverge-env header and adds it to the context
 func PreviewEnvMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		previewEnv := r.Header.Get(PreviewEnvHeader)
@@ -138,6 +138,55 @@ func PreviewEnvClientInterceptor() grpc.UnaryClientInterceptor {
 		return invoker(ctx, method, req, reply, cc, opts...)
 	}
 }
+```
+
+## 4. Async Routing SDK (Temporal & Kafka)
+
+Diverge provides SDKs to automatically propagate headers across asynchronous boundaries.
+
+### Temporal
+
+When working with Temporal, you must install the Diverge Temporal SDK to handle header propagation through Temporal metadata and into Go context inside activities.
+
+```go
+import (
+	divergetemporal "github.com/divergedev/diverge/pkg/sdk/temporal"
+)
+
+// Attach the ContextPropagator and HeadersProvider to your client
+c, err := client.Dial(client.Options{
+	ContextPropagators: []workflow.ContextPropagator{
+		&divergetemporal.Propagator{EnvName: env},
+	},
+	HeadersProvider: divergetemporal.NewHeadersProvider(env),
+})
+
+// Attach the WorkerInterceptor to your worker
+workerOpts := worker.Options{
+	Interceptors: []worker.Interceptor{
+		divergetemporal.NewWorkerInterceptor(env),
+	},
+}
+```
+*For detailed Temporal guidance, see the [Temporal Integration Guide](../../guides/temporal-integration.md).*
+
+### Kafka
+
+To propagate headers through Kafka messages, you can use `divergekafka.InjectHeaders` and `divergekafka.ExtractEnvName` when constructing or processing messages.
+
+```go
+import (
+	divergekafka "github.com/divergedev/diverge/pkg/sdk/kafka"
+)
+
+// When producing a message, inject the context header
+msgHeaders := []divergekafka.Header{
+	{Key: "custom-header", Value: []byte("val")},
+}
+msgHeaders = divergekafka.InjectHeaders(msgHeaders, env)
+
+// When consuming a message, extract the environment name
+envName := divergekafka.ExtractEnvName(incomingHeaders)
 ```
 
 ## OpenTelemetry Baggage (Alternative)
