@@ -18,7 +18,7 @@ require (
 	golang.org/x/exp v0.0.0-20251219203646-944ab1f22d93
 	golang.org/x/sync v0.22.0
 	google.golang.org/grpc v1.83.0
-	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af
+	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 	hegel.dev/go/hegel v0.6.25
 	k8s.io/api v0.36.1

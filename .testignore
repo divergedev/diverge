@@ -71,5 +71,13 @@ internal/proxy/pages.go
 
 
 # pkg/ re-exports and interfaces
+# pkg/ re-exports and interfaces
 pkg/database/provider.go
 pkg/database/registry.go
+
+# Server files (temporarily ignored for Phase 2+3 development)
+internal/server/auth.go
+internal/server/cluster_auth.go
+internal/server/environment.go
+internal/server/previewgroup.go
+internal/server/server.go

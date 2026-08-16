@@ -1,9 +1,10 @@
+# buf.yaml
 version: v2
 modules:
-  - path: proto
+  - path: api/proto
 lint:
   use:
     - STANDARD
 breaking:
   use:
-    - WIRE_JSON
+    - WIRE

@@ -1,0 +1,135 @@
+syntax = "proto3";
+
+package diverge.v1alpha1;
+option go_package = "github.com/divergedev/diverge/api/gen/diverge/v1alpha1;divergev1alpha1";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+import "diverge/v1alpha1/types.proto";
+import "diverge/v1alpha1/environment.proto";
+
+message PreviewGroupServiceSpec {
+  string name = 1;
+  string image = 2;
+  string mode = 3;
+  string endpoint = 4;
+  string namespace = 5;
+  int32 port = 6;
+  string parent_ref = 7;
+  string path_prefix = 8;
+  string protocol = 9;
+  repeated AsyncRouteSpec async_routes = 10;
+  string image_pull_policy = 11;
+  repeated EnvVar env = 12;
+  ResourceOverride resources = 13;
+  EnvironmentDatabase database = 14;
+}
+
+message PreviewGroupRouting {
+  string mode = 1;
+  string header_key = 2;
+  string header_value = 3;
+  string external_url = 4;
+  string base_domain = 5;
+}
+
+message PreviewGroupLifecycle {
+  google.protobuf.Duration ttl = 1;
+  bool cleanup_on_merge = 2;
+}
+
+message PreviewGroupSpec {
+  EnvironmentSource source = 1;
+  PreviewGroupRouting routing = 2;
+  repeated PreviewGroupServiceSpec services = 3;
+  EnvironmentDatabase database = 4;
+  PreviewGroupLifecycle lifecycle = 5;
+  string owner = 6;
+}
+
+message PreviewGroupServiceStatus {
+  string name = 1;
+  string environment_name = 2;
+  string namespace = 3;
+  string phase = 4;
+  string url = 5;
+  string message = 6;
+  string reason = 7;
+  string last_log_snippet = 8;
+}
+
+message PreviewGroupStatus {
+  string phase = 1;
+  int32 service_count = 2;
+  repeated PreviewGroupServiceStatus services = 3;
+  int64 observed_generation = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp expires_at = 6;
+  repeated Condition conditions = 7;
+  int64 comment_id = 8;
+  google.protobuf.Timestamp lease_renewed_at = 9;
+}
+
+message PreviewGroup {
+  string name = 1;
+  string namespace = 2;
+  PreviewGroupSpec spec = 3;
+  PreviewGroupStatus status = 4;
+  google.protobuf.Timestamp created_at = 5;
+  map<string, string> labels = 6;
+  map<string, string> annotations = 7;
+}
+
+service PreviewGroupService {
+  rpc CreatePreviewGroup(CreatePreviewGroupRequest) returns (CreatePreviewGroupResponse);
+  rpc GetPreviewGroup(GetPreviewGroupRequest) returns (GetPreviewGroupResponse);
+  rpc ListPreviewGroups(ListPreviewGroupsRequest) returns (ListPreviewGroupsResponse);
+  rpc DeletePreviewGroup(DeletePreviewGroupRequest) returns (DeletePreviewGroupResponse);
+  rpc WatchPreviewGroups(WatchPreviewGroupsRequest) returns (stream WatchPreviewGroupsResponse);
+}
+
+message CreatePreviewGroupRequest {
+  string namespace = 1;
+  PreviewGroup preview_group = 2;
+}
+message CreatePreviewGroupResponse {
+  PreviewGroup preview_group = 1;
+}
+
+message GetPreviewGroupRequest {
+  string namespace = 1;
+  string name = 2;
+}
+message GetPreviewGroupResponse {
+  PreviewGroup preview_group = 1;
+}
+
+message ListPreviewGroupsRequest {
+  string namespace = 1;
+  int32 page_size = 2;
+  string page_token = 3;
+  string label_selector = 4;
+}
+message ListPreviewGroupsResponse {
+  repeated PreviewGroup preview_groups = 1;
+  string next_page_token = 2;
+  int32 total_size = 3;
+}
+
+message DeletePreviewGroupRequest {
+  string namespace = 1;
+  string name = 2;
+}
+message DeletePreviewGroupResponse {}
+
+message WatchPreviewGroupsRequest {
+  string namespace = 1;
+  string label_selector = 2;
+  string resource_version = 3;
+}
+message WatchPreviewGroupsResponse {
+  WatchEventType type = 1;
+  PreviewGroup preview_group = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  string resource_version = 4;
+}

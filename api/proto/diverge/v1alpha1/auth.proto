@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package diverge.v1alpha1;
+option go_package = "github.com/divergedev/diverge/api/gen/diverge/v1alpha1;divergev1alpha1";
+
+service AuthService {
+  rpc GetCurrentUser(GetCurrentUserRequest) returns (GetCurrentUserResponse);
+  rpc ListPermissions(ListPermissionsRequest) returns (ListPermissionsResponse);
+}
+
+message GetCurrentUserRequest {}
+
+message GetCurrentUserResponse {
+  string user_id = 1;
+  string email = 2;
+  repeated string groups = 3;
+  string issuer = 4;
+}
+
+message ListPermissionsRequest {
+  string namespace = 1;
+}
+
+message ListPermissionsResponse {
+  repeated Permission permissions = 1;
+}
+
+message Permission {
+  string resource = 1;
+  repeated string verbs = 2;
+  repeated string namespaces = 3;
+}
