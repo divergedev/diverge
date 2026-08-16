@@ -108,6 +108,16 @@ type EnvironmentRouting struct {
 	// AsyncRoutes defines async routing targets for event-driven backends.
 	// +optional
 	AsyncRoutes []AsyncRouteSpec `json:"asyncRoutes,omitempty"`
+	// Cookie enables sticky routing using cookies.
+	// +optional
+	Cookie *CookieSpec `json:"cookie,omitempty"`
+}
+
+// CookieSpec defines the configuration for sticky routing cookies.
+type CookieSpec struct {
+	Enabled  bool   `json:"enabled,omitempty"`
+	MaxAge   int    `json:"maxAge,omitempty"`   // seconds, default 86400 (24h)
+	SameSite string `json:"sameSite,omitempty"` // Lax, Strict, None
 }
 
 // EnvironmentDatabase defines the database configuration

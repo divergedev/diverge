@@ -158,6 +158,27 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 			}
 		}
 		matches = []interface{}{matchRule}
+
+		if env.Spec.Routing.Cookie != nil && env.Spec.Routing.Cookie.Enabled {
+			cookieMatch := map[string]interface{}{
+				"headers": []interface{}{
+					map[string]interface{}{
+						"type":  "RegularExpression",
+						"name":  "Cookie",
+						"value": fmt.Sprintf(`.*%s=%s.*`, headerKey, headerValue),
+					},
+				},
+			}
+			if kind == "HTTPRoute" {
+				if cfg := env.Spec.ServiceConfig; cfg != nil && cfg.PathPrefix != "" {
+					cookieMatch["path"] = map[string]interface{}{
+						"type":  "PathPrefix",
+						"value": cfg.PathPrefix,
+					}
+				}
+			}
+			matches = append(matches, cookieMatch)
+		}
 	}
 
 	parentRef := map[string]interface{}{
@@ -178,15 +199,41 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 		},
 	}
 
+	var filters []interface{}
+
 	if !isServiceName(parentRefName) && env.Spec.Routing.Mode != "subdomain" {
-		rule["filters"] = []interface{}{
-			map[string]interface{}{
-				"type": "RequestHeaderModifier",
-				"requestHeaderModifier": map[string]interface{}{
-					"remove": []interface{}{headerKey},
+		filters = append(filters, map[string]interface{}{
+			"type": "RequestHeaderModifier",
+			"requestHeaderModifier": map[string]interface{}{
+				"remove": []interface{}{headerKey},
+			},
+		})
+	}
+
+	if env.Spec.Routing.Cookie != nil && env.Spec.Routing.Cookie.Enabled && kind == "HTTPRoute" {
+		maxAge := 86400
+		if env.Spec.Routing.Cookie.MaxAge > 0 {
+			maxAge = env.Spec.Routing.Cookie.MaxAge
+		}
+		sameSite := "Lax"
+		if env.Spec.Routing.Cookie.SameSite != "" {
+			sameSite = env.Spec.Routing.Cookie.SameSite
+		}
+		filters = append(filters, map[string]interface{}{
+			"type": "ResponseHeaderModifier",
+			"responseHeaderModifier": map[string]interface{}{
+				"add": []interface{}{
+					map[string]interface{}{
+						"name":  "Set-Cookie",
+						"value": fmt.Sprintf("%s=%s; Path=/; Max-Age=%d; SameSite=%s", headerKey, headerValue, maxAge, sameSite),
+					},
 				},
 			},
-		}
+		})
+	}
+
+	if len(filters) > 0 {
+		rule["filters"] = filters
 	}
 
 	spec := map[string]interface{}{
