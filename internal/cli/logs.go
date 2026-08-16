@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
@@ -60,7 +61,9 @@ func runLogs(app *App, cmd *cobra.Command, args []string) error {
 
 	var sinceTime *metav1.Time
 	if sinceStr != "" {
-		if d, err := time.ParseDuration(sinceStr); err == nil {
+		if d, err := time.ParseDuration(sinceStr); err != nil {
+			return fmt.Errorf("invalid --since value %q: %w", sinceStr, err)
+		} else {
 			t := metav1.NewTime(time.Now().Add(-d))
 			sinceTime = &t
 		}
@@ -72,7 +75,7 @@ func runLogs(app *App, cmd *cobra.Command, args []string) error {
 	}
 
 	pods, err := clientset.CoreV1().Pods(podNs).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("diverge.dev/environment=%s", name),
+		LabelSelector: fmt.Sprintf("diverge.io/environment=%s", name),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to list pods: %w", err)
@@ -83,6 +86,7 @@ func runLogs(app *App, cmd *cobra.Command, args []string) error {
 	}
 
 	var wg sync.WaitGroup
+	var mu sync.Mutex
 	colors := []*color.Color{
 		color.New(color.FgHiCyan),
 		color.New(color.FgHiGreen),
@@ -97,7 +101,7 @@ func runLogs(app *App, cmd *cobra.Command, args []string) error {
 	podCount := 0
 
 	for _, pod := range pods.Items {
-		svcName := pod.Labels["diverge.dev/service"]
+		svcName := pod.Labels["diverge.io/service"]
 		if svcName == "" {
 			svcName = pod.Name // fallback
 		}
@@ -119,7 +123,7 @@ func runLogs(app *App, cmd *cobra.Command, args []string) error {
 			wg.Add(1)
 			go func(p corev1.Pod, c corev1.Container, svc string, col *color.Color) {
 				defer wg.Done()
-				streamLogs(ctx, app, p.Namespace, p.Name, c.Name, svc, col, follow, tail, sinceTime, timestamps, previous, cmd.OutOrStdout())
+				streamLogs(ctx, clientset, app, p, c.Name, svc, col, follow, tail, sinceTime, timestamps, previous, cmd.OutOrStdout(), &mu)
 			}(pod, container, svcName, podColor)
 		}
 	}
@@ -132,12 +136,7 @@ func runLogs(app *App, cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func streamLogs(ctx context.Context, app *App, namespace, podName, containerName, svcName string, col *color.Color, follow bool, tail int64, sinceTime *metav1.Time, timestamps, previous bool, out io.Writer) {
-	_, clientset, err := app.KubeClient()
-	if err != nil {
-		return
-	}
-
+func streamLogs(ctx context.Context, clientset kubernetes.Interface, app *App, pod corev1.Pod, containerName, svcName string, col *color.Color, follow bool, tail int64, sinceTime *metav1.Time, timestamps, previous bool, out io.Writer, mu *sync.Mutex) {
 	opts := &corev1.PodLogOptions{
 		Container:  containerName,
 		Follow:     follow,
@@ -151,17 +150,24 @@ func streamLogs(ctx context.Context, app *App, namespace, podName, containerName
 		opts.SinceTime = sinceTime
 	}
 
-	req := clientset.CoreV1().Pods(namespace).GetLogs(podName, opts)
+	req := clientset.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, opts)
 	stream, err := req.Stream(ctx)
 	if err != nil {
-		_, _ = fmt.Fprintf(out, "failed to stream logs for %s: %v\n", podName, err)
+		mu.Lock()
+		_, _ = fmt.Fprintf(out, "failed to stream logs for %s: %v\n", pod.Name, err)
+		mu.Unlock()
 		return
 	}
 	defer func() { _ = stream.Close() }()
 
 	reader := bufio.NewReader(stream)
 
-	prefixStr := fmt.Sprintf("[%s]", svcName)
+	prefixBase := svcName
+	if len(pod.Spec.Containers) > 1 {
+		prefixBase = fmt.Sprintf("%s/%s", svcName, containerName)
+	}
+	prefixStr := fmt.Sprintf("[%s]", prefixBase)
+
 	var prefix string
 	if app.NoColor {
 		prefix = prefixStr
@@ -172,11 +178,15 @@ func streamLogs(ctx context.Context, app *App, namespace, podName, containerName
 	for {
 		line, err := reader.ReadString('\n')
 		if line != "" {
+			mu.Lock()
 			_, _ = fmt.Fprintf(out, "%s  %s", prefix, line)
+			mu.Unlock()
 		}
 		if err != nil {
 			if err != io.EOF && err != context.Canceled {
-				_, _ = fmt.Fprintf(out, "error reading logs for %s: %v\n", podName, err)
+				mu.Lock()
+				_, _ = fmt.Fprintf(out, "error reading logs for %s: %v\n", pod.Name, err)
+				mu.Unlock()
 			}
 			break
 		}
