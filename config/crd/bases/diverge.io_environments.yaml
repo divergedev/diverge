@@ -456,6 +456,12 @@ spec:
           status:
             description: EnvironmentStatus defines the observed state of Environment
             properties:
+              asyncEnvVars:
+                additionalProperties:
+                  type: string
+                description: AsyncEnvVars contains environment variables injected
+                  by async route provisioners.
+                type: object
               commentID:
                 type: integer
               commitSHA:

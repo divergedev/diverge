@@ -15,6 +15,22 @@ import (
 
 func runChildProcess(ctx context.Context, args []string, envMap map[string]string) (*exec.Cmd, error) {
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	cmd.WaitDelay = 5 * time.Second
+	cmd.Cancel = func() error {
+		pgid := -cmd.Process.Pid
+		if err := syscall.Kill(pgid, syscall.SIGTERM); err != nil {
+			if errors.Is(err, syscall.ESRCH) {
+				return os.ErrProcessDone
+			}
+			return err
+		}
+		// Start SIGKILL fallback after WaitDelay
+		go func() {
+			time.Sleep(cmd.WaitDelay)
+			_ = syscall.Kill(pgid, syscall.SIGKILL)
+		}()
+		return nil
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -25,11 +41,6 @@ func runChildProcess(ctx context.Context, args []string, envMap map[string]strin
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
 	}
 	cmd.Env = env
-
-	cmd.Cancel = func() error {
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-	}
-	cmd.WaitDelay = 5 * time.Second
 
 	if err := cmd.Start(); err != nil {
 		fmt.Printf("⚠️  Failed to start child process: %v\n", err)
@@ -50,19 +61,7 @@ func runChildProcess(ctx context.Context, args []string, envMap map[string]strin
 				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 			})
 		case <-ctx.Done():
-			// Context canceled (e.g. from app teardown)
-			cmd.Cancel = func() error {
-				// Signal entire process group
-				if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err != nil {
-					// Process may have already exited
-					if errors.Is(err, syscall.ESRCH) {
-						return nil
-					}
-					return err
-				}
-				return nil
-			}
-			cmd.WaitDelay = 5 * time.Second
+			// cmd.Cancel handles this automatically now
 		}
 	}()
 

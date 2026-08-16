@@ -1,28 +1,63 @@
-package kafka_test
+package kafka
 
 import (
+	"os"
 	"testing"
 
-	"github.com/divergedev/diverge/pkg/sdk/kafka"
 	"github.com/stretchr/testify/assert"
+	"pgregory.net/rapid"
 )
 
-func TestTopic(t *testing.T) {
-	assert.Equal(t, "orders", kafka.Topic("orders", ""))
-	assert.Equal(t, "orders--preview-1", kafka.Topic("orders", "preview-1"))
+func TestHeadersSdk(t *testing.T) {
+	tests := []struct {
+		name     string
+		env      string
+		expected map[string]string
+	}{
+		{
+			name:     "empty env",
+			env:      "",
+			expected: map[string]string{},
+		},
+		{
+			name:     "with env",
+			env:      "pr-123",
+			expected: map[string]string{HeaderKey: "pr-123"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("DIVERGE_ENV", tt.env)
+
+			headers := Headers()
+			assert.Equal(t, tt.expected, headers)
+		})
+	}
 }
 
-func TestConsumerGroup(t *testing.T) {
-	assert.Equal(t, "my-group", kafka.ConsumerGroup("orders", "my-group", ""))
-	assert.Equal(t, "my-group--orders--preview-1", kafka.ConsumerGroup("orders", "my-group", "preview-1"))
+func TestTopicAndConsumerGroupSdk(t *testing.T) {
+	t.Setenv("DIVERGE_ENV", "pr-123")
+
+	assert.Equal(t, "my-topic-pr-123", Topic("my-topic"))
+	assert.Equal(t, "my-group-pr-123", ConsumerGroup("my-group"))
+
+	t.Setenv("DIVERGE_ENV", "")
+	assert.Equal(t, "my-topic", Topic("my-topic"))
+	assert.Equal(t, "my-group", ConsumerGroup("my-group"))
 }
 
-func TestParseTopic(t *testing.T) {
-	base, env := kafka.ParseTopic("orders--preview-1")
-	assert.Equal(t, "orders", base)
-	assert.Equal(t, "preview-1", env)
+func TestTopicAndConsumerGroupSdk_Rapid(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		base := rapid.StringMatching(`^[a-z0-9-]+$`).Draw(t, "base")
+		env := rapid.StringMatching(`^[a-z0-9-]+$`).Draw(t, "env")
 
-	base2, env2 := kafka.ParseTopic("orders")
-	assert.Equal(t, "orders", base2)
-	assert.Equal(t, "", env2)
+		//nolint:errcheck
+		os.Setenv("DIVERGE_ENV", env)
+		defer os.Unsetenv("DIVERGE_ENV") //nolint:errcheck
+
+		expected := base + "-" + env
+		assert.Equal(t, expected, Topic(base))
+		assert.Equal(t, expected, ConsumerGroup(base))
+	})
 }
