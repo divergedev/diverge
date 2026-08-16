@@ -187,6 +187,32 @@ spec:
                       - target
                       type: object
                     type: array
+                  banner:
+                    description: Banner configures a preview indicator banner to inject
+                      into responses.
+                    properties:
+                      color:
+                        default: '#FF6B00'
+                        description: Color is the hex color code for the banner background.
+                        type: string
+                      enabled:
+                        description: Enabled controls whether the preview banner is
+                          injected into HTTP responses.
+                        type: boolean
+                      position:
+                        default: top
+                        description: Position determines where the banner is displayed
+                          on the screen.
+                        enum:
+                        - top
+                        - bottom
+                        type: string
+                      text:
+                        default: Preview Environment
+                        description: Text specifies the text to display inside the
+                          preview banner.
+                        type: string
+                    type: object
                   baseDomain:
                     description: |-
                       BaseDomain is the base domain for subdomain routing (e.g., "preview.app.dev").

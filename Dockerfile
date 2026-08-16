@@ -13,6 +13,7 @@ COPY api/ api/
 COPY gen/ gen/
 COPY internal/ internal/
 COPY pkg/ pkg/
+COPY config/ config/
 
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -a -o /out/diverge-controller cmd/controller/main.go
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -a -o /out/diverge-proxy cmd/proxy/main.go
