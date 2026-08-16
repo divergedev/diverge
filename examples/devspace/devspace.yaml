@@ -5,7 +5,7 @@ vars:
   DIVERGE_SERVICE: ${DIVERGE_SERVICE:-example-service}
 
 pipelines:
-  dev:
+  diverge-dev:
     run: |-
       diverge dev --service ${DIVERGE_SERVICE} -- devspace dev
 

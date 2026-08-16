@@ -34,12 +34,61 @@ diverge dev --service my-service -- devspace dev
 
 3. Run the pipeline:
    ```bash
-   devspace run dev
+   devspace run diverge-dev
    ```
    Or set the variable and run:
    ```bash
-   DIVERGE_SERVICE=my-service devspace run dev
+   DIVERGE_SERVICE=my-service devspace run diverge-dev
    ```
+
+## Remote Development (In-Cluster)
+
+For services with heavy cluster dependencies (databases, Temporal, Kafka), you can develop directly inside the cluster:
+
+1. Diverge creates the preview environment and routes traffic
+2. DevSpace syncs your local files TO a dev container in the preview namespace
+3. Your code runs IN the cluster with full access to cluster services
+
+### Remote Dev Template
+
+```yaml
+version: v2beta1
+name: diverge-remote-dev
+
+pipelines:
+  diverge-remote:
+    run: |-
+      diverge dev --service ${DIVERGE_SERVICE} -- devspace dev --no-warn
+
+dev:
+  app:
+    imageSelector: ${DIVERGE_SERVICE}
+    devImage: golang:1.26  # or your preferred dev image
+    sync:
+      - path: ./:/app
+        excludePaths:
+          - .git/
+          - vendor/
+          - node_modules/
+    terminal:
+      command: /bin/sh
+    env:
+      - name: DIVERGE_ENV
+        value: ${DIVERGE_ENV}
+    ports:
+      - port: "8080:8080"
+```
+
+Run with: `devspace run diverge-remote`
+
+### When to use Remote vs Local
+
+| | Local Dev | Remote Dev |
+|--|-----------|------------|
+| Speed | Faster iteration | Network latency |
+| Dependencies | Needs Tailscale | Direct cluster access |
+| Best for | Frontend, simple services | Backend with DB/queues |
+| Env vars | Injected by diverge dev | Inherited from namespace |
 
 ## Comparison: Standalone vs DevSpace
 

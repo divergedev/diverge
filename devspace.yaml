@@ -8,7 +8,7 @@ vars:
     command: git branch --show-current
 
 pipelines:
-  dev:
+  diverge-dev:
     run: |-
       diverge dev --service ${DIVERGE_SERVICE} -- devspace dev
 

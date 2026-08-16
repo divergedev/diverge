@@ -69,17 +69,22 @@ func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, e
 	ctx := cmd.Context()
 
 	if devspaceFlag {
-		const devspaceTemplate = `version: v2beta1
+		defaultService := "my-service"
+		if serviceFlag != "" {
+			defaultService = serviceFlag
+		}
+
+		devspaceTemplate := fmt.Sprintf(`version: v2beta1
 name: diverge-dev
 
 # Import Diverge dev vars
 vars:
-  DIVERGE_SERVICE: ${DIVERGE_SERVICE:-my-service}
+  DIVERGE_SERVICE: ${DIVERGE_SERVICE:-%s}
   DIVERGE_BRANCH:
     command: git branch --show-current
 
 pipelines:
-  dev:
+  diverge-dev:
     run: |-
       diverge dev --service ${DIVERGE_SERVICE} -- devspace dev
 
@@ -95,18 +100,21 @@ dev:
       command: ./start-dev.sh
     ports:
       - port: "8080:8080"
-`
-		if _, err := os.Stat("devspace.yaml"); os.IsNotExist(err) {
+`, defaultService)
+
+		if _, err := os.Stat("devspace.yaml"); err == nil {
+			fmt.Println("ℹ️  devspace.yaml already exists, skipping creation.")
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("checking devspace.yaml: %w", err)
+		} else {
 			if err := os.WriteFile("devspace.yaml", []byte(devspaceTemplate), 0644); err != nil {
 				return fmt.Errorf("failed to create devspace.yaml: %w", err)
 			}
 			fmt.Println("✅ Created devspace.yaml template in current directory.")
-		} else {
-			fmt.Println("ℹ️  devspace.yaml already exists, skipping creation.")
 		}
 		fmt.Println("\nTo start developing with DevSpace and Diverge:")
 		fmt.Println("  1. Edit devspace.yaml to match your service.")
-		fmt.Println("  2. Run: DIVERGE_SERVICE=your-service devspace run dev")
+		fmt.Println("  2. Run: DIVERGE_SERVICE=your-service devspace run diverge-dev")
 		fmt.Println("\nFor more details, see docs/guides/devspace-integration.md")
 		return nil
 	}
@@ -320,6 +328,9 @@ dev:
 		if childCmd != nil {
 			// Wait for the child command to finish or context to be canceled
 			if err := childCmd.Wait(); err != nil {
+				if ctx.Err() != nil {
+					return nil // graceful shutdown
+				}
 				return fmt.Errorf("child process failed: %w", err)
 			}
 		}
