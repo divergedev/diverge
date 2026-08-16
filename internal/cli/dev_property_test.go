@@ -93,7 +93,14 @@ func TestProperty_AsyncEnvAlwaysWins(t *testing.T) {
 			Overrides: map[string]string{key: asyncVal},
 		}, &buf)
 		require.NoError(ht, err)
-		require.Contains(ht, buf.String(), fmt.Sprintf("%s=%s\n", key, asyncVal))
-		require.NotContains(ht, buf.String(), fmt.Sprintf("%s=%s\n", key, baselineVal))
+		// Verify async value is present
+		output := buf.String()
+		require.Contains(ht, output, fmt.Sprintf("%s=%s", key, asyncVal))
+		// Verify baseline value doesn't appear as its own line (not substring)
+		for _, line := range strings.Split(output, "\n") {
+			if strings.TrimSpace(line) == fmt.Sprintf("%s=%s", key, baselineVal) {
+				ht.Errorf("baseline value should have been overridden: found %q", line)
+			}
+		}
 	})
 }

@@ -19,6 +19,8 @@ jobs:
         run: go build ./...
       - name: Test
         run: |
+          # E2E tests in /test/ are filtered out because they require a real cluster
+          # and are run in a separate workflow (e2e.yaml) using the 'e2e' build tag.
           PACKAGES=$(go list ./... | grep -v '/gen/' | grep -v '/test/' | tr '\n' ' ')
           go test $PACKAGES -race -coverprofile=coverage.out
       - name: Coverage Check

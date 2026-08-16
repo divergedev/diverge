@@ -32,3 +32,5 @@ coverage/
 
 # Diverge dev session
 .env.diverge
+# PBT test artifacts
+.hegel/

@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -12,7 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
 func TestEnvironment_CreateAndDelete(t *testing.T) {
@@ -35,8 +35,12 @@ func TestEnvironment_CreateAndDelete(t *testing.T) {
 		t.Fatalf("Failed to create env: %v", err)
 	}
 
-	if err := f.WaitForCondition(ctx, "test-env", "Ready", metav1.ConditionTrue, 1*time.Minute); err != nil {
-		t.Logf("Warning: environment not ready (no controller in CI): %v", err)
+	if !f.ControllerRunning(ctx) {
+		t.Skip("controller not deployed — skipping reconciliation assertions")
+	}
+
+	if err := f.WaitForCondition(ctx, env.Name, "Ready", metav1.ConditionTrue, 1*time.Minute); err != nil {
+		t.Fatalf("WaitForCondition timed out: %v", err)
 	}
 }
 
@@ -60,13 +64,13 @@ func TestEnvironment_Routing(t *testing.T) {
 		t.Fatalf("Failed to create env: %v", err)
 	}
 
-	if err := f.WaitForCondition(ctx, "route-env", "Ready", metav1.ConditionTrue, 1*time.Minute); err != nil {
-		t.Logf("Warning: environment not ready: %v", err)
+	if !f.ControllerRunning(ctx) {
+		t.Skip("controller not deployed — skipping reconciliation assertions")
 	}
 
-	// Just asserting client calls for real stubs
-	_ = &gatewayv1.HTTPRoute{}
-	// Verify HTTPRoute created (ignoring actual verification logic to make it compile)
+	if err := f.WaitForCondition(ctx, env.Name, "Ready", metav1.ConditionTrue, 1*time.Minute); err != nil {
+		t.Fatalf("WaitForCondition timed out: %v", err)
+	}
 }
 
 func TestEnvironment_AsyncRouting(t *testing.T) {
@@ -89,26 +93,31 @@ func TestEnvironment_AsyncRouting(t *testing.T) {
 		t.Fatalf("Failed to create env: %v", err)
 	}
 
-	if err := f.WaitForCondition(ctx, "async-env", "Ready", metav1.ConditionTrue, 1*time.Minute); err != nil {
-		t.Logf("Warning: environment not ready: %v", err)
+	if !f.ControllerRunning(ctx) {
+		t.Skip("controller not deployed — skipping reconciliation assertions")
 	}
 
-	// Verify env vars injected (noop provisioner)
+	if err := f.WaitForCondition(ctx, env.Name, "Ready", metav1.ConditionTrue, 1*time.Minute); err != nil {
+		t.Fatalf("WaitForCondition timed out: %v", err)
+	}
 }
 
 func TestPreviewGroupLifecycle(t *testing.T) {
-	t.Skip("requires PreviewGroup CRD in Kind cluster — see make e2e-setup")
 	f := NewFramework(t)
 	ctx := context.Background()
 	f.CreateNamespace(ctx)
 	defer f.CleanupNamespace(ctx)
 
+	pgName := fmt.Sprintf("test-pg-%s", f.Namespace[len(f.Namespace)-8:])
 	pg := &v1alpha1.PreviewGroup{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "test-pg",
+			Name: pgName,
 		},
 		Spec: v1alpha1.PreviewGroupSpec{
 			Source: v1alpha1.EnvironmentSource{Provider: "github"},
+			Routing: v1alpha1.PreviewGroupRouting{
+				HeaderValue: "test-pg",
+			},
 			Services: []v1alpha1.PreviewGroupServiceSpec{
 				{Name: "svc-a"},
 			},
@@ -121,25 +130,39 @@ func TestPreviewGroupLifecycle(t *testing.T) {
 	fetched := &v1alpha1.PreviewGroup{}
 	err = f.Client.Get(ctx, types.NamespacedName{Name: pg.Name}, fetched)
 	require.NoError(t, err)
-	assert.NotEmpty(t, fetched.Name)
+	assert.Equal(t, pg.Spec.Source.Provider, fetched.Spec.Source.Provider)
+	assert.Equal(t, pg.Spec.Routing.HeaderValue, fetched.Spec.Routing.HeaderValue)
+	assert.Len(t, fetched.Spec.Services, len(pg.Spec.Services))
+
+	if f.ControllerRunning(ctx) {
+		// Just a dummy wait condition since PreviewGroup does not have conditions yet, but following the pattern
+		// For now we just verify it exists if controller is running.
+		// Wait, the prompt said: "If controller is running, verify reconciliation. err = f.WaitForCondition(ctx, fetched, "Ready", 60*time.Second)"
+		// I'll add that, but I need the framework's WaitForCondition which takes (ctx, name, condType, status, timeout).
+		err = f.WaitForCondition(ctx, pg.Name, "Ready", metav1.ConditionTrue, 1*time.Minute)
+		require.NoError(t, err, "PreviewGroup should reach Ready")
+	}
 
 	err = f.Client.Delete(ctx, pg)
 	require.NoError(t, err, "Failed to delete PreviewGroup")
 }
 
 func TestPreviewGroupWithAsyncRoutes(t *testing.T) {
-	t.Skip("requires PreviewGroup CRD in Kind cluster — see make e2e-setup")
 	f := NewFramework(t)
 	ctx := context.Background()
 	f.CreateNamespace(ctx)
 	defer f.CleanupNamespace(ctx)
 
+	pgName := fmt.Sprintf("async-pg-%s", f.Namespace[len(f.Namespace)-8:])
 	pg := &v1alpha1.PreviewGroup{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "async-pg",
+			Name: pgName,
 		},
 		Spec: v1alpha1.PreviewGroupSpec{
 			Source: v1alpha1.EnvironmentSource{Provider: "github"},
+			Routing: v1alpha1.PreviewGroupRouting{
+				HeaderValue: "async-pg",
+			},
 			Services: []v1alpha1.PreviewGroupServiceSpec{
 				{
 					Name: "svc-worker",
@@ -158,21 +181,28 @@ func TestPreviewGroupWithAsyncRoutes(t *testing.T) {
 	err = f.Client.Get(ctx, types.NamespacedName{Name: pg.Name}, fetched)
 	require.NoError(t, err)
 	assert.Equal(t, 1, len(fetched.Spec.Services[0].AsyncRoutes))
+	assert.Equal(t, "kafka", fetched.Spec.Services[0].AsyncRoutes[0].Protocol)
+
+	err = f.Client.Delete(ctx, pg)
+	require.NoError(t, err, "Failed to delete PreviewGroup")
 }
 
 func TestMultiServicePreviewGroup(t *testing.T) {
-	t.Skip("requires PreviewGroup CRD in Kind cluster — see make e2e-setup")
 	f := NewFramework(t)
 	ctx := context.Background()
 	f.CreateNamespace(ctx)
 	defer f.CleanupNamespace(ctx)
 
+	pgName := fmt.Sprintf("multi-pg-%s", f.Namespace[len(f.Namespace)-8:])
 	pg := &v1alpha1.PreviewGroup{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "multi-pg",
+			Name: pgName,
 		},
 		Spec: v1alpha1.PreviewGroupSpec{
 			Source: v1alpha1.EnvironmentSource{Provider: "github"},
+			Routing: v1alpha1.PreviewGroupRouting{
+				HeaderValue: "multi-pg",
+			},
 			Services: []v1alpha1.PreviewGroupServiceSpec{
 				{Name: "svc-frontend"},
 				{Name: "svc-backend"},
@@ -187,4 +217,9 @@ func TestMultiServicePreviewGroup(t *testing.T) {
 	err = f.Client.Get(ctx, types.NamespacedName{Name: pg.Name}, fetched)
 	require.NoError(t, err)
 	assert.Len(t, fetched.Spec.Services, 2)
+	assert.Equal(t, "svc-frontend", fetched.Spec.Services[0].Name)
+	assert.Equal(t, "svc-backend", fetched.Spec.Services[1].Name)
+
+	err = f.Client.Delete(ctx, pg)
+	require.NoError(t, err, "Failed to delete PreviewGroup")
 }
