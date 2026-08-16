@@ -10,43 +10,33 @@ type Header struct {
 	Value []byte
 }
 
-// InjectHeaders injects the x-diverge-env header into a list of Kafka headers.
+// InjectHeaders injects the preview environment header into a list of Kafka headers.
 // If envName is empty, it returns the original headers unmodified.
-// If the header already exists, its value is updated.
+// Removes ALL existing environment headers before appending to prevent duplicate injection bypass.
 func InjectHeaders(headers []Header, envName string) []Header {
 	if envName == "" {
 		return headers
 	}
 
-	var result []Header
-	injected := false
-
+	targetKey := sdk.GetHeaderKey()
+	filtered := make([]Header, 0, len(headers))
 	for _, h := range headers {
-		if h.Key == sdk.GetHeaderKey() {
-			if !injected {
-				result = append(result, Header{Key: sdk.GetHeaderKey(), Value: []byte(envName)})
-				injected = true
-			}
-			// Skip additional duplicates of the environment header
-		} else {
-			result = append(result, h)
+		if h.Key != targetKey {
+			filtered = append(filtered, h)
 		}
 	}
 
-	if !injected {
-		result = append(result, Header{
-			Key:   sdk.GetHeaderKey(),
-			Value: []byte(envName),
-		})
-	}
-
-	return result
+	return append(filtered, Header{
+		Key:   targetKey,
+		Value: []byte(envName),
+	})
 }
 
 // ExtractEnvName extracts the preview environment name from Kafka headers.
 func ExtractEnvName(headers []Header) string {
+	targetKey := sdk.GetHeaderKey()
 	for _, h := range headers {
-		if h.Key == sdk.GetHeaderKey() {
+		if h.Key == targetKey {
 			return string(h.Value)
 		}
 	}

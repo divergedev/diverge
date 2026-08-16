@@ -22,8 +22,7 @@ func TestInterceptorRoundtripPBT(t *testing.T) {
 	provider := temporal.HeadersProvider{}
 
 	rapid.Check(t, func(t *rapid.T) {
-		env := rapid.StringMatching(`^[a-z0-9-]{0,20}$`).Draw(t, "env")
-
+		env := rapid.StringMatching(`^[a-zA-Z0-9-]{0,63}$`).Draw(t, "envName")
 		// 1. Inject into Context
 		ctx := context.Background()
 		if env != "" {
@@ -37,19 +36,29 @@ func TestInterceptorRoundtripPBT(t *testing.T) {
 		}
 
 		if env == "" {
-			require.Len(t, headers, 0)
+			if len(headers) != 0 {
+				t.Fatalf("Expected no headers")
+			}
 			return
 		}
-
-		require.NotNil(t, headers)
+		
+		if headers == nil {
+			t.Fatalf("Expected headers")
+		}
+		
 		payload, ok := headers[sdk.GetHeaderKey()]
-		require.True(t, ok)
-
+		if !ok {
+			t.Fatalf("Expected header %s", sdk.GetHeaderKey())
+		}
+		
 		var extracted string
-		err = converter.GetDefaultDataConverter().FromPayload(payload, &extracted)
-		require.NoError(t, err)
-
-		require.Equal(t, env, extracted)
+		if err := converter.GetDefaultDataConverter().FromPayload(payload, &extracted); err != nil {
+			t.Fatalf("Failed to decode payload: %v", err)
+		}
+		
+		if extracted != env {
+			t.Fatalf("Expected extracted env %q, got %q", env, extracted)
+		}
 	})
 }
 
