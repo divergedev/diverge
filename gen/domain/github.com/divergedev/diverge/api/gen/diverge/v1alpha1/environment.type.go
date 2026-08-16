@@ -392,12 +392,14 @@ func (m *ManifestSource) Equal(other *ManifestSource) bool {
 }
 
 // EnvironmentDeploy is the domain representation of diverge.v1alpha1.EnvironmentDeploy.
+//
+// Field numbers are frozen for stability. Do not change existing field numbers.
 type EnvironmentDeploy struct {
 	Mode            string            `json:"mode,omitempty"`
 	Namespace       string            `json:"namespace,omitempty"`
-	NamespaceLabels map[string]string `json:"namespace_labels,omitempty"`
 	ChangedServices []string          `json:"changed_services,omitempty"`
 	BaselineRef     string            `json:"baseline_ref,omitempty"`
+	NamespaceLabels map[string]string `json:"namespace_labels,omitempty"`
 	Manifests       *ManifestSource   `json:"manifests,omitempty"`
 }
 
@@ -409,9 +411,9 @@ func (e *EnvironmentDeploy) ToProto() *v1alpha1.EnvironmentDeploy {
 	out := &v1alpha1.EnvironmentDeploy{
 		Mode:            e.Mode,
 		Namespace:       e.Namespace,
-		NamespaceLabels: e.NamespaceLabels,
 		ChangedServices: e.ChangedServices,
 		BaselineRef:     e.BaselineRef,
+		NamespaceLabels: e.NamespaceLabels,
 	}
 	if e.Manifests != nil {
 		out.Manifests = e.Manifests.ToProto()
@@ -426,11 +428,11 @@ func (e *EnvironmentDeploy) FromProto(msg *v1alpha1.EnvironmentDeploy) {
 	}
 	e.Mode = msg.Mode
 	e.Namespace = msg.Namespace
-	e.NamespaceLabels = nil
-	e.NamespaceLabels = msg.NamespaceLabels
 	e.ChangedServices = nil
 	e.ChangedServices = msg.ChangedServices
 	e.BaselineRef = msg.BaselineRef
+	e.NamespaceLabels = nil
+	e.NamespaceLabels = msg.NamespaceLabels
 	e.Manifests = nil
 	if msg.Manifests != nil {
 		e.Manifests = &ManifestSource{}
@@ -449,12 +451,12 @@ func ApplyFieldMaskEnvironmentDeploy(dst, src *EnvironmentDeploy, paths []string
 			dst.Mode = src.Mode
 		case "namespace":
 			dst.Namespace = src.Namespace
-		case "namespace_labels":
-			dst.NamespaceLabels = src.NamespaceLabels
 		case "changed_services":
 			dst.ChangedServices = src.ChangedServices
 		case "baseline_ref":
 			dst.BaselineRef = src.BaselineRef
+		case "namespace_labels":
+			dst.NamespaceLabels = src.NamespaceLabels
 		case "manifests":
 			dst.Manifests = src.Manifests.Clone()
 		}
@@ -501,6 +503,17 @@ func (e *EnvironmentDeploy) Equal(other *EnvironmentDeploy) bool {
 	if e.Namespace != other.Namespace {
 		return false
 	}
+	if len(e.ChangedServices) != len(other.ChangedServices) {
+		return false
+	}
+	for i := range e.ChangedServices {
+		if e.ChangedServices[i] != other.ChangedServices[i] {
+			return false
+		}
+	}
+	if e.BaselineRef != other.BaselineRef {
+		return false
+	}
 	if len(e.NamespaceLabels) != len(other.NamespaceLabels) {
 		return false
 	}
@@ -512,17 +525,6 @@ func (e *EnvironmentDeploy) Equal(other *EnvironmentDeploy) bool {
 		if v != ov {
 			return false
 		}
-	}
-	if len(e.ChangedServices) != len(other.ChangedServices) {
-		return false
-	}
-	for i := range e.ChangedServices {
-		if e.ChangedServices[i] != other.ChangedServices[i] {
-			return false
-		}
-	}
-	if e.BaselineRef != other.BaselineRef {
-		return false
 	}
 	if (e.Manifests == nil) != (other.Manifests == nil) {
 		return false
@@ -718,6 +720,8 @@ func (c *CookieSpec) Equal(other *CookieSpec) bool {
 }
 
 // EnvironmentRouting is the domain representation of diverge.v1alpha1.EnvironmentRouting.
+//
+// Field numbers are frozen for stability. Do not change existing field numbers.
 type EnvironmentRouting struct {
 	Mode        string            `json:"mode,omitempty"`
 	Provider    string            `json:"provider,omitempty"`

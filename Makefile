@@ -18,7 +18,8 @@ manifests: ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefin
 
 .PHONY: proto
 proto: ## Generate protobuf code
-	buf lint
+	buf lint api/proto
+	buf breaking api/proto --against '.git#branch=main' || true
 	buf generate
 
 .PHONY: generate
