@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
+	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
@@ -78,8 +80,67 @@ func (r *GitHubActionsRunner) Trigger(ctx context.Context, env *v1alpha1.Environ
 	}
 
 	// GitHub dispatch is fire-and-forget; there's no run ID returned.
-	// We'll use a sentinel to trigger workflow run discovery on first poll.
-	return "dispatch-pending", nil
+	// We'll poll the Actions API to find the workflow run we just triggered.
+	dispatchedAt := time.Now()
+	runID, err := r.resolveDispatchRun(ctx, repo, eventType, dispatchedAt)
+	if err != nil {
+		// fallback to pending if we couldn't resolve
+		return "dispatch-pending", nil
+	}
+
+	return runID, nil
+}
+
+func (r *GitHubActionsRunner) resolveDispatchRun(ctx context.Context, repo, eventType string, dispatchedAt time.Time) (string, error) {
+	deadline := time.After(30 * time.Second)
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	// GitHub's search for created filters by UTC
+	createdAtFilter := dispatchedAt.Add(-10 * time.Second).UTC().Format(time.RFC3339)
+
+	for {
+		select {
+		case <-deadline:
+			return "", fmt.Errorf("timed out resolving dispatch to run ID")
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-ticker.C:
+			// Poll /repos/{repo}/actions/runs?event=repository_dispatch
+			apiURL := fmt.Sprintf("%s/repos/%s/actions/runs?event=repository_dispatch&created=>%s", r.baseURL(), repo, url.QueryEscape(createdAtFilter))
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+			if err != nil {
+				continue
+			}
+			req.Header.Set("Authorization", "Bearer "+r.Token)
+			req.Header.Set("Accept", "application/vnd.github+json")
+
+			resp, err := r.HTTPClient.Do(req)
+			if err != nil {
+				continue
+			}
+			if resp.StatusCode != http.StatusOK {
+				_ = resp.Body.Close()
+				continue
+			}
+
+			var result struct {
+				WorkflowRuns []struct {
+					ID        int64     `json:"id"`
+					CreatedAt time.Time `json:"created_at"`
+				} `json:"workflow_runs"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&result); err == nil {
+				for _, run := range result.WorkflowRuns {
+					if run.CreatedAt.After(dispatchedAt.Add(-10 * time.Second)) {
+						_ = resp.Body.Close()
+						return fmt.Sprintf("%d", run.ID), nil
+					}
+				}
+			}
+			_ = resp.Body.Close()
+		}
+	}
 }
 
 func (r *GitHubActionsRunner) Status(ctx context.Context, env *v1alpha1.Environment, runID string) (*TestResult, error) {

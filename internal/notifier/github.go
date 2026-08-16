@@ -415,3 +415,59 @@ func (g *GitHubPreviewGroupNotifier) UpdateGroupStatus(ctx context.Context, pg *
 	}
 	return g.postOrUpdateComment(ctx, pg, msg)
 }
+
+func (g *GitHubNotifier) resolveDispatchRun(ctx context.Context, owner, repo, workflow, branch string, dispatchedAt time.Time) (int64, error) {
+	deadline := time.After(30 * time.Second)
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	createdAtFilter := dispatchedAt.Add(-10 * time.Second).UTC().Format(time.RFC3339)
+	escapedProject, err := escapeProjectPath(owner + "/" + repo)
+	if err != nil {
+		return 0, err
+	}
+
+	for {
+		select {
+		case <-deadline:
+			return 0, fmt.Errorf("timed out resolving dispatch to run ID")
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		case <-ticker.C:
+			apiURL := fmt.Sprintf("%s/repos/%s/actions/runs?event=workflow_dispatch&branch=%s&created=>%s",
+				g.BaseURL, escapedProject, url.QueryEscape(branch), url.QueryEscape(createdAtFilter))
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+			if err != nil {
+				continue
+			}
+			req.Header.Set("Authorization", "Bearer "+g.Token)
+			req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+			resp, err := g.HTTPClient.Do(req)
+			if err != nil {
+				continue
+			}
+			if resp.StatusCode != http.StatusOK {
+				_ = resp.Body.Close()
+				continue
+			}
+
+			var result struct {
+				WorkflowRuns []struct {
+					ID        int64     `json:"id"`
+					CreatedAt time.Time `json:"created_at"`
+					Name      string    `json:"name"`
+				} `json:"workflow_runs"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&result); err == nil {
+				for _, run := range result.WorkflowRuns {
+					if run.CreatedAt.After(dispatchedAt.Add(-10 * time.Second)) {
+						_ = resp.Body.Close()
+						return run.ID, nil
+					}
+				}
+			}
+			_ = resp.Body.Close()
+		}
+	}
+}
