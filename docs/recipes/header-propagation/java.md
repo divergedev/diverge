@@ -9,8 +9,11 @@ public class DivergeHeaderFilter implements Filter {
         if (header != null) {
             DivergeContext.set(header);
         }
-        chain.doFilter(req, res);
-        DivergeContext.clear();
+        try {
+            chain.doFilter(req, res);
+        } finally {
+            DivergeContext.clear();
+        }
     }
 }
 ```
