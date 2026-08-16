@@ -16,7 +16,7 @@ helm install diverge diverge/diverge \
   --namespace diverge-system \
   --create-namespace \
   -f gitlab-values.yaml \
-  --version v0.4.0
+  --version 0.1.1
 ```
 
 ## 2. Configure GitLab Webhook
@@ -29,50 +29,32 @@ To enable automatic environment creation, configure a webhook in your GitLab pro
 
 For **PreviewGroups** support (multi-service environments), add a second webhook pointing to:
 - URL: `https://diverge.yourdomain.com/gitlab-previewgroup-webhook`
+*(Note: The `/gitlab-previewgroup-webhook` endpoint is currently only available on the latest main branch, not yet in a stable release.)*
 
 *Note: The webhook endpoint must be accessible from your GitLab instance.*
 
-## 3. Configure GitLab CI/CD Variables
-If you use Diverge for deployment and registry access, add these variables to your GitLab CI/CD Settings (`Settings` > `CI/CD` > `Variables`):
-- `DIVERGE_GITLAB_TOKEN`: GitLab personal access token or project access token (requires `api` scope).
-- `DIVERGE_GITLAB_URL`: GitLab instance URL (e.g., `https://gitlab.example.com`). Required for self-hosted instances.
+## 3. Configure Diverge Environment Variables
+The Diverge controller requires access to GitLab to post comments and validate webhooks. Ensure the following environment variables are set on the Diverge controller manager container:
+- `DIVERGE_NOTIFIER_TOKEN`: GitLab personal access token or project access token (requires `api` scope).
+- `DIVERGE_WEBHOOK_SECRET`: Your configured webhook secret token.
 
 ## 4. Helm Values for GitLab
 To configure Diverge for GitLab integration, apply the following `values.yaml` during installation:
 
 ```yaml
-notifier:
-  provider: gitlab
-  gitlab:
-    url: https://gitlab.example.com  # omit for gitlab.com
-    token:
-      secretName: diverge-gitlab-token
-      key: token
-webhook:
-  gitlab:
-    secretToken:
-      secretName: diverge-webhook-secret
-      key: token
+notifierProvider: gitlab
 ```
 
-Create the necessary Kubernetes secrets before installing:
-```bash
-kubectl create secret generic diverge-gitlab-token \
-  --namespace diverge-system \
-  --from-literal=token=YOUR_GITLAB_TOKEN
-
-kubectl create secret generic diverge-webhook-secret \
-  --namespace diverge-system \
-  --from-literal=token=YOUR_WEBHOOK_SECRET
-```
+*Note: The Helm chart does not currently natively map the secrets to the required environment variables. You will need to patch the `diverge-controller-manager` deployment to include `DIVERGE_NOTIFIER_TOKEN` and `DIVERGE_WEBHOOK_SECRET` in its `env` list.*
 
 ## 5. Single Service Setup
 For single-service repositories, the `Environment` CRD is deployed when a Merge Request webhook event is received. Ensure your `.diverge.yaml` maps the repository correctly:
 ```yaml
-version: v1
+version: "1"
 services:
   frontend:
-    path: apps/web/**
+    paths:
+      - apps/web/**
 ```
 When an MR is opened or updated, Diverge creates an `Environment` matching the MR ID and routes header-based traffic specifically to the updated service.
 
@@ -105,11 +87,11 @@ build-preview:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
 ```
-Refer to the `examples/gitlab-ci/` directory for full examples.
+Refer to the `ci/gitlab/` directory for full examples.
 
 ## 8. Self-Hosted GitLab
 If you are running a self-hosted GitLab instance, ensure the following are configured:
-- **Custom URL configuration**: Set `notifier.gitlab.url` in your Helm values to your instance URL.
+- **Custom URL configuration**: You must pass the `--gitlab-url` flag to the controller manager deployment args. The base URL handling for the standard notifier is currently unconfigurable via env var or Helm value.
 - **Internal CA certificates**: If your instance uses self-signed certs, mount your CA bundle into the controller pod.
 - **Private registry authentication**: Ensure Diverge has the correct image pull secrets for your internal container registry.
 - **Network considerations**: The webhook delivery must be able to reach your Kubernetes cluster from the GitLab instance. You may need to configure local network access in GitLab's Admin Area (`Settings` > `Network` > `Outbound requests`).
@@ -125,5 +107,5 @@ If you are running a self-hosted GitLab instance, ensure the following are confi
 
 ## 10. Troubleshooting
 - **Webhook 404** → Check that your webhook URL endpoint is correct and accessible.
-- **No MR comments** → Verify your `DIVERGE_GITLAB_TOKEN` permissions; it requires the `api` scope to post notes.
+- **No MR comments** → Verify your `DIVERGE_NOTIFIER_TOKEN` permissions; it requires the `api` scope to post notes.
 - **Self-hosted cert errors** → You likely need to mount your custom CA bundle in the controller.
