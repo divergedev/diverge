@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/divergedev/diverge/api/v1alpha1"
 	"gopkg.in/yaml.v3"
 )
 
@@ -21,9 +22,10 @@ type Config struct {
 var ErrConfigNotFound = errors.New("config not found")
 
 type ServiceConfig struct {
-	Paths []string    `yaml:"paths"`
-	Image ImageConfig `yaml:"image"`
-	Helm  *HelmConfig `yaml:"helm,omitempty"`
+	Paths       []string                  `yaml:"paths"`
+	Image       ImageConfig               `yaml:"image"`
+	Helm        *HelmConfig               `yaml:"helm,omitempty"`
+	AsyncRoutes []v1alpha1.AsyncRouteSpec `yaml:"asyncRoutes,omitempty" json:"asyncRoutes,omitempty"`
 }
 
 type ImageConfig struct {
@@ -108,6 +110,10 @@ func Parse(data []byte) (*Config, error) {
 
 // Load reads the YAML file from the given path, unmarshals it, and validates the version.
 func Load(path string) (*Config, error) {
+	info, err := os.Stat(path)
+	if err == nil && info.Size() > 1<<20 { // 1MB
+		return nil, fmt.Errorf("config file too large: %d bytes (max 1MB)", info.Size())
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)

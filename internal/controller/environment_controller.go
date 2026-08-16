@@ -36,6 +36,23 @@ import (
 
 const environmentFinalizer = "diverge.io/environment-protection"
 
+var blockedEnvVars = map[string]bool{
+	"KUBERNETES_SERVICE_HOST": true,
+	"KUBERNETES_SERVICE_PORT": true,
+	"HOME":                    true,
+	"PATH":                    true,
+	"KUBECONFIG":              true,
+}
+
+func validateEnvVarMapping(mapping map[string]string) error {
+	for _, v := range mapping {
+		if blockedEnvVars[v] {
+			return fmt.Errorf("env var %q is restricted and cannot be overridden", v)
+		}
+	}
+	return nil
+}
+
 // EnvironmentReconciler reconciles a Environment object
 type EnvironmentReconciler struct {
 	client.Client
@@ -61,6 +78,7 @@ type EnvironmentReconciler struct {
 // +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=argoproj.io,resources=applications,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=http.keda.sh,resources=httpscaledobjects,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile performs its designated operation.
 func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, retErr error) {
@@ -241,55 +259,66 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// 7.5. Ensure async routing
 	if len(env.Spec.Routing.AsyncRoutes) > 0 && r.AsyncProvisioner != nil {
-		var asyncEnvVars []divergeiov1alpha1.EnvVar
-		for _, route := range env.Spec.Routing.AsyncRoutes {
-			tCtxA, cancelA := context.WithTimeout(ctx, 30*time.Second)
-			startA := time.Now()
-			result, err := r.AsyncProvisioner.Provision(tCtxA, &env, route)
-			durationA := time.Since(startA).Seconds()
-			cancelA()
-			if err == nil && result == nil {
-				err = async.ErrNilProvisionResult
+		if meta.IsStatusConditionTrue(env.Status.Conditions, "AsyncRoutingReady") {
+			// Skip re-provisioning
+		} else {
+			for _, route := range env.Spec.Routing.AsyncRoutes {
+				if err := validateEnvVarMapping(route.EnvVarMapping); err != nil {
+					meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+						Type:    "AsyncRoutingReady",
+						Status:  metav1.ConditionFalse,
+						Reason:  "EnvVarConflict",
+						Message: err.Error(),
+					})
+					return r.updateStatusWithRequeue(ctx, &env, statusBase, err, 0)
+				}
 			}
-			if err != nil {
-				metrics.AsyncProvisionDurationSeconds.WithLabelValues(string(route.Protocol), "error").Observe(durationA)
-				metrics.AsyncProvisionErrorsTotal.WithLabelValues(string(route.Protocol)).Inc()
-				meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
-					Type:    "AsyncRoutingReady",
-					Status:  metav1.ConditionFalse,
-					Reason:  "AsyncProvisionFailed",
-					Message: fmt.Sprintf("async provision failed for %s/%s: %s", route.Protocol, route.Target, err.Error()),
-				})
-				r.Recorder.Event(&env, "Warning", "AsyncProvisionFailed", fmt.Sprintf("async provision failed for %s/%s: %s", route.Protocol, route.Target, err.Error()))
-				return r.updateStatusWithRequeue(ctx, &env, statusBase, err, 0)
+
+			asyncEnvVars := make(map[string]string)
+			for _, route := range env.Spec.Routing.AsyncRoutes {
+				tCtxA, cancelA := context.WithTimeout(ctx, 30*time.Second)
+				startA := time.Now()
+				result, err := r.AsyncProvisioner.Provision(tCtxA, &env, route)
+				durationA := time.Since(startA).Seconds()
+				cancelA()
+				if err == nil && result == nil {
+					err = async.ErrNilProvisionResult
+				}
+				if err != nil {
+					metrics.AsyncProvisionDurationSeconds.WithLabelValues(string(route.Protocol), "error").Observe(durationA)
+					metrics.AsyncProvisionErrorsTotal.WithLabelValues(string(route.Protocol)).Inc()
+					meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+						Type:    "AsyncRoutingReady",
+						Status:  metav1.ConditionFalse,
+						Reason:  "AsyncProvisionFailed",
+						Message: fmt.Sprintf("async provision failed for %s/%s: %s", route.Protocol, route.Target, err.Error()),
+					})
+					r.Recorder.Event(&env, "Warning", "AsyncProvisionFailed", fmt.Sprintf("async provision failed for %s/%s: %s", route.Protocol, route.Target, err.Error()))
+					return r.updateStatusWithRequeue(ctx, &env, statusBase, err, 0)
+				}
+				metrics.AsyncProvisionDurationSeconds.WithLabelValues(string(route.Protocol), "success").Observe(durationA)
+				for k, v := range result.EnvVars {
+					if existing, ok := asyncEnvVars[k]; ok && existing != v {
+						err = fmt.Errorf("env var collision for %q", k)
+						meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+							Type:    "AsyncRoutingReady",
+							Status:  metav1.ConditionFalse,
+							Reason:  "EnvVarConflict",
+							Message: err.Error(),
+						})
+						return r.updateStatusWithRequeue(ctx, &env, statusBase, err, 0)
+					}
+					asyncEnvVars[k] = v
+				}
 			}
-			metrics.AsyncProvisionDurationSeconds.WithLabelValues(string(route.Protocol), "success").Observe(durationA)
-			for k, v := range result.EnvVars {
-				asyncEnvVars = append(asyncEnvVars, divergeiov1alpha1.EnvVar{Name: k, Value: v})
-			}
-		}
-		// Inject async env vars into service config
-		if env.Spec.ServiceConfig == nil {
-			env.Spec.ServiceConfig = &divergeiov1alpha1.ServicePreviewConfig{}
-		}
-		// Merge async env vars, detecting conflicts
-		merged, err := mergeEnvVars(env.Spec.ServiceConfig.Env, asyncEnvVars)
-		if err != nil {
+			env.Status.AsyncEnvVars = asyncEnvVars
 			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 				Type:    "AsyncRoutingReady",
-				Status:  metav1.ConditionFalse,
-				Reason:  "EnvVarConflict",
-				Message: err.Error(),
+				Status:  metav1.ConditionTrue,
+				Reason:  "AsyncProvisioned",
+				Message: fmt.Sprintf("%d async routes provisioned", len(env.Spec.Routing.AsyncRoutes)),
 			})
-			return r.updateStatusWithRequeue(ctx, &env, statusBase, err, 0)
 		}
-		env.Spec.ServiceConfig.Env = merged
-		meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
-			Type:    "AsyncRoutingReady",
-			Status:  metav1.ConditionTrue,
-			Reason:  "AsyncProvisioned",
-			Message: fmt.Sprintf("%d async routes provisioned", len(env.Spec.Routing.AsyncRoutes)),
-		})
 	}
 
 	// 7.6. Ensure banner ConfigMap

@@ -265,8 +265,8 @@ func TestReconcile_AsyncRouting(t *testing.T) {
 	require.NoError(t, client.Get(context.Background(), req.NamespacedName, updatedEnv))
 
 	require.NotNil(t, dep.lastEnv)
-	require.NotNil(t, dep.lastEnv.Spec.ServiceConfig)
-	assert.Contains(t, dep.lastEnv.Spec.ServiceConfig.Env, divergeiov1alpha1.EnvVar{Name: "TEST_SQS_URL", Value: "http://sqs"})
+	require.NotNil(t, updatedEnv.Status.AsyncEnvVars)
+	assert.Equal(t, "http://sqs", updatedEnv.Status.AsyncEnvVars["TEST_SQS_URL"])
 	assert.Equal(t, divergeiov1alpha1.PhaseRunning, updatedEnv.Status.Phase)
 
 	condition := meta.FindStatusCondition(updatedEnv.Status.Conditions, "AsyncRoutingReady")

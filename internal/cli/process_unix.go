@@ -4,6 +4,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,6 +15,22 @@ import (
 
 func runChildProcess(ctx context.Context, args []string, envMap map[string]string) (*exec.Cmd, error) {
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	cmd.WaitDelay = 5 * time.Second
+	cmd.Cancel = func() error {
+		pgid := -cmd.Process.Pid
+		if err := syscall.Kill(pgid, syscall.SIGTERM); err != nil {
+			if errors.Is(err, syscall.ESRCH) {
+				return os.ErrProcessDone
+			}
+			return err
+		}
+		// Start SIGKILL fallback after WaitDelay
+		go func() {
+			time.Sleep(cmd.WaitDelay)
+			_ = syscall.Kill(pgid, syscall.SIGKILL)
+		}()
+		return nil
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -44,11 +61,7 @@ func runChildProcess(ctx context.Context, args []string, envMap map[string]strin
 				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 			})
 		case <-ctx.Done():
-			// Context canceled (e.g. from app teardown)
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-			time.AfterFunc(5*time.Second, func() {
-				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			})
+			// cmd.Cancel handles this automatically now
 		}
 	}()
 
