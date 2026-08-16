@@ -81,3 +81,8 @@ internal/server/cluster_auth.go
 internal/server/environment.go
 internal/server/previewgroup.go
 internal/server/server.go
+
+# CLI interface and interactive login (tested via integration)
+internal/cli/client.go
+internal/cli/client_k8s.go
+internal/cli/login.go
