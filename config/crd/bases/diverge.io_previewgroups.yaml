@@ -140,6 +140,9 @@ spec:
                 description: Routing configures header-based traffic routing shared
                   by all services.
                 properties:
+                  baseDomain:
+                    description: BaseDomain is the base domain for subdomain routing.
+                    type: string
                   externalUrl:
                     description: |-
                       ExternalURL is an optional shareable URL for non-engineer access
@@ -159,10 +162,10 @@ spec:
                     type: string
                   mode:
                     default: header
-                    description: Mode is the routing mode. Only "header" is supported
-                      in v1.
+                    description: Mode is the routing mode.
                     enum:
                     - header
+                    - subdomain
                     type: string
                 required:
                 - headerValue
@@ -176,6 +179,37 @@ spec:
                     Only Name is required; Port, ParentRef, and PathPrefix
                     are auto-discovered from existing Kubernetes Services if omitted.
                   properties:
+                    asyncRoutes:
+                      description: AsyncRoutes defines async routing targets to provision
+                        for this service.
+                      items:
+                        description: AsyncRouteSpec defines an async routing target
+                          for event-driven services.
+                        properties:
+                          envVarMapping:
+                            additionalProperties:
+                              type: string
+                            description: |-
+                              EnvVarMapping maps provisioned targets to environment variable names.
+                              If empty, sensible defaults are used based on protocol:
+                              - temporal: TEMPORAL_TASK_QUEUE
+                              - kafka: KAFKA_CONSUMER_GROUP
+                            type: object
+                          protocol:
+                            description: Protocol is the async protocol type.
+                            enum:
+                            - temporal
+                            - kafka
+                            type: string
+                          target:
+                            description: Target is the baseline resource name (e.g.,
+                              task queue name or topic name).
+                            type: string
+                        required:
+                        - protocol
+                        - target
+                        type: object
+                      type: array
                     database:
                       description: Database overrides the group-level database configuration
                         for this service.

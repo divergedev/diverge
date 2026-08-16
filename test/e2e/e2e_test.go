@@ -8,7 +8,10 @@ import (
 	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
@@ -91,4 +94,97 @@ func TestEnvironment_AsyncRouting(t *testing.T) {
 	}
 
 	// Verify env vars injected (noop provisioner)
+}
+
+func TestPreviewGroupLifecycle(t *testing.T) {
+	t.Skip("requires PreviewGroup CRD in Kind cluster — see make e2e-setup")
+	f := NewFramework(t)
+	ctx := context.Background()
+	f.CreateNamespace(ctx)
+	defer f.CleanupNamespace(ctx)
+
+	pg := &v1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-pg",
+		},
+		Spec: v1alpha1.PreviewGroupSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "github"},
+			Services: []v1alpha1.PreviewGroupServiceSpec{
+				{Name: "svc-a"},
+			},
+		},
+	}
+
+	err := f.Client.Create(ctx, pg)
+	require.NoError(t, err, "Failed to create PreviewGroup")
+
+	fetched := &v1alpha1.PreviewGroup{}
+	err = f.Client.Get(ctx, types.NamespacedName{Name: pg.Name}, fetched)
+	require.NoError(t, err)
+	assert.NotEmpty(t, fetched.Name)
+
+	err = f.Client.Delete(ctx, pg)
+	require.NoError(t, err, "Failed to delete PreviewGroup")
+}
+
+func TestPreviewGroupWithAsyncRoutes(t *testing.T) {
+	t.Skip("requires PreviewGroup CRD in Kind cluster — see make e2e-setup")
+	f := NewFramework(t)
+	ctx := context.Background()
+	f.CreateNamespace(ctx)
+	defer f.CleanupNamespace(ctx)
+
+	pg := &v1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "async-pg",
+		},
+		Spec: v1alpha1.PreviewGroupSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "github"},
+			Services: []v1alpha1.PreviewGroupServiceSpec{
+				{
+					Name: "svc-worker",
+					AsyncRoutes: []v1alpha1.AsyncRouteSpec{
+						{Protocol: "kafka", Target: "topic-test"},
+					},
+				},
+			},
+		},
+	}
+
+	err := f.Client.Create(ctx, pg)
+	require.NoError(t, err, "Failed to create PreviewGroup with async routes")
+
+	fetched := &v1alpha1.PreviewGroup{}
+	err = f.Client.Get(ctx, types.NamespacedName{Name: pg.Name}, fetched)
+	require.NoError(t, err)
+	assert.Equal(t, 1, len(fetched.Spec.Services[0].AsyncRoutes))
+}
+
+func TestMultiServicePreviewGroup(t *testing.T) {
+	t.Skip("requires PreviewGroup CRD in Kind cluster — see make e2e-setup")
+	f := NewFramework(t)
+	ctx := context.Background()
+	f.CreateNamespace(ctx)
+	defer f.CleanupNamespace(ctx)
+
+	pg := &v1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "multi-pg",
+		},
+		Spec: v1alpha1.PreviewGroupSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "github"},
+			Services: []v1alpha1.PreviewGroupServiceSpec{
+				{Name: "svc-frontend"},
+				{Name: "svc-backend"},
+			},
+		},
+	}
+
+	err := f.Client.Create(ctx, pg)
+	require.NoError(t, err, "Failed to create multi-service PreviewGroup")
+
+	fetched := &v1alpha1.PreviewGroup{}
+	err = f.Client.Get(ctx, types.NamespacedName{Name: pg.Name}, fetched)
+	require.NoError(t, err)
+	assert.Len(t, fetched.Spec.Services, 2)
 }

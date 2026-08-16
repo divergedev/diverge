@@ -156,6 +156,42 @@ spec:
               routing:
                 description: EnvironmentRouting defines the routing configuration
                 properties:
+                  asyncRoutes:
+                    description: AsyncRoutes defines async routing targets for event-driven
+                      backends.
+                    items:
+                      description: AsyncRouteSpec defines an async routing target
+                        for event-driven services.
+                      properties:
+                        envVarMapping:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            EnvVarMapping maps provisioned targets to environment variable names.
+                            If empty, sensible defaults are used based on protocol:
+                            - temporal: TEMPORAL_TASK_QUEUE
+                            - kafka: KAFKA_CONSUMER_GROUP
+                          type: object
+                        protocol:
+                          description: Protocol is the async protocol type.
+                          enum:
+                          - temporal
+                          - kafka
+                          type: string
+                        target:
+                          description: Target is the baseline resource name (e.g.,
+                            task queue name or topic name).
+                          type: string
+                      required:
+                      - protocol
+                      - target
+                      type: object
+                    type: array
+                  baseDomain:
+                    description: |-
+                      BaseDomain is the base domain for subdomain routing (e.g., "preview.app.dev").
+                      When mode is "subdomain", HTTPRoutes are created with hostname "<env-name>.<baseDomain>".
+                    type: string
                   devIP:
                     type: string
                   externalUrl:

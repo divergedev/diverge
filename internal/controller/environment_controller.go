@@ -108,6 +108,11 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		env.Status.CommitSHA = env.Spec.Source.CommitSHA
 	}
 
+	// Initialize metrics from existing state
+	for _, route := range env.Spec.Routing.AsyncRoutes {
+		metrics.AsyncRoutesActive.WithLabelValues(string(route.Protocol), env.Namespace).Add(0)
+	}
+
 	// 3. Add finalizer
 	if !controllerutil.ContainsFinalizer(&env, environmentFinalizer) {
 		controllerutil.AddFinalizer(&env, environmentFinalizer)
@@ -115,6 +120,9 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			return ctrl.Result{}, fmt.Errorf("failed to add finalizer: %w", err)
 		}
 		metrics.EnvironmentsActive.Inc()
+		for _, route := range env.Spec.Routing.AsyncRoutes {
+			metrics.AsyncRoutesActive.WithLabelValues(string(route.Protocol), env.Namespace).Inc()
+		}
 		if r.Notifier != nil {
 			tCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
@@ -233,12 +241,16 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		var asyncEnvVars []divergeiov1alpha1.EnvVar
 		for _, route := range env.Spec.Routing.AsyncRoutes {
 			tCtxA, cancelA := context.WithTimeout(ctx, 30*time.Second)
+			startA := time.Now()
 			result, err := r.AsyncProvisioner.Provision(tCtxA, &env, route)
+			durationA := time.Since(startA).Seconds()
 			cancelA()
 			if err == nil && result == nil {
 				err = async.ErrNilProvisionResult
 			}
 			if err != nil {
+				metrics.AsyncProvisionDurationSeconds.WithLabelValues(string(route.Protocol), "error").Observe(durationA)
+				metrics.AsyncProvisionErrorsTotal.WithLabelValues(string(route.Protocol)).Inc()
 				meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 					Type:    "AsyncRoutingReady",
 					Status:  metav1.ConditionFalse,
@@ -248,6 +260,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				r.Recorder.Event(&env, "Warning", "AsyncProvisionFailed", fmt.Sprintf("async provision failed for %s/%s: %s", route.Protocol, route.Target, err.Error()))
 				return r.updateStatusWithRequeue(ctx, &env, statusBase, err, 0)
 			}
+			metrics.AsyncProvisionDurationSeconds.WithLabelValues(string(route.Protocol), "success").Observe(durationA)
 			for k, v := range result.EnvVars {
 				asyncEnvVars = append(asyncEnvVars, divergeiov1alpha1.EnvVar{Name: k, Value: v})
 			}
@@ -573,6 +586,9 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		}
 
 		metrics.EnvironmentsActive.Dec()
+		for _, route := range env.Spec.Routing.AsyncRoutes {
+			metrics.AsyncRoutesActive.WithLabelValues(string(route.Protocol), env.Namespace).Dec()
+		}
 
 		r.Recorder.Event(env, "Normal", "Terminated", "Teardown complete")
 	}

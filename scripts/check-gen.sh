@@ -25,7 +25,7 @@ if [[ -f flake.nix ]] && ! [[ "${IN_NIX_SHELL:-}" == "1" || -n "${IN_NIX_SHELL:-
 fi
 
 # Verify tools are available
-for tool in buf protoc-gen-go protoc-gen-connect-go; do
+for tool in buf protoc-gen-go protoc-gen-connect-go controller-gen; do
     if ! command -v "$tool" &>/dev/null; then
         echo "❌ Required tool '$tool' not found. Run inside nix develop."
         exit 1
@@ -38,9 +38,14 @@ buf generate
 buf generate --template buf.gen.domain.yaml
 rm -rf gen/domain/diverge/v1
 
-# Check for modified or untracked files in gen/
-DIFF_OUTPUT=$(git diff --stat gen/ 2>/dev/null || true)
-UNTRACKED=$(git ls-files --others --exclude-standard -- gen/ 2>/dev/null || true)
+echo "▸ Running controller-gen..."
+controller-gen object paths=./api/...
+mkdir -p config/crd/bases
+controller-gen crd paths=./api/... output:crd:dir=config/crd/bases
+
+# Check for modified or untracked files
+DIFF_OUTPUT=$(git diff --stat gen/ api/ config/crd/bases/ 2>/dev/null || true)
+UNTRACKED=$(git ls-files --others --exclude-standard -- gen/ api/ config/crd/bases/ 2>/dev/null || true)
 
 if [[ -n "$DIFF_OUTPUT" || -n "$UNTRACKED" ]]; then
     echo ""
@@ -56,7 +61,7 @@ if [[ -n "$DIFF_OUTPUT" || -n "$UNTRACKED" ]]; then
         echo "$UNTRACKED"
     fi
     echo ""
-    echo "Run 'make proto' and commit the updated gen/ directory."
+    echo "Run 'make generate manifests' and commit the updated files."
     exit 1
 fi
 
