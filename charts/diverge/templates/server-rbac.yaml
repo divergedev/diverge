@@ -1,0 +1,50 @@
+{{- if .Values.server.enabled -}}
+---
+{{- if .Values.server.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "diverge.fullname" . }}-server
+  labels:
+    app.kubernetes.io/component: server
+  {{- with .Values.server.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "diverge.fullname" . }}-server
+  labels:
+    app.kubernetes.io/component: server
+rules:
+  - apiGroups: ["environments.diverge.io"]
+    resources: ["previewgroups"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["authorization.k8s.io"]
+    resources: ["subjectaccessreviews"]
+    verbs: ["create"]
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "diverge.fullname" . }}-server
+  labels:
+    app.kubernetes.io/component: server
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "diverge.fullname" . }}-server
+subjects:
+  - kind: ServiceAccount
+    name: {{ if .Values.server.serviceAccount.create }}{{ include "diverge.fullname" . }}-server{{ else }}{{ .Values.server.serviceAccount.name | default (printf "%s-server" (include "diverge.fullname" .)) }}{{ end }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

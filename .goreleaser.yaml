@@ -93,6 +93,19 @@ builds:
       - arm64
     ldflags:
       - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+  - id: diverge-server
+    main: cmd/server/main.go
+    binary: diverge-server
+    flags:
+      - -trimpath
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
 archives:
   - id: full
     format: tar.gz
@@ -101,6 +114,7 @@ archives:
       - diverge-controller
       - diverge-proxy
       - diverge-activator-proxy
+      - diverge-server
     files:
       - src: README*
       - src: LICENSE*
