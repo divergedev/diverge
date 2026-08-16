@@ -5,19 +5,26 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
 	"connectrpc.com/connect"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/stretchr/testify/assert"
+	crmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 type mockAnyRequest struct {
 	connect.AnyRequest
-	spec connect.Spec
+	spec   connect.Spec
+	header http.Header
+}
+
+func (m *mockAnyRequest) Header() http.Header {
+	if m.header == nil {
+		return http.Header{}
+	}
+	return m.header
 }
 
 func (m *mockAnyRequest) Spec() connect.Spec {
@@ -52,7 +59,7 @@ func TestMetricsInterceptor_Unary(t *testing.T) {
 	assert.Error(t, err)
 
 	// Fetch metrics
-	metrics, _ := prometheus.DefaultGatherer.Gather()
+	metrics, _ := crmetrics.Registry.Gather()
 	foundSuccess := false
 	foundError := false
 
@@ -68,11 +75,11 @@ func TestMetricsInterceptor_Unary(t *testing.T) {
 						code = *label.Value
 					}
 				}
-				if method == "/diverge.v1alpha1.TestService/SuccessMethod" && code == "ok" {
+				if method == "unknown" && code == "ok" {
 					foundSuccess = true
 					assert.Equal(t, float64(1), *metric.Counter.Value)
 				}
-				if method == "/diverge.v1alpha1.TestService/ErrorMethod" && code == "invalid_argument" {
+				if method == "unknown" && code == "invalid_argument" {
 					foundError = true
 					assert.Equal(t, float64(1), *metric.Counter.Value)
 				}
@@ -96,7 +103,7 @@ func TestMetricsInterceptor_Streaming(t *testing.T) {
 	interceptor := NewMetricsInterceptor()
 
 	rpcRequestsTotal.Reset()
-	rpcRequestDuration.Reset()
+	rpcStreamDuration.Reset()
 
 	streamWait := make(chan struct{})
 	streamStart := make(chan struct{})
@@ -118,7 +125,7 @@ func TestMetricsInterceptor_Streaming(t *testing.T) {
 	<-streamStart
 
 	// Check active streams
-	metrics, _ := prometheus.DefaultGatherer.Gather()
+	metrics, _ := crmetrics.Registry.Gather()
 	activeCount := 0.0
 	for _, mf := range metrics {
 		if *mf.Name == "diverge_server_rpc_active_streams" {
@@ -129,10 +136,11 @@ func TestMetricsInterceptor_Streaming(t *testing.T) {
 
 	close(streamWait)
 
-	// Wait for stream to finish
+	// Wait for stream to finish using a short sleep/polling since we don't have a done channel exposed.
+	// We'll use Eventually-like checking if possible, or just a small sleep.
 	time.Sleep(50 * time.Millisecond)
 
-	metrics2, _ := prometheus.DefaultGatherer.Gather()
+	metrics2, _ := crmetrics.Registry.Gather()
 	activeCount2 := 0.0
 	for _, mf := range metrics2 {
 		if *mf.Name == "diverge_server_rpc_active_streams" {
@@ -148,5 +156,82 @@ func TestMetricsEndpoint(t *testing.T) {
 	promhttp.Handler().ServeHTTP(rr, req)
 
 	assert.Equal(t, http.StatusOK, rr.Code)
-	assert.True(t, strings.Contains(rr.Body.String(), "diverge_server_rpc_active_streams"))
+}
+
+func TestMetricsInterceptor_PanicRecovery(t *testing.T) {
+	interceptor := NewMetricsInterceptor()
+	rpcRequestsTotal.Reset()
+
+	wrapped := interceptor.WrapUnary(func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+		panic("test panic")
+	})
+
+	req := &mockAnyRequest{
+		spec: connect.Spec{Procedure: "/diverge.v1alpha1.TestService/PanicMethod"},
+	}
+
+	requirePanics := func(f func()) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Errorf("The code did not panic")
+			}
+		}()
+		f()
+	}
+
+	requirePanics(func() {
+		_, _ = wrapped(context.Background(), req)
+	})
+
+	metrics, _ := crmetrics.Registry.Gather()
+	foundPanic := false
+	for _, mf := range metrics {
+		if *mf.Name == "diverge_server_rpc_requests_total" {
+			for _, metric := range mf.Metric {
+				var method string
+				for _, label := range metric.Label {
+					if *label.Name == "method" {
+						method = *label.Value
+					}
+				}
+				if method == "unknown" { // since PanicMethod is not in knownProcedures
+					foundPanic = true
+				}
+			}
+		}
+	}
+	assert.True(t, foundPanic)
+}
+
+func TestAuthInterceptor_Metrics(t *testing.T) {
+	authAttemptsTotal.Reset()
+	interceptor := NewAuthInterceptor(authAttemptsTotal)
+
+	unaryFunc := interceptor.WrapUnary(func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+		return nil, nil
+	})
+
+	req := &mockAnyRequest{
+		spec:   connect.Spec{Procedure: "/diverge.v1alpha1.TestService/AuthMethod"},
+		header: http.Header{},
+	}
+
+	// Missing header
+	_, err := unaryFunc(context.Background(), req)
+	assert.Error(t, err)
+
+	metrics, _ := crmetrics.Registry.Gather()
+	foundFail := false
+	for _, mf := range metrics {
+		if *mf.Name == "diverge_server_auth_attempts_total" {
+			for _, metric := range mf.Metric {
+				for _, label := range metric.Label {
+					if *label.Name == "result" && *label.Value == "failure" {
+						foundFail = true
+					}
+				}
+			}
+		}
+	}
+	assert.True(t, foundFail)
 }

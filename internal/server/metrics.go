@@ -6,20 +6,47 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
+	crmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	"github.com/divergedev/diverge/internal/server/streaming"
 )
 
+var knownProcedures = map[string]bool{
+	"/diverge.v1alpha1.EnvironmentService/ListEnvironments":    true,
+	"/diverge.v1alpha1.EnvironmentService/GetEnvironment":      true,
+	"/diverge.v1alpha1.EnvironmentService/CreateEnvironment":   true,
+	"/diverge.v1alpha1.EnvironmentService/UpdateEnvironment":   true,
+	"/diverge.v1alpha1.EnvironmentService/DeleteEnvironment":   true,
+	"/diverge.v1alpha1.EnvironmentService/ExtendTTL":           true,
+	"/diverge.v1alpha1.EnvironmentService/WatchEnvironments":   true,
+	"/diverge.v1alpha1.EnvironmentService/StreamLogs":          true,
+	"/diverge.v1alpha1.PreviewGroupService/ListPreviewGroups":  true,
+	"/diverge.v1alpha1.PreviewGroupService/GetPreviewGroup":    true,
+	"/diverge.v1alpha1.PreviewGroupService/CreatePreviewGroup": true,
+	"/diverge.v1alpha1.PreviewGroupService/UpdatePreviewGroup": true,
+	"/diverge.v1alpha1.PreviewGroupService/DeletePreviewGroup": true,
+	"/diverge.v1alpha1.PreviewGroupService/WatchPreviewGroups": true,
+	"/diverge.v1alpha1.ClusterService/GetClusterInfo":          true,
+	"/diverge.v1alpha1.AuthService/GetCurrentUser":             true,
+	"/diverge.v1alpha1.AuthService/ListPermissions":            true,
+}
+
+func sanitizeMethod(procedure string) string {
+	if knownProcedures[procedure] {
+		return procedure
+	}
+	return "unknown"
+}
+
 var (
-	rpcRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+	rpcRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "diverge",
 		Subsystem: "server",
 		Name:      "rpc_requests_total",
 		Help:      "Total number of RPC requests by method and status",
 	}, []string{"method", "code"})
 
-	rpcRequestDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+	rpcRequestDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: "diverge",
 		Subsystem: "server",
 		Name:      "rpc_request_duration_seconds",
@@ -27,41 +54,62 @@ var (
 		Buckets:   prometheus.DefBuckets,
 	}, []string{"method"})
 
-	rpcActiveStreams = promauto.NewGauge(prometheus.GaugeOpts{
+	rpcStreamDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "diverge",
+		Subsystem: "server",
+		Name:      "rpc_stream_duration_seconds",
+		Help:      "Duration of streaming RPCs in seconds",
+		Buckets:   []float64{1, 5, 10, 30, 60, 120, 300, 600, 1800, 3600},
+	}, []string{"method"})
+
+	rpcActiveStreams = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: "diverge",
 		Subsystem: "server",
 		Name:      "rpc_active_streams",
 		Help:      "Number of active streaming RPCs",
 	})
 
-	authAttemptsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+	authAttemptsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "diverge",
 		Subsystem: "server",
 		Name:      "auth_attempts_total",
 		Help:      "Authentication attempts by provider and result",
 	}, []string{"provider", "result"})
 
-	broadcasterSubscribers = promauto.NewGauge(prometheus.GaugeOpts{
+	broadcasterSubscribers = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: "diverge",
 		Subsystem: "server",
 		Name:      "broadcaster_subscribers",
 		Help:      "Current number of active broadcaster subscribers",
 	})
 
-	broadcasterEventsTotal = promauto.NewCounter(prometheus.CounterOpts{
+	broadcasterEventsTotal = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace: "diverge",
 		Subsystem: "server",
 		Name:      "broadcaster_events_total",
 		Help:      "Total events published through broadcaster",
 	})
 
-	broadcasterDropsTotal = promauto.NewCounter(prometheus.CounterOpts{
+	broadcasterDropsTotal = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace: "diverge",
 		Subsystem: "server",
 		Name:      "broadcaster_drops_total",
 		Help:      "Total events dropped due to slow consumers",
 	})
 )
+
+func init() {
+	crmetrics.Registry.MustRegister(
+		rpcRequestsTotal,
+		rpcRequestDuration,
+		rpcStreamDuration,
+		rpcActiveStreams,
+		authAttemptsTotal,
+		broadcasterSubscribers,
+		broadcasterEventsTotal,
+		broadcasterDropsTotal,
+	)
+}
 
 type metricsInterceptor struct{}
 
@@ -79,18 +127,20 @@ func NewMetricsInterceptor() connect.Interceptor {
 }
 
 func (m *metricsInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
-	return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+	return func(ctx context.Context, req connect.AnyRequest) (resp connect.AnyResponse, err error) {
+		method := sanitizeMethod(req.Spec().Procedure)
 		start := time.Now()
-		resp, err := next(ctx, req)
-		duration := time.Since(start).Seconds()
-		method := req.Spec().Procedure
-		code := "ok"
-		if err != nil {
-			code = connect.CodeOf(err).String()
-		}
-		rpcRequestsTotal.WithLabelValues(method, code).Inc()
-		rpcRequestDuration.WithLabelValues(method).Observe(duration)
-		return resp, err
+		defer func() {
+			duration := time.Since(start).Seconds()
+			code := "ok"
+			if err != nil {
+				code = connect.CodeOf(err).String()
+			}
+			rpcRequestsTotal.WithLabelValues(method, code).Inc()
+			rpcRequestDuration.WithLabelValues(method).Observe(duration)
+		}()
+		resp, err = next(ctx, req)
+		return
 	}
 }
 
@@ -99,19 +149,21 @@ func (m *metricsInterceptor) WrapStreamingClient(next connect.StreamingClientFun
 }
 
 func (m *metricsInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
-	return func(ctx context.Context, conn connect.StreamingHandlerConn) error {
+	return func(ctx context.Context, conn connect.StreamingHandlerConn) (err error) {
+		method := sanitizeMethod(conn.Spec().Procedure)
 		rpcActiveStreams.Inc()
-		defer rpcActiveStreams.Dec()
-		method := conn.Spec().Procedure
 		start := time.Now()
-		err := next(ctx, conn)
-		duration := time.Since(start).Seconds()
-		code := "ok"
-		if err != nil {
-			code = connect.CodeOf(err).String()
-		}
-		rpcRequestsTotal.WithLabelValues(method, code).Inc()
-		rpcRequestDuration.WithLabelValues(method).Observe(duration)
-		return err
+		defer func() {
+			rpcActiveStreams.Dec()
+			duration := time.Since(start).Seconds()
+			code := "ok"
+			if err != nil {
+				code = connect.CodeOf(err).String()
+			}
+			rpcRequestsTotal.WithLabelValues(method, code).Inc()
+			rpcStreamDuration.WithLabelValues(method).Observe(duration)
+		}()
+		err = next(ctx, conn)
+		return
 	}
 }

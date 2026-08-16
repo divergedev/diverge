@@ -1,11 +1,13 @@
 package server
 
 import (
+	"log"
 	"net/http"
 
 	"connectrpc.com/connect"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	crmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	"github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
 	"github.com/divergedev/diverge/internal/server/streaming"
@@ -18,7 +20,7 @@ func NewServeMux(c client.Client, informerMgr *streaming.InformerManager, logStr
 
 	interceptors := connect.WithInterceptors(
 		NewMetricsInterceptor(),
-		NewAuthInterceptor(),
+		NewAuthInterceptor(authAttemptsTotal),
 	)
 
 	envService := NewEnvironmentService(c, informerMgr, logStreamer)
@@ -37,7 +39,18 @@ func NewServeMux(c client.Client, informerMgr *streaming.InformerManager, logStr
 	authPath, authHandler := divergev1alpha1connect.NewAuthServiceHandler(authService, interceptors)
 	mux.Handle(authPath, authHandler)
 
-	mux.Handle("/metrics", promhttp.Handler())
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", promhttp.HandlerFor(crmetrics.Registry, promhttp.HandlerOpts{}))
+	metricsMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	go func() {
+		log.Printf("Metrics server listening on :9090")
+		if err := http.ListenAndServe(":9090", metricsMux); err != nil {
+			log.Printf("metrics server error: %v", err)
+		}
+	}()
 
 	return mux
 }

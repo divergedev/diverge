@@ -31,11 +31,11 @@ func (p HeadersProvider) GetHeaders(ctx context.Context) (map[string]*commonpb.P
 		return nil, err
 	}
 	return map[string]*commonpb.Payload{
-		sdk.DefaultHeaderKey: payload,
+		sdk.GetHeaderKey(): payload,
 	}, nil
 }
 
-// WorkerInterceptor intercepts Temporal workflow and activity tasks to extract the x-diverge-env header.
+// WorkerInterceptor intercepts Temporal workflow and activity tasks to extract the preview env header.
 type WorkerInterceptor struct {
 	interceptor.WorkerInterceptorBase
 }
@@ -58,10 +58,10 @@ type activityInboundInterceptor struct {
 func (a *activityInboundInterceptor) ExecuteActivity(ctx context.Context, in *interceptor.ExecuteActivityInput) (interface{}, error) {
 	headers := interceptor.Header(ctx)
 	if headers != nil {
-		if payload, ok := headers[sdk.DefaultHeaderKey]; ok {
+		if payload, ok := headers[sdk.GetHeaderKey()]; ok {
 			var env string
 			if err := converter.GetDefaultDataConverter().FromPayload(payload, &env); err == nil && env != "" {
-				ctx = context.WithValue(ctx, envContextKey, env)
+				ctx = context.WithValue(ctx, sdk.EnvContextKey, env)
 			}
 		}
 	}
@@ -82,10 +82,10 @@ type workflowInboundInterceptor struct {
 func (w *workflowInboundInterceptor) ExecuteWorkflow(ctx workflow.Context, in *interceptor.ExecuteWorkflowInput) (interface{}, error) {
 	headers := interceptor.WorkflowHeader(ctx)
 	if headers != nil {
-		if payload, ok := headers[sdk.DefaultHeaderKey]; ok {
+		if payload, ok := headers[sdk.GetHeaderKey()]; ok {
 			var env string
 			if err := converter.GetDefaultDataConverter().FromPayload(payload, &env); err == nil && env != "" {
-				ctx = workflow.WithValue(ctx, envContextKey, env)
+				ctx = workflow.WithValue(ctx, sdk.EnvContextKey, env)
 			}
 		}
 	}

@@ -7,6 +7,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	go.temporal.io/api v1.43.0
 	go.temporal.io/sdk v1.31.0
+	pgregory.net/rapid v1.3.0
 )
 
 require (
