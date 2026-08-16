@@ -275,6 +275,14 @@ func main() {
 		DefaultNS:     defaultNamespace,
 	})
 
+	if notifierProvider == "gitlab" && notifierToken != "" {
+		mgr.GetWebhookServer().Register("/gitlab-previewgroup-webhook", &webhook.GitLabPreviewGroupWebhookHandler{
+			Client:        mgr.GetClient(),
+			Config:        webhookConfig,
+			ConfigFetcher: glConfigFetcher,
+		})
+	}
+
 	var ghConfigFetcher webhook.ConfigFetcher
 	if notifierProvider == "github" && notifierToken != "" {
 		ghConfigFetcher = &webhook.GitHubConfigFetcher{

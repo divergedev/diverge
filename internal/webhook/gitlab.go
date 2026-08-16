@@ -65,8 +65,7 @@ func (h *GitLabWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	token := r.Header.Get("X-Gitlab-Token")
-	if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(h.Config.SecretToken)) != 1 {
+	if !ValidateGitLabWebhookToken(r, h.Config.SecretToken) {
 		logger.Info("Unauthorized webhook request")
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
@@ -190,4 +189,10 @@ func normalizeGitLabAction(action string) string {
 	default:
 		return "other"
 	}
+}
+
+// ValidateGitLabWebhookToken validates a GitLab webhook payload token.
+func ValidateGitLabWebhookToken(r *http.Request, expectedToken string) bool {
+	token := r.Header.Get("X-Gitlab-Token")
+	return subtle.ConstantTimeCompare([]byte(token), []byte(expectedToken)) == 1
 }
