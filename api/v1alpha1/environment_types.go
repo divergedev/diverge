@@ -264,7 +264,8 @@ type ServicePreviewConfig struct {
 
 // WebSocketSpec defines WebSocket proxy configuration.
 type WebSocketSpec struct {
-	Enabled bool   `json:"enabled,omitempty"`
+	Enabled bool `json:"enabled,omitempty"`
+	// +kubebuilder:validation:Pattern=`^/.*$`
 	Path    string `json:"path,omitempty"`    // e.g., "/ws", default: all paths
 	Timeout string `json:"timeout,omitempty"` // e.g., "3600s", default: no timeout
 }

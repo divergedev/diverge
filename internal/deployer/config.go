@@ -19,11 +19,12 @@ type DotDivergeConfig struct {
 
 // DotDivergeSpec is the spec section of .diverge.yaml.
 type DotDivergeSpec struct {
-	Namespace   string              `yaml:"namespace"`
-	ServiceName string              `yaml:"serviceName"`
-	Port        int32               `yaml:"port"`
-	Routing     DotDivergeRouting   `yaml:"routing"`
-	Container   DotDivergeContainer `yaml:"container"`
+	Namespace   string                  `yaml:"namespace"`
+	ServiceName string                  `yaml:"serviceName"`
+	Port        int32                   `yaml:"port"`
+	Routing     DotDivergeRouting       `yaml:"routing"`
+	WebSocket   *v1alpha1.WebSocketSpec `yaml:"websocket"`
+	Container   DotDivergeContainer     `yaml:"container"`
 }
 
 // DotDivergeRouting configures preview routing.
@@ -67,6 +68,7 @@ func (c *DotDivergeConfig) ToServicePreviewConfig(image string) *v1alpha1.Servic
 		Image:       image,
 		ParentRef:   c.Spec.Routing.ParentRef,
 		HeaderKey:   c.Spec.Routing.HeaderKey,
+		WebSocket:   c.Spec.WebSocket,
 	}
 	for _, env := range c.Spec.Container.Env {
 		cfg.Env = append(cfg.Env, v1alpha1.EnvVar{Name: env.Name, Value: env.Value})

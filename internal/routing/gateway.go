@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
 	"regexp"
 	"strings"
 
@@ -244,13 +245,17 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 	}
 
 	var rules []interface{}
-	if cfg := env.Spec.ServiceConfig; cfg != nil && cfg.WebSocket != nil && cfg.WebSocket.Enabled && kind == "HTTPRoute" {
+	if cfg := env.Spec.ServiceConfig; cfg != nil && (cfg.ServiceName == "" || cfg.ServiceName == svc) && cfg.WebSocket != nil && cfg.WebSocket.Enabled && kind == "HTTPRoute" {
 		timeout := cfg.WebSocket.Timeout
 		if timeout == "" {
 			timeout = "0s" // disable timeout by default
 		}
 
 		if cfg.WebSocket.Path != "" {
+			wsPath := cfg.WebSocket.Path
+			if cfg.PathPrefix != "" {
+				wsPath = path.Join(cfg.PathPrefix, wsPath)
+			}
 			wsMatches := []interface{}{}
 			for _, m := range matches {
 				mMap := m.(map[string]interface{})
@@ -260,7 +265,7 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 				}
 				wsMatch["path"] = map[string]interface{}{
 					"type":  "PathPrefix",
-					"value": cfg.WebSocket.Path,
+					"value": wsPath,
 				}
 				wsMatches = append(wsMatches, wsMatch)
 			}

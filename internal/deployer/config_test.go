@@ -138,3 +138,28 @@ spec:
 	assert.Equal(t, "DB_URL", spc.Env[0].Name)
 	assert.Equal(t, "postgres://localhost/preview", spc.Env[0].Value)
 }
+
+func TestToServicePreviewConfig_WebSocket(t *testing.T) {
+	cfg, err := ParseDotDivergeConfig([]byte(`
+apiVersion: diverge.io/v1alpha1
+kind: ServicePreview
+metadata:
+  name: payments-api
+spec:
+  namespace: demo-bank
+  serviceName: payments-api
+  port: 9090
+  websocket:
+    enabled: true
+    path: /ws
+    timeout: 3600s
+`))
+	require.NoError(t, err)
+
+	spc := cfg.ToServicePreviewConfig("registry/payments-api:mr-42")
+
+	require.NotNil(t, spc.WebSocket)
+	assert.True(t, spc.WebSocket.Enabled)
+	assert.Equal(t, "/ws", spc.WebSocket.Path)
+	assert.Equal(t, "3600s", spc.WebSocket.Timeout)
+}

@@ -329,6 +329,7 @@ spec:
                       enabled:
                         type: boolean
                       path:
+                        pattern: ^/.*$
                         type: string
                       timeout:
                         type: string
