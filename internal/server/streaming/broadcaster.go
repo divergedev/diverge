@@ -24,17 +24,30 @@ type Subscriber[T any] struct {
 	id     string
 }
 
+// BroadcasterMetrics defines optional callbacks for observability.
+type BroadcasterMetrics struct {
+	IncSubscribers func()
+	DecSubscribers func()
+	IncEvents      func()
+	IncDrops       func()
+}
+
 // Broadcaster distributes events to multiple subscribers with bounded buffers.
 type Broadcaster[T any] struct {
 	mu          sync.RWMutex
 	subscribers map[string]*Subscriber[T]
+	metrics     BroadcasterMetrics
 }
 
 // NewBroadcaster creates a new bounded broadcaster.
-func NewBroadcaster[T any]() *Broadcaster[T] {
-	return &Broadcaster[T]{
+func NewBroadcaster[T any](metrics ...BroadcasterMetrics) *Broadcaster[T] {
+	b := &Broadcaster[T]{
 		subscribers: make(map[string]*Subscriber[T]),
 	}
+	if len(metrics) > 0 {
+		b.metrics = metrics[0]
+	}
+	return b
 }
 
 // Subscribe creates a new subscriber with a bounded channel.
@@ -50,6 +63,10 @@ func (b *Broadcaster[T]) Subscribe(ctx context.Context) *Subscriber[T] {
 	b.mu.Lock()
 	b.subscribers[sub.id] = sub
 	b.mu.Unlock()
+
+	if b.metrics.IncSubscribers != nil {
+		b.metrics.IncSubscribers()
+	}
 
 	// Auto-unsubscribe on context cancellation
 	go func() {
@@ -67,6 +84,9 @@ func (b *Broadcaster[T]) Unsubscribe(id string) {
 		sub.cancel()
 		close(sub.ch)
 		delete(b.subscribers, id)
+		if b.metrics.DecSubscribers != nil {
+			b.metrics.DecSubscribers()
+		}
 	}
 	b.mu.Unlock()
 }
@@ -74,6 +94,9 @@ func (b *Broadcaster[T]) Unsubscribe(id string) {
 // Publish sends an event to all subscribers.
 // If a subscriber's buffer is full, it is dropped.
 func (b *Broadcaster[T]) Publish(event Event[T]) {
+	if b.metrics.IncEvents != nil {
+		b.metrics.IncEvents()
+	}
 	b.mu.RLock()
 	// Create a copy of the keys to avoid holding the lock during drop
 	var toDrop []string
@@ -84,6 +107,9 @@ func (b *Broadcaster[T]) Publish(event Event[T]) {
 		default:
 			// buffer full, drop subscriber
 			toDrop = append(toDrop, id)
+			if b.metrics.IncDrops != nil {
+				b.metrics.IncDrops()
+			}
 		}
 	}
 	b.mu.RUnlock()

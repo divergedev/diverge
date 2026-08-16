@@ -15,10 +15,10 @@ type InformerManager struct {
 }
 
 // NewInformerManager creates informer event handlers and connects them to broadcasters.
-func NewInformerManager(logger *slog.Logger) *InformerManager {
+func NewInformerManager(logger *slog.Logger, metrics ...BroadcasterMetrics) *InformerManager {
 	return &InformerManager{
-		EnvBroadcaster: NewBroadcaster[*divergev1alpha1.Environment](),
-		PgBroadcaster:  NewBroadcaster[*divergev1alpha1.PreviewGroup](),
+		EnvBroadcaster: NewBroadcaster[*divergev1alpha1.Environment](metrics...),
+		PgBroadcaster:  NewBroadcaster[*divergev1alpha1.PreviewGroup](metrics...),
 		logger:         logger,
 	}
 }

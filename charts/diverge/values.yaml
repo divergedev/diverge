@@ -1,5 +1,11 @@
 replicaCount: 1
 
+server:
+  metrics:
+    serviceMonitor:
+      enabled: false
+
+
 image:
   repository: ghcr.io/divergedev/diverge
   tag: "v0.4.0"
