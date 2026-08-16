@@ -13,6 +13,8 @@ type TestResult struct {
 	State   v1alpha1.TestState
 	Summary string
 	URL     string
+	// ResolvedRunID is the actual ID of the run if it was resolved from a pending state.
+	ResolvedRunID string
 }
 
 // TestRunner triggers test runs and polls for their completion.

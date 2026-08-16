@@ -191,6 +191,8 @@ type TestTriggerSpec struct {
 	// EventType is the GitHub repository dispatch event type.
 	// Used by github-dispatch trigger only.
 	EventType string `json:"eventType,omitempty"`
+	// Workflow is the GitHub Actions workflow file name to filter by.
+	Workflow string `json:"workflow,omitempty"`
 	// WebhookURL is the URL to POST to for webhook triggers.
 	WebhookURL string `json:"webhookURL,omitempty"`
 	// SecretRef references a Kubernetes Secret containing the trigger token.

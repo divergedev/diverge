@@ -442,6 +442,10 @@ spec:
                         description: WebhookURL is the URL to POST to for webhook
                           triggers.
                         type: string
+                      workflow:
+                        description: Workflow is the GitHub Actions workflow file
+                          name to filter by.
+                        type: string
                     required:
                     - type
                     type: object
