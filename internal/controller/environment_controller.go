@@ -131,7 +131,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// Initialize metrics from existing state
 	for _, route := range env.Spec.Routing.AsyncRoutes {
-		metrics.AsyncRoutesActive.WithLabelValues(string(route.Protocol), env.Namespace).Add(0)
+		asyncActiveRoutes.WithLabelValues(string(route.Protocol)).Add(0)
 	}
 
 	// 3. Add finalizer
@@ -142,7 +142,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 		metrics.EnvironmentsActive.Inc()
 		for _, route := range env.Spec.Routing.AsyncRoutes {
-			metrics.AsyncRoutesActive.WithLabelValues(string(route.Protocol), env.Namespace).Inc()
+			asyncActiveRoutes.WithLabelValues(string(route.Protocol)).Inc()
 		}
 		if r.Notifier != nil {
 			tCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -285,8 +285,8 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 					err = async.ErrNilProvisionResult
 				}
 				if err != nil {
-					metrics.AsyncProvisionDurationSeconds.WithLabelValues(string(route.Protocol), "error").Observe(durationA)
-					metrics.AsyncProvisionErrorsTotal.WithLabelValues(string(route.Protocol)).Inc()
+					asyncProvisionDuration.WithLabelValues(string(route.Protocol)).Observe(durationA)
+					asyncProvisionsTotal.WithLabelValues(string(route.Protocol), "error").Inc()
 					meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 						Type:    "AsyncRoutingReady",
 						Status:  metav1.ConditionFalse,
@@ -296,7 +296,8 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 					r.Recorder.Event(&env, "Warning", "AsyncProvisionFailed", fmt.Sprintf("async provision failed for %s/%s: %s", route.Protocol, route.Target, err.Error()))
 					return r.updateStatusWithRequeue(ctx, &env, statusBase, err, 0)
 				}
-				metrics.AsyncProvisionDurationSeconds.WithLabelValues(string(route.Protocol), "success").Observe(durationA)
+				asyncProvisionDuration.WithLabelValues(string(route.Protocol)).Observe(durationA)
+				asyncProvisionsTotal.WithLabelValues(string(route.Protocol), "success").Inc()
 				for k, v := range result.EnvVars {
 					if existing, ok := asyncEnvVars[k]; ok && existing != v {
 						err = fmt.Errorf("env var collision for %q", k)
@@ -622,8 +623,10 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 				tCtxA, cancelA := context.WithTimeout(ctx, 15*time.Second)
 				if err := r.AsyncProvisioner.Teardown(tCtxA, env, route); err != nil {
 					cancelA()
+					asyncTeardownsTotal.WithLabelValues(string(route.Protocol), "error").Inc()
 					return ctrl.Result{}, fmt.Errorf("failed to teardown async route %s/%s: %w", route.Protocol, route.Target, err)
 				}
+				asyncTeardownsTotal.WithLabelValues(string(route.Protocol), "success").Inc()
 				cancelA()
 			}
 		}
@@ -674,7 +677,7 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 
 		metrics.EnvironmentsActive.Dec()
 		for _, route := range env.Spec.Routing.AsyncRoutes {
-			metrics.AsyncRoutesActive.WithLabelValues(string(route.Protocol), env.Namespace).Dec()
+			asyncActiveRoutes.WithLabelValues(string(route.Protocol)).Dec()
 		}
 
 		r.Recorder.Event(env, "Normal", "Terminated", "Teardown complete")
