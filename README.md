@@ -12,7 +12,13 @@
   <a href="https://github.com/divergedev/diverge/releases/latest"><img src="https://img.shields.io/github/v/release/divergedev/diverge" alt="Release"></a>
 </p>
 
-Environment-as-a-service engine for Kubernetes. Diverge creates ephemeral preview environments triggered by merge request events, with delta deployment (only deploy changed services), configurable database provisioning, and Gateway API / Istio-based header routing. Extensible via a pluggable provider registry.
+Environment-as-a-service engine for Kubernetes. Diverge creates ephemeral preview environments with async routing, Prometheus observability, GitLab support, SDK propagation, and configurable database provisioning. Extensible via a pluggable provider registry.
+
+### Get Started
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/v0.5.0/install.sh | sh
+```
 
 Documentation: [https://divergedev.com](https://divergedev.com)
 
@@ -131,7 +137,7 @@ sh install.sh
 Or install via Go:
 
 ```bash
-go install github.com/divergedev/diverge/cmd/diverge@v0.3.0
+go install github.com/divergedev/diverge/cmd/diverge@v0.5.0
 ```
 
 ### Install via Helm (Kubernetes Operator)
@@ -139,14 +145,14 @@ go install github.com/divergedev/diverge/cmd/diverge@v0.3.0
 ```bash
 helm repo add diverge https://divergedev.github.io/diverge
 helm repo update
-helm install diverge diverge/diverge --namespace diverge-system --create-namespace --version v0.3.0
+helm install diverge diverge/diverge --namespace diverge-system --create-namespace --version v0.5.0
 ```
 
 ### Docker Images (for reference)
 
 The controller and proxy images are available at:
 ```bash
-docker pull ghcr.io/divergedev/diverge:v0.3.0
+docker pull ghcr.io/divergedev/diverge:v0.5.0
 ```
 
 Or download the binary from [Releases](https://github.com/divergedev/diverge/releases).
