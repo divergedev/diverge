@@ -80,9 +80,38 @@ func TestStatusCmd(t *testing.T) {
 		},
 	}
 
+	env3 := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "env3",
+			Namespace:         "staging",
+			CreationTimestamp: now,
+		},
+		Status: divergeiov1alpha1.EnvironmentStatus{
+			Phase:     "Pending",
+			ExpiresAt: nil, // Nil TTL
+			Services:  []string{"db"},
+		},
+	}
+
+	pg2 := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "pg2",
+			Namespace:         "other", // pg is cluster-scoped
+			CreationTimestamp: now,
+		},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{Name: "cache"},
+			},
+		},
+		Status: divergeiov1alpha1.PreviewGroupStatus{
+			Phase: "Ready",
+		},
+	}
+
 	fakeClient := fake.NewClientBuilder().
 		WithScheme(newTestScheme()).
-		WithObjects(env1, env2, pg1).
+		WithObjects(env1, env2, env3, pg1, pg2).
 		Build()
 
 	app := &App{Namespace: "default", Client: fakeClient, NoColor: true}
@@ -97,28 +126,31 @@ func TestStatusCmd(t *testing.T) {
 		out := buf.String()
 		assert.Contains(t, out, "PREVIEW ENVIRONMENTS")
 		assert.Contains(t, out, "env1")
-		assert.Contains(t, out, "env2")
+		assert.NotContains(t, out, "env2")
+		assert.NotContains(t, out, "env3")
 		assert.Contains(t, out, "Ready")
-		assert.Contains(t, out, "Failed")
-		assert.Contains(t, out, "expired")
 		assert.Contains(t, out, "PREVIEW GROUPS")
 		assert.Contains(t, out, "pg1")
+		assert.Contains(t, out, "pg2")
 		assert.Contains(t, out, "Deploying")
-		assert.Contains(t, out, "SUMMARY: 2 environments, 1 preview groups, 2 services total")
+		assert.Contains(t, out, "SUMMARY: 1 environments, 2 preview groups, 5 services total")
 	})
 
-	t.Run("namespace filtering", func(t *testing.T) {
+	t.Run("all namespaces", func(t *testing.T) {
 		cmd := newStatusCmd(app)
 		var buf bytes.Buffer
 		cmd.SetOut(&buf)
-		cmd.SetArgs([]string{"-n", "staging"})
+		cmd.SetArgs([]string{"-A"})
 		require.NoError(t, cmd.Execute())
 
 		out := buf.String()
-		assert.NotContains(t, out, "env1")
+		assert.Contains(t, out, "env1")
 		assert.Contains(t, out, "env2")
-		assert.NotContains(t, out, "pg1")
-		assert.Contains(t, out, "SUMMARY: 1 environments, 0 preview groups, 0 services total")
+		assert.Contains(t, out, "env3")
+		assert.Contains(t, out, "pg1")
+		assert.Contains(t, out, "pg2")
+		assert.Contains(t, out, "expired")
+		assert.Contains(t, out, "SUMMARY: 3 environments, 2 preview groups, 6 services total")
 	})
 
 	t.Run("wide output", func(t *testing.T) {
@@ -148,8 +180,22 @@ func TestStatusCmd(t *testing.T) {
 
 		envs := result["environments"].([]interface{})
 		pgs := result["previewGroups"].([]interface{})
-		assert.Len(t, envs, 2)
-		assert.Len(t, pgs, 1)
+		assert.Len(t, envs, 1)
+		assert.Len(t, pgs, 2)
+	})
+
+	t.Run("yaml output", func(t *testing.T) {
+		cmd := newStatusCmd(app)
+		var buf bytes.Buffer
+		cmd.SetOut(&buf)
+		cmd.SetArgs([]string{"-o", "yaml"})
+		require.NoError(t, cmd.Execute())
+
+		out := buf.String()
+		assert.Contains(t, out, "environments:")
+		assert.Contains(t, out, "previewGroups:")
+		assert.Contains(t, out, "env1")
+		assert.Contains(t, out, "pg1")
 	})
 
 	t.Run("no environments", func(t *testing.T) {

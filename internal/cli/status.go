@@ -7,63 +7,61 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/fatih/color"
 	"github.com/spf13/cobra"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 )
 
-func formatTTL(expiresAt *metav1.Time) string {
-	if expiresAt == nil {
-		return "-"
-	}
-	d := time.Until(expiresAt.Time)
+func formatTTL(d time.Duration) string {
 	if d <= 0 {
 		return "expired"
 	}
 	hours := int(d.Hours())
 	if hours >= 24 {
-		return fmt.Sprintf("%dh left", hours)
+		return fmt.Sprintf("%dd left", hours/24)
 	}
 	if hours > 0 {
 		return fmt.Sprintf("%dh left", hours)
 	}
 	mins := int(d.Minutes())
-	return fmt.Sprintf("%dm left", mins)
+	if mins > 0 {
+		return fmt.Sprintf("%dm left", mins)
+	}
+	return "<1m left"
 }
 
 func colorStatus(status string, noColor bool) string {
+	padded := fmt.Sprintf("%-12s", status)
 	if noColor {
-		return status
+		return padded
 	}
-	s := strings.ToLower(status)
-	if s == "ready" || s == "running" {
-		return color.GreenString(status)
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "ready", "running":
+		return "\033[32m" + padded + "\033[0m"
+	case "deploying", "pending":
+		return "\033[33m" + padded + "\033[0m"
+	case "failed", "degraded":
+		return "\033[31m" + padded + "\033[0m"
+	default:
+		return padded
 	}
-	if s == "deploying" || s == "pending" {
-		return color.YellowString(status)
-	}
-	if s == "failed" || s == "degraded" {
-		return color.RedString(status)
-	}
-	return status
 }
 
 func colorTTL(ttl string, noColor bool) string {
+	padded := fmt.Sprintf("%-10s", ttl)
 	if noColor {
-		return ttl
+		return padded
 	}
-	if ttl == "expired" {
-		return color.RedString(ttl)
+	if strings.TrimSpace(ttl) == "expired" {
+		return "\033[31m" + padded + "\033[0m"
 	}
-	return ttl
+	return padded
 }
 
 func newStatusCmd(app *App) *cobra.Command {
-	var namespaceFilter string
+	var allNamespaces bool
 	var outputFormat string
 	var wide bool
 
@@ -77,9 +75,14 @@ func newStatusCmd(app *App) *cobra.Command {
 				return err
 			}
 
+			namespace := app.Namespace
+			if allNamespaces {
+				namespace = ""
+			}
+
 			listOpts := []client.ListOption{}
-			if namespaceFilter != "" {
-				listOpts = append(listOpts, client.InNamespace(namespaceFilter))
+			if namespace != "" {
+				listOpts = append(listOpts, client.InNamespace(namespace))
 			}
 
 			var envList divergeiov1alpha1.EnvironmentList
@@ -88,7 +91,7 @@ func newStatusCmd(app *App) *cobra.Command {
 			}
 
 			var pgList divergeiov1alpha1.PreviewGroupList
-			if err := c.List(cmd.Context(), &pgList, listOpts...); err != nil {
+			if err := c.List(cmd.Context(), &pgList); err != nil {
 				return fmt.Errorf("failed to list preview groups: %w", err)
 			}
 
@@ -122,6 +125,8 @@ func newStatusCmd(app *App) *cobra.Command {
 			}
 
 			// Rendering Table
+			servicesTotal := 0
+
 			cmd.Println("PREVIEW ENVIRONMENTS")
 			if len(envList.Items) == 0 {
 				cmd.Println("  No active environments found.")
@@ -134,6 +139,8 @@ func newStatusCmd(app *App) *cobra.Command {
 				}
 
 				for _, env := range envList.Items {
+					servicesTotal += len(env.Status.Services)
+
 					phase := string(env.Status.Phase)
 					if phase == "" {
 						phase = "Unknown"
@@ -141,7 +148,12 @@ func newStatusCmd(app *App) *cobra.Command {
 					cPhase := colorStatus(phase, app.NoColor)
 
 					age := formatAge(env.CreationTimestamp.Time)
-					ttl := formatTTL(env.Status.ExpiresAt)
+					var ttl string
+					if env.Status.ExpiresAt == nil {
+						ttl = "-"
+					} else {
+						ttl = formatTTL(time.Until(env.Status.ExpiresAt.Time))
+					}
 					cTtl := colorTTL(ttl, app.NoColor)
 
 					url := env.Status.URL
@@ -167,7 +179,6 @@ func newStatusCmd(app *App) *cobra.Command {
 			cmd.Println()
 
 			cmd.Println("PREVIEW GROUPS")
-			servicesTotal := 0
 			if len(pgList.Items) == 0 {
 				cmd.Println("  No active preview groups found.")
 			} else {
@@ -214,7 +225,7 @@ func newStatusCmd(app *App) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVarP(&namespaceFilter, "namespace", "n", "", "Filter by namespace (default: all)")
+	cmd.Flags().BoolVarP(&allNamespaces, "all-namespaces", "A", false, "List across all namespaces")
 	cmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table, json, yaml")
 	cmd.Flags().BoolVar(&wide, "wide", false, "Show additional columns")
 	return cmd
