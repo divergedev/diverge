@@ -5,13 +5,13 @@ import (
 	"errors"
 
 	"connectrpc.com/connect"
+	authzv1 "k8s.io/api/authorization/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	pb "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 	"github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
 	"github.com/divergedev/diverge/api/v1alpha1"
-	domain "github.com/divergedev/diverge/gen/domain/github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 )
 
 type EnvironmentService struct {
@@ -22,68 +22,105 @@ func NewEnvironmentService(c client.Client) divergev1alpha1connect.EnvironmentSe
 	return &EnvironmentService{client: c}
 }
 
+func (s *EnvironmentService) authorizeAction(ctx context.Context, namespace, name, verb string) error {
+	u, ok := UserFromContext(ctx)
+	if !ok {
+		return connect.NewError(connect.CodeUnauthenticated, errors.New("unauthenticated"))
+	}
+
+	sar := &authzv1.SubjectAccessReview{
+		Spec: authzv1.SubjectAccessReviewSpec{
+			User:   u.ID,
+			Groups: u.Groups,
+			ResourceAttributes: &authzv1.ResourceAttributes{
+				Group:     "diverge.dev",
+				Resource:  "environments",
+				Verb:      verb,
+				Namespace: namespace,
+				Name:      name,
+			},
+		},
+	}
+
+	if err := s.client.Create(ctx, sar); err != nil {
+		return toConnectError(err)
+	}
+	if !sar.Status.Allowed {
+		return connect.NewError(connect.CodePermissionDenied, errors.New("permission denied"))
+	}
+	return nil
+}
+
 func (s *EnvironmentService) CreateEnvironment(ctx context.Context, req *connect.Request[pb.CreateEnvironmentRequest]) (*connect.Response[pb.CreateEnvironmentResponse], error) {
 	msg := req.Msg
+	if msg.Namespace == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("namespace is required"))
+	}
 	if msg.Environment == nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("environment is required"))
 	}
-
-	var dom domain.Environment
-	dom.FromProto(msg.Environment)
-
-	// empty replacement
-
-	realCrd, err := DomainEnvToCRD(&dom)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+	if msg.Environment.Name == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("environment name is required"))
 	}
 
+	if err := s.authorizeAction(ctx, msg.Namespace, msg.Environment.Name, "create"); err != nil {
+		return nil, err
+	}
+
+	realCrd := ProtoToEnvironment(msg.Environment)
 	realCrd.Namespace = msg.Namespace
-	if realCrd.Namespace == "" {
-		realCrd.Namespace = "default"
-	}
 
 	if err := s.client.Create(ctx, realCrd); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, toConnectError(err)
 	}
 
-	// Read back to return
-	var back domain.Environment
-	domBack, _ := CRDEnvToDomain(realCrd)
-	if domBack != nil {
-		back = *domBack
-	}
 	return connect.NewResponse(&pb.CreateEnvironmentResponse{
-		Environment: back.ToProto(),
+		Environment: EnvironmentToProto(realCrd),
 	}), nil
 }
 
 func (s *EnvironmentService) GetEnvironment(ctx context.Context, req *connect.Request[pb.GetEnvironmentRequest]) (*connect.Response[pb.GetEnvironmentResponse], error) {
+	if req.Msg.Namespace == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("namespace is required"))
+	}
+	if req.Msg.Name == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("name is required"))
+	}
+
+	if err := s.authorizeAction(ctx, req.Msg.Namespace, req.Msg.Name, "get"); err != nil {
+		return nil, err
+	}
+
 	var crd v1alpha1.Environment
 	err := s.client.Get(ctx, types.NamespacedName{Name: req.Msg.Name, Namespace: req.Msg.Namespace}, &crd)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeNotFound, err)
+		return nil, toConnectError(err)
 	}
-	dom, err := CRDEnvToDomain(&crd)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
-	}
+
 	return connect.NewResponse(&pb.GetEnvironmentResponse{
-		Environment: dom.ToProto(),
+		Environment: EnvironmentToProto(&crd),
 	}), nil
 }
 
 func (s *EnvironmentService) ListEnvironments(ctx context.Context, req *connect.Request[pb.ListEnvironmentsRequest]) (*connect.Response[pb.ListEnvironmentsResponse], error) {
+	if req.Msg.Namespace == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("namespace is required"))
+	}
+
+	if err := s.authorizeAction(ctx, req.Msg.Namespace, "", "list"); err != nil {
+		return nil, err
+	}
+
 	var list v1alpha1.EnvironmentList
 	if err := s.client.List(ctx, &list, client.InNamespace(req.Msg.Namespace)); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, toConnectError(err)
 	}
 
 	var pbs []*pb.Environment
 	for i := range list.Items {
-		dom, _ := CRDEnvToDomain(&list.Items[i])
-		if dom != nil {
-			pbs = append(pbs, dom.ToProto())
+		pbEnv := EnvironmentToProto(&list.Items[i])
+		if pbEnv != nil {
+			pbs = append(pbs, pbEnv)
 		}
 	}
 
@@ -97,31 +134,45 @@ func (s *EnvironmentService) UpdateEnvironment(ctx context.Context, req *connect
 	if msg.Environment == nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("environment is required"))
 	}
-
-	var dom domain.Environment
-	dom.FromProto(msg.Environment)
-
-	realCrd, err := DomainEnvToCRD(&dom)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+	if msg.Environment.Namespace == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("namespace is required"))
 	}
+	if msg.Environment.Name == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("environment name is required"))
+	}
+
+	if err := s.authorizeAction(ctx, msg.Environment.Namespace, msg.Environment.Name, "update"); err != nil {
+		return nil, err
+	}
+
+	realCrd := ProtoToEnvironment(msg.Environment)
 
 	if err := s.client.Update(ctx, realCrd); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, toConnectError(err)
 	}
 
-	domBack, _ := CRDEnvToDomain(realCrd)
 	return connect.NewResponse(&pb.UpdateEnvironmentResponse{
-		Environment: domBack.ToProto(),
+		Environment: EnvironmentToProto(realCrd),
 	}), nil
 }
 
 func (s *EnvironmentService) DeleteEnvironment(ctx context.Context, req *connect.Request[pb.DeleteEnvironmentRequest]) (*connect.Response[pb.DeleteEnvironmentResponse], error) {
+	if req.Msg.Namespace == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("namespace is required"))
+	}
+	if req.Msg.Name == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("name is required"))
+	}
+
+	if err := s.authorizeAction(ctx, req.Msg.Namespace, req.Msg.Name, "delete"); err != nil {
+		return nil, err
+	}
+
 	var crd v1alpha1.Environment
 	crd.Name = req.Msg.Name
 	crd.Namespace = req.Msg.Namespace
 	if err := s.client.Delete(ctx, &crd); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, toConnectError(err)
 	}
 	return connect.NewResponse(&pb.DeleteEnvironmentResponse{}), nil
 }
