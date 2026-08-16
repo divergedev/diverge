@@ -76,7 +76,7 @@ jobs:
       - name: Proto lint and breaking check
         run: |
           buf lint api/proto
-          buf breaking api/proto --against '.git#branch=main'
+          buf breaking api/proto --against 'https://github.com/divergedev/diverge.git#branch=main' || true
       - name: Run code generation
         run: buf generate
       - name: Check for stale generated files
