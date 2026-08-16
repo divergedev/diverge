@@ -264,10 +264,15 @@ type ServicePreviewConfig struct {
 
 // WebSocketSpec defines WebSocket proxy configuration.
 type WebSocketSpec struct {
+	// Enabled turns on WebSocket proxy support for the service route.
 	Enabled bool `json:"enabled,omitempty"`
+	// Path is the URL path prefix to match for WebSocket connections (e.g., "/ws").
 	// +kubebuilder:validation:Pattern=`^/.*$`
-	Path    string `json:"path,omitempty"`    // e.g., "/ws", default: all paths
-	Timeout string `json:"timeout,omitempty"` // e.g., "3600s", default: no timeout
+	Path string `json:"path,omitempty"`
+	// Timeout sets the maximum duration for the WebSocket connection.
+	// Valid time units are "ns", "us" (or "µs"), "ms", "s", "m", "h".
+	// +kubebuilder:validation:Pattern=`^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$`
+	Timeout string `json:"timeout,omitempty"`
 }
 
 // EnvVar represents an environment variable for a preview container.

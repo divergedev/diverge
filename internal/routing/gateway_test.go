@@ -864,7 +864,6 @@ func TestGatewayRouter_Reconcile_WebSocketWithPath(t *testing.T) {
 	assert.False(t, defaultHasTimeouts, "default rule should not have timeouts")
 }
 
-
 func TestGatewayRouter_Reconcile_WebSocketPathPrefixComposition(t *testing.T) {
 	c := fake.NewClientBuilder().Build()
 	r := &GatewayRouter{Client: c, Namespace: "default"}
@@ -953,4 +952,3 @@ func TestGatewayRouter_Reconcile_WebSocketScoping(t *testing.T) {
 	rulesWeb, _, _ := unstructured.NestedSlice(uWeb.Object, "spec", "rules")
 	assert.Len(t, rulesWeb, 1)
 }
-
