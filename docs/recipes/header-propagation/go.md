@@ -1,6 +1,6 @@
 # Go Header Propagation Recipe
 
-This recipe demonstrates how to propagate the `x-preview-env` header across both HTTP (net/http) and gRPC services in Go.
+This recipe demonstrates how to propagate the `x-diverge-env` header across both HTTP (net/http) and gRPC services in Go.
 
 ## 1. HTTP Middleware (Inbound)
 
@@ -14,12 +14,12 @@ import (
 	"net/http"
 )
 
-const PreviewEnvHeader = "x-preview-env"
+const PreviewEnvHeader = "x-diverge-env"
 
 type contextKey string
 const PreviewEnvContextKey = contextKey(PreviewEnvHeader)
 
-// PreviewEnvMiddleware extracts the x-preview-env header and adds it to the context
+// PreviewEnvMiddleware extracts the x-diverge-env header and adds it to the context
 func PreviewEnvMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		previewEnv := r.Header.Get(PreviewEnvHeader)
@@ -172,25 +172,21 @@ workerOpts := worker.Options{
 
 ### Kafka
 
-To propagate headers through Kafka messages, use the Diverge Kafka wrapper around `segmentio/kafka-go` or `IBM/sarama`.
+To propagate headers through Kafka messages, you can use `divergekafka.InjectHeaders` and `divergekafka.ExtractEnvName` when constructing or processing messages.
 
 ```go
 import (
 	divergekafka "github.com/divergedev/diverge/pkg/sdk/kafka"
 )
 
-// The writer will automatically inject the x-diverge-env header from the context into the Kafka message headers
-writer := divergekafka.NewWriter(kafka.WriterConfig{
-	Brokers: []string{"localhost:9092"},
-	Topic:   "my-topic",
-})
+// When producing a message, inject the context header
+msgHeaders := []divergekafka.Header{
+	{Key: "custom-header", Value: []byte("val")},
+}
+msgHeaders = divergekafka.InjectHeaders(msgHeaders, env)
 
-// The reader will automatically extract the header from incoming messages and inject it into the context
-reader := divergekafka.NewReader(kafka.ReaderConfig{
-	Brokers: []string{"localhost:9092"},
-	Topic:   "my-topic",
-	GroupID: "my-group",
-})
+// When consuming a message, extract the environment name
+envName := divergekafka.ExtractEnvName(incomingHeaders)
 ```
 
 ## OpenTelemetry Baggage (Alternative)
