@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"net"
 	"strings"
@@ -8,6 +10,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"hegel.dev/go/hegel"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
 
 	"github.com/divergedev/diverge/internal/git"
 )
@@ -63,5 +68,32 @@ func TestProperty_EndpointAlwaysHostPort(t *testing.T) {
 		require.NoError(ht, err)
 		require.Equal(ht, ipStr, host)
 		require.Equal(ht, fmt.Sprintf("%d", port), p)
+	})
+}
+
+func TestProperty_AsyncEnvAlwaysWins(t *testing.T) {
+	hegel.Test(t, func(ht *hegel.T) {
+		key := genStr(ht, nameChars, 20)
+		baselineVal := genStr(ht, nameChars, 20)
+		asyncVal := genStr(ht, nameChars, 20)
+		if baselineVal == asyncVal {
+			return
+		}
+
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "baseline", Namespace: "default", Labels: map[string]string{"app": "svc"}},
+			Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "main", Env: []corev1.EnvVar{{Name: key, Value: baselineVal}}}}},
+			Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+		}
+		clientset := k8sfake.NewSimpleClientset(pod)
+
+		var buf bytes.Buffer
+		_, err := syncBaselineEnv(context.Background(), clientset, syncEnvOptions{
+			Namespace: "default", ServiceName: "svc",
+			Overrides: map[string]string{key: asyncVal},
+		}, &buf)
+		require.NoError(ht, err)
+		require.Contains(ht, buf.String(), fmt.Sprintf("%s=%s", key, asyncVal))
+		require.NotContains(ht, buf.String(), fmt.Sprintf("%s=%s", key, baselineVal))
 	})
 }

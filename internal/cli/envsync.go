@@ -71,6 +71,8 @@ type syncEnvOptions struct {
 	Namespace string
 	// ServiceName is the baseline service name to find pods for.
 	ServiceName string
+	// Overrides are environment variables that override the baseline.
+	Overrides map[string]string
 }
 
 // syncBaselineEnvToFile writes environment variables from a baseline pod to a file.
@@ -139,6 +141,11 @@ func syncBaselineEnv(ctx context.Context, clientset kubernetes.Interface, opts s
 		}
 	}
 
+	// Merge overrides
+	for k, v := range opts.Overrides {
+		envMap[k] = envEntry{Value: v, Source: "diverge-controller"}
+	}
+
 	// Sort keys for deterministic output
 	keys := make([]string, 0, len(envMap))
 	for k := range envMap {
@@ -158,7 +165,17 @@ func syncBaselineEnv(ctx context.Context, clientset kubernetes.Interface, opts s
 		if strings.HasPrefix(k, "# [envFrom]") {
 			fmt.Fprintf(&sb, "%s\n", k)
 		} else if entry.Source != "" {
-			fmt.Fprintf(&sb, "# %s=# sourced from %s\n", k, entry.Source)
+			if entry.Value != "" {
+				fmt.Fprintf(&sb, "# sourced from %s\n", entry.Source)
+				if strings.Contains(entry.Value, "\n") {
+					fmt.Fprintf(&sb, "%s=%q\n", k, entry.Value)
+				} else {
+					fmt.Fprintf(&sb, "%s=%s\n", k, entry.Value)
+				}
+				written++
+			} else {
+				fmt.Fprintf(&sb, "# %s=# sourced from %s\n", k, entry.Source)
+			}
 		} else {
 			if strings.Contains(entry.Value, "\n") {
 				fmt.Fprintf(&sb, "%s=%q\n", k, entry.Value)
