@@ -137,7 +137,7 @@ func TestGitHubActionsRunner_Trigger(t *testing.T) {
 	runner := &GitHubActionsRunner{BaseURL: ts.URL, Token: "test-token", HTTPClient: ts.Client()}
 	runID, err := runner.Trigger(context.Background(), env)
 	require.NoError(t, err)
-	assert.Equal(t, "12345", runID)
+	assert.Equal(t, "dispatch-pending", runID)
 	assert.Equal(t, "preview-test", receivedBody["event_type"])
 }
 

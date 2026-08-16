@@ -417,87 +417,56 @@ func (g *GitHubPreviewGroupNotifier) UpdateGroupStatus(ctx context.Context, pg *
 }
 
 func (g *GitHubNotifier) resolveDispatchRun(ctx context.Context, owner, repo, workflow, branch string, dispatchedAt time.Time) (int64, error) {
-	pollCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-
 	createdAtFilter := dispatchedAt.Add(-10 * time.Second).UTC().Format(time.RFC3339)
 	escapedProject, err := escapeProjectPath(owner + "/" + repo)
 	if err != nil {
 		return 0, err
 	}
 
-	for {
-		select {
-		case <-pollCtx.Done():
-			if err := ctx.Err(); err != nil {
-				return 0, err
-			}
-			return 0, fmt.Errorf("timed out resolving dispatch to run ID")
-		case <-ticker.C:
-			params := url.Values{}
-			params.Set("event", "workflow_dispatch")
-			params.Set("branch", branch)
-			params.Set("created", ">="+createdAtFilter)
-			if workflow != "" {
-				params.Set("workflow_id", workflow)
-			}
-			apiURL := fmt.Sprintf("%s/repos/%s/actions/runs?%s", g.BaseURL, escapedProject, params.Encode())
+	params := url.Values{}
+	params.Set("event", "workflow_dispatch")
+	params.Set("branch", branch)
+	params.Set("created", ">="+createdAtFilter)
+	if workflow != "" {
+		params.Set("workflow_id", workflow)
+	}
+	apiURL := fmt.Sprintf("%s/repos/%s/actions/runs?%s", g.BaseURL, escapedProject, params.Encode())
 
-			req, err := http.NewRequestWithContext(pollCtx, http.MethodGet, apiURL, nil)
-			if err != nil {
-				continue
-			}
-			req.Header.Set("Authorization", "Bearer "+g.Token)
-			req.Header.Set("Accept", "application/vnd.github.v3+json")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+g.Token)
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
-			resp, err := g.HTTPClient.Do(req)
-			if err != nil {
-				continue
-			}
+	resp, err := g.HTTPClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = resp.Body.Close() }()
 
-			switch {
-			case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusForbidden:
-				retryAfter := resp.Header.Get("Retry-After")
-				backoff := 5 * time.Second
-				if secs, err := strconv.Atoi(retryAfter); err == nil {
-					backoff = time.Duration(secs) * time.Second
-				}
-				_ = resp.Body.Close()
-				select {
-				case <-pollCtx.Done():
-					return 0, pollCtx.Err()
-				case <-time.After(backoff):
-				}
-				continue
-			case resp.StatusCode >= 400:
-				_ = resp.Body.Close()
-				return 0, fmt.Errorf("GitHub API error: %d", resp.StatusCode)
-			}
+	if resp.StatusCode >= 400 {
+		return 0, fmt.Errorf("GitHub API error: %d", resp.StatusCode)
+	}
 
-			if resp.StatusCode != http.StatusOK {
-				_ = resp.Body.Close()
-				continue
-			}
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("unexpected status: %d", resp.StatusCode)
+	}
 
-			var result struct {
-				WorkflowRuns []struct {
-					ID        int64     `json:"id"`
-					CreatedAt time.Time `json:"created_at"`
-					Name      string    `json:"name"`
-				} `json:"workflow_runs"`
+	var result struct {
+		WorkflowRuns []struct {
+			ID        int64     `json:"id"`
+			CreatedAt time.Time `json:"created_at"`
+			Name      string    `json:"name"`
+		} `json:"workflow_runs"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err == nil {
+		for _, run := range result.WorkflowRuns {
+			if run.CreatedAt.After(dispatchedAt.Add(-10 * time.Second)) {
+				return run.ID, nil
 			}
-			if err := json.NewDecoder(resp.Body).Decode(&result); err == nil {
-				for _, run := range result.WorkflowRuns {
-					if run.CreatedAt.After(dispatchedAt.Add(-10 * time.Second)) {
-						_ = resp.Body.Close()
-						return run.ID, nil
-					}
-				}
-			}
-			_ = resp.Body.Close()
 		}
 	}
+
+	return 0, fmt.Errorf("run not found")
 }
