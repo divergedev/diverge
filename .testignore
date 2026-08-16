@@ -81,3 +81,12 @@ internal/server/cluster_auth.go
 internal/server/environment.go
 internal/server/previewgroup.go
 internal/server/server.go
+
+🔀 Diverge dev shell loaded
+   Go:      go1.26.5
+   kubectl: v1.36.3
+   helm:    v4.2.3
+
+sync hooks: ✔️(pre-push, pre-commit)
+internal/server/streaming/informer.go
+internal/server/streaming/logs.go
