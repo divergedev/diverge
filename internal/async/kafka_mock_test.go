@@ -37,7 +37,7 @@ func TestKafkaProvisioner_Mock(t *testing.T) {
 	ctx := context.Background()
 	env := &v1alpha1.Environment{ObjectMeta: metav1.ObjectMeta{Name: "testenv"}}
 	route := v1alpha1.AsyncRouteSpec{Target: "my-topic"}
-	targetName := "my-topic-testenv"
+	targetName := "my-topic--testenv"
 
 	// 1. Happy path provision
 	t.Run("Happy path provision", func(t *testing.T) {
