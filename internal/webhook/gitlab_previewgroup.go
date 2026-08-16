@@ -166,9 +166,7 @@ func (h *GitLabPreviewGroupWebhookHandler) reconcilePreviewGroup(ctx context.Con
 					}
 					if svcCfg.Image.Repository != "" {
 						tag := svcCfg.Image.TagTemplate
-						if tag != "" {
-							// TODO: render template instead of using it literally
-						} else {
+						if tag == "" {
 							tag = imageTag
 						}
 						s.Image = fmt.Sprintf("%s:%s", svcCfg.Image.Repository, tag)

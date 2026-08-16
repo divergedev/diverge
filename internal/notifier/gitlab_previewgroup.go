@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
@@ -57,7 +58,7 @@ func (g *GitLabPreviewGroupNotifier) postOrUpdateComment(ctx context.Context, pg
 	payload := map[string]string{"body": body}
 	jsonPayload, _ := json.Marshal(payload)
 
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := 0; attempt < 3; attempt++ {
 		commentID := g.getCommentID(pg)
 		var reqURL string
 		var method string
@@ -80,6 +81,21 @@ func (g *GitLabPreviewGroupNotifier) postOrUpdateComment(ctx context.Context, pg
 		resp, err := g.HTTPClient.Do(req)
 		if err != nil {
 			return err
+		}
+
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusForbidden {
+			retryAfter := resp.Header.Get("Retry-After")
+			backoff := 5 * time.Second
+			if secs, err := strconv.Atoi(retryAfter); err == nil {
+				backoff = time.Duration(secs) * time.Second
+			}
+			_ = resp.Body.Close()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+			continue // retry
 		}
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
