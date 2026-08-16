@@ -73,19 +73,23 @@ jobs:
         run: |
           go install google.golang.org/protobuf/cmd/protoc-gen-go@$(grep google.golang.org/protobuf go.mod | awk '{print $2}')
           go install connectrpc.com/connect/cmd/protoc-gen-connect-go@$(grep connectrpc.com/connect go.mod | awk '{print $2}')
+      - name: Proto lint and breaking check
+        run: |
+          buf lint api/proto
+          buf breaking api/proto --against '.git#branch=main'
       - name: Run code generation
         run: buf generate
       - name: Check for stale generated files
         run: |
-          DIFF=$(git diff --stat gen/diverge/ 2>/dev/null || true)
-          UNTRACKED=$(git ls-files --others --exclude-standard -- gen/diverge/ 2>/dev/null || true)
+          DIFF=$(git diff --stat api/gen/diverge/ 2>/dev/null || true)
+          UNTRACKED=$(git ls-files --others --exclude-standard -- api/gen/diverge/ 2>/dev/null || true)
           if [[ -n "$DIFF" || -n "$UNTRACKED" ]]; then
             echo "❌ Generated protobuf/connect files are stale!"
             echo ""
             [[ -n "$DIFF" ]] && echo "Modified:" && echo "$DIFF"
             [[ -n "$UNTRACKED" ]] && echo "Untracked:" && echo "$UNTRACKED"
             echo ""
-            echo "Run 'make proto' and commit the updated gen/ directory."
+            echo "Run 'make proto' and commit the updated api/gen/ directory."
             exit 1
           fi
           echo "✅ Generated files are up-to-date"

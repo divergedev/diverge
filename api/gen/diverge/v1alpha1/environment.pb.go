@@ -280,13 +280,14 @@ func (x *ManifestSource) GetUrl() string {
 	return ""
 }
 
+// Field numbers are frozen for stability. Do not change existing field numbers.
 type EnvironmentDeploy struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	Mode            string                 `protobuf:"bytes,1,opt,name=mode,proto3" json:"mode,omitempty"`
 	Namespace       string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
-	NamespaceLabels map[string]string      `protobuf:"bytes,3,rep,name=namespace_labels,json=namespaceLabels,proto3" json:"namespace_labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	ChangedServices []string               `protobuf:"bytes,4,rep,name=changed_services,json=changedServices,proto3" json:"changed_services,omitempty"`
-	BaselineRef     string                 `protobuf:"bytes,5,opt,name=baseline_ref,json=baselineRef,proto3" json:"baseline_ref,omitempty"`
+	ChangedServices []string               `protobuf:"bytes,3,rep,name=changed_services,json=changedServices,proto3" json:"changed_services,omitempty"`
+	BaselineRef     string                 `protobuf:"bytes,4,opt,name=baseline_ref,json=baselineRef,proto3" json:"baseline_ref,omitempty"`
+	NamespaceLabels map[string]string      `protobuf:"bytes,5,rep,name=namespace_labels,json=namespaceLabels,proto3" json:"namespace_labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	Manifests       *ManifestSource        `protobuf:"bytes,6,opt,name=manifests,proto3" json:"manifests,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
@@ -336,13 +337,6 @@ func (x *EnvironmentDeploy) GetNamespace() string {
 	return ""
 }
 
-func (x *EnvironmentDeploy) GetNamespaceLabels() map[string]string {
-	if x != nil {
-		return x.NamespaceLabels
-	}
-	return nil
-}
-
 func (x *EnvironmentDeploy) GetChangedServices() []string {
 	if x != nil {
 		return x.ChangedServices
@@ -355,6 +349,13 @@ func (x *EnvironmentDeploy) GetBaselineRef() string {
 		return x.BaselineRef
 	}
 	return ""
+}
+
+func (x *EnvironmentDeploy) GetNamespaceLabels() map[string]string {
+	if x != nil {
+		return x.NamespaceLabels
+	}
+	return nil
 }
 
 func (x *EnvironmentDeploy) GetManifests() *ManifestSource {
@@ -492,6 +493,7 @@ func (x *CookieSpec) GetSecure() bool {
 	return false
 }
 
+// Field numbers are frozen for stability. Do not change existing field numbers.
 type EnvironmentRouting struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Mode          string                 `protobuf:"bytes,1,opt,name=mode,proto3" json:"mode,omitempty"`
@@ -2622,10 +2624,10 @@ const file_diverge_v1alpha1_environment_proto_rawDesc = "" +
 	"\x03url\x18\x02 \x01(\tR\x03url\"\xfc\x02\n" +
 	"\x11EnvironmentDeploy\x12\x12\n" +
 	"\x04mode\x18\x01 \x01(\tR\x04mode\x12\x1c\n" +
-	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12c\n" +
-	"\x10namespace_labels\x18\x03 \x03(\v28.diverge.v1alpha1.EnvironmentDeploy.NamespaceLabelsEntryR\x0fnamespaceLabels\x12)\n" +
-	"\x10changed_services\x18\x04 \x03(\tR\x0fchangedServices\x12!\n" +
-	"\fbaseline_ref\x18\x05 \x01(\tR\vbaselineRef\x12>\n" +
+	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12)\n" +
+	"\x10changed_services\x18\x03 \x03(\tR\x0fchangedServices\x12!\n" +
+	"\fbaseline_ref\x18\x04 \x01(\tR\vbaselineRef\x12c\n" +
+	"\x10namespace_labels\x18\x05 \x03(\v28.diverge.v1alpha1.EnvironmentDeploy.NamespaceLabelsEntryR\x0fnamespaceLabels\x12>\n" +
 	"\tmanifests\x18\x06 \x01(\v2 .diverge.v1alpha1.ManifestSourceR\tmanifests\x1aB\n" +
 	"\x14NamespaceLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
