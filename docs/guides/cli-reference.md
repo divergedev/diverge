@@ -1,43 +1,58 @@
 # CLI Reference
 
-A quick reference for the `diverge` CLI commands.
+The `diverge` CLI manages your local development environments and interacts with the Diverge cluster controller.
 
-## `diverge dev`
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `diverge create` | Create an environment from the current branch |
+| `diverge delete <name>` | Delete an environment |
+| `diverge dev` | Route cluster traffic for a service to your local machine |
+| `diverge dev intercept <service>` | Intercept a service in a preview group |
+| `diverge dev release <service>` | Stop intercepting a service |
+| `diverge env export` | Export environment variables for a service |
+| `diverge init` | Initialize a local development playground |
+| `diverge list` | List all environments in the cluster |
+| `diverge logs [env-name]` | Stream logs from a preview environment |
+| `diverge open <name>` | Open the environment URL in browser |
+| `diverge plugins` | Manage plugins |
+| `diverge preview create` | Create a preview group from current branch |
+| `diverge preview status <name>` | Show status of a preview group |
+| `diverge preview delete <name>` | Delete a preview group |
+| `diverge preview watch <name>` | Watch a preview group until Ready/Failed |
+| `diverge providers list` | List all registered providers |
+| `diverge status` | Show active preview environments and groups |
+| `diverge validate` | Validate .diverge.yaml against JSON Schema |
+| `diverge version` | Print version info |
+
+## Detailed Command Usage
+
+### `diverge dev`
+
 Route cluster traffic for a service to your local machine.
 
-```text
-diverge dev [flags]
-```
-This command blocks until async routing is ready and syncs necessary environment variables (including async route variables) to your local environment.
+**Flags:**
+- `--service` — Service name (default: auto-detect)
+- `--port` — Local port (default: 8080)
+- `--endpoint` — Local endpoint IP (default: tailscale ip -4)
+- `--env-output` — How to handle env vars: `inject` (in-memory) or `file` (.env.diverge)
+- `--devspace` — Generate a devspace.yaml template
 
-## `diverge status`
-Show active preview environments and preview groups.
+### `diverge logs`
 
-```text
-diverge status [flags]
-```
-Displays a summary of all active preview environments, preview groups, and their current state.
-
-## `diverge logs`
 Stream logs from a preview environment.
 
-```text
-diverge logs [environment-name]
-```
-Stream logs from pods in a preview environment. Shows logs from all services by default. You can use filters to narrow down the logs.
+**Flags:**
+- `--service` — Filter to specific service
+- `--follow` / `-f` — Follow log output
+- `--tail` — Number of lines to show
 
-## `diverge env export`
+### `diverge env export`
+
 Export environment variables for a service.
 
-```text
-diverge env export [flags]
-```
-Outputs environment variables required to run your service locally, mimicking the cluster configuration.
-
-## `diverge providers list`
-List all registered providers.
-
-```text
-diverge providers list
-```
-Outputs the available authentication and infrastructure providers registered with your Diverge installation.
+**Supported output formats:**
+- `dotenv` (default)
+- `json`
+- `shell`

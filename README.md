@@ -21,6 +21,9 @@ curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/v0.5.0/install.s
 ```
 
 Documentation: [https://divergedev.com](https://divergedev.com)
+- [Hot Reload Guide](docs/guides/hot-reload.md)
+- [Observability Guide](docs/guides/observability.md)
+- [CLI Reference](docs/guides/cli-reference.md)
 
 ## Try It
 
