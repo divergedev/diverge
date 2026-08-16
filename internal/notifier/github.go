@@ -417,7 +417,9 @@ func (g *GitHubPreviewGroupNotifier) UpdateGroupStatus(ctx context.Context, pg *
 }
 
 func (g *GitHubNotifier) resolveDispatchRun(ctx context.Context, owner, repo, workflow, branch string, dispatchedAt time.Time) (int64, error) {
-	deadline := time.After(30 * time.Second)
+	pollCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
@@ -429,14 +431,19 @@ func (g *GitHubNotifier) resolveDispatchRun(ctx context.Context, owner, repo, wo
 
 	for {
 		select {
-		case <-deadline:
+		case <-pollCtx.Done():
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
 			return 0, fmt.Errorf("timed out resolving dispatch to run ID")
-		case <-ctx.Done():
-			return 0, ctx.Err()
 		case <-ticker.C:
-			apiURL := fmt.Sprintf("%s/repos/%s/actions/runs?event=workflow_dispatch&branch=%s&created=>%s",
-				g.BaseURL, escapedProject, url.QueryEscape(branch), url.QueryEscape(createdAtFilter))
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+			params := url.Values{}
+			params.Set("event", "workflow_dispatch")
+			params.Set("branch", branch)
+			params.Set("created", ">="+createdAtFilter)
+			apiURL := fmt.Sprintf("%s/repos/%s/actions/runs?%s", g.BaseURL, escapedProject, params.Encode())
+
+			req, err := http.NewRequestWithContext(pollCtx, http.MethodGet, apiURL, nil)
 			if err != nil {
 				continue
 			}
@@ -447,6 +454,22 @@ func (g *GitHubNotifier) resolveDispatchRun(ctx context.Context, owner, repo, wo
 			if err != nil {
 				continue
 			}
+
+			switch {
+			case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusForbidden:
+				retryAfter := resp.Header.Get("Retry-After")
+				if secs, err := strconv.Atoi(retryAfter); err == nil {
+					time.Sleep(time.Duration(secs) * time.Second)
+				} else {
+					time.Sleep(5 * time.Second) // backoff
+				}
+				_ = resp.Body.Close()
+				continue
+			case resp.StatusCode >= 400:
+				_ = resp.Body.Close()
+				return 0, fmt.Errorf("GitHub API error: %d", resp.StatusCode)
+			}
+
 			if resp.StatusCode != http.StatusOK {
 				_ = resp.Body.Close()
 				continue

@@ -245,3 +245,60 @@ func TestResolveDispatchRun_MultipleRuns(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, int64(9999), runID)
 }
+
+func TestResolveDispatchRun_RateLimit(t *testing.T) {
+	dispatchedAt := time.Now()
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		if callCount == 1 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{
+			"workflow_runs": [
+				{
+					"id": 8888,
+					"created_at": "` + dispatchedAt.Add(5*time.Second).Format(time.RFC3339) + `"
+				}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	n := NewGitHubNotifier(server.URL, "token")
+	start := time.Now()
+	runID, err := n.resolveDispatchRun(context.Background(), "owner", "repo", "ci.yml", "main", dispatchedAt)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(8888), runID)
+	assert.True(t, time.Since(start) >= time.Second)
+}
+
+func TestResolveDispatchRun_ServerError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	n := NewGitHubNotifier(server.URL, "token")
+	_, err := n.resolveDispatchRun(context.Background(), "owner", "repo", "ci.yml", "main", time.Now())
+	assert.ErrorContains(t, err, "GitHub API error: 500")
+}
+
+func TestResolveDispatchRun_ContextCancel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"workflow_runs": []}`))
+	}))
+	defer server.Close()
+
+	n := NewGitHubNotifier(server.URL, "token")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := n.resolveDispatchRun(ctx, "owner", "repo", "ci.yml", "main", time.Now())
+	assert.ErrorIs(t, err, context.Canceled)
+}
