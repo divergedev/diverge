@@ -2,7 +2,6 @@ package webhook
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,8 +39,7 @@ func (h *GitLabPreviewGroupWebhookHandler) ServeHTTP(w http.ResponseWriter, r *h
 		return
 	}
 
-	token := r.Header.Get("X-Gitlab-Token")
-	if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(h.Config.SecretToken)) != 1 {
+	if !ValidateGitLabWebhookToken(r, h.Config.SecretToken) {
 		logger.Info("Unauthorized webhook request")
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
