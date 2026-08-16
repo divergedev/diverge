@@ -3,12 +3,10 @@ package temporal
 import (
 	"context"
 
+	"github.com/divergedev/diverge/pkg/sdk"
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/workflow"
 )
-
-// HeaderKey is used by the propagator to inject/extract the Diverge environment name into Temporal workflow headers.
-const HeaderKey = "x-diverge-env"
 
 // Propagator implements workflow.ContextPropagator.
 // It propagates the preview environment context through Temporal workflow headers.
@@ -37,7 +35,7 @@ func (p *Propagator) Inject(ctx context.Context, writer workflow.HeaderWriter) e
 		if err != nil {
 			return err
 		}
-		writer.Set(HeaderKey, payload)
+		writer.Set(sdk.DefaultHeaderKey, payload)
 	}
 	return nil
 }
@@ -49,7 +47,7 @@ func (p *Propagator) Extract(ctx context.Context, reader workflow.HeaderReader) 
 		return context.WithValue(ctx, envContextKey, p.EnvName), nil
 	}
 	// Otherwise read from header
-	payload, ok := reader.Get(HeaderKey)
+	payload, ok := reader.Get(sdk.DefaultHeaderKey)
 	if !ok {
 		return ctx, nil // no header, not in preview
 	}
@@ -75,7 +73,7 @@ func (p *Propagator) InjectFromWorkflow(ctx workflow.Context, writer workflow.He
 		if err != nil {
 			return err
 		}
-		writer.Set(HeaderKey, payload)
+		writer.Set(sdk.DefaultHeaderKey, payload)
 	}
 	return nil
 }
@@ -85,7 +83,7 @@ func (p *Propagator) ExtractToWorkflow(ctx workflow.Context, reader workflow.Hea
 	if p.EnvName != "" {
 		return workflow.WithValue(ctx, envContextKey, p.EnvName), nil
 	}
-	payload, ok := reader.Get(HeaderKey)
+	payload, ok := reader.Get(sdk.DefaultHeaderKey)
 	if !ok {
 		return ctx, nil
 	}

@@ -12,10 +12,17 @@ import (
 )
 
 // HeadersProvider implements Temporal's client.HeadersProvider
-type HeadersProvider struct{}
+type HeadersProvider struct {
+	// EnvName, when set, overrides context-derived env name.
+	// SECURITY: prevents preview sandbox escape.
+	EnvName string
+}
 
 func (p HeadersProvider) GetHeaders(ctx context.Context) (map[string]*commonpb.Payload, error) {
-	env := sdk.EnvironmentFromContext(ctx)
+	env := p.EnvName
+	if env == "" {
+		env = EnvFromContext(ctx)
+	}
 	if env == "" {
 		return nil, nil
 	}
@@ -54,7 +61,7 @@ func (a *activityInboundInterceptor) ExecuteActivity(ctx context.Context, in *in
 		if payload, ok := headers[sdk.DefaultHeaderKey]; ok {
 			var env string
 			if err := converter.GetDefaultDataConverter().FromPayload(payload, &env); err == nil && env != "" {
-				ctx = sdk.WithEnvironment(ctx, env)
+				ctx = context.WithValue(ctx, envContextKey, env)
 			}
 		}
 	}

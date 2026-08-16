@@ -18,14 +18,16 @@ func InjectHeaders(headers []Header, envName string) []Header {
 		return headers
 	}
 
-	for i, h := range headers {
+	result := make([]Header, len(headers))
+	copy(result, headers)
+	for i, h := range result {
 		if h.Key == sdk.DefaultHeaderKey {
-			headers[i].Value = []byte(envName)
-			return headers
+			result[i].Value = []byte(envName)
+			return result
 		}
 	}
 
-	return append(headers, Header{
+	return append(result, Header{
 		Key:   sdk.DefaultHeaderKey,
 		Value: []byte(envName),
 	})

@@ -8,6 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/sdk/converter"
+
+	"github.com/divergedev/diverge/pkg/sdk"
 )
 
 type mockHeader struct {
@@ -46,7 +48,7 @@ func TestPropagator_InjectExtract(t *testing.T) {
 	err := p.Inject(ctx, header)
 	require.NoError(t, err)
 
-	assert.NotNil(t, header.payloads[HeaderKey])
+	assert.NotNil(t, header.payloads[sdk.DefaultHeaderKey])
 
 	// Extract
 	ctx2, err := p.Extract(context.Background(), header)
@@ -67,14 +69,14 @@ func TestPropagator_OverwriteSemantics(t *testing.T) {
 	require.NoError(t, err)
 
 	var injectedEnv string
-	err = converter.GetDefaultDataConverter().FromPayload(header.payloads[HeaderKey], &injectedEnv)
+	err = converter.GetDefaultDataConverter().FromPayload(header.payloads[sdk.DefaultHeaderKey], &injectedEnv)
 	require.NoError(t, err)
 	assert.Equal(t, "preview-env", injectedEnv)
 
 	// Extract should ignore header and use p.EnvName
 	header2 := &mockHeader{}
 	payload, _ := converter.GetDefaultDataConverter().ToPayload("forged-env")
-	header2.Set(HeaderKey, payload)
+	header2.Set(sdk.DefaultHeaderKey, payload)
 
 	ctx2, err := p.Extract(context.Background(), header2)
 	require.NoError(t, err)

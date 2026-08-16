@@ -5,6 +5,8 @@ import (
 	"testing"
 	"testing/quick"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/workflow"
@@ -82,4 +84,19 @@ func TestWorkflowInterceptorInitialization(t *testing.T) {
 	if wfInt == nil {
 		t.Error("Expected interceptor, got nil")
 	}
+}
+
+func TestHeadersProvider_SecurityOverwrite(t *testing.T) {
+	provider := temporal.HeadersProvider{EnvName: "trusted-env"}
+
+	// Context has a different env
+	ctx := sdk.WithEnvironment(context.Background(), "untrusted-env")
+
+	headers, err := provider.GetHeaders(ctx)
+	require.NoError(t, err)
+
+	payload := headers[sdk.DefaultHeaderKey]
+	var extracted string
+	require.NoError(t, converter.GetDefaultDataConverter().FromPayload(payload, &extracted))
+	assert.Equal(t, "trusted-env", extracted) // EnvName MUST win
 }
