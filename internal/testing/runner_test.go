@@ -179,3 +179,115 @@ func TestHelpers(t *testing.T) {
 	assert.Equal(t, "x-custom", headerKey(env))
 	assert.Equal(t, "custom-val", headerValue(env))
 }
+
+func TestStatus_DispatchPending_Resolves(t *testing.T) {
+	dispatchedAt := time.Now().Add(-10 * time.Second)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/actions/runs") && r.URL.Query().Get("event") == "repository_dispatch" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"workflow_runs": [{"id": 1234, "created_at": "` + time.Now().Format(time.RFC3339) + `", "path": "ci.yml"}]}`))
+			return
+		}
+		if strings.Contains(r.URL.Path, "/actions/runs/1234") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status": "completed", "conclusion": "success"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	runner := &GitHubActionsRunner{BaseURL: ts.URL, Token: "tok", HTTPClient: ts.Client()}
+	env := testEnv()
+	env.Spec.Testing.Trigger.Workflow = "ci.yml"
+	now := metav1.NewTime(dispatchedAt)
+	env.Status.TestStatus = &v1alpha1.TestStatus{RunID: "dispatch-pending", StartedAt: &now}
+
+	res, err := runner.Status(context.Background(), env, "dispatch-pending")
+	require.NoError(t, err)
+	assert.Equal(t, v1alpha1.TestStatePassed, res.State)
+	assert.Equal(t, "1234", res.ResolvedRunID)
+}
+
+func TestStatus_DispatchPending_NotYetAvailable(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"workflow_runs": []}`))
+	}))
+	defer ts.Close()
+
+	runner := &GitHubActionsRunner{BaseURL: ts.URL, Token: "tok", HTTPClient: ts.Client()}
+	env := testEnv()
+	now := metav1.Now()
+	env.Status.TestStatus = &v1alpha1.TestStatus{RunID: "dispatch-pending", StartedAt: &now}
+
+	res, err := runner.Status(context.Background(), env, "dispatch-pending")
+	require.NoError(t, err)
+	assert.Equal(t, v1alpha1.TestStatePending, res.State)
+}
+
+func TestStatus_DispatchPending_Timeout(t *testing.T) {
+	runner := &GitHubActionsRunner{}
+	env := testEnv()
+	oldTime := metav1.NewTime(time.Now().Add(-3 * time.Minute))
+	env.Status.TestStatus = &v1alpha1.TestStatus{RunID: "dispatch-pending", StartedAt: &oldTime}
+
+	res, err := runner.Status(context.Background(), env, "dispatch-pending")
+	require.NoError(t, err)
+	assert.Equal(t, v1alpha1.TestStateFailed, res.State)
+	assert.Contains(t, res.Summary, "Timed out waiting")
+}
+
+func TestStatus_DispatchPending_APIError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	runner := &GitHubActionsRunner{BaseURL: ts.URL, Token: "tok", HTTPClient: ts.Client()}
+	env := testEnv()
+	now := metav1.Now()
+	env.Status.TestStatus = &v1alpha1.TestStatus{RunID: "dispatch-pending", StartedAt: &now}
+
+	res, err := runner.Status(context.Background(), env, "dispatch-pending")
+	require.NoError(t, err)
+	assert.Equal(t, v1alpha1.TestStateFailed, res.State)
+}
+
+func TestResolveDispatchRun_FiltersWorkflow(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"workflow_runs": [{"id": 1, "created_at": "` + time.Now().Format(time.RFC3339) + `", "path": "wrong.yml"}]}`))
+	}))
+	defer ts.Close()
+
+	runner := &GitHubActionsRunner{BaseURL: ts.URL, Token: "tok", HTTPClient: ts.Client()}
+	res, err := runner.resolveDispatchRun(context.Background(), "repo", "ci.yml", "main", time.Now().Add(-time.Minute))
+	require.NoError(t, err)
+	assert.Equal(t, "", res)
+}
+
+func TestResolveDispatchRun_FiltersBranch(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "main", r.URL.Query().Get("branch"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"workflow_runs": []}`))
+	}))
+	defer ts.Close()
+
+	runner := &GitHubActionsRunner{BaseURL: ts.URL, Token: "tok", HTTPClient: ts.Client()}
+	_, err := runner.resolveDispatchRun(context.Background(), "repo", "ci.yml", "main", time.Now())
+	require.NoError(t, err)
+}
+
+func TestTrigger_Failure_SetsFailedState(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer ts.Close()
+
+	runner := &GitHubActionsRunner{BaseURL: ts.URL, Token: "tok", HTTPClient: ts.Client()}
+	env := testEnv()
+	_, err := runner.Trigger(context.Background(), env)
+	assert.ErrorContains(t, err, "unexpected status 403")
+}

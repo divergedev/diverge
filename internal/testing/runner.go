@@ -10,9 +10,10 @@ import (
 
 // TestResult holds the result of a test run poll.
 type TestResult struct {
-	State   v1alpha1.TestState
-	Summary string
-	URL     string
+	State         v1alpha1.TestState
+	Summary       string
+	URL           string
+	ResolvedRunID string
 }
 
 // TestRunner triggers test runs and polls for their completion.

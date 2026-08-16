@@ -392,6 +392,21 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			if err != nil {
 				logger.Error(err, "failed to trigger tests")
 				r.Recorder.Event(&env, "Warning", "TestTriggerFailed", err.Error())
+				now := metav1.Now()
+				env.Status.TestStatus = &divergeiov1alpha1.TestStatus{
+					State:       divergeiov1alpha1.TestStateFailed,
+					Summary:     fmt.Sprintf("Failed to trigger: %v", err),
+					CompletedAt: &now,
+				}
+				if r.StatusReporter != nil {
+					commitState := "failed"
+					if env.Spec.Testing == nil || !env.Spec.Testing.Required {
+						commitState = "success"
+					}
+					notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+					_ = r.StatusReporter.PostCommitStatus(notifyCtx, &env, commitState, err.Error())
+					cancel()
+				}
 			} else {
 				now := metav1.Now()
 				env.Status.TestStatus = &divergeiov1alpha1.TestStatus{
@@ -404,6 +419,9 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 					notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 					_ = r.StatusReporter.PostCommitStatus(notifyCtx, &env, "pending", "Tests running...")
 					cancel()
+				}
+				if runID == "dispatch-pending" {
+					return r.updateStatusWithRequeue(ctx, &env, statusBase, nil, 5*time.Second)
 				}
 			}
 		}
@@ -450,6 +468,9 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 					if result.URL != "" {
 						ts.URL = result.URL
 					}
+					if result.ResolvedRunID != "" {
+						ts.RunID = result.ResolvedRunID
+					}
 
 					switch result.State {
 					case divergeiov1alpha1.TestStatePassed:
@@ -480,7 +501,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				// Requeue to poll again if still running
 				switch ts.State {
 				case divergeiov1alpha1.TestStatePending:
-					requeueAfter = 3 * time.Second
+					requeueAfter = 5 * time.Second
 				case divergeiov1alpha1.TestStateRunning:
 					if requeueAfter == 0 || requeueAfter > 15*time.Second {
 						requeueAfter = 30 * time.Second
