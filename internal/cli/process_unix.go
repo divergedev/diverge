@@ -4,6 +4,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,7 +16,15 @@ import (
 func runChildProcess(ctx context.Context, args []string, envMap map[string]string) (*exec.Cmd, error) {
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Cancel = func() error {
-		return cmd.Process.Signal(syscall.SIGTERM)
+		// Signal entire process group
+		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err != nil {
+			// Process may have already exited
+			if errors.Is(err, syscall.ESRCH) {
+				return nil
+			}
+			return err
+		}
+		return nil
 	}
 	cmd.WaitDelay = 5 * time.Second
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

@@ -65,17 +65,17 @@ type EnvironmentDeploy struct {
 type AsyncRouteSpec struct {
 	// Protocol is the async protocol type.
 	// +kubebuilder:validation:Enum=temporal;kafka
-	Protocol string `json:"protocol"`
+	Protocol string `json:"protocol" yaml:"protocol"`
 
 	// Target is the baseline resource name (e.g., task queue name or topic name).
-	Target string `json:"target"`
+	Target string `json:"target" yaml:"target"`
 
 	// EnvVarMapping maps provisioned targets to environment variable names.
 	// If empty, sensible defaults are used based on protocol:
 	// - temporal: TEMPORAL_TASK_QUEUE
 	// - kafka: KAFKA_CONSUMER_GROUP
 	// +optional
-	EnvVarMapping map[string]string `json:"envVarMapping,omitempty"`
+	EnvVarMapping map[string]string `json:"envVarMapping,omitempty" yaml:"envVarMapping,omitempty"`
 }
 
 // DefaultEnvVarForProtocol returns the default environment variable name for a protocol.
