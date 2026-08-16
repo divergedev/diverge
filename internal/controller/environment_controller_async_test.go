@@ -76,8 +76,8 @@ func TestAsyncRouting_FullReconcile(t *testing.T) {
 	assert.Equal(t, "AsyncProvisioned", condition.Reason)
 
 	require.NotNil(t, dep.lastEnv)
-	require.NotNil(t, dep.lastEnv.Spec.ServiceConfig)
-	assert.Contains(t, dep.lastEnv.Spec.ServiceConfig.Env, divergeiov1alpha1.EnvVar{Name: "TEMPORAL_TASK_QUEUE", Value: "payments-test-env"})
+	require.NotNil(t, updatedEnv.Status.AsyncEnvVars)
+	assert.Equal(t, "payments-test-env", updatedEnv.Status.AsyncEnvVars["TEMPORAL_TASK_QUEUE"])
 
 	assert.True(t, dep.deployCalled)
 	assert.Equal(t, divergeiov1alpha1.PhaseRunning, updatedEnv.Status.Phase)
@@ -101,7 +101,7 @@ func TestAsyncRouting_MultipleRoutes(t *testing.T) {
 			},
 		},
 	}
-	r, client, dep, _, _ := newTestReconciler(t, env.DeepCopy(), &database.DatabaseResult{Ready: true}, "https://test.com")
+	r, client, _, _, _ := newTestReconciler(t, env.DeepCopy(), &database.DatabaseResult{Ready: true}, "https://test.com")
 
 	callCount := 0
 	r.AsyncProvisioner = &fakeProvisionerDynamic{
@@ -126,9 +126,9 @@ func TestAsyncRouting_MultipleRoutes(t *testing.T) {
 	require.NotNil(t, condition)
 	assert.Contains(t, condition.Message, "2 async routes")
 
-	envVars := dep.lastEnv.Spec.ServiceConfig.Env
-	assert.Contains(t, envVars, divergeiov1alpha1.EnvVar{Name: "TEMPORAL_TASK_QUEUE", Value: "payments-test-env"})
-	assert.Contains(t, envVars, divergeiov1alpha1.EnvVar{Name: "KAFKA_CONSUMER_GROUP", Value: "events-test-env"})
+	envVars := updatedEnv.Status.AsyncEnvVars
+	assert.Equal(t, "payments-test-env", envVars["TEMPORAL_TASK_QUEUE"])
+	assert.Equal(t, "events-test-env", envVars["KAFKA_CONSUMER_GROUP"])
 }
 
 // Test 3: Async provision failure -> blocks deploy
@@ -230,7 +230,7 @@ func TestAsyncRouting_Conflict(t *testing.T) {
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-env", Namespace: "default"}}
 	_, err := r.Reconcile(context.Background(), req)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "env var conflict")
+	assert.Contains(t, err.Error(), "env var collision")
 
 	updatedEnv := &divergeiov1alpha1.Environment{}
 	require.NoError(t, client.Get(context.Background(), req.NamespacedName, updatedEnv))
