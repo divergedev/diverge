@@ -140,6 +140,59 @@ func PreviewEnvClientInterceptor() grpc.UnaryClientInterceptor {
 }
 ```
 
+## 4. Async Routing SDK (Temporal & Kafka)
+
+Diverge provides SDKs to automatically propagate headers across asynchronous boundaries.
+
+### Temporal
+
+When working with Temporal, you must install the Diverge Temporal SDK to handle header propagation through Temporal metadata and into Go context inside activities.
+
+```go
+import (
+	divergetemporal "github.com/divergedev/diverge/pkg/sdk/temporal"
+)
+
+// Attach the ContextPropagator and HeadersProvider to your client
+c, err := client.Dial(client.Options{
+	ContextPropagators: []workflow.ContextPropagator{
+		&divergetemporal.Propagator{EnvName: env},
+	},
+	HeadersProvider: divergetemporal.NewHeadersProvider(env),
+})
+
+// Attach the WorkerInterceptor to your worker
+workerOpts := worker.Options{
+	Interceptors: []worker.Interceptor{
+		divergetemporal.NewWorkerInterceptor(env),
+	},
+}
+```
+*For detailed Temporal guidance, see the [Temporal Integration Guide](../../guides/temporal-integration.md).*
+
+### Kafka
+
+To propagate headers through Kafka messages, use the Diverge Kafka wrapper around `segmentio/kafka-go` or `IBM/sarama`.
+
+```go
+import (
+	divergekafka "github.com/divergedev/diverge/pkg/sdk/kafka"
+)
+
+// The writer will automatically inject the x-diverge-env header from the context into the Kafka message headers
+writer := divergekafka.NewWriter(kafka.WriterConfig{
+	Brokers: []string{"localhost:9092"},
+	Topic:   "my-topic",
+})
+
+// The reader will automatically extract the header from incoming messages and inject it into the context
+reader := divergekafka.NewReader(kafka.ReaderConfig{
+	Brokers: []string{"localhost:9092"},
+	Topic:   "my-topic",
+	GroupID: "my-group",
+})
+```
+
 ## OpenTelemetry Baggage (Alternative)
 
 If you are already using OpenTelemetry, you can propagate the preview environment as Baggage instead of manual header propagation. The standard OpenTelemetry propagators will automatically forward Baggage items across service boundaries.

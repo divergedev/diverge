@@ -22,6 +22,7 @@ When creating your Temporal Client, register the Diverge ContextPropagator:
 
 ```go
 import (
+	"fmt"
 	"log"
 	"os"
 	
@@ -43,6 +44,8 @@ func main() {
 	c, err := client.Dial(client.Options{
 		HostPort:          "localhost:7233",
 		ContextPropagators: []workflow.ContextPropagator{propagator},
+		// HeadersProvider attaches the correct x-diverge-env header to new workflows
+		HeadersProvider: divergetemporal.NewHeadersProvider(env),
 	})
 	if err != nil {
 		log.Fatalln("Unable to create client", err)
@@ -68,14 +71,20 @@ if env != "" {
 	taskQueue = fmt.Sprintf("%s-%s", taskQueue, env)
 }
 
-w := worker.New(c, taskQueue, worker.Options{})
+// The WorkerInterceptor intercepts activity execution to inject the headers into the Go context
+workerOpts := worker.Options{
+	Interceptors: []worker.Interceptor{
+		divergetemporal.NewWorkerInterceptor(env),
+	},
+}
+w := worker.New(c, taskQueue, workerOpts)
 ```
 
-The Diverge ConfigMap creates a `task-queue-suffix` key containing the environment name for this exact purpose.
+The Diverge ConfigMap creates a `task-queue-suffix` key containing the environment name for this exact purpose. The `WorkerInterceptor` extracts the context and injects it so downstream HTTP/gRPC calls made from the activity will properly propagate the `x-diverge-env` header.
 
 ## Security
 
-In preview mode (when `EnvName` is set on the Propagator), the propagator **overwrites** the `x-diverge-env` header injected into the workflow context. This guarantees that untrusted user input cannot forge headers and break out of the preview sandbox environment.
+In preview mode (when `EnvName` is set), the Propagator, HeadersProvider, and WorkerInterceptor all **overwrite** the `x-diverge-env` header injected into the workflow context. This guarantees that untrusted user input cannot forge headers and break out of the preview sandbox environment or perform cross-environment spoofing.
 
 ## Limitations
 

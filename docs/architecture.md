@@ -20,6 +20,7 @@ flowchart TD
         G --> H[Changeset Detector]
         G --> I[Database Provider]
         G --> J[Routing Engine]
+        G --> ASYNC[Async Provisioner]
         G --> N[Notifier]
         G --> S[Status Reporter]
     end
@@ -27,11 +28,14 @@ flowchart TD
     F -->|Analyzes .diverge.yaml| ARGO[Argo CD Application CRs / Deployments]
     G -->|Provisions DB| DB_INST[Database Instances]
     H -->|Creates VirtualService| K[Istio Ingress & Diverge Proxy]
+    ASYNC -->|Provisions| TASK[Temporal Task Queues / Kafka Topics]
     N -->|Status Feedback| B
 
     ARGO --> L[Changed Services]
     K -->|Header Routing| L
     K -->|Fallback| M[Baseline Services]
+    TASK -->|SDK Propagates Context| L
+    TASK -->|Fallback| M
 ```
 
 ## Components
@@ -46,6 +50,8 @@ flowchart TD
 - **Changeset Detector**: Responsible for identifying which services have been modified in the current branch by performing a git diff and mapping the changed files to service paths defined in `.diverge.yaml`.
 - **Database Providers**: Pluggable interfaces to handle database provisioning dynamically according to the requested mode (e.g., creating schemas, restoring from snapshots, or providing fresh databases).
 - **Routing Engine**: Configures the underlying service mesh (e.g., Istio) to route traffic appropriately. In header-based mode, it generates Istio `VirtualService` and `DestinationRule` resources.
+- **Async Provisioner**: Manages async routing resources like Temporal Task Queues and Kafka topics, ensuring they are provisioned before workloads are started.
+- **SDK Context Propagation**: SDK packages (for Go, Python, Node, Java) that transparently propagate the `x-diverge-env` context through headers or metadata, extending routing to async protocols.
 - **ArgoCD Deployer**: Generates and manages Argo CD `Application` CRs, supporting both Helm and Kustomize source types.
 - **Notifier**: (Optional) Sends status updates back to the Version Control System (like GitLab/GitHub MR/PR comments) regarding deployment progress and preview URLs.
 - **Status Reporter**: Posts commit status checks to GitLab/GitHub for merge gating. Supports `pending`, `running`, `success`, `failed`, and `canceled` states with platform-specific mapping. Includes SHA validation (hex-only regex) to prevent path traversal.
@@ -104,6 +110,13 @@ Diverge supports multiple routing strategies depending on cluster configuration:
 - **Gateway API**: Generates Gateway API `HTTPRoute` resources for header-based routing. When `ServicePreviewConfig.PathPrefix` is set, the generated route combines header matching with a `PathPrefix` path match, scoping it to specific API paths (e.g., `/api/payments`) to avoid unintentionally shadowing the entire baseline service.
 - **Namespace isolation**: Deploys the entire environment into a dedicated, isolated Kubernetes namespace.
 - **Subdomain**: Exposes the environment via a unique subdomain (e.g., `mr-123.preview.example.com`).
+
+## Async Routing
+
+In addition to synchronous HTTP/gRPC routing, Diverge natively supports asynchronous message routing:
+- **Temporal Task Queue Routing**: Diverge automatically injects an environment suffix into task queue names, isolating workflow execution to the preview environment.
+- **Kafka Topic Routing**: Topic names are dynamically rewritten or isolated by environment suffixes.
+- **SDK Context Propagation**: By utilizing Diverge's SDK context propagators, applications automatically forward the environment context across asynchronous boundaries (e.g. from an HTTP request to a Temporal workflow).
 
 ## Scale-to-Zero
 

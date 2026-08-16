@@ -14,17 +14,9 @@ Before installing Diverge, ensure you have the following prerequisites installed
 - **Istio**: Required for header-based routing.
 - **Argo CD** (optional but recommended): For declarative GitOps deployments of your microservices.
 
-## Install Diverge
+## Install Diverge CLI
 
-You can install Diverge via Helm, our installation script, or Go.
-
-### Install via Helm (Kubernetes Operator)
-
-```bash
-helm repo add diverge https://divergedev.github.io/diverge
-helm repo update
-helm install diverge diverge/diverge --namespace diverge-system --create-namespace --version v0.3.0
-```
+You can install Diverge via our installation script or Go.
 
 **Install via Shell Script**
 ```bash
@@ -40,7 +32,18 @@ go install github.com/divergedev/diverge/cmd/diverge@v0.3.0
 
 The controller and proxy images are available at:
 ```bash
+# prefetch image via Docker
 docker pull ghcr.io/divergedev/diverge:v0.3.0
+```
+
+## Install Diverge Controller (Cluster)
+
+### Install via Helm (Kubernetes Operator)
+
+```bash
+helm repo add diverge https://divergedev.github.io/diverge
+helm repo update
+helm install diverge diverge/diverge --namespace diverge-system --create-namespace --version v0.3.0
 ```
 
 Alternatively, to install from source for development:
@@ -50,7 +53,21 @@ make run
 ```
 
 ## Try the Bank Demo
-For a complete hands-on demo with database schema isolation, see the [bank-demo](https://github.com/divergedev/demo).
+For a complete hands-on demo with database schema isolation and async routing, see the [bank-demo](https://github.com/divergedev/demo).
+
+## Local Development with `diverge dev`
+
+Once your project is configured, you can use the CLI to instantly spin up a local development session. The `diverge dev` command creates an environment that routes cluster traffic seamlessly to your local machine, complete with async routing awareness for Temporal and Kafka.
+
+```bash
+diverge dev --service frontend
+```
+
+This will automatically:
+1. Detect your git branch and local IP endpoint.
+2. Route `x-diverge-env` traffic for the `frontend` service to your machine.
+3. Block until async routes (like Temporal Task Queues or Kafka topics) are fully provisioned (2-minute timeout).
+4. Capture baseline environment variables and inject them into your local process.
 
 ## Configure Your Repo
 
