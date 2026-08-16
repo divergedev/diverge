@@ -2,9 +2,9 @@ package streaming
 
 import (
 	"context"
-	"crypto/rand"
-	"fmt"
 	"sync"
+
+	"github.com/google/uuid"
 )
 
 const defaultBufferSize = 64
@@ -98,6 +98,11 @@ func (s *Subscriber[T]) Events() <-chan Event[T] {
 	return s.ch
 }
 
+// ID returns the subscriber's ID.
+func (s *Subscriber[T]) ID() string {
+	return s.id
+}
+
 // SubscriberCount returns number of active subscribers.
 func (b *Broadcaster[T]) SubscriberCount() int {
 	b.mu.RLock()
@@ -106,7 +111,5 @@ func (b *Broadcaster[T]) SubscriberCount() int {
 }
 
 func generateID() string {
-	b := make([]byte, 16)
-	rand.Read(b)
-	return fmt.Sprintf("%x", b)
+	return uuid.New().String()
 }

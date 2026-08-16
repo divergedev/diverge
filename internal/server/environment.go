@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -141,22 +142,63 @@ func (s *EnvironmentService) ExtendTTL(ctx context.Context, req *connect.Request
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
 }
 
+func (s *EnvironmentService) authorizeAction(ctx context.Context, verb, namespace string) error {
+	sar := &authorizationv1.SubjectAccessReview{
+		Spec: authorizationv1.SubjectAccessReviewSpec{
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				Namespace: namespace,
+				Verb:      verb,
+				Group:     "diverge.dev",
+				Resource:  "environments",
+			},
+		},
+	}
+	if err := s.client.Create(ctx, sar); err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("authorization check failed: %w", err))
+	}
+	if !sar.Status.Allowed {
+		return connect.NewError(connect.CodePermissionDenied, errors.New("permission denied"))
+	}
+	return nil
+}
+
 func (s *EnvironmentService) WatchEnvironments(ctx context.Context, req *connect.Request[pb.WatchEnvironmentsRequest], stream *connect.ServerStream[pb.WatchEnvironmentsResponse]) error {
 	if s.informerMgr == nil {
 		return connect.NewError(connect.CodeUnimplemented, errors.New("informer manager is not configured"))
 	}
 
+	select {
+	case StreamSemaphore <- struct{}{}:
+		defer func() { <-StreamSemaphore }()
+	default:
+		return connect.NewError(connect.CodeResourceExhausted, errors.New("too many concurrent streams"))
+	}
+
+	streamCtx, cancel := context.WithTimeout(ctx, 4*time.Hour)
+	defer cancel()
+
 	namespace := req.Msg.Namespace
-	// TODO: implement proper label selector filtering
+	if namespace != "" {
+		if err := s.authorizeAction(streamCtx, "watch", namespace); err != nil {
+			return err
+		}
+	}
 
-	sub := s.informerMgr.EnvBroadcaster.Subscribe(ctx)
-
-	// List initial state
+	// 1. List current state to get latestRV
 	var list v1alpha1.EnvironmentList
-	if err := s.client.List(ctx, &list, client.InNamespace(namespace)); err != nil {
+	opts := []client.ListOption{}
+	if namespace != "" {
+		opts = append(opts, client.InNamespace(namespace))
+	}
+	if err := s.client.List(streamCtx, &list, opts...); err != nil {
 		return connect.NewError(connect.CodeInternal, err)
 	}
 
+	// 2. Subscribe AFTER getting the list
+	sub := s.informerMgr.EnvBroadcaster.Subscribe(streamCtx)
+	defer s.informerMgr.EnvBroadcaster.Unsubscribe(sub.ID())
+
+	// 3. Send current state as ADDED
 	for i := range list.Items {
 		crd := &list.Items[i]
 		dom, _ := CRDEnvToDomain(crd)
@@ -171,9 +213,10 @@ func (s *EnvironmentService) WatchEnvironments(ctx context.Context, req *connect
 		}
 	}
 
+	// 4. Stream deltas
 	for {
 		select {
-		case <-ctx.Done():
+		case <-streamCtx.Done():
 			return nil
 		case event, ok := <-sub.Events():
 			if !ok {
@@ -224,9 +267,23 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 		return connect.NewError(connect.CodeUnimplemented, errors.New("log streamer is not configured"))
 	}
 
+	select {
+	case StreamSemaphore <- struct{}{}:
+		defer func() { <-StreamSemaphore }()
+	default:
+		return connect.NewError(connect.CodeResourceExhausted, errors.New("too many concurrent streams"))
+	}
+
+	streamCtx, cancel := context.WithTimeout(ctx, 4*time.Hour)
+	defer cancel()
+
 	msg := req.Msg
 	if msg.EnvironmentName == "" || msg.Namespace == "" {
 		return connect.NewError(connect.CodeInvalidArgument, errors.New("environment name and namespace are required"))
+	}
+
+	if err := s.authorizeAction(streamCtx, "get", msg.Namespace); err != nil {
+		return err
 	}
 
 	opts := []client.ListOption{
@@ -234,7 +291,7 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 		client.MatchingLabels{"diverge.dev/environment": msg.EnvironmentName},
 	}
 	var podList corev1.PodList
-	if err := s.client.List(ctx, &podList, opts...); err != nil {
+	if err := s.client.List(streamCtx, &podList, opts...); err != nil {
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list pods: %w", err))
 	}
 
@@ -253,10 +310,6 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 		return connect.NewError(connect.CodeNotFound, errors.New("no pods found for environment and service"))
 	}
 
-	// 30 minute max stream deadline
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
-	defer cancel()
-
 	logCh := make(chan logMessage, 100)
 	errCh := make(chan error, len(targetPods))
 
@@ -274,9 +327,8 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 				since = &t
 			}
 
-			logsStream, err := s.logStreamer.StreamPodLogs(ctx, p.Namespace, p.Name, containerName, msg.Follow, msg.TailLines, since)
+			logsStream, err := s.logStreamer.StreamPodLogs(streamCtx, p.Namespace, p.Name, containerName, msg.Follow, msg.TailLines, since)
 			if err != nil {
-				// Only report errors if we fail to open the stream
 				errCh <- fmt.Errorf("failed to open stream for pod %s: %w", p.Name, err)
 				return
 			}
@@ -285,25 +337,24 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 			}()
 
 			scanner := bufio.NewScanner(logsStream)
+			scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
 			for scanner.Scan() {
 				line := scanner.Text()
 
-				// Optional: parse timestamp if Timestamps is true, client-go prefixes with RFC3339 timestamp
-				// e.g. "2023-01-01T00:00:00Z content"
 				var ts *timestamppb.Timestamp
 				content := line
 				if msg.Timestamps {
-					parts := strings.SplitN(line, " ", 2)
-					if len(parts) == 2 {
-						if parsedTime, err := time.Parse(time.RFC3339Nano, parts[0]); err == nil {
+					timestamp, rest, found := strings.Cut(line, " ")
+					if found {
+						if parsedTime, err := time.Parse(time.RFC3339Nano, timestamp); err == nil {
 							ts = timestamppb.New(parsedTime)
-							content = parts[1]
+							content = rest
 						}
 					}
 				}
 
 				select {
-				case <-ctx.Done():
+				case <-streamCtx.Done():
 					return
 				case logCh <- logMessage{
 					pod:       p.Name,
@@ -312,6 +363,9 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 					timestamp: ts,
 				}:
 				}
+			}
+			if err := scanner.Err(); err != nil && !errors.Is(err, context.Canceled) {
+				errCh <- fmt.Errorf("log scan error: %w", err)
 			}
 		}(pod)
 	}
@@ -324,7 +378,7 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 	// Send logs to stream
 	for {
 		select {
-		case <-ctx.Done():
+		case <-streamCtx.Done():
 			return nil
 		case err := <-errCh:
 			return connect.NewError(connect.CodeInternal, err)

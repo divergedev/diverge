@@ -9,6 +9,8 @@ import (
 	"github.com/divergedev/diverge/internal/server/streaming"
 )
 
+var StreamSemaphore = make(chan struct{}, 100)
+
 func NewServeMux(c client.Client, informerMgr *streaming.InformerManager, logStreamer *streaming.LogStreamer) *http.ServeMux {
 	mux := http.NewServeMux()
 

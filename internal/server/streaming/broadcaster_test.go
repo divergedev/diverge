@@ -2,14 +2,18 @@ package streaming
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
+
+	"pgregory.net/rapid"
 )
 
 func TestBroadcaster_PublishReceive(t *testing.T) {
 	b := NewBroadcaster[string]()
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	sub := b.Subscribe(ctx)
 
 	go func() {
@@ -28,7 +32,8 @@ func TestBroadcaster_PublishReceive(t *testing.T) {
 
 func TestBroadcaster_SlowConsumerDropped(t *testing.T) {
 	b := NewBroadcaster[string]()
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	sub := b.Subscribe(ctx)
 
 	// Fill buffer
@@ -78,7 +83,8 @@ func TestBroadcaster_ContextCancellation(t *testing.T) {
 
 func TestBroadcaster_ConcurrentPublish(t *testing.T) {
 	b := NewBroadcaster[string]()
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	for i := 0; i < 5; i++ {
 		_ = b.Subscribe(ctx)
@@ -104,7 +110,8 @@ func TestBroadcaster_ConcurrentPublish(t *testing.T) {
 
 func TestBroadcaster_Unsubscribe(t *testing.T) {
 	b := NewBroadcaster[string]()
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	sub := b.Subscribe(ctx)
 
 	if b.SubscriberCount() != 1 {
@@ -115,5 +122,42 @@ func TestBroadcaster_Unsubscribe(t *testing.T) {
 
 	if b.SubscriberCount() != 0 {
 		t.Errorf("expected 0 subscribers")
+	}
+}
+
+func TestBroadcaster_PBT(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		b := NewBroadcaster[string]()
+		nSubs := rapid.IntRange(1, 20).Draw(t, "subscribers")
+		nEvents := rapid.IntRange(0, 100).Draw(t, "events")
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		subs := make([]*Subscriber[string], nSubs)
+		for i := 0; i < nSubs; i++ {
+			subs[i] = b.Subscribe(ctx)
+		}
+
+		for i := 0; i < nEvents; i++ {
+			b.Publish(Event[string]{Type: "MODIFIED", Object: fmt.Sprintf("event-%d", i)})
+		}
+
+		// All non-dropped subscribers should have received events
+		// (up to buffer capacity)
+	})
+}
+
+func BenchmarkBroadcaster_Publish(b *testing.B) {
+	br := NewBroadcaster[string]()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	for i := 0; i < 10; i++ {
+		br.Subscribe(ctx)
+	}
+	event := Event[string]{Type: "MODIFIED", Object: "test"}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		br.Publish(event)
 	}
 }

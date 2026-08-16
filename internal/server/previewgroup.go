@@ -3,8 +3,11 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
+	"time"
 
 	"connectrpc.com/connect"
+	authorizationv1 "k8s.io/api/authorization/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -104,20 +107,60 @@ func (s *PreviewGroupService) DeletePreviewGroup(ctx context.Context, req *conne
 	return connect.NewResponse(&pb.DeletePreviewGroupResponse{}), nil
 }
 
+func (s *PreviewGroupService) authorizeAction(ctx context.Context, verb, namespace string) error {
+	sar := &authorizationv1.SubjectAccessReview{
+		Spec: authorizationv1.SubjectAccessReviewSpec{
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				Namespace: namespace,
+				Verb:      verb,
+				Group:     "diverge.dev",
+				Resource:  "previewgroups",
+			},
+		},
+	}
+	if err := s.client.Create(ctx, sar); err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("authorization check failed: %w", err))
+	}
+	if !sar.Status.Allowed {
+		return connect.NewError(connect.CodePermissionDenied, errors.New("permission denied"))
+	}
+	return nil
+}
+
 func (s *PreviewGroupService) WatchPreviewGroups(ctx context.Context, req *connect.Request[pb.WatchPreviewGroupsRequest], stream *connect.ServerStream[pb.WatchPreviewGroupsResponse]) error {
 	if s.informerMgr == nil {
 		return connect.NewError(connect.CodeUnimplemented, errors.New("informer manager is not configured"))
 	}
 
-	namespace := req.Msg.Namespace
+	select {
+	case StreamSemaphore <- struct{}{}:
+		defer func() { <-StreamSemaphore }()
+	default:
+		return connect.NewError(connect.CodeResourceExhausted, errors.New("too many concurrent streams"))
+	}
 
-	sub := s.informerMgr.PgBroadcaster.Subscribe(ctx)
+	streamCtx, cancel := context.WithTimeout(ctx, 4*time.Hour)
+	defer cancel()
+
+	namespace := req.Msg.Namespace
+	if namespace != "" {
+		if err := s.authorizeAction(streamCtx, "watch", namespace); err != nil {
+			return err
+		}
+	}
 
 	// List initial state
 	var list v1alpha1.PreviewGroupList
-	if err := s.client.List(ctx, &list, client.InNamespace(namespace)); err != nil {
+	opts := []client.ListOption{}
+	if namespace != "" {
+		opts = append(opts, client.InNamespace(namespace))
+	}
+	if err := s.client.List(streamCtx, &list, opts...); err != nil {
 		return connect.NewError(connect.CodeInternal, err)
 	}
+
+	sub := s.informerMgr.PgBroadcaster.Subscribe(streamCtx)
+	defer s.informerMgr.PgBroadcaster.Unsubscribe(sub.ID())
 
 	for i := range list.Items {
 		crd := &list.Items[i]
@@ -135,7 +178,7 @@ func (s *PreviewGroupService) WatchPreviewGroups(ctx context.Context, req *conne
 
 	for {
 		select {
-		case <-ctx.Done():
+		case <-streamCtx.Done():
 			return nil
 		case event, ok := <-sub.Events():
 			if !ok {
