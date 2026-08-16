@@ -1,0 +1,18 @@
+version: "1"
+services:
+  - name: frontend
+    image: "${REGISTRY}/frontend:${CI_COMMIT_SHORT_SHA}"
+    port: 3000
+  - name: backend
+    image: "${REGISTRY}/backend:${CI_COMMIT_SHORT_SHA}"
+    port: 8080
+    env:
+      DATABASE_URL: "postgres://diverge:diverge@db:5432/${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}"
+  - name: worker
+    image: "${REGISTRY}/worker:${CI_COMMIT_SHORT_SHA}"
+    asyncRoutes:
+      - protocol: kafka
+        topic: "events-${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}"
+routing:
+  mode: header
+  headerKey: x-diverge-env

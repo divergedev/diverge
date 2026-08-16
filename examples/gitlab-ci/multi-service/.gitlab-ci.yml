@@ -1,0 +1,12 @@
+# Multi-service preview with PreviewGroup
+preview:group:
+  stage: preview
+  image: ghcr.io/divergedev/diverge:${DIVERGE_VERSION}
+  script:
+    - diverge preview group create
+      --provider gitlab
+      --project "${CI_PROJECT_PATH}"
+      --mr ${CI_MERGE_REQUEST_IID}
+      --config .diverge.yaml
+  rules:
+    - if: $CI_MERGE_REQUEST_IID
