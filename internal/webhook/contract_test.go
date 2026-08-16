@@ -6,11 +6,8 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"regexp"
 	"testing"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
@@ -23,36 +20,6 @@ import (
 
 func init() {
 	_ = v1alpha1.AddToScheme(scheme.Scheme)
-}
-
-type ContractAssertion struct {
-	Method      string
-	PathPattern *regexp.Regexp
-	Headers     map[string]string
-	BodyFields  []string
-}
-
-func AssertHTTPContract(t *testing.T, req *http.Request, contract ContractAssertion) {
-	t.Helper()
-	assert.Equal(t, contract.Method, req.Method)
-	assert.Regexp(t, contract.PathPattern, req.URL.Path)
-	for k, v := range contract.Headers {
-		assert.Equal(t, v, req.Header.Get(k), "header %s", k)
-	}
-
-	if len(contract.BodyFields) > 0 && req.Body != nil {
-		bodyBytes, err := io.ReadAll(req.Body)
-		require.NoError(t, err)
-		req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-
-		var bodyMap map[string]interface{}
-		err = json.Unmarshal(bodyBytes, &bodyMap)
-		require.NoError(t, err)
-		for _, field := range contract.BodyFields {
-			_, ok := bodyMap[field]
-			assert.True(t, ok, "body should contain field %s", field)
-		}
-	}
 }
 
 func TestContract_GitHubWebhook(t *testing.T) {
@@ -69,20 +36,25 @@ func TestContract_GitHubWebhook(t *testing.T) {
 	handler.ServeHTTP(rr, req)
 	assert.Equal(t, http.StatusUnauthorized, rr.Code)
 
-	// 2. Bad body (simulated by failing signature check if body is bad/tampered)
+	// 2. Bad body (simulated by valid signature but bad json)
 	payload := []byte(`{"action": "opened", "pull_request": {"number": 1, "head": {"ref": "main", "sha": "123"}, "base": {"ref": "main"}}, "repository": {"full_name": "owner/repo"}}`)
+	badBody := []byte(`{bad`)
+	badMac := hmac.New(sha256.New, []byte("secret123"))
+	badMac.Write(badBody)
+	badSig := "sha256=" + hex.EncodeToString(badMac.Sum(nil))
+
+	req2 := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(badBody))
+	req2.Header.Set("X-Hub-Signature-256", badSig)
+	req2.Header.Set("X-GitHub-Event", "pull_request")
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, req2)
+	assert.Equal(t, http.StatusBadRequest, rr2.Code)
+
+	// 3. Valid -> 200 and K8s resource created
 	mac := hmac.New(sha256.New, []byte("secret123"))
 	mac.Write(payload)
 	sig := "sha256=" + hex.EncodeToString(mac.Sum(nil))
 
-	req2 := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader([]byte(`{bad`)))
-	req2.Header.Set("X-Hub-Signature-256", sig)
-	req2.Header.Set("X-GitHub-Event", "pull_request")
-	rr2 := httptest.NewRecorder()
-	handler.ServeHTTP(rr2, req2)
-	assert.Equal(t, http.StatusUnauthorized, rr2.Code)
-
-	// 3. Valid -> 200 and K8s resource created
 	req3 := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(payload))
 	req3.Header.Set("X-Hub-Signature-256", sig)
 	req3.Header.Set("X-GitHub-Event", "pull_request")
