@@ -26,6 +26,14 @@ metrics:
   cloudMonitoringDashboard:
     enabled: false
 
+grafana:
+  dashboards:
+    enabled: true
+
+prometheus:
+  alerts:
+    enabled: true
+
 webhook:
   port: 9443
   secretName: diverge-webhook-token
