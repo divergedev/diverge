@@ -98,6 +98,8 @@ To enable automatic environment creation when a Merge Request (MR) is opened, co
 
 *Note: The Diverge webhook endpoint needs to be externally accessible from your VCS.*
 
+See the [Diverge for GitLab](guides/diverge-for-gitlab.md) guide for comprehensive instructions, including setup for PreviewGroups, CI/CD, and self-hosted instances.
+
 ## Create Your First Environment
 
 If you want to manually test Diverge without a webhook event, you can apply an `Environment` Custom Resource (CR) directly.
