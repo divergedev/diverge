@@ -58,7 +58,7 @@ func TestEnsureBannerConfigMap_CreateMode(t *testing.T) {
 
 	cm := &corev1.ConfigMap{}
 	err = client.Get(context.Background(), types.NamespacedName{
-		Name:      "diverge-preview-banner",
+		Name:      "diverge-banner-test-env",
 		Namespace: env.PreviewNamespace(),
 	}, cm)
 	require.NoError(t, err)
@@ -113,7 +113,7 @@ func TestEnsureBannerConfigMap_SameMode_OwnerReference(t *testing.T) {
 
 	cm := &corev1.ConfigMap{}
 	err = client.Get(context.Background(), types.NamespacedName{
-		Name:      "diverge-preview-banner",
+		Name:      "diverge-banner-test-env",
 		Namespace: "default",
 	}, cm)
 	require.NoError(t, err)
@@ -157,7 +157,7 @@ func TestEnsureBannerConfigMap_XSS(t *testing.T) {
 
 	cm := &corev1.ConfigMap{}
 	err = client.Get(context.Background(), types.NamespacedName{
-		Name:      "diverge-preview-banner",
+		Name:      "diverge-banner-test-env",
 		Namespace: "default",
 	}, cm)
 	require.NoError(t, err)
@@ -199,7 +199,7 @@ func TestBannerReconcileCleanup(t *testing.T) {
 	// Pre-create the configmap
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "diverge-preview-banner",
+			Name:      "diverge-banner-test-env",
 			Namespace: env.PreviewNamespace(),
 		},
 		Data: map[string]string{"diverge-banner.js": "console.log();"},
@@ -219,7 +219,7 @@ func TestBannerReconcileCleanup(t *testing.T) {
 
 	// Verify the ConfigMap is deleted
 	err = client.Get(context.Background(), types.NamespacedName{
-		Name:      "diverge-preview-banner",
+		Name:      "diverge-banner-test-env",
 		Namespace: env.PreviewNamespace(),
 	}, &corev1.ConfigMap{})
 	assert.True(t, apierrors.IsNotFound(err), "Expected ConfigMap to be deleted")

@@ -295,23 +295,24 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// 7.6. Ensure banner ConfigMap
 	if env.Spec.Routing.Banner != nil && env.Spec.Routing.Banner.Enabled {
 		if err := r.ensureBannerConfigMap(ctx, &env); err != nil {
+			logger.Error(err, "failed to provision banner ConfigMap")
 			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 				Type:    "BannerReady",
 				Status:  metav1.ConditionFalse,
 				Reason:  "BannerProvisionFailed",
 				Message: err.Error(),
 			})
-			return r.updateStatusWithRequeue(ctx, &env, statusBase, err, 0)
+		} else {
+			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+				Type:    "BannerReady",
+				Status:  metav1.ConditionTrue,
+				Reason:  "BannerProvisioned",
+				Message: "Preview banner ConfigMap is ready",
+			})
 		}
-		meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
-			Type:    "BannerReady",
-			Status:  metav1.ConditionTrue,
-			Reason:  "BannerProvisioned",
-			Message: "Preview banner ConfigMap is ready",
-		})
 	} else {
 		if err := r.ensureBannerConfigMap(ctx, &env); err != nil {
-			return r.updateStatusWithRequeue(ctx, &env, statusBase, err, 0)
+			logger.Error(err, "failed to teardown banner ConfigMap")
 		}
 	}
 
@@ -624,6 +625,7 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 	return ctrl.Result{}, nil
 }
 
+// ensureBannerConfigMap creates or updates the ConfigMap containing the Javascript for the preview banner.
 func (r *EnvironmentReconciler) ensureBannerConfigMap(ctx context.Context, env *divergeiov1alpha1.Environment) error {
 	bannerSpec := env.Spec.Routing.Banner
 
@@ -632,9 +634,14 @@ func (r *EnvironmentReconciler) ensureBannerConfigMap(ctx context.Context, env *
 		targetNS = env.PreviewNamespace()
 	}
 
+	cmName := fmt.Sprintf("diverge-banner-%s", env.Name)
+	if len(cmName) > 253 {
+		cmName = cmName[:253]
+	}
+
 	if bannerSpec == nil || !bannerSpec.Enabled {
 		existing := &corev1.ConfigMap{}
-		if err := r.Get(ctx, types.NamespacedName{Name: "diverge-preview-banner", Namespace: targetNS}, existing); err == nil {
+		if err := r.Get(ctx, types.NamespacedName{Name: cmName, Namespace: targetNS}, existing); err == nil {
 			if err := r.Delete(ctx, existing); err != nil {
 				return fmt.Errorf("failed to delete banner configmap: %w", err)
 			}
@@ -644,7 +651,7 @@ func (r *EnvironmentReconciler) ensureBannerConfigMap(ctx context.Context, env *
 
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "diverge-preview-banner",
+			Name:      cmName,
 			Namespace: targetNS,
 			Labels: map[string]string{
 				"diverge.io/environment": env.Name,
