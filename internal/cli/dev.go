@@ -391,6 +391,24 @@ func runPreviewRelease(app *App, service, groupName string, ctx context.Context)
 }
 
 func waitForAsyncRoutes(ctx context.Context, c client.Client, groupName string, serviceName string, defaultNs string) (map[string]string, error) {
+	// Add a maximum timeout for the entire polling operation
+	pollCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
+	var initialPg divergeiov1alpha1.PreviewGroup
+	if err := c.Get(pollCtx, types.NamespacedName{Name: groupName}, &initialPg); err == nil {
+		hasAsync := false
+		for _, svc := range initialPg.Spec.Services {
+			if svc.Name == serviceName && len(svc.AsyncRoutes) > 0 {
+				hasAsync = true
+				break
+			}
+		}
+		if !hasAsync {
+			return nil, nil
+		}
+	}
+
 	var envName string
 	var envNs string
 	backoff := 100 * time.Millisecond
@@ -398,7 +416,7 @@ func waitForAsyncRoutes(ctx context.Context, c client.Client, groupName string, 
 
 	for {
 		var pg divergeiov1alpha1.PreviewGroup
-		if err := c.Get(ctx, types.NamespacedName{Name: groupName}, &pg); err == nil {
+		if err := c.Get(pollCtx, types.NamespacedName{Name: groupName}, &pg); err == nil {
 			for _, svc := range pg.Status.Services {
 				if svc.Name == serviceName && svc.EnvironmentName != "" {
 					envName = svc.EnvironmentName
@@ -415,7 +433,11 @@ func waitForAsyncRoutes(ctx context.Context, c client.Client, groupName string, 
 		}
 
 		select {
-		case <-ctx.Done():
+		case <-pollCtx.Done():
+			if ctx.Err() == nil {
+				// Our timeout fired, not user cancellation
+				return nil, fmt.Errorf("timed out waiting for async routes after 2m")
+			}
 			return nil, ctx.Err()
 		case <-time.After(backoff):
 			backoff *= 2
@@ -426,7 +448,7 @@ func waitForAsyncRoutes(ctx context.Context, c client.Client, groupName string, 
 	}
 
 	var env divergeiov1alpha1.Environment
-	if err := c.Get(ctx, types.NamespacedName{Name: envName, Namespace: envNs}, &env); err != nil {
+	if err := c.Get(pollCtx, types.NamespacedName{Name: envName, Namespace: envNs}, &env); err != nil {
 		return nil, fmt.Errorf("failed to get Environment %q: %w", envName, err)
 	}
 
@@ -438,7 +460,7 @@ func waitForAsyncRoutes(ctx context.Context, c client.Client, groupName string, 
 
 	backoff = 100 * time.Millisecond
 	for {
-		if err := c.Get(ctx, types.NamespacedName{Name: envName, Namespace: envNs}, &env); err != nil {
+		if err := c.Get(pollCtx, types.NamespacedName{Name: envName, Namespace: envNs}, &env); err != nil {
 			return nil, fmt.Errorf("failed to refresh Environment %q: %w", envName, err)
 		}
 
@@ -457,7 +479,11 @@ func waitForAsyncRoutes(ctx context.Context, c client.Client, groupName string, 
 		}
 
 		select {
-		case <-ctx.Done():
+		case <-pollCtx.Done():
+			if ctx.Err() == nil {
+				// Our timeout fired, not user cancellation
+				return nil, fmt.Errorf("timed out waiting for async routes after 2m")
+			}
 			return nil, ctx.Err()
 		case <-time.After(backoff):
 			backoff *= 2

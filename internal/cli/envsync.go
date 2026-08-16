@@ -165,7 +165,17 @@ func syncBaselineEnv(ctx context.Context, clientset kubernetes.Interface, opts s
 		if strings.HasPrefix(k, "# [envFrom]") {
 			fmt.Fprintf(&sb, "%s\n", k)
 		} else if entry.Source != "" {
-			fmt.Fprintf(&sb, "# %s=# sourced from %s\n", k, entry.Source)
+			if entry.Value != "" {
+				fmt.Fprintf(&sb, "# sourced from %s\n", entry.Source)
+				if strings.Contains(entry.Value, "\n") {
+					fmt.Fprintf(&sb, "%s=%q\n", k, entry.Value)
+				} else {
+					fmt.Fprintf(&sb, "%s=%s\n", k, entry.Value)
+				}
+				written++
+			} else {
+				fmt.Fprintf(&sb, "# %s=# sourced from %s\n", k, entry.Source)
+			}
 		} else {
 			if strings.Contains(entry.Value, "\n") {
 				fmt.Fprintf(&sb, "%s=%q\n", k, entry.Value)
