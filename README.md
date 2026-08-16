@@ -9,6 +9,7 @@
   <a href="https://github.com/divergedev/diverge/actions/workflows/ci.yml"><img src="https://github.com/divergedev/diverge/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/divergedev/diverge/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
   <a href="https://github.com/divergedev/diverge"><img src="https://img.shields.io/badge/Go-1.26-00ADD8.svg" alt="Go Version"></a>
+  [![Release](https://img.shields.io/github/v/release/divergedev/diverge)](https://github.com/divergedev/diverge/releases/latest)
 </p>
 
 Environment-as-a-service engine for Kubernetes. Diverge creates ephemeral preview environments triggered by merge request events, with delta deployment (only deploy changed services), configurable database provisioning, and Gateway API / Istio-based header routing. Extensible via a pluggable provider registry.
@@ -18,6 +19,14 @@ Documentation: [https://divergedev.com](https://divergedev.com)
 ## Try It
 
 > **[5-minute demo →](https://github.com/divergedev/demo)** — Multi-repo preview environments with k3d + Envoy Gateway. Features a complete hands-on bank-demo showcasing database schema isolation and automated migration jobs!
+
+## Quick Start
+
+You can quickly test Diverge locally with the CLI:
+
+```bash
+diverge dev --service my-app
+```
 
 ## Key Features
 *   **PreviewGroup Orchestration**: Manage multiple child environments and services under a single CR tied directly to an MR/PR. Automatic orphan cleanup and label-based ownership.
@@ -105,6 +114,24 @@ The `diverge` CLI helps you manage environments efficiently:
 *   `diverge version` - Show CLI version
 
 ## Installation
+
+Install via shell script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/main/install.sh | sh
+```
+
+Or install via Go:
+
+```bash
+go install github.com/divergedev/diverge/cmd/diverge@latest
+```
+
+Docker pull:
+
+```bash
+docker pull ghcr.io/divergedev/diverge:v0.3.0
+```
 
 Install via Helm:
 
