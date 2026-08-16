@@ -14,6 +14,10 @@ import (
 
 func runChildProcess(ctx context.Context, args []string, envMap map[string]string) (*exec.Cmd, error) {
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	cmd.Cancel = func() error {
+		return cmd.Process.Signal(syscall.SIGTERM)
+	}
+	cmd.WaitDelay = 5 * time.Second
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -44,11 +48,7 @@ func runChildProcess(ctx context.Context, args []string, envMap map[string]strin
 				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 			})
 		case <-ctx.Done():
-			// Context canceled (e.g. from app teardown)
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-			time.AfterFunc(5*time.Second, func() {
-				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			})
+			// cmd.Cancel handles this automatically now
 		}
 	}()
 

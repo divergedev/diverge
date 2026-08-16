@@ -110,6 +110,10 @@ func Parse(data []byte) (*Config, error) {
 
 // Load reads the YAML file from the given path, unmarshals it, and validates the version.
 func Load(path string) (*Config, error) {
+	info, err := os.Stat(path)
+	if err == nil && info.Size() > 1<<20 { // 1MB
+		return nil, fmt.Errorf("config file too large: %d bytes (max 1MB)", info.Size())
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)

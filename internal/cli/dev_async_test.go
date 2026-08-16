@@ -18,7 +18,11 @@ import (
 func setupTestClient(t *testing.T, objects ...client.Object) client.Client {
 	scheme := runtime.NewScheme()
 	require.NoError(t, divergeiov1alpha1.AddToScheme(scheme))
-	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
+	return fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&divergeiov1alpha1.Environment{}, &divergeiov1alpha1.PreviewGroup{}).
+		WithObjects(objects...).
+		Build()
 }
 
 func TestWaitForAsyncRoutes(t *testing.T) {
@@ -95,6 +99,9 @@ func TestWaitForAsyncRoutes(t *testing.T) {
 						Conditions: []metav1.Condition{
 							{Type: "AsyncRoutingReady", Status: metav1.ConditionTrue},
 						},
+						AsyncEnvVars: map[string]string{
+							"TEMPORAL_TASK_QUEUE": "q1-preview",
+						},
 					},
 				}
 				return setupTestClient(t, pg, env)
@@ -137,6 +144,9 @@ func TestWaitForAsyncRoutes(t *testing.T) {
 						Conditions: []metav1.Condition{
 							{Type: "AsyncRoutingReady", Status: metav1.ConditionFalse},
 						},
+						AsyncEnvVars: map[string]string{
+							"TEMPORAL_TASK_QUEUE": "q1-preview",
+						},
 					},
 				}
 				c := setupTestClient(t, pg, env)
@@ -145,7 +155,7 @@ func TestWaitForAsyncRoutes(t *testing.T) {
 					var e divergeiov1alpha1.Environment
 					_ = c.Get(context.Background(), client.ObjectKey{Name: "env-1", Namespace: ns}, &e)
 					e.Status.Conditions[0].Status = metav1.ConditionTrue
-					_ = c.Update(context.Background(), &e)
+					_ = c.Status().Update(context.Background(), &e)
 				}()
 				return c
 			},
@@ -257,6 +267,9 @@ func TestWaitForAsyncRoutes(t *testing.T) {
 						Conditions: []metav1.Condition{
 							{Type: "AsyncRoutingReady", Status: metav1.ConditionTrue},
 						},
+						AsyncEnvVars: map[string]string{
+							"BASELINE_VAR": "async_wins",
+						},
 					},
 				}
 				return setupTestClient(t, pg, env)
@@ -365,6 +378,11 @@ func TestWaitForAsyncRoutes(t *testing.T) {
 					Status: divergeiov1alpha1.EnvironmentStatus{
 						Conditions: []metav1.Condition{
 							{Type: "AsyncRoutingReady", Status: metav1.ConditionTrue},
+						},
+						AsyncEnvVars: map[string]string{
+							"VAR_1": "val1",
+							"VAR_2": "val2",
+							"VAR_3": "val3",
 						},
 					},
 				}

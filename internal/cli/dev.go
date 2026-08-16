@@ -15,6 +15,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
@@ -245,19 +246,29 @@ dev:
 
 	// Start lease heartbeat
 	heartbeatTicker := time.NewTicker(20 * time.Second)
-	defer heartbeatTicker.Stop()
+	hbCtx, hbCancel := context.WithCancel(ctx)
+	defer hbCancel()
 
 	go func() {
+		defer heartbeatTicker.Stop()
 		for {
 			select {
-			case <-ctx.Done():
+			case <-hbCtx.Done():
 				return
 			case <-heartbeatTicker.C:
-				var current divergeiov1alpha1.PreviewGroup
-				if err := c.Get(ctx, types.NamespacedName{Name: groupName}, &current); err == nil {
+				hbCallCtx, hbCallCancel := context.WithTimeout(hbCtx, 5*time.Second)
+				retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+					var current divergeiov1alpha1.PreviewGroup
+					if err := c.Get(hbCallCtx, types.NamespacedName{Name: groupName}, &current); err != nil {
+						return err
+					}
 					now := metav1.Now()
 					current.Status.LeaseRenewedAt = &now
-					_ = c.Status().Update(ctx, &current)
+					return c.Status().Update(hbCallCtx, &current)
+				})
+				hbCallCancel()
+				if retryErr != nil {
+					slog.Error("heartbeat failed", "error", retryErr)
 				}
 			}
 		}
@@ -479,6 +490,9 @@ func waitForAsyncRoutes(ctx context.Context, c client.Client, groupName string, 
 	backoff := 100 * time.Millisecond
 	maxBackoff := 1500 * time.Millisecond
 
+	backoffTimer := time.NewTimer(backoff)
+	defer backoffTimer.Stop()
+
 	for {
 		var pg divergeiov1alpha1.PreviewGroup
 		if err := c.Get(pollCtx, types.NamespacedName{Name: groupName}, &pg); err == nil {
@@ -492,6 +506,9 @@ func waitForAsyncRoutes(ctx context.Context, c client.Client, groupName string, 
 					break
 				}
 			}
+			if pg.Status.Phase == divergeiov1alpha1.PreviewGroupPhaseRunning {
+				break
+			}
 		}
 		if envName != "" {
 			break
@@ -504,48 +521,49 @@ func waitForAsyncRoutes(ctx context.Context, c client.Client, groupName string, 
 				return nil, fmt.Errorf("timed out waiting for async routes after 2m")
 			}
 			return nil, ctx.Err()
-		case <-time.After(backoff):
+		case <-backoffTimer.C:
 			backoff *= 2
 			if backoff > maxBackoff {
 				backoff = maxBackoff
 			}
+			backoffTimer.Reset(backoff)
 		}
 	}
 
+	// Wait for the specific Environment's async routes to be ready
 	var env divergeiov1alpha1.Environment
-	if err := c.Get(pollCtx, types.NamespacedName{Name: envName, Namespace: envNs}, &env); err != nil {
-		return nil, fmt.Errorf("failed to get Environment %q: %w", envName, err)
-	}
-
-	if len(env.Spec.Routing.AsyncRoutes) == 0 {
-		return nil, nil
-	}
-
 	fmt.Println("⏳ Waiting for async routes...")
 
 	backoff = 100 * time.Millisecond
+	backoffTimer2 := time.NewTimer(backoff)
+	defer backoffTimer2.Stop()
+
 	for {
 		if err := c.Get(pollCtx, types.NamespacedName{Name: envName, Namespace: envNs}, &env); err != nil {
-			return nil, fmt.Errorf("failed to refresh Environment %q: %w", envName, err)
-		}
-
-		ready := false
-		for _, cond := range env.Status.Conditions {
-			if cond.Type == "AsyncRoutingReady" {
-				if cond.Status == metav1.ConditionTrue {
-					ready = true
-				}
-				if cond.Status == metav1.ConditionFalse {
-					if cond.Reason == "AsyncProvisionFailed" || cond.Reason == "EnvVarConflict" {
-						return nil, fmt.Errorf("async route provisioning failed: %s (%s)", cond.Message, cond.Reason)
+			if apierrors.IsNotFound(err) || apierrors.IsServerTimeout(err) || apierrors.IsServiceUnavailable(err) {
+				// retry on transient errors
+			} else {
+				return nil, fmt.Errorf("failed to refresh Environment %q: %w", envName, err)
+			}
+		} else {
+			ready := false
+			for _, cond := range env.Status.Conditions {
+				if cond.Type == "AsyncRoutingReady" {
+					if cond.Status == metav1.ConditionTrue {
+						ready = true
 					}
+					if cond.Status == metav1.ConditionFalse {
+						if cond.Reason == "AsyncProvisionFailed" || cond.Reason == "EnvVarConflict" {
+							return nil, fmt.Errorf("async route provisioning failed: %s (%s)", cond.Message, cond.Reason)
+						}
+					}
+					break
 				}
+			}
+
+			if ready {
 				break
 			}
-		}
-
-		if ready {
-			break
 		}
 
 		select {
@@ -555,11 +573,12 @@ func waitForAsyncRoutes(ctx context.Context, c client.Client, groupName string, 
 				return nil, fmt.Errorf("timed out waiting for async routes after 2m")
 			}
 			return nil, ctx.Err()
-		case <-time.After(backoff):
+		case <-backoffTimer2.C:
 			backoff *= 2
 			if backoff > maxBackoff {
 				backoff = maxBackoff
 			}
+			backoffTimer2.Reset(backoff)
 		}
 	}
 
@@ -573,10 +592,8 @@ func waitForAsyncRoutes(ctx context.Context, c client.Client, groupName string, 
 	}
 
 	asyncVars := make(map[string]string)
-	if env.Spec.ServiceConfig != nil {
-		for _, v := range env.Spec.ServiceConfig.Env {
-			asyncVars[v.Name] = v.Value
-		}
+	for k, v := range env.Status.AsyncEnvVars {
+		asyncVars[k] = v
 	}
 	return asyncVars, nil
 }

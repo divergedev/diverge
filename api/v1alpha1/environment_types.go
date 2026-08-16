@@ -351,6 +351,10 @@ type EnvironmentStatus struct {
 	// TestStatus tracks the state of the test run for this environment.
 	// +optional
 	TestStatus *TestStatus `json:"testStatus,omitempty"`
+
+	// AsyncEnvVars contains environment variables injected by async route provisioners.
+	// +optional
+	AsyncEnvVars map[string]string `json:"asyncEnvVars,omitempty"`
 }
 
 // +kubebuilder:object:root=true
