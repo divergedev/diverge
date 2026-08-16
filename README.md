@@ -9,7 +9,7 @@
   <a href="https://github.com/divergedev/diverge/actions/workflows/ci.yml"><img src="https://github.com/divergedev/diverge/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/divergedev/diverge/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
   <a href="https://github.com/divergedev/diverge"><img src="https://img.shields.io/badge/Go-1.26-00ADD8.svg" alt="Go Version"></a>
-  <a href="https://github.com/divergedev/diverge/releases/tag/v0.5.0"><img src="https://img.shields.io/badge/Release-v0.5.0-blue.svg" alt="Release"></a>
+  <a href="https://github.com/divergedev/diverge/releases/latest"><img src="https://img.shields.io/github/v/release/divergedev/diverge" alt="Release"></a>
 </p>
 
 Environment-as-a-service engine for Kubernetes. Diverge creates ephemeral preview environments with async routing, Prometheus observability, GitLab support, SDK propagation, and configurable database provisioning. Extensible via a pluggable provider registry.
@@ -124,7 +124,14 @@ The `diverge` CLI helps you manage environments efficiently:
 Install via shell script:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/v0.5.0/install.sh | sh
+curl -fsSL https://divergedev.com/install.sh | sh
+```
+
+Or download and verify first:
+```bash
+curl -fsSL -o install.sh https://divergedev.com/install.sh
+sha256sum install.sh  # verify contents
+sh install.sh
 ```
 
 Or install via Go:
