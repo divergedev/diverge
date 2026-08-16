@@ -4,7 +4,7 @@
 # This script re-runs code generation and checks for any diff or new
 # untracked files against the committed gen/ directory. If the generated
 # output differs, the stubs are stale and must be regenerated with
-# `make proto`.
+# `make generate manifests`.
 #
 # Usage:
 #   ./scripts/check-gen.sh          # exits 0 if clean, 1 if stale
@@ -32,7 +32,7 @@ for tool in buf protoc-gen-go protoc-gen-connect-go controller-gen; do
     fi
 done
 
-# Run code generation (same as `make proto`)
+# Run code generation (same as `make generate manifests`)
 echo "▸ Running buf generate..."
 buf generate
 buf generate --template buf.gen.domain.yaml
@@ -41,11 +41,11 @@ rm -rf gen/domain/diverge/v1
 echo "▸ Running controller-gen..."
 controller-gen object paths=./api/...
 mkdir -p config/crd/bases
-controller-gen crd paths=./api/... output:crd:dir=config/crd/bases
+controller-gen crd webhook rbac:roleName=manager-role paths="./..." output:crd:dir=config/crd/bases
 
 # Check for modified or untracked files
-DIFF_OUTPUT=$(git diff --stat gen/ api/ config/crd/bases/ 2>/dev/null || true)
-UNTRACKED=$(git ls-files --others --exclude-standard -- gen/ api/ config/crd/bases/ 2>/dev/null || true)
+DIFF_OUTPUT=$(git diff -I 'protoc-gen-go v' -I 'controller-gen' --stat gen/ api/ config/crd/bases/ config/rbac/ config/webhook/ 2>/dev/null || true)
+UNTRACKED=$(git ls-files --others --exclude-standard -- gen/ api/ config/crd/bases/ config/rbac/ config/webhook/ 2>/dev/null || true)
 
 if [[ -n "$DIFF_OUTPUT" || -n "$UNTRACKED" ]]; then
     echo ""

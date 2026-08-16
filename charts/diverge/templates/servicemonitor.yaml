@@ -16,3 +16,22 @@ spec:
     - port: metrics
       interval: {{ .Values.metrics.serviceMonitor.interval }}
 {{- end }}
+
+---
+{{- if .Values.server.metrics.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "diverge.fullname" . }}-server
+  labels:
+    {{- include "diverge.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "diverge.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: server
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.server.metrics.serviceMonitor.interval | default "30s" }}
+{{- end }}

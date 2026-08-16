@@ -12,9 +12,11 @@ help: ## Display this help.
 
 ##@ Development
 
+CONTROLLER_GEN = go run sigs.k8s.io/controller-tools/cmd/controller-gen
+
 .PHONY: manifests
-manifests: ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
-	controller-gen crd paths=./api/... output:crd:dir=config/crd/bases
+manifests: ## Generate CRD, webhook, and RBAC manifests
+	$(CONTROLLER_GEN) crd webhook rbac:roleName=manager-role paths="./..." output:crd:dir=config/crd/bases
 
 .PHONY: proto
 proto: ## Generate protobuf code
@@ -24,7 +26,7 @@ proto: ## Generate protobuf code
 
 .PHONY: generate
 generate: proto ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
-	controller-gen object paths=./api/...
+	$(CONTROLLER_GEN) object paths="./api/..."
 
 .PHONY: fmt
 fmt: ## Run go fmt against code.
@@ -41,6 +43,10 @@ lint: ## Run golangci-lint
 .PHONY: test
 test: manifests generate fmt vet ## Run tests.
 	go test ./... -coverprofile cover.out
+
+.PHONY: test-integration
+test-integration: ## Run integration tests (requires running cluster)
+	go test ./internal/controller/... -tags=integration -v -count=1
 
 .PHONY: e2e-setup e2e-run e2e-teardown e2e
 
@@ -65,16 +71,16 @@ e2e: e2e-setup ## Full E2E cycle
 	exit $$status
 
 e2e-dual-setup:
-	nix develop -c ./test/e2e/setup_dual.sh
+	./test/e2e/setup_dual.sh
 
 e2e-dual:
-	nix develop -c go test -tags=e2e_dual -v -count=1 -timeout=10m ./test/e2e/...
+	go test -tags=e2e,e2e_dual -v -count=1 -timeout=10m ./test/e2e/...
 
 e2e-dual-teardown:
-	nix develop -c ./test/e2e/teardown_dual.sh
+	./test/e2e/teardown_dual.sh
 
 e2e-istio:
-	nix develop -c go test -tags=e2e_istio -v -count=1 -timeout=15m ./test/e2e/...
+	go test -tags=e2e,e2e_istio -v -count=1 -timeout=15m ./test/e2e/...
 
 ##@ Build
 
@@ -84,7 +90,7 @@ build: manifests generate fmt vet ## Build manager binary.
 
 .PHONY: build-slim
 build-slim: ## Build slim manager binary without heavy providers
-	nix develop -c go build -tags=no_knative,no_schema -o /tmp/diverge-controller-slim ./cmd/controller/
+	go build -tags=no_knative,no_schema -o /tmp/diverge-controller-slim ./cmd/controller/
 
 .PHONY: build-all
 build-all: build build-cli build-proxy ## Build all binaries.

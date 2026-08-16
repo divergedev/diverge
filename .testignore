@@ -90,4 +90,5 @@ internal/server/server.go
 sync hooks: ✔️(pre-push, pre-commit)
 internal/server/streaming/informer.go
 internal/server/streaming/logs.go
+internal/server/metrics.go
 pkg/sdk/temporal/context.go
