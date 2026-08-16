@@ -2,7 +2,6 @@ stages:
   - build
   - preview
   - test
-  - cleanup
 
 variables:
   DIVERGE_VERSION: "0.3.0"
@@ -11,28 +10,25 @@ variables:
 # Build the service image
 build:
   stage: build
-  image: gcr.io/kaniko-project/executor:v1.23.2-debug
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
   script:
-    - /kaniko/executor
-      --context $CI_PROJECT_DIR
-      --dockerfile $CI_PROJECT_DIR/Dockerfile
-      --destination ${REGISTRY}:${CI_COMMIT_SHORT_SHA}
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"${CI_REGISTRY}\":{\"auth\":\"$(printf "%s:%s" "${CI_REGISTRY_USER}" "${CI_REGISTRY_PASSWORD}" | base64 | tr -d '\n')\"}}}" > /kaniko/.docker/config.json
+    - /kaniko/executor --context $CI_PROJECT_DIR --dockerfile $CI_PROJECT_DIR/Dockerfile --destination ${REGISTRY}:${CI_COMMIT_SHORT_SHA}
   rules:
     - if: $CI_MERGE_REQUEST_IID
 
 # Create preview environment on MR open
 preview:create:
   stage: preview
-  image: ghcr.io/divergedev/diverge:${DIVERGE_VERSION}
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache curl tar
+    - curl -sL https://github.com/divergedev/diverge/releases/download/v${DIVERGE_VERSION}/diverge_${DIVERGE_VERSION}_linux_amd64.tar.gz | tar xz -C /usr/local/bin diverge
   script:
-    - diverge preview create
-      --provider gitlab
-      --project "${CI_PROJECT_PATH}"
-      --mr ${CI_MERGE_REQUEST_IID}
-      --branch ${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}
-      --service my-service
-      --image ${REGISTRY}:${CI_COMMIT_SHORT_SHA}
-      --routing-mode header
+    - diverge create --mr ${CI_MERGE_REQUEST_IID}
   rules:
     - if: $CI_MERGE_REQUEST_IID
       when: always
@@ -42,21 +38,7 @@ test:preview:
   stage: test
   image: curlimages/curl:latest
   script:
-    - curl -H "x-diverge-env: ${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}" https://preview.example.com/health
+    - curl -H "x-diverge-env: preview-mr-${CI_MERGE_REQUEST_IID}" https://preview.example.com/health
   rules:
     - if: $CI_MERGE_REQUEST_IID
   needs: ["preview:create"]
-
-# Cleanup on MR close (triggered by webhook)
-preview:cleanup:
-  stage: cleanup
-  image: ghcr.io/divergedev/diverge:${DIVERGE_VERSION}
-  script:
-    - diverge preview delete
-      --provider gitlab
-      --project "${CI_PROJECT_PATH}"
-      --mr ${CI_MERGE_REQUEST_IID}
-  rules:
-    - if: $CI_MERGE_REQUEST_IID
-      when: manual
-  allow_failure: true

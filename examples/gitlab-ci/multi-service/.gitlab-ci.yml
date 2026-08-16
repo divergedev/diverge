@@ -1,12 +1,15 @@
 # Multi-service preview with PreviewGroup
 preview:group:
   stage: preview
-  image: ghcr.io/divergedev/diverge:${DIVERGE_VERSION}
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache curl tar
+    - curl -sL https://github.com/divergedev/diverge/releases/download/v${DIVERGE_VERSION}/diverge_${DIVERGE_VERSION}_linux_amd64.tar.gz | tar xz -C /usr/local/bin diverge
   script:
-    - diverge preview group create
-      --provider gitlab
-      --project "${CI_PROJECT_PATH}"
+    - diverge preview create \
+      --service frontend="${REGISTRY}/frontend:${CI_COMMIT_SHORT_SHA}" \
+      --service backend="${REGISTRY}/backend:${CI_COMMIT_SHORT_SHA}" \
+      --service worker \
       --mr ${CI_MERGE_REQUEST_IID}
-      --config .diverge.yaml
   rules:
     - if: $CI_MERGE_REQUEST_IID
