@@ -3,7 +3,7 @@
 Async routing allows you to route non-HTTP workloads such as Kafka consumers and Temporal workflows to your preview environments.
 
 ## How it works
-The `diverge dev` command provisions the requested async routing resources (e.g. creating a dedicated Kafka consumer group or a Temporal task queue) and waits for the `AsyncRoutingReady` condition on the `Environment` object to become true before allowing traffic.
+The `diverge dev` command provisions the requested async routing resources (e.g. creating a dedicated Kafka consumer group or a Temporal task queue) and polls `Environment.status.conditions` until the `AsyncRoutingReady` condition becomes true.
 
 ## Injected Environment Variables
 Diverge automatically provisions and injects specific environment variables into your preview pods to support async routing:

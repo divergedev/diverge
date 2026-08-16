@@ -17,7 +17,7 @@ Environment-as-a-service engine for Kubernetes. Diverge creates ephemeral previe
 ### Get Started
 
 ```bash
-curl -fsSL https://divergedev.com/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/v0.5.0/install.sh | sh
 ```
 
 Documentation: [https://divergedev.com](https://divergedev.com)

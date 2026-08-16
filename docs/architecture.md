@@ -16,13 +16,22 @@ sequenceDiagram
     participant Controller
     participant Async as Async Provisioner
     participant Env as Environment CRD
+    participant Prometheus
 
     CLI->>Controller: Create/Update Environment
     Controller->>Async: Provision Async Route
     Async-->>Controller: Return EnvVars (e.g. KAFKA_TOPIC)
     Controller->>Env: Update Status.AsyncEnvVars & AsyncRoutingReady=True
-    Env-->>CLI: Status update (Ready)
+
+    loop Poll until Ready
+        CLI->>Env: Get Environment Status
+        Env-->>CLI: Return Status (AsyncRoutingReady)
+    end
+
     CLI->>CLI: Apply EnvVars locally
+
+    Prometheus->>Controller: Scrape /metrics
+    Controller-->>Prometheus: Return metrics
 ```
 
 ## SDK Propagation
