@@ -10,9 +10,10 @@ import (
 
 // TestResult holds the result of a test run poll.
 type TestResult struct {
-	State         v1alpha1.TestState
-	Summary       string
-	URL           string
+	State   v1alpha1.TestState
+	Summary string
+	URL     string
+	// ResolvedRunID is the actual ID of the run if it was resolved from a pending state.
 	ResolvedRunID string
 }
 

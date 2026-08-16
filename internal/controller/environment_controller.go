@@ -501,7 +501,14 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				// Requeue to poll again if still running
 				switch ts.State {
 				case divergeiov1alpha1.TestStatePending:
-					requeueAfter = 5 * time.Second
+					elapsed := time.Since(ts.StartedAt.Time)
+					if elapsed < 30*time.Second {
+						requeueAfter = 5 * time.Second
+					} else if elapsed < 60*time.Second {
+						requeueAfter = 10 * time.Second
+					} else {
+						requeueAfter = 30 * time.Second
+					}
 				case divergeiov1alpha1.TestStateRunning:
 					if requeueAfter == 0 || requeueAfter > 15*time.Second {
 						requeueAfter = 30 * time.Second

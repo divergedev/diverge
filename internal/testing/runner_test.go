@@ -291,3 +291,35 @@ func TestTrigger_Failure_SetsFailedState(t *testing.T) {
 	_, err := runner.Trigger(context.Background(), env)
 	assert.ErrorContains(t, err, "unexpected status 403")
 }
+
+func TestStatus_DispatchPending_WorkflowFilter(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/actions/runs") && r.URL.Query().Get("event") == "repository_dispatch" {
+			w.Header().Set("Content-Type", "application/json")
+			// Return two runs: one that doesn't match the workflow, one that does
+			_, _ = w.Write([]byte(`{"workflow_runs": [
+				{"id": 111, "created_at": "` + time.Now().Format(time.RFC3339) + `", "path": ".github/workflows/other.yml"},
+				{"id": 222, "created_at": "` + time.Now().Format(time.RFC3339) + `", "path": ".github/workflows/e2e.yml"}
+			]}`))
+			return
+		}
+		if strings.Contains(r.URL.Path, "/actions/runs/222") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status": "completed", "conclusion": "success"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	runner := &GitHubActionsRunner{BaseURL: ts.URL, Token: "tok", HTTPClient: ts.Client()}
+	env := testEnv()
+	env.Spec.Testing.Trigger.Workflow = "e2e.yml"
+	now := metav1.Now()
+	env.Status.TestStatus = &v1alpha1.TestStatus{RunID: "dispatch-pending", StartedAt: &now}
+
+	res, err := runner.Status(context.Background(), env, "dispatch-pending")
+	require.NoError(t, err)
+	assert.Equal(t, v1alpha1.TestStatePassed, res.State)
+	assert.Equal(t, "222", res.ResolvedRunID)
+}

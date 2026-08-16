@@ -29,6 +29,7 @@ func (r *GitHubActionsRunner) baseURL() string {
 	return "https://api.github.com"
 }
 
+// Trigger starts a GitHub Actions workflow dispatch event.
 func (r *GitHubActionsRunner) Trigger(ctx context.Context, env *v1alpha1.Environment) (string, error) {
 	if env.Spec.Testing == nil {
 		return "", fmt.Errorf("testing spec not configured")
@@ -83,6 +84,7 @@ func (r *GitHubActionsRunner) Trigger(ctx context.Context, env *v1alpha1.Environ
 	return "dispatch-pending", nil
 }
 
+// resolveDispatchRun polls the GitHub Actions API to find the workflow run ID corresponding to a recent dispatch event.
 func (r *GitHubActionsRunner) resolveDispatchRun(ctx context.Context, repo, workflow, branch string, dispatchedAt time.Time) (string, error) {
 	// GitHub's search for created filters by UTC
 	createdAtFilter := dispatchedAt.Add(-10 * time.Second).UTC().Format(time.RFC3339)
@@ -121,20 +123,23 @@ func (r *GitHubActionsRunner) resolveDispatchRun(ctx context.Context, repo, work
 			Path      string    `json:"path"`
 		} `json:"workflow_runs"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err == nil {
-		for _, run := range result.WorkflowRuns {
-			if run.CreatedAt.After(dispatchedAt.Add(-10 * time.Second)) {
-				if workflow != "" && !strings.HasSuffix(run.Path, workflow) {
-					continue
-				}
-				return fmt.Sprintf("%d", run.ID), nil
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("decoding workflow runs response: %w", err)
+	}
+
+	for _, run := range result.WorkflowRuns {
+		if run.CreatedAt.After(dispatchedAt.Add(-10 * time.Second)) {
+			if workflow != "" && !strings.HasSuffix(run.Path, workflow) {
+				continue
 			}
+			return fmt.Sprintf("%d", run.ID), nil
 		}
 	}
 
 	return "", nil
 }
 
+// Status checks the current state of a GitHub Actions workflow run.
 func (r *GitHubActionsRunner) Status(ctx context.Context, env *v1alpha1.Environment, runID string) (*TestResult, error) {
 	repo := env.Spec.Testing.Trigger.Project
 	if repo == "" {
@@ -144,11 +149,7 @@ func (r *GitHubActionsRunner) Status(ctx context.Context, env *v1alpha1.Environm
 	// If runID is "dispatch-pending", search for recent workflow runs
 	if runID == "dispatch-pending" {
 		branch := env.Spec.Testing.Trigger.Ref
-		// Assuming Workflow is stored or we can pass an empty string if not in config
-		// As per user request, we pass workflow and branch
-		// The eventType could act as the workflow name or it's empty
-		var workflow string // Or we pull it from config if added. User just said pass workflow and branch from test config.
-		// If the user's config has Workflow in Trigger spec, but it doesn't, we will pass empty. Wait, let me check TestTriggerSpec.
+		workflow := env.Spec.Testing.Trigger.Workflow
 
 		var dispatchedAt time.Time
 		if env.Status.TestStatus != nil && env.Status.TestStatus.StartedAt != nil {
