@@ -98,7 +98,7 @@ func TestProperty_AsyncEnvAlwaysWins(t *testing.T) {
 		require.Contains(ht, output, fmt.Sprintf("%s=%s", key, asyncVal))
 		// Verify baseline value doesn't appear as its own line (not substring)
 		for _, line := range strings.Split(output, "\n") {
-			if line == fmt.Sprintf("%s=%s", key, baselineVal) {
+			if strings.TrimSpace(line) == fmt.Sprintf("%s=%s", key, baselineVal) {
 				ht.Errorf("baseline value should have been overridden: found %q", line)
 			}
 		}

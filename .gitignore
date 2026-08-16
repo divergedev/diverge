@@ -32,4 +32,5 @@ coverage/
 
 # Diverge dev session
 .env.diverge
-internal/cli/.hegel/
+# PBT test artifacts
+.hegel/

@@ -6,8 +6,10 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -72,10 +74,21 @@ func (f *Framework) CreateNamespace(ctx context.Context) {
 
 // CleanupNamespace deletes the test namespace.
 func (f *Framework) CleanupNamespace(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	if err := f.Clientset.CoreV1().Namespaces().Delete(ctx, f.Namespace, metav1.DeleteOptions{}); err != nil {
+	ctxDel, cancelDel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelDel()
+	if err := f.Clientset.CoreV1().Namespaces().Delete(ctxDel, f.Namespace, metav1.DeleteOptions{}); err != nil {
 		f.T.Logf("Failed to delete namespace: %v", err)
+	}
+
+	// Best-effort wait for termination
+	ctxWait, cancelWait := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelWait()
+	for {
+		var ns corev1.Namespace
+		if err := f.Client.Get(ctxWait, types.NamespacedName{Name: f.Namespace}, &ns); err != nil {
+			return // namespace gone
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
 }
 
@@ -108,4 +121,13 @@ func (f *Framework) CreateEnvironment(ctx context.Context, env *v1alpha1.Environ
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	return f.Client.Create(ctx, env)
+}
+
+// ControllerRunning checks if the diverge-controller deployment exists and has ready replicas.
+func (f *Framework) ControllerRunning(ctx context.Context) bool {
+	var dep appsv1.Deployment
+	err := f.Client.Get(ctx, types.NamespacedName{
+		Name: "diverge-controller", Namespace: "diverge-system",
+	}, &dep)
+	return err == nil && dep.Status.ReadyReplicas > 0
 }

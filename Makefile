@@ -50,6 +50,8 @@ e2e-setup: ## Create Kind cluster and install CRDs
 	$(MAKE) docker-build
 	kind load docker-image divergedev/diverge:latest --name diverge-e2e
 	kubectl apply -f config/crd/bases/ --context kind-diverge-e2e
+	kubectl apply -k config/default --context kind-diverge-e2e || true
+	kubectl -n diverge-system wait --for=condition=available deployment/diverge-controller --timeout=60s --context kind-diverge-e2e || true
 
 e2e-run: ## Run E2E tests
 	go test -tags=e2e -v -count=1 -timeout=10m ./test/e2e/...
