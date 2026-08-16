@@ -1,6 +1,9 @@
 package sdk
 
-import "context"
+import (
+	"context"
+	"os"
+)
 
 type contextKey struct{}
 
@@ -18,4 +21,13 @@ func EnvironmentFromContext(ctx context.Context) string {
 		return val
 	}
 	return ""
+}
+
+// GetHeaderKey returns the header key used for environment propagation.
+// It defaults to "x-preview-env" if DIVERGE_HEADER_KEY is not set.
+func GetHeaderKey() string {
+	if val := os.Getenv("DIVERGE_HEADER_KEY"); val != "" {
+		return val
+	}
+	return "x-preview-env"
 }

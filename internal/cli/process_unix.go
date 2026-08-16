@@ -4,6 +4,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -45,10 +46,18 @@ func runChildProcess(ctx context.Context, args []string, envMap map[string]strin
 			})
 		case <-ctx.Done():
 			// Context canceled (e.g. from app teardown)
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-			time.AfterFunc(5*time.Second, func() {
-				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			})
+			cmd.Cancel = func() error {
+				// Signal entire process group
+				if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err != nil {
+					// Process may have already exited
+					if errors.Is(err, syscall.ESRCH) {
+						return nil
+					}
+					return err
+				}
+				return nil
+			}
+			cmd.WaitDelay = 5 * time.Second
 		}
 	}()
 

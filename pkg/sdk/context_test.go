@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -20,4 +21,14 @@ func TestFromContextEmpty(t *testing.T) {
 	ctx := context.Background()
 	val := EnvironmentFromContext(ctx)
 	assert.Equal(t, "", val)
+}
+
+func TestGetHeaderKey_Default(t *testing.T) {
+	_ = os.Unsetenv("DIVERGE_HEADER_KEY")
+	assert.Equal(t, "x-preview-env", GetHeaderKey())
+}
+
+func TestGetHeaderKey_EnvOverride(t *testing.T) {
+	t.Setenv("DIVERGE_HEADER_KEY", "x-custom-env")
+	assert.Equal(t, "x-custom-env", GetHeaderKey())
 }

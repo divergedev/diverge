@@ -1,40 +1,138 @@
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: diverge-controller-role
+  name: manager-role
 rules:
-  # Diverge CRDs
-  - apiGroups: ["diverge.io"]
-    resources: [environments, environments/status, environments/finalizers]
-    verbs: [get, list, watch, create, update, patch, delete]
-  # Core K8s - Namespaces
-  - apiGroups: [""]
-    resources: [namespaces]
-    verbs: [get, list, watch, create, update, patch, delete]
-  # Core K8s - Workloads
-  - apiGroups: [""]
-    resources: [services, secrets, configmaps, serviceaccounts]
-    verbs: [get, list, watch, create, update, patch, delete]
-  - apiGroups: ["apps"]
-    resources: [deployments, statefulsets]
-    verbs: [get, list, watch, create, update, patch, delete]
-  # Istio networking
-  - apiGroups: ["networking.istio.io"]
-    resources: [virtualservices, destinationrules]
-    verbs: [get, list, watch, create, update, patch, delete]
-  # Gateway API
-  - apiGroups: ["gateway.networking.k8s.io"]
-    resources: [httproutes]
-    verbs: [get, list, watch, create, update, patch, delete]
-  # Events
-  - apiGroups: [""]
-    resources: [events]
-    verbs: [create, patch]
-  # Leader election
-  - apiGroups: ["coordination.k8s.io"]
-    resources: [leases]
-    verbs: [get, list, watch, create, update, patch, delete]
-  # Argo CD
-  - apiGroups: ["argoproj.io"]
-    resources: [applicationsets, applications]
-    verbs: [get, list, watch, create, update, patch, delete]
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - events
+  - namespaces
+  - secrets
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - argoproj.io
+  resources:
+  - applications
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - discovery.k8s.io
+  resources:
+  - endpointslices
+  verbs:
+  - delete
+  - list
+- apiGroups:
+  - diverge.io
+  resources:
+  - environments
+  - previewgroups
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - diverge.io
+  resources:
+  - environments/finalizers
+  - previewgroups/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - diverge.io
+  resources:
+  - environments/status
+  - previewgroups/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+  - grpcroutes
+  verbs:
+  - delete
+  - list
+- apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+  - httproutes
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - http.keda.sh
+  resources:
+  - httpscaledobjects
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - networking.istio.io
+  resources:
+  - destinationrules
+  - virtualservices
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch

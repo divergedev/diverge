@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"connectrpc.com/connect"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -118,8 +117,10 @@ func TestMetricsInterceptor_Streaming(t *testing.T) {
 		spec: connect.Spec{Procedure: "/diverge.v1alpha1.TestService/StreamMethod"},
 	}
 
+	done := make(chan struct{})
 	go func() {
 		_ = streamFunc(context.Background(), conn)
+		close(done)
 	}()
 
 	<-streamStart
@@ -136,9 +137,8 @@ func TestMetricsInterceptor_Streaming(t *testing.T) {
 
 	close(streamWait)
 
-	// Wait for stream to finish using a short sleep/polling since we don't have a done channel exposed.
-	// We'll use Eventually-like checking if possible, or just a small sleep.
-	time.Sleep(50 * time.Millisecond)
+	// Wait for stream to finish using done channel
+	<-done
 
 	metrics2, _ := crmetrics.Registry.Gather()
 	activeCount2 := 0.0

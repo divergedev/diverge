@@ -59,7 +59,7 @@ e2e-setup: ## Create Kind cluster and install CRDs
 	kubectl -n diverge-system wait --for=condition=available deployment/diverge-controller --timeout=60s --context kind-diverge-e2e || true
 
 e2e-run: ## Run E2E tests
-	nix develop -c go test -tags=e2e -v -count=1 -timeout=10m ./test/e2e/...
+	go test -tags=e2e -v -count=1 -timeout=10m ./test/e2e/...
 
 e2e-teardown: ## Delete Kind cluster
 	kind delete cluster --name diverge-e2e

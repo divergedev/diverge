@@ -47,8 +47,8 @@ func NewServeMux(c client.Client, informerMgr *streaming.InformerManager, logStr
 
 	go func() {
 		log.Printf("Metrics server listening on :9090")
-		if err := http.ListenAndServe(":9090", metricsMux); err != nil {
-			log.Printf("metrics server error: %v", err)
+		if err := http.ListenAndServe(":9090", metricsMux); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("metrics server failed: %v", err)
 		}
 	}()
 

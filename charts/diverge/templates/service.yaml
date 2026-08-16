@@ -12,5 +12,9 @@ spec:
       protocol: TCP
       targetPort: 8080
       name: metrics
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+      protocol: TCP
   selector:
     control-plane: controller-manager

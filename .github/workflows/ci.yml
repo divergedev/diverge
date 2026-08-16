@@ -1,5 +1,8 @@
 name: CI
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [ "main" ]
@@ -99,8 +102,8 @@ jobs:
       - name: Check CRD and deepcopy staleness
         run: |
           make generate manifests
-          DIFF=$(git diff -I 'controller-gen' --stat api/ config/crd/ config/rbac/ 2>/dev/null || true)
-          UNTRACKED=$(git ls-files --others --exclude-standard -- api/ config/crd/ config/rbac/ 2>/dev/null || true)
+          DIFF=$(git diff -I 'controller-gen' --stat api/ config/crd/ config/rbac/ config/webhook/ 2>/dev/null || true)
+          UNTRACKED=$(git ls-files --others --exclude-standard -- api/ config/crd/ config/rbac/ config/webhook/ 2>/dev/null || true)
           if [[ -n "$DIFF" || -n "$UNTRACKED" ]]; then
             echo "❌ CRD manifests or deepcopy are stale!"
             [[ -n "$DIFF" ]] && echo "Modified:" && echo "$DIFF"

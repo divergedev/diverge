@@ -2,6 +2,7 @@ package temporal
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/divergedev/diverge/pkg/sdk"
 	"go.temporal.io/sdk/converter"
@@ -53,7 +54,7 @@ func (p *Propagator) Extract(ctx context.Context, reader workflow.HeaderReader) 
 	}
 	var env string
 	if err := converter.GetDefaultDataConverter().FromPayload(payload, &env); err != nil {
-		return ctx, nil
+		return ctx, fmt.Errorf("diverge: failed to decode environment header: %w", err)
 	}
 	return context.WithValue(ctx, envContextKey, env), nil
 }
@@ -89,7 +90,7 @@ func (p *Propagator) ExtractToWorkflow(ctx workflow.Context, reader workflow.Hea
 	}
 	var env string
 	if err := converter.GetDefaultDataConverter().FromPayload(payload, &env); err != nil {
-		return ctx, nil
+		return ctx, fmt.Errorf("diverge: failed to decode environment header: %w", err)
 	}
 	return workflow.WithValue(ctx, envContextKey, env), nil
 }
