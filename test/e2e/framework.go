@@ -51,7 +51,7 @@ func NewFramework(t *testing.T) *Framework {
 	if err := v1alpha1.AddToScheme(c.Scheme()); err != nil {
 		t.Fatalf("Failed to add scheme: %v", err)
 	}
-	if err := gatewayv1.AddToScheme(c.Scheme()); err != nil {
+	if err := gatewayv1.Install(c.Scheme()); err != nil {
 		t.Fatalf("Failed to add gateway scheme: %v", err)
 	}
 
