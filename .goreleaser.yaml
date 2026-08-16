@@ -94,7 +94,22 @@ builds:
     ldflags:
       - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
 archives:
-  - format: tar.gz
+  - id: full
+    format: tar.gz
+    builds:
+      - diverge
+      - diverge-controller
+      - diverge-proxy
+      - diverge-activator-proxy
+    files:
+      - src: README*
+      - src: LICENSE*
+  - id: slim
+    format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_slim_{{ .Os }}_{{ .Arch }}"
+    builds:
+      - diverge-slim
+      - diverge-controller-slim
     files:
       - src: README*
       - src: LICENSE*
