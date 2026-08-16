@@ -78,8 +78,10 @@ jobs:
         run: |
           buf lint api/proto
           buf breaking api/proto --against 'https://github.com/divergedev/diverge.git#branch=main' || true
-      - name: Run code generation
-        run: buf generate
+      - name: Clean and regenerate protos
+        run: |
+          rm -rf api/gen/diverge/
+          buf generate
       - name: Check for stale generated files
         run: |
           DIFF=$(git diff -I 'protoc-gen-go v' --stat api/gen/diverge/ 2>/dev/null || true)
@@ -94,6 +96,19 @@ jobs:
             exit 1
           fi
           echo "✅ Generated files are up-to-date"
+      - name: Check CRD and deepcopy staleness
+        run: |
+          make generate manifests
+          DIFF=$(git diff -I 'controller-gen' --stat api/ config/crd/ config/rbac/ 2>/dev/null || true)
+          UNTRACKED=$(git ls-files --others --exclude-standard -- api/ config/crd/ config/rbac/ 2>/dev/null || true)
+          if [[ -n "$DIFF" || -n "$UNTRACKED" ]]; then
+            echo "❌ CRD manifests or deepcopy are stale!"
+            [[ -n "$DIFF" ]] && echo "Modified:" && echo "$DIFF"
+            [[ -n "$UNTRACKED" ]] && echo "Untracked:" && echo "$UNTRACKED"
+            echo "Run 'make generate manifests' and commit."
+            exit 1
+          fi
+          echo "✅ CRD manifests and deepcopy are up-to-date"
 
   test-guardrails:
     runs-on: ubuntu-latest

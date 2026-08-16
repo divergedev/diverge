@@ -44,7 +44,7 @@ mkdir -p config/crd/bases
 controller-gen crd paths=./api/... output:crd:dir=config/crd/bases
 
 # Check for modified or untracked files
-DIFF_OUTPUT=$(git diff --stat gen/ api/ config/crd/bases/ 2>/dev/null || true)
+DIFF_OUTPUT=$(git diff -I 'protoc-gen-go v' -I 'controller-gen' --stat gen/ api/ config/crd/bases/ 2>/dev/null || true)
 UNTRACKED=$(git ls-files --others --exclude-standard -- gen/ api/ config/crd/bases/ 2>/dev/null || true)
 
 if [[ -n "$DIFF_OUTPUT" || -n "$UNTRACKED" ]]; then
