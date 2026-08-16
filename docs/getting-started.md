@@ -16,15 +16,31 @@ Before installing Diverge, ensure you have the following prerequisites installed
 
 ## Install Diverge
 
-The easiest way to install Diverge is via Helm.
+You can install Diverge via Helm, our installation script, or Go.
+
+### Install via Helm (Kubernetes Operator)
 
 ```bash
-# Add the Diverge Helm repository (placeholder URL)
-helm repo add diverge https://charts.divergedev.io
+helm repo add diverge https://divergedev.github.io/diverge
 helm repo update
+helm install diverge diverge/diverge --namespace diverge-system --create-namespace --version v0.3.0
+```
 
-# Install the Diverge operator (v0.1.0 Release)
-helm install diverge diverge/diverge --version v0.1.0 --namespace diverge-system --create-namespace
+**Install via Shell Script**
+```bash
+curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/v0.3.0/install.sh | sh
+```
+
+**Install via Go**
+```bash
+go install github.com/divergedev/diverge/cmd/diverge@v0.3.0
+```
+
+### Docker Images (for reference)
+
+The controller and proxy images are available at:
+```bash
+docker pull ghcr.io/divergedev/diverge:v0.3.0
 ```
 
 Alternatively, to install from source for development:
