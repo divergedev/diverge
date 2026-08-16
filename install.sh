@@ -28,6 +28,7 @@ fi
 
 echo "Downloading $DOWNLOAD_URL..."
 TMP_DIR=$(mktemp -d)
+trap 'rm -rf "$TMP_DIR"' EXIT
 curl -sL "$DOWNLOAD_URL" -o "$TMP_DIR/diverge.tar.gz"
 
 echo "Extracting..."
@@ -43,13 +44,10 @@ echo "Installing diverge to $INSTALL_DIR..."
 mv "$TMP_DIR/diverge" "$INSTALL_DIR/diverge"
 chmod +x "$INSTALL_DIR/diverge"
 
-rm -rf "$TMP_DIR"
-
 echo "Installation complete."
+
+"$INSTALL_DIR/diverge" version
 
 if ! command -v diverge >/dev/null 2>&1; then
     echo "Please add $INSTALL_DIR to your PATH."
-    "$INSTALL_DIR/diverge" version
-else
-    diverge version
 fi
