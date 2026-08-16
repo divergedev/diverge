@@ -108,6 +108,11 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		env.Status.CommitSHA = env.Spec.Source.CommitSHA
 	}
 
+	// Initialize metrics from existing state
+	for _, route := range env.Spec.Routing.AsyncRoutes {
+		metrics.AsyncRoutesActive.WithLabelValues(string(route.Protocol), env.Namespace).Add(0)
+	}
+
 	// 3. Add finalizer
 	if !controllerutil.ContainsFinalizer(&env, environmentFinalizer) {
 		controllerutil.AddFinalizer(&env, environmentFinalizer)

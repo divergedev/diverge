@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
@@ -103,12 +104,11 @@ func TestPreviewGroupLifecycle(t *testing.T) {
 
 	pg := &v1alpha1.PreviewGroup{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-pg",
-			Namespace: f.Namespace,
+			Name: "test-pg",
 		},
 		Spec: v1alpha1.PreviewGroupSpec{
 			Source: v1alpha1.EnvironmentSource{Provider: "github"},
-			Services: []v1alpha1.PreviewGroupService{
+			Services: []v1alpha1.PreviewGroupServiceSpec{
 				{Name: "svc-a"},
 			},
 		},
@@ -117,7 +117,10 @@ func TestPreviewGroupLifecycle(t *testing.T) {
 	err := f.Client.Create(ctx, pg)
 	require.NoError(t, err, "Failed to create PreviewGroup")
 
-	assert.NotEmpty(t, pg.Name)
+	fetched := &v1alpha1.PreviewGroup{}
+	err = f.Client.Get(ctx, types.NamespacedName{Name: pg.Name}, fetched)
+	require.NoError(t, err)
+	assert.NotEmpty(t, fetched.Name)
 
 	err = f.Client.Delete(ctx, pg)
 	require.NoError(t, err, "Failed to delete PreviewGroup")
@@ -131,18 +134,15 @@ func TestPreviewGroupWithAsyncRoutes(t *testing.T) {
 
 	pg := &v1alpha1.PreviewGroup{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "async-pg",
-			Namespace: f.Namespace,
+			Name: "async-pg",
 		},
 		Spec: v1alpha1.PreviewGroupSpec{
 			Source: v1alpha1.EnvironmentSource{Provider: "github"},
-			Services: []v1alpha1.PreviewGroupService{
+			Services: []v1alpha1.PreviewGroupServiceSpec{
 				{
 					Name: "svc-worker",
-					Routing: &v1alpha1.RoutingConfig{
-						AsyncRoutes: []v1alpha1.AsyncRouteConfig{
-							{Protocol: "kafka", Target: "topic-test"},
-						},
+					AsyncRoutes: []v1alpha1.AsyncRouteSpec{
+						{Protocol: "kafka", Target: "topic-test"},
 					},
 				},
 			},
@@ -151,7 +151,11 @@ func TestPreviewGroupWithAsyncRoutes(t *testing.T) {
 
 	err := f.Client.Create(ctx, pg)
 	require.NoError(t, err, "Failed to create PreviewGroup with async routes")
-	assert.Equal(t, 1, len(pg.Spec.Services[0].Routing.AsyncRoutes))
+
+	fetched := &v1alpha1.PreviewGroup{}
+	err = f.Client.Get(ctx, types.NamespacedName{Name: pg.Name}, fetched)
+	require.NoError(t, err)
+	assert.Equal(t, 1, len(fetched.Spec.Services[0].AsyncRoutes))
 }
 
 func TestMultiServicePreviewGroup(t *testing.T) {
@@ -162,12 +166,11 @@ func TestMultiServicePreviewGroup(t *testing.T) {
 
 	pg := &v1alpha1.PreviewGroup{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "multi-pg",
-			Namespace: f.Namespace,
+			Name: "multi-pg",
 		},
 		Spec: v1alpha1.PreviewGroupSpec{
 			Source: v1alpha1.EnvironmentSource{Provider: "github"},
-			Services: []v1alpha1.PreviewGroupService{
+			Services: []v1alpha1.PreviewGroupServiceSpec{
 				{Name: "svc-frontend"},
 				{Name: "svc-backend"},
 			},
@@ -176,5 +179,9 @@ func TestMultiServicePreviewGroup(t *testing.T) {
 
 	err := f.Client.Create(ctx, pg)
 	require.NoError(t, err, "Failed to create multi-service PreviewGroup")
-	assert.Len(t, pg.Spec.Services, 2)
+
+	fetched := &v1alpha1.PreviewGroup{}
+	err = f.Client.Get(ctx, types.NamespacedName{Name: pg.Name}, fetched)
+	require.NoError(t, err)
+	assert.Len(t, fetched.Spec.Services, 2)
 }
