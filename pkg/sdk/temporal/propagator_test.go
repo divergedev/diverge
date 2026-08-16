@@ -40,45 +40,44 @@ func (m *mockHeader) ForEachKey(handler func(string, *commonpb.Payload) error) e
 }
 
 func TestPropagator_InjectExtract(t *testing.T) {
-	p := &Propagator{}
+	p := NewPropagator()
 
 	// Inject
-	ctx := WithEnv(context.Background(), "my-env")
+	ctx := sdk.WithEnvironment(context.Background(), "my-env")
 	header := &mockHeader{}
 	err := p.Inject(ctx, header)
 	require.NoError(t, err)
 
-	assert.NotNil(t, header.payloads[sdk.DefaultHeaderKey])
+	assert.NotNil(t, header.payloads[sdk.GetHeaderKey()])
 
 	// Extract
 	ctx2, err := p.Extract(context.Background(), header)
 	require.NoError(t, err)
 
-	assert.Equal(t, "my-env", EnvFromContext(ctx2))
+	assert.Equal(t, "my-env", sdk.EnvironmentFromContext(ctx2))
 }
 
 func TestPropagator_OverwriteSemantics(t *testing.T) {
-	p := &Propagator{
-		EnvName: "preview-env",
-	}
+	p := NewPropagator()
+	p.EnvName = "preview-env"
 
 	// Inject should ignore ctx and use p.EnvName
-	ctx := WithEnv(context.Background(), "untrusted-env")
+	ctx := sdk.WithEnvironment(context.Background(), "untrusted-env")
 	header := &mockHeader{}
 	err := p.Inject(ctx, header)
 	require.NoError(t, err)
 
 	var injectedEnv string
-	err = converter.GetDefaultDataConverter().FromPayload(header.payloads[sdk.DefaultHeaderKey], &injectedEnv)
+	err = converter.GetDefaultDataConverter().FromPayload(header.payloads[sdk.GetHeaderKey()], &injectedEnv)
 	require.NoError(t, err)
 	assert.Equal(t, "preview-env", injectedEnv)
 
 	// Extract should ignore header and use p.EnvName
 	header2 := &mockHeader{}
 	payload, _ := converter.GetDefaultDataConverter().ToPayload("forged-env")
-	header2.Set(sdk.DefaultHeaderKey, payload)
+	header2.Set(sdk.GetHeaderKey(), payload)
 
 	ctx2, err := p.Extract(context.Background(), header2)
 	require.NoError(t, err)
-	assert.Equal(t, "preview-env", EnvFromContext(ctx2))
+	assert.Equal(t, "preview-env", sdk.EnvironmentFromContext(ctx2))
 }

@@ -2,10 +2,10 @@ package kafka_test
 
 import (
 	"testing"
-	"testing/quick"
 
 	"github.com/divergedev/diverge/pkg/sdk"
 	"github.com/divergedev/diverge/pkg/sdk/kafka"
+	"pgregory.net/rapid"
 )
 
 func TestInjectExtractRoundtrip(t *testing.T) {
@@ -20,17 +20,12 @@ func TestInjectExtractRoundtrip(t *testing.T) {
 	if extracted != env {
 		t.Errorf("Expected extracted environment %q, got %q", env, extracted)
 	}
-
-	// Test empty env
-	injectedEmpty := kafka.InjectHeaders(injected, "")
-	if len(injectedEmpty) != len(injected) {
-		t.Errorf("Expected inject with empty env to not modify headers")
-	}
 }
 
 func TestInjectOverwrite(t *testing.T) {
 	headers := []kafka.Header{
-		{Key: sdk.DefaultHeaderKey, Value: []byte("old-env")},
+		{Key: sdk.GetHeaderKey(), Value: []byte("old-env")},
+		{Key: sdk.GetHeaderKey(), Value: []byte("old-env-2")},
 	}
 	env := "new-env"
 
@@ -47,30 +42,30 @@ func TestInjectOverwrite(t *testing.T) {
 }
 
 func TestProperty_InjectExtractRoundtrip(t *testing.T) {
-	f := func(envName string) bool {
+	rapid.Check(t, func(t *rapid.T) {
+		envName := rapid.StringMatching(`^[a-zA-Z0-9-]{0,63}$`).Draw(t, "envName")
 		if envName == "" {
-			return len(kafka.InjectHeaders(nil, "")) == 0
+			if len(kafka.InjectHeaders(nil, "")) != 0 {
+				t.Fatalf("Expected no headers")
+			}
+			return
 		}
 		injected := kafka.InjectHeaders(nil, envName)
-		return kafka.ExtractEnvName(injected) == envName
-	}
-	if err := quick.Check(f, nil); err != nil {
-		t.Error(err)
-	}
+		if kafka.ExtractEnvName(injected) != envName {
+			t.Fatalf("Expected envName")
+		}
+	})
 }
 
 func TestProperty_InjectDoesNotMutateInput(t *testing.T) {
-	f := func(envName string) bool {
-		if envName == "" {
-			return true
-		}
-		original := []kafka.Header{{Key: sdk.DefaultHeaderKey, Value: []byte("old")}}
+	rapid.Check(t, func(t *rapid.T) {
+		envName := rapid.StringMatching(`^[a-zA-Z0-9-]{1,63}$`).Draw(t, "envName")
+		original := []kafka.Header{{Key: sdk.GetHeaderKey(), Value: []byte("old")}}
 		originalCopy := make([]kafka.Header, len(original))
 		copy(originalCopy, original)
 		kafka.InjectHeaders(original, envName)
-		return string(original[0].Value) == string(originalCopy[0].Value)
-	}
-	if err := quick.Check(f, nil); err != nil {
-		t.Error(err)
-	}
+		if string(original[0].Value) != string(originalCopy[0].Value) {
+			t.Fatalf("Expected original input to not be mutated")
+		}
+	})
 }

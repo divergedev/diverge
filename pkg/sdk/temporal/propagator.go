@@ -8,6 +8,16 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
+// PropagatorOption configures the Propagator.
+type PropagatorOption func(*Propagator)
+
+// WithPropagatorHeaderKey sets the header key for the propagator.
+func WithPropagatorHeaderKey(key string) PropagatorOption {
+	return func(p *Propagator) {
+		p.headerKey = key
+	}
+}
+
 // Propagator implements workflow.ContextPropagator.
 // It propagates the preview environment context through Temporal workflow headers.
 //
@@ -17,6 +27,17 @@ type Propagator struct {
 	// EnvName is the preview environment name.
 	// When set, it overrides any user-provided env context (sandbox escape prevention).
 	EnvName string
+	headerKey string
+}
+
+func NewPropagator(opts ...PropagatorOption) *Propagator {
+	p := &Propagator{
+		headerKey: sdk.GetHeaderKey(),
+	}
+	for _, opt := range opts {
+		opt(p)
+	}
+	return p
 }
 
 var _ workflow.ContextPropagator = (*Propagator)(nil)
@@ -26,16 +47,14 @@ func (p *Propagator) Inject(ctx context.Context, writer workflow.HeaderWriter) e
 	env := p.EnvName
 	if env == "" {
 		// Not in a preview environment, try to read from context
-		if v, ok := ctx.Value(envContextKey).(string); ok {
-			env = v
-		}
+		env = sdk.EnvironmentFromContext(ctx)
 	}
 	if env != "" {
 		payload, err := converter.GetDefaultDataConverter().ToPayload(env)
 		if err != nil {
 			return err
 		}
-		writer.Set(sdk.DefaultHeaderKey, payload)
+		writer.Set(p.headerKey, payload)
 	}
 	return nil
 }
@@ -44,10 +63,10 @@ func (p *Propagator) Inject(ctx context.Context, writer workflow.HeaderWriter) e
 func (p *Propagator) Extract(ctx context.Context, reader workflow.HeaderReader) (context.Context, error) {
 	// If EnvName is set (preview mode), ALWAYS use it regardless of header
 	if p.EnvName != "" {
-		return context.WithValue(ctx, envContextKey, p.EnvName), nil
+		return context.WithValue(ctx, sdk.EnvContextKey, p.EnvName), nil
 	}
 	// Otherwise read from header
-	payload, ok := reader.Get(sdk.DefaultHeaderKey)
+	payload, ok := reader.Get(p.headerKey)
 	if !ok {
 		return ctx, nil // no header, not in preview
 	}
@@ -55,7 +74,7 @@ func (p *Propagator) Extract(ctx context.Context, reader workflow.HeaderReader) 
 	if err := converter.GetDefaultDataConverter().FromPayload(payload, &env); err != nil {
 		return ctx, nil
 	}
-	return context.WithValue(ctx, envContextKey, env), nil
+	return context.WithValue(ctx, sdk.EnvContextKey, env), nil
 }
 
 // InjectFromWorkflow injects the environment name from the workflow context.
@@ -64,7 +83,7 @@ func (p *Propagator) InjectFromWorkflow(ctx workflow.Context, writer workflow.He
 	env := p.EnvName
 	if env == "" {
 		// Try to get from workflow context
-		if v, ok := ctx.Value(envContextKey).(string); ok {
+		if v, ok := ctx.Value(sdk.EnvContextKey).(string); ok {
 			env = v
 		}
 	}
@@ -73,7 +92,7 @@ func (p *Propagator) InjectFromWorkflow(ctx workflow.Context, writer workflow.He
 		if err != nil {
 			return err
 		}
-		writer.Set(sdk.DefaultHeaderKey, payload)
+		writer.Set(p.headerKey, payload)
 	}
 	return nil
 }
@@ -81,9 +100,9 @@ func (p *Propagator) InjectFromWorkflow(ctx workflow.Context, writer workflow.He
 // ExtractToWorkflow extracts the environment name into the workflow context.
 func (p *Propagator) ExtractToWorkflow(ctx workflow.Context, reader workflow.HeaderReader) (workflow.Context, error) {
 	if p.EnvName != "" {
-		return workflow.WithValue(ctx, envContextKey, p.EnvName), nil
+		return workflow.WithValue(ctx, sdk.EnvContextKey, p.EnvName), nil
 	}
-	payload, ok := reader.Get(sdk.DefaultHeaderKey)
+	payload, ok := reader.Get(p.headerKey)
 	if !ok {
 		return ctx, nil
 	}
@@ -91,30 +110,13 @@ func (p *Propagator) ExtractToWorkflow(ctx workflow.Context, reader workflow.Hea
 	if err := converter.GetDefaultDataConverter().FromPayload(payload, &env); err != nil {
 		return ctx, nil
 	}
-	return workflow.WithValue(ctx, envContextKey, env), nil
-}
-
-type contextKey struct{}
-
-var envContextKey = contextKey{}
-
-// EnvFromContext extracts the preview environment name from context.
-func EnvFromContext(ctx context.Context) string {
-	if v, ok := ctx.Value(envContextKey).(string); ok {
-		return v
-	}
-	return ""
+	return workflow.WithValue(ctx, sdk.EnvContextKey, env), nil
 }
 
 // EnvFromWorkflow extracts the preview environment name from workflow context.
 func EnvFromWorkflow(ctx workflow.Context) string {
-	if v, ok := ctx.Value(envContextKey).(string); ok {
+	if v, ok := ctx.Value(sdk.EnvContextKey).(string); ok {
 		return v
 	}
 	return ""
-}
-
-// WithEnv sets the environment name in the given context.
-func WithEnv(ctx context.Context, env string) context.Context {
-	return context.WithValue(ctx, envContextKey, env)
 }

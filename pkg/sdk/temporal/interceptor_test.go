@@ -3,13 +3,13 @@ package temporal_test
 import (
 	"context"
 	"testing"
-	"testing/quick"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/workflow"
+	"pgregory.net/rapid"
 
 	"github.com/divergedev/diverge/pkg/sdk"
 	"github.com/divergedev/diverge/pkg/sdk/temporal"
@@ -21,7 +21,8 @@ import (
 func TestInterceptorRoundtripPBT(t *testing.T) {
 	provider := temporal.HeadersProvider{}
 
-	assertion := func(env string) bool {
+	rapid.Check(t, func(t *rapid.T) {
+		env := rapid.StringMatching(`^[a-zA-Z0-9-]{0,63}$`).Draw(t, "envName")
 		// 1. Inject into Context
 		ctx := context.Background()
 		if env != "" {
@@ -31,39 +32,34 @@ func TestInterceptorRoundtripPBT(t *testing.T) {
 		// 2. Extract using HeadersProvider
 		headers, err := provider.GetHeaders(ctx)
 		if err != nil {
-			t.Logf("Failed to get headers: %v", err)
-			return false
+			t.Fatalf("Failed to get headers: %v", err)
 		}
 
-		// 3. Simulate Activity Execution
-		// We mock interceptor.Header(ctx) by storing it in our mock context.
-		// Wait, interceptor.Header(ctx) relies on internal context keys which we cannot set directly.
-		// So testing it completely end-to-end without testsuite is hard.
-		// For PBT, we'll verify GetHeaders is correct.
 		if env == "" {
-			return len(headers) == 0
+			if len(headers) != 0 {
+				t.Fatalf("Expected no headers")
+			}
+			return
 		}
 		
 		if headers == nil {
-			return false
+			t.Fatalf("Expected headers")
 		}
 		
-		payload, ok := headers[sdk.DefaultHeaderKey]
+		payload, ok := headers[sdk.GetHeaderKey()]
 		if !ok {
-			return false
+			t.Fatalf("Expected header %s", sdk.GetHeaderKey())
 		}
 		
 		var extracted string
 		if err := converter.GetDefaultDataConverter().FromPayload(payload, &extracted); err != nil {
-			return false
+			t.Fatalf("Failed to decode payload: %v", err)
 		}
 		
-		return extracted == env
-	}
-
-	if err := quick.Check(assertion, nil); err != nil {
-		t.Error(err)
-	}
+		if extracted != env {
+			t.Fatalf("Expected extracted env %q, got %q", env, extracted)
+		}
+	})
 }
 
 // mockWorkflowInterceptor captures context.
@@ -95,7 +91,7 @@ func TestHeadersProvider_SecurityOverwrite(t *testing.T) {
 	headers, err := provider.GetHeaders(ctx)
 	require.NoError(t, err)
 
-	payload := headers[sdk.DefaultHeaderKey]
+	payload := headers[sdk.GetHeaderKey()]
 	var extracted string
 	require.NoError(t, converter.GetDefaultDataConverter().FromPayload(payload, &extracted))
 	assert.Equal(t, "trusted-env", extracted) // EnvName MUST win
