@@ -8,10 +8,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
-
-	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 )
 
 func formatTTL(d time.Duration) string {
@@ -70,7 +67,7 @@ func newStatusCmd(app *App) *cobra.Command {
 		Short: "Show active preview environments and preview groups",
 		Long:  "Display a summary of all active preview environments, preview groups, and their current state.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, _, err := app.KubeClient()
+			envClient, err := app.EnvironmentClient()
 			if err != nil {
 				return err
 			}
@@ -80,26 +77,21 @@ func newStatusCmd(app *App) *cobra.Command {
 				namespace = ""
 			}
 
-			listOpts := []client.ListOption{}
-			if namespace != "" {
-				listOpts = append(listOpts, client.InNamespace(namespace))
-			}
-
-			var envList divergeiov1alpha1.EnvironmentList
-			if err := c.List(cmd.Context(), &envList, listOpts...); err != nil {
+			envs, err := envClient.ListEnvironments(cmd.Context(), namespace)
+			if err != nil {
 				return fmt.Errorf("failed to list environments: %w", err)
 			}
 
-			var pgList divergeiov1alpha1.PreviewGroupList
-			if err := c.List(cmd.Context(), &pgList); err != nil {
+			pgs, err := envClient.ListPreviewGroups(cmd.Context(), namespace)
+			if err != nil {
 				return fmt.Errorf("failed to list preview groups: %w", err)
 			}
 
 			switch outputFormat {
 			case "json":
 				data := map[string]interface{}{
-					"environments":  envList.Items,
-					"previewGroups": pgList.Items,
+					"environments":  envs,
+					"previewGroups": pgs,
 				}
 				b, err := json.MarshalIndent(data, "", "  ")
 				if err != nil {
@@ -109,8 +101,8 @@ func newStatusCmd(app *App) *cobra.Command {
 				return nil
 			case "yaml":
 				data := map[string]interface{}{
-					"environments":  envList.Items,
-					"previewGroups": pgList.Items,
+					"environments":  envs,
+					"previewGroups": pgs,
 				}
 				b, err := yaml.Marshal(data)
 				if err != nil {
@@ -128,7 +120,7 @@ func newStatusCmd(app *App) *cobra.Command {
 			servicesTotal := 0
 
 			cmd.Println("PREVIEW ENVIRONMENTS")
-			if len(envList.Items) == 0 {
+			if len(envs) == 0 {
 				cmd.Println("  No active environments found.")
 			} else {
 				w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 3, ' ', 0)
@@ -138,7 +130,7 @@ func newStatusCmd(app *App) *cobra.Command {
 					_, _ = fmt.Fprintln(w, "  NAME\tNAMESPACE\tBRANCH\tPROVIDER\tSTATUS\tAGE\tTTL\tURL")
 				}
 
-				for _, env := range envList.Items {
+				for _, env := range envs {
 					servicesTotal += len(env.Status.Services)
 
 					phase := string(env.Status.Phase)
@@ -179,7 +171,7 @@ func newStatusCmd(app *App) *cobra.Command {
 			cmd.Println()
 
 			cmd.Println("PREVIEW GROUPS")
-			if len(pgList.Items) == 0 {
+			if len(pgs) == 0 {
 				cmd.Println("  No active preview groups found.")
 			} else {
 				w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 3, ' ', 0)
@@ -189,7 +181,7 @@ func newStatusCmd(app *App) *cobra.Command {
 					_, _ = fmt.Fprintln(w, "  NAME\tSERVICES\tBRANCH\tPROVIDER\tSTATUS\tAGE")
 				}
 
-				for _, pg := range pgList.Items {
+				for _, pg := range pgs {
 					phase := string(pg.Status.Phase)
 					if phase == "" {
 						phase = "Unknown"
@@ -220,7 +212,7 @@ func newStatusCmd(app *App) *cobra.Command {
 				_ = w.Flush()
 			}
 
-			cmd.Printf("\nSUMMARY: %d environments, %d preview groups, %d services total\n", len(envList.Items), len(pgList.Items), servicesTotal)
+			cmd.Printf("\nSUMMARY: %d environments, %d preview groups, %d services total\n", len(envs), len(pgs), servicesTotal)
 
 			return nil
 		},

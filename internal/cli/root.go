@@ -31,6 +31,9 @@ type App struct {
 	Commit     string
 	Date       string
 
+	ServerURL string
+	Config    *Config
+
 	Client    client.Client        // For testing
 	Clientset kubernetes.Interface // For testing (logs needs CoreV1)
 }
@@ -77,6 +80,15 @@ func NewRootCmd(app *App) *cobra.Command {
 		Short: "Diverge CLI manages preview environments",
 		Long:  `The developer's daily driver for interacting with Diverge environments.`,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			if cfg, err := LoadConfig(); err == nil {
+				app.Config = cfg
+				if app.ServerURL == "" {
+					app.ServerURL = cfg.ActiveServerURL()
+				}
+			}
+			if url := os.Getenv("DIVERGE_SERVER_URL"); url != "" && app.ServerURL == "" {
+				app.ServerURL = url
+			}
 			return app.ResolveNamespace()
 		},
 	}
@@ -85,6 +97,7 @@ func NewRootCmd(app *App) *cobra.Command {
 	rootCmd.PersistentFlags().StringVarP(&app.Namespace, "namespace", "n", "", "Kubernetes namespace (default: from kubeconfig context)")
 	rootCmd.PersistentFlags().StringVar(&app.Context, "context", "", "Kubernetes context")
 	rootCmd.PersistentFlags().BoolVar(&app.NoColor, "no-color", false, "disable color output")
+	rootCmd.PersistentFlags().StringVar(&app.ServerURL, "server", "", "Diverge server URL")
 
 	addCommands(rootCmd, app)
 	return rootCmd
@@ -105,6 +118,8 @@ func addCommands(root *cobra.Command, app *App) {
 	root.AddCommand(newStatusCmd(app))
 	root.AddCommand(newValidateCmd(app))
 	root.AddCommand(newVersionCmd(app))
+	root.AddCommand(newLoginCmd(app))
+	root.AddCommand(newContextCmd(app))
 }
 
 // ResolveNamespace resolves the namespace from the kubeconfig if not
@@ -171,4 +186,24 @@ func (app *App) KubeClient() (client.Client, kubernetes.Interface, error) {
 	}
 
 	return c, clientset, nil
+}
+
+// EnvironmentClient returns an EnvironmentClient based on current context.
+func (app *App) EnvironmentClient() (EnvironmentClient, error) {
+	if app.ServerURL != "" {
+		token := ""
+		if app.Config != nil {
+			var err error
+			token, err = app.Config.ActiveToken()
+			if err != nil {
+				return nil, err
+			}
+		}
+		return NewConnectClient(app.ServerURL, token), nil
+	}
+	c, cs, err := app.KubeClient()
+	if err != nil {
+		return nil, err
+	}
+	return NewK8sClient(c, cs, app), nil
 }

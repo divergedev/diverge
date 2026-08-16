@@ -98,13 +98,12 @@ func runCreate(cmd *cobra.Command, _ []string, app *App, configPath, envName, en
 		return printDryRun(env)
 	}
 
-	// Create via K8s client
-	c, _, err := app.KubeClient()
+	envClient, err := app.EnvironmentClient()
 	if err != nil {
-		return fmt.Errorf("failed to create Kubernetes client: %w", err)
+		return fmt.Errorf("failed to get environment client: %w", err)
 	}
 
-	if err := c.Create(cmd.Context(), env); err != nil {
+	if _, err := envClient.CreateEnvironment(cmd.Context(), env); err != nil {
 		return fmt.Errorf("failed to create environment: %w", err)
 	}
 

@@ -4,8 +4,6 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-
-	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 )
 
 var deleteForce bool
@@ -17,7 +15,7 @@ func newDeleteCmd(app *App) *cobra.Command {
 		Short: "Delete an environment",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, _, err := app.KubeClient()
+			envClient, err := app.EnvironmentClient()
 			if err != nil {
 				return err
 			}
@@ -34,11 +32,7 @@ func newDeleteCmd(app *App) *cobra.Command {
 				}
 			}
 
-			env := &divergeiov1alpha1.Environment{}
-			env.Name = name
-			env.Namespace = app.Namespace
-
-			if err := c.Delete(cmd.Context(), env); err != nil {
+			if err := envClient.DeleteEnvironment(cmd.Context(), app.Namespace, name); err != nil {
 				return fmt.Errorf("failed to delete environment %s: %w", name, err)
 			}
 
