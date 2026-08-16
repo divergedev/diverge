@@ -2,7 +2,9 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -12,94 +14,202 @@ import (
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 )
 
-func TestStatusShowsEnvironmentDetails(t *testing.T) {
-	env := &divergeiov1alpha1.Environment{
+func TestStatusCmd(t *testing.T) {
+	now := metav1.Now()
+	expired := metav1.NewTime(now.Add(-1 * time.Hour))
+	future := metav1.NewTime(now.Add(23 * time.Hour))
+
+	env1 := &divergeiov1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "preview-mr-42",
-			Namespace: "default",
+			Name:              "env1",
+			Namespace:         "default",
+			CreationTimestamp: now,
 		},
 		Spec: divergeiov1alpha1.EnvironmentSpec{
 			Source: divergeiov1alpha1.EnvironmentSource{
+				Branch:   "feat/one",
 				Provider: "github",
-				Project:  "divergedev/diverge",
-				Branch:   "feat/preview",
-				MR:       42,
 			},
 			Routing: divergeiov1alpha1.EnvironmentRouting{
 				Mode:        "header",
-				HeaderKey:   "x-diverge-env",
-				HeaderValue: "preview-mr-42",
+				HeaderValue: "feat-one",
 			},
 		},
 		Status: divergeiov1alpha1.EnvironmentStatus{
-			Phase:    "Ready",
-			URL:      "https://preview-mr-42.example.com",
-			Services: []string{"api", "web"},
-			Conditions: []metav1.Condition{
-				{
-					Type:    "Ready",
-					Status:  "True",
-					Reason:  "AllServicesReady",
-					Message: "All services deployed",
-				},
+			Phase:     "Ready",
+			URL:       "https://env1.example.com",
+			Services:  []string{"api", "web"},
+			ExpiresAt: &future,
+		},
+	}
+
+	env2 := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "env2",
+			Namespace:         "staging",
+			CreationTimestamp: now,
+		},
+		Status: divergeiov1alpha1.EnvironmentStatus{
+			Phase:     "Failed",
+			ExpiresAt: &expired,
+		},
+	}
+
+	pg1 := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "pg1",
+			Namespace:         "default",
+			CreationTimestamp: now,
+		},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Source: divergeiov1alpha1.EnvironmentSource{
+				Branch:   "feat/pg",
+				Provider: "github",
 			},
+			Routing: divergeiov1alpha1.PreviewGroupRouting{
+				Mode:        "subdomain",
+				HeaderValue: "feat-pg",
+			},
+			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{Name: "auth"},
+				{Name: "billing"},
+			},
+		},
+		Status: divergeiov1alpha1.PreviewGroupStatus{
+			Phase: "Deploying",
+		},
+	}
+
+	env3 := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "env3",
+			Namespace:         "staging",
+			CreationTimestamp: now,
+		},
+		Status: divergeiov1alpha1.EnvironmentStatus{
+			Phase:     "Pending",
+			ExpiresAt: nil, // Nil TTL
+			Services:  []string{"db"},
+		},
+	}
+
+	pg2 := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "pg2",
+			Namespace:         "other", // pg is cluster-scoped
+			CreationTimestamp: now,
+		},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{Name: "cache"},
+			},
+		},
+		Status: divergeiov1alpha1.PreviewGroupStatus{
+			Phase: "Ready",
 		},
 	}
 
 	fakeClient := fake.NewClientBuilder().
 		WithScheme(newTestScheme()).
-		WithObjects(env).
+		WithObjects(env1, env2, env3, pg1, pg2).
 		Build()
 
-	app := &App{Namespace: "default", Client: fakeClient}
-	cmd := newStatusCmd(app)
+	app := &App{Namespace: "default", Client: fakeClient, NoColor: true}
 
-	var buf bytes.Buffer
-	cmd.SetOut(&buf)
-	cmd.SetArgs([]string{"preview-mr-42"})
+	t.Run("table output", func(t *testing.T) {
+		cmd := newStatusCmd(app)
+		var buf bytes.Buffer
+		cmd.SetOut(&buf)
+		cmd.SetArgs([]string{})
+		require.NoError(t, cmd.Execute())
 
-	err := cmd.Execute()
-	require.NoError(t, err)
+		out := buf.String()
+		assert.Contains(t, out, "PREVIEW ENVIRONMENTS")
+		assert.Contains(t, out, "env1")
+		assert.NotContains(t, out, "env2")
+		assert.NotContains(t, out, "env3")
+		assert.Contains(t, out, "Ready")
+		assert.Contains(t, out, "PREVIEW GROUPS")
+		assert.Contains(t, out, "pg1")
+		assert.Contains(t, out, "pg2")
+		assert.Contains(t, out, "Deploying")
+		assert.Contains(t, out, "SUMMARY: 1 environments, 2 preview groups, 5 services total")
+	})
 
-	output := buf.String()
-	assert.Contains(t, output, "preview-mr-42")
-	assert.Contains(t, output, "Ready")
-	assert.Contains(t, output, "https://preview-mr-42.example.com")
-	assert.Contains(t, output, "api")
-	assert.Contains(t, output, "web")
-	assert.Contains(t, output, "header")
-	assert.Contains(t, output, "x-diverge-env")
-	assert.Contains(t, output, "AllServicesReady")
-}
+	t.Run("all namespaces", func(t *testing.T) {
+		cmd := newStatusCmd(app)
+		var buf bytes.Buffer
+		cmd.SetOut(&buf)
+		cmd.SetArgs([]string{"-A"})
+		require.NoError(t, cmd.Execute())
 
-func TestStatusNotFound(t *testing.T) {
-	fakeClient := fake.NewClientBuilder().
-		WithScheme(newTestScheme()).
-		Build()
+		out := buf.String()
+		assert.Contains(t, out, "env1")
+		assert.Contains(t, out, "env2")
+		assert.Contains(t, out, "env3")
+		assert.Contains(t, out, "pg1")
+		assert.Contains(t, out, "pg2")
+		assert.Contains(t, out, "expired")
+		assert.Contains(t, out, "SUMMARY: 3 environments, 2 preview groups, 6 services total")
+	})
 
-	app := &App{Namespace: "default", Client: fakeClient}
-	cmd := newStatusCmd(app)
+	t.Run("wide output", func(t *testing.T) {
+		cmd := newStatusCmd(app)
+		var buf bytes.Buffer
+		cmd.SetOut(&buf)
+		cmd.SetArgs([]string{"--wide"})
+		require.NoError(t, cmd.Execute())
 
-	var buf bytes.Buffer
-	cmd.SetOut(&buf)
-	cmd.SetErr(&buf)
-	cmd.SetArgs([]string{"nonexistent"})
+		out := buf.String()
+		assert.Contains(t, out, "ROUTING MODE")
+		assert.Contains(t, out, "HEADER VALUE")
+		assert.Contains(t, out, "SERVICES")
+		assert.Contains(t, out, "api,web")
+		assert.Contains(t, out, "auth,billing")
+	})
 
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to get environment")
-}
+	t.Run("json output", func(t *testing.T) {
+		cmd := newStatusCmd(app)
+		var buf bytes.Buffer
+		cmd.SetOut(&buf)
+		cmd.SetArgs([]string{"-o", "json"})
+		require.NoError(t, cmd.Execute())
 
-func TestStatusRequiresArg(t *testing.T) {
-	app := &App{}
-	cmd := newStatusCmd(app)
+		var result map[string]interface{}
+		require.NoError(t, json.Unmarshal(buf.Bytes(), &result))
 
-	var buf bytes.Buffer
-	cmd.SetOut(&buf)
-	cmd.SetErr(&buf)
-	cmd.SetArgs([]string{})
+		envs := result["environments"].([]interface{})
+		pgs := result["previewGroups"].([]interface{})
+		assert.Len(t, envs, 1)
+		assert.Len(t, pgs, 2)
+	})
 
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "accepts 1 arg(s)")
+	t.Run("yaml output", func(t *testing.T) {
+		cmd := newStatusCmd(app)
+		var buf bytes.Buffer
+		cmd.SetOut(&buf)
+		cmd.SetArgs([]string{"-o", "yaml"})
+		require.NoError(t, cmd.Execute())
+
+		out := buf.String()
+		assert.Contains(t, out, "environments:")
+		assert.Contains(t, out, "previewGroups:")
+		assert.Contains(t, out, "env1")
+		assert.Contains(t, out, "pg1")
+	})
+
+	t.Run("no environments", func(t *testing.T) {
+		emptyClient := fake.NewClientBuilder().WithScheme(newTestScheme()).Build()
+		emptyApp := &App{Namespace: "default", Client: emptyClient, NoColor: true}
+		cmd := newStatusCmd(emptyApp)
+		var buf bytes.Buffer
+		cmd.SetOut(&buf)
+		cmd.SetArgs([]string{})
+		require.NoError(t, cmd.Execute())
+
+		out := buf.String()
+		assert.Contains(t, out, "No active environments found.")
+		assert.Contains(t, out, "No active preview groups found.")
+		assert.Contains(t, out, "SUMMARY: 0 environments, 0 preview groups, 0 services total")
+	})
 }
