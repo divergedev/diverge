@@ -135,12 +135,10 @@ func TestPreviewGroupLifecycle(t *testing.T) {
 	assert.Len(t, fetched.Spec.Services, len(pg.Spec.Services))
 
 	if f.ControllerRunning(ctx) {
-		// Just a dummy wait condition since PreviewGroup does not have conditions yet, but following the pattern
-		// For now we just verify it exists if controller is running.
-		// Wait, the prompt said: "If controller is running, verify reconciliation. err = f.WaitForCondition(ctx, fetched, "Ready", 60*time.Second)"
-		// I'll add that, but I need the framework's WaitForCondition which takes (ctx, name, condType, status, timeout).
-		err = f.WaitForCondition(ctx, pg.Name, "Ready", metav1.ConditionTrue, 1*time.Minute)
-		require.NoError(t, err, "PreviewGroup should reach Ready")
+		// Verify that the child Environment is created and reaches Ready
+		envName := fmt.Sprintf("%s-%s", pg.Name, "svc-a")
+		err = f.WaitForCondition(ctx, envName, "Ready", metav1.ConditionTrue, 1*time.Minute)
+		require.NoError(t, err, "Child Environment should reach Ready")
 	}
 
 	err = f.Client.Delete(ctx, pg)

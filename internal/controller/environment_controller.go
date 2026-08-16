@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -307,6 +309,10 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			Reason:  "BannerProvisioned",
 			Message: "Preview banner ConfigMap is ready",
 		})
+	} else {
+		if err := r.ensureBannerConfigMap(ctx, &env); err != nil {
+			return r.updateStatusWithRequeue(ctx, &env, statusBase, err, 0)
+		}
 	}
 
 	// 8. Deploy services
@@ -620,19 +626,37 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 
 func (r *EnvironmentReconciler) ensureBannerConfigMap(ctx context.Context, env *divergeiov1alpha1.Environment) error {
 	bannerSpec := env.Spec.Routing.Banner
+
+	targetNS := env.Namespace
+	if env.Spec.Deploy.Namespace == "create" {
+		targetNS = env.PreviewNamespace()
+	}
+
 	if bannerSpec == nil || !bannerSpec.Enabled {
+		existing := &corev1.ConfigMap{}
+		if err := r.Get(ctx, types.NamespacedName{Name: "diverge-preview-banner", Namespace: targetNS}, existing); err == nil {
+			if err := r.Delete(ctx, existing); err != nil {
+				return fmt.Errorf("failed to delete banner configmap: %w", err)
+			}
+		}
 		return nil
 	}
 
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "diverge-preview-banner",
-			Namespace: env.PreviewNamespace(),
+			Namespace: targetNS,
 			Labels: map[string]string{
 				"diverge.io/environment": env.Name,
 				"diverge.io/managed-by":  "diverge",
 			},
 		},
+	}
+
+	if targetNS == env.Namespace {
+		if err := controllerutil.SetControllerReference(env, cm, r.Scheme); err != nil {
+			return fmt.Errorf("failed to set owner reference: %w", err)
+		}
 	}
 
 	script := banner.Script
@@ -649,12 +673,18 @@ func (r *EnvironmentReconciler) ensureBannerConfigMap(ctx context.Context, env *
 		position = bannerSpec.Position
 	}
 
-	script = strings.ReplaceAll(script, "{{TEXT}}", text)
-	script = strings.ReplaceAll(script, "{{BRANCH}}", env.Spec.Source.Branch)
-	script = strings.ReplaceAll(script, "{{COLOR}}", color)
-	script = strings.ReplaceAll(script, "{{POSITION}}", position)
+	configJSON, err := json.Marshal(map[string]string{
+		"text":     text,
+		"branch":   env.Spec.Source.Branch,
+		"color":    color,
+		"position": position,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal banner config: %w", err)
+	}
+	script = strings.ReplaceAll(script, "{{CONFIG_JSON}}", string(configJSON))
 
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
 		if cm.Data == nil {
 			cm.Data = make(map[string]string)
 		}
