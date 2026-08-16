@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"pgregory.net/rapid"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -186,6 +187,41 @@ func TestWaitForAsyncRoutes(t *testing.T) {
 				return setupTestClient(t, pg, env)
 			},
 			ctxTimeout:  200 * time.Millisecond,
+			expectedEnv: nil,
+			expectErr:   true,
+		},
+		{
+			name: "fast fail on AsyncProvisionFailed",
+			setup: func(t *testing.T) client.Client {
+				pg := &divergeiov1alpha1.PreviewGroup{
+					ObjectMeta: metav1.ObjectMeta{Name: groupName},
+					Spec: divergeiov1alpha1.PreviewGroupSpec{
+						Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+							{Name: serviceName, AsyncRoutes: []divergeiov1alpha1.AsyncRouteSpec{{Protocol: "temporal", Target: "q1"}}},
+						},
+					},
+					Status: divergeiov1alpha1.PreviewGroupStatus{
+						Services: []divergeiov1alpha1.PreviewGroupServiceStatus{
+							{Name: serviceName, EnvironmentName: "env-1"},
+						},
+					},
+				}
+				env := &divergeiov1alpha1.Environment{
+					ObjectMeta: metav1.ObjectMeta{Name: "env-1", Namespace: ns},
+					Spec: divergeiov1alpha1.EnvironmentSpec{
+						Routing: divergeiov1alpha1.EnvironmentRouting{
+							AsyncRoutes: []divergeiov1alpha1.AsyncRouteSpec{{Protocol: "temporal", Target: "q1"}},
+						},
+					},
+					Status: divergeiov1alpha1.EnvironmentStatus{
+						Conditions: []metav1.Condition{
+							{Type: "AsyncRoutingReady", Status: metav1.ConditionFalse, Reason: "AsyncProvisionFailed", Message: "foo"},
+						},
+					},
+				}
+				return setupTestClient(t, pg, env)
+			},
+			ctxTimeout:  5 * time.Second,
 			expectedEnv: nil,
 			expectErr:   true,
 		},
@@ -395,4 +431,39 @@ func TestWaitForAsyncRoutes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPreviewGroupAsyncRoutesPBT(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		protocol := rapid.StringMatching(`^(temporal|kafka)$`).Draw(t, "protocol")
+		target := rapid.StringMatching(`^[a-z0-9-]+$`).Draw(t, "target")
+
+		var envVarMapping map[string]string
+		if rapid.Bool().Draw(t, "hasMapping") {
+			k := rapid.String().Draw(t, "key")
+			v := rapid.String().Draw(t, "val")
+			envVarMapping = map[string]string{k: v}
+		}
+
+		route := divergeiov1alpha1.AsyncRouteSpec{
+			Protocol:      protocol,
+			Target:        target,
+			EnvVarMapping: envVarMapping,
+		}
+
+		pg := &divergeiov1alpha1.PreviewGroup{
+			Spec: divergeiov1alpha1.PreviewGroupSpec{
+				Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+					{
+						Name:        "svc",
+						AsyncRoutes: []divergeiov1alpha1.AsyncRouteSpec{route},
+					},
+				},
+			},
+		}
+
+		require.Len(t, pg.Spec.Services[0].AsyncRoutes, 1)
+		require.Equal(t, protocol, pg.Spec.Services[0].AsyncRoutes[0].Protocol)
+		require.Equal(t, target, pg.Spec.Services[0].AsyncRoutes[0].Target)
+	})
 }

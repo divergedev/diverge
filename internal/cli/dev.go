@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/config"
 	"github.com/divergedev/diverge/internal/git"
 )
 
@@ -197,6 +198,13 @@ dev:
 				Branch: headerValue,
 			},
 		},
+	}
+
+	// Load async routes from config
+	if cfg, err := config.Load(".diverge.yaml"); err == nil && cfg != nil {
+		if svcCfg, ok := cfg.Services[serviceName]; ok && len(svcCfg.AsyncRoutes) > 0 {
+			pg.Spec.Services[0].AsyncRoutes = svcCfg.AsyncRoutes
+		}
 	}
 
 	c, clientset, err := app.KubeClient()
@@ -527,6 +535,11 @@ func waitForAsyncRoutes(ctx context.Context, c client.Client, groupName string, 
 				if cond.Status == metav1.ConditionTrue {
 					ready = true
 				}
+				if cond.Status == metav1.ConditionFalse {
+					if cond.Reason == "AsyncProvisionFailed" || cond.Reason == "EnvVarConflict" {
+						return nil, fmt.Errorf("async route provisioning failed: %s (%s)", cond.Message, cond.Reason)
+					}
+				}
 				break
 			}
 		}
@@ -551,6 +564,13 @@ func waitForAsyncRoutes(ctx context.Context, c client.Client, groupName string, 
 	}
 
 	fmt.Printf("✅ Async routes ready (%d routes provisioned)\n", len(env.Spec.Routing.AsyncRoutes))
+	for _, route := range env.Spec.Routing.AsyncRoutes {
+		envVar := route.EnvVarMapping[route.Target]
+		if envVar == "" {
+			envVar = divergeiov1alpha1.DefaultEnvVarForProtocol(route.Protocol)
+		}
+		fmt.Printf("  ✓ %s: %s → %s\n", route.Protocol, route.Target, envVar)
+	}
 
 	asyncVars := make(map[string]string)
 	if env.Spec.ServiceConfig != nil {
