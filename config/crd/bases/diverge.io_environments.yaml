@@ -192,6 +192,23 @@ spec:
                       BaseDomain is the base domain for subdomain routing (e.g., "preview.app.dev").
                       When mode is "subdomain", HTTPRoutes are created with hostname "<env-name>.<baseDomain>".
                     type: string
+                  cookie:
+                    description: Cookie enables sticky routing using cookies.
+                    properties:
+                      enabled:
+                        type: boolean
+                      maxAge:
+                        minimum: 0
+                        type: integer
+                      sameSite:
+                        enum:
+                        - Lax
+                        - Strict
+                        - None
+                        type: string
+                      secure:
+                        type: boolean
+                    type: object
                   devIP:
                     type: string
                   externalUrl:
