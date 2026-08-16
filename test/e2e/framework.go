@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -18,6 +19,22 @@ import (
 
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
+
+var (
+	defaultTimeout      = 3 * time.Minute
+	controllerNamespace = "diverge-system"
+)
+
+func init() {
+	if t := os.Getenv("E2E_TIMEOUT"); t != "" {
+		if d, err := time.ParseDuration(t); err == nil {
+			defaultTimeout = d
+		}
+	}
+	if ns := os.Getenv("DIVERGE_CONTROLLER_NAMESPACE"); ns != "" {
+		controllerNamespace = ns
+	}
+}
 
 // Framework holds the test context for E2E tests.
 type Framework struct {
@@ -152,7 +169,7 @@ func (f *Framework) CreateEnvironment(ctx context.Context, env *v1alpha1.Environ
 func (f *Framework) ControllerRunning(ctx context.Context) bool {
 	var dep appsv1.Deployment
 	err := f.Client.Get(ctx, types.NamespacedName{
-		Name: "diverge-controller", Namespace: "diverge-system",
+		Name: "diverge-controller", Namespace: controllerNamespace,
 	}, &dep)
 	return err == nil && dep.Status.ReadyReplicas > 0
 }
