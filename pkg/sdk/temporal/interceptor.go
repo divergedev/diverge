@@ -11,17 +11,40 @@ import (
 	"github.com/divergedev/diverge/pkg/sdk"
 )
 
+// InterceptorOption configures the Temporal interceptors.
+type InterceptorOption func(*interceptorOptions)
+
+type interceptorOptions struct {
+	headerKey string
+}
+
+// WithHeaderKey configures a custom header key to use for preview environments.
+func WithHeaderKey(key string) InterceptorOption {
+	return func(o *interceptorOptions) {
+		o.headerKey = key
+	}
+}
+
 // HeadersProvider implements Temporal's client.HeadersProvider
 type HeadersProvider struct {
 	// EnvName, when set, overrides context-derived env name.
 	// SECURITY: prevents preview sandbox escape.
 	EnvName string
+	// HeaderKey overrides the default header key if set.
+	HeaderKey string
+}
+
+func (p HeadersProvider) getHeaderKey() string {
+	if p.HeaderKey != "" {
+		return p.HeaderKey
+	}
+	return sdk.GetHeaderKey()
 }
 
 func (p HeadersProvider) GetHeaders(ctx context.Context) (map[string]*commonpb.Payload, error) {
 	env := p.EnvName
 	if env == "" {
-		env = EnvFromContext(ctx)
+		env = sdk.EnvironmentFromContext(ctx)
 	}
 	if env == "" {
 		return nil, nil
@@ -31,17 +54,22 @@ func (p HeadersProvider) GetHeaders(ctx context.Context) (map[string]*commonpb.P
 		return nil, err
 	}
 	return map[string]*commonpb.Payload{
-		sdk.DefaultHeaderKey: payload,
+		p.getHeaderKey(): payload,
 	}, nil
 }
 
-// WorkerInterceptor intercepts Temporal workflow and activity tasks to extract the x-diverge-env header.
+// WorkerInterceptor intercepts Temporal workflow and activity tasks to extract the preview env header.
 type WorkerInterceptor struct {
 	interceptor.WorkerInterceptorBase
+	headerKey string
 }
 
-func NewWorkerInterceptor() interceptor.WorkerInterceptor {
-	return &WorkerInterceptor{}
+func NewWorkerInterceptor(opts ...InterceptorOption) interceptor.WorkerInterceptor {
+	options := &interceptorOptions{headerKey: sdk.GetHeaderKey()}
+	for _, opt := range opts {
+		opt(options)
+	}
+	return &WorkerInterceptor{headerKey: options.headerKey}
 }
 
 func (w *WorkerInterceptor) InterceptActivity(ctx context.Context, next interceptor.ActivityInboundInterceptor) interceptor.ActivityInboundInterceptor {
@@ -58,10 +86,10 @@ type activityInboundInterceptor struct {
 func (a *activityInboundInterceptor) ExecuteActivity(ctx context.Context, in *interceptor.ExecuteActivityInput) (interface{}, error) {
 	headers := interceptor.Header(ctx)
 	if headers != nil {
-		if payload, ok := headers[sdk.DefaultHeaderKey]; ok {
+		if payload, ok := headers[a.root.headerKey]; ok {
 			var env string
 			if err := converter.GetDefaultDataConverter().FromPayload(payload, &env); err == nil && env != "" {
-				ctx = context.WithValue(ctx, envContextKey, env)
+				ctx = context.WithValue(ctx, sdk.EnvContextKey, env)
 			}
 		}
 	}
@@ -82,10 +110,10 @@ type workflowInboundInterceptor struct {
 func (w *workflowInboundInterceptor) ExecuteWorkflow(ctx workflow.Context, in *interceptor.ExecuteWorkflowInput) (interface{}, error) {
 	headers := interceptor.WorkflowHeader(ctx)
 	if headers != nil {
-		if payload, ok := headers[sdk.DefaultHeaderKey]; ok {
+		if payload, ok := headers[w.root.headerKey]; ok {
 			var env string
 			if err := converter.GetDefaultDataConverter().FromPayload(payload, &env); err == nil && env != "" {
-				ctx = workflow.WithValue(ctx, envContextKey, env)
+				ctx = workflow.WithValue(ctx, sdk.EnvContextKey, env)
 			}
 		}
 	}

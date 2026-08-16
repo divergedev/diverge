@@ -7,6 +7,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	go.temporal.io/api v1.43.0
 	go.temporal.io/sdk v1.31.0
+	pgregory.net/rapid v1.3.0
 )
 
 require (
@@ -31,6 +32,8 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/grpc v1.83.0 // indirect
-	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af // indirect
+	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/divergedev/diverge => ../../..

@@ -70,9 +70,8 @@ func (k *KafkaProvisioner) getAdmin() (KafkaAdmin, error) {
 // Name returns the provisioner name.
 func (k *KafkaProvisioner) Name() string { return "kafka" }
 
-// Provision creates a preview-scoped Kafka topic and/or consumer group.
 func (k *KafkaProvisioner) Provision(ctx context.Context, env *v1alpha1.Environment, route v1alpha1.AsyncRouteSpec) (*ProvisionResult, error) {
-	target := fmt.Sprintf("%s-%s", route.Target, env.Name)
+	target := fmt.Sprintf("%s--%s", route.Target, env.Name)
 
 	admin, err := k.getAdmin()
 	if err != nil {
@@ -116,7 +115,7 @@ func (k *KafkaProvisioner) Provision(ctx context.Context, env *v1alpha1.Environm
 
 // Teardown deletes the preview-scoped Kafka topic.
 func (k *KafkaProvisioner) Teardown(ctx context.Context, env *v1alpha1.Environment, route v1alpha1.AsyncRouteSpec) error {
-	target := fmt.Sprintf("%s-%s", route.Target, env.Name)
+	target := fmt.Sprintf("%s--%s", route.Target, env.Name)
 
 	admin, err := k.getAdmin()
 	if err != nil {
