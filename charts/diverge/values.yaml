@@ -21,10 +21,16 @@ metrics:
     enabled: false
     namespace: ""
     interval: 30s
-  grafanaDashboard:
-    enabled: false
   cloudMonitoringDashboard:
     enabled: false
+
+grafana:
+  dashboards:
+    enabled: true
+
+prometheus:
+  alerts:
+    enabled: true
 
 webhook:
   port: 9443

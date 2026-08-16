@@ -1,0 +1,10 @@
+{{- if .Values.prometheus.alerts.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "diverge.fullname" . }}-alerts
+  labels:
+    {{- include "diverge.labels" . | nindent 4 }}
+spec:
+{{ .Files.Get "alerts/diverge-alerts.yaml" | indent 2 }}
+{{- end }}
