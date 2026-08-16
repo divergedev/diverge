@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
 	"regexp"
 	"strings"
 
@@ -243,9 +244,59 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 		rule["filters"] = filters
 	}
 
+	var rules []interface{}
+	if cfg := env.Spec.ServiceConfig; cfg != nil && (cfg.ServiceName == "" || cfg.ServiceName == svc) && cfg.WebSocket != nil && cfg.WebSocket.Enabled && kind == "HTTPRoute" {
+		timeout := cfg.WebSocket.Timeout
+		if timeout == "" {
+			timeout = "0s" // disable timeout by default
+		}
+
+		if cfg.WebSocket.Path != "" {
+			wsPath := cfg.WebSocket.Path
+			if cfg.PathPrefix != "" {
+				wsPath = path.Join(cfg.PathPrefix, wsPath)
+			}
+			wsMatches := []interface{}{}
+			for _, m := range matches {
+				mMap := m.(map[string]interface{})
+				wsMatch := map[string]interface{}{}
+				for k, v := range mMap {
+					wsMatch[k] = v
+				}
+				wsMatch["path"] = map[string]interface{}{
+					"type":  "PathPrefix",
+					"value": wsPath,
+				}
+				wsMatches = append(wsMatches, wsMatch)
+			}
+
+			wsRule := map[string]interface{}{
+				"matches": wsMatches,
+				"backendRefs": []interface{}{
+					map[string]interface{}{
+						"name": fmt.Sprintf("%s-%s", env.Name, svc),
+						"port": backendPort,
+					},
+				},
+				"timeouts": map[string]interface{}{
+					"request": timeout,
+				},
+			}
+			if filters, ok := rule["filters"]; ok {
+				wsRule["filters"] = filters
+			}
+			rules = append(rules, wsRule)
+		} else {
+			rule["timeouts"] = map[string]interface{}{
+				"request": timeout,
+			}
+		}
+	}
+	rules = append(rules, rule)
+
 	spec := map[string]interface{}{
 		"parentRefs": []interface{}{parentRef},
-		"rules":      []interface{}{rule},
+		"rules":      rules,
 	}
 	if len(hostnames) > 0 {
 		spec["hostnames"] = hostnames

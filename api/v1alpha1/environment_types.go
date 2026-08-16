@@ -276,6 +276,22 @@ type ServicePreviewConfig struct {
 	// Resources overrides the resource requests/limits for the preview pod.
 	// +optional
 	Resources *ResourceOverride `json:"resources,omitempty"`
+	// WebSocket configures WebSocket proxy support.
+	// +optional
+	WebSocket *WebSocketSpec `json:"websocket,omitempty"`
+}
+
+// WebSocketSpec defines WebSocket proxy configuration.
+type WebSocketSpec struct {
+	// Enabled turns on WebSocket proxy support for the service route.
+	Enabled bool `json:"enabled,omitempty"`
+	// Path is the URL path prefix to match for WebSocket connections (e.g., "/ws").
+	// +kubebuilder:validation:Pattern=`^/.*$`
+	Path string `json:"path,omitempty"`
+	// Timeout sets the maximum duration for the WebSocket connection.
+	// Valid time units are "ns", "us" (or "µs"), "ms", "s", "m", "h".
+	// +kubebuilder:validation:Pattern=`^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$`
+	Timeout string `json:"timeout,omitempty"`
 }
 
 // EnvVar represents an environment variable for a preview container.

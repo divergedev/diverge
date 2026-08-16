@@ -349,6 +349,25 @@ spec:
                   serviceName:
                     description: ServiceName is the Kubernetes Service name to shadow.
                     type: string
+                  websocket:
+                    description: WebSocket configures WebSocket proxy support.
+                    properties:
+                      enabled:
+                        description: Enabled turns on WebSocket proxy support for
+                          the service route.
+                        type: boolean
+                      path:
+                        description: Path is the URL path prefix to match for WebSocket
+                          connections (e.g., "/ws").
+                        pattern: ^/.*$
+                        type: string
+                      timeout:
+                        description: |-
+                          Timeout sets the maximum duration for the WebSocket connection.
+                          Valid time units are "ns", "us" (or "µs"), "ms", "s", "m", "h".
+                        pattern: ^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$
+                        type: string
+                    type: object
                 required:
                 - image
                 - port

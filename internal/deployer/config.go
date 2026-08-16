@@ -2,6 +2,7 @@ package deployer
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
 	"gopkg.in/yaml.v3"
@@ -9,33 +10,50 @@ import (
 
 // DotDivergeConfig represents the .diverge.yaml file found in service repositories.
 type DotDivergeConfig struct {
+	// APIVersion is the API version of the configuration format.
 	APIVersion string `yaml:"apiVersion"`
-	Kind       string `yaml:"kind"`
-	Metadata   struct {
+	// Kind is the configuration resource type.
+	Kind string `yaml:"kind"`
+	// Metadata holds the resource metadata.
+	Metadata struct {
+		// Name is the name of the service configuration.
 		Name string `yaml:"name"`
 	} `yaml:"metadata"`
+	// Spec defines the desired preview configuration.
 	Spec DotDivergeSpec `yaml:"spec"`
 }
 
 // DotDivergeSpec is the spec section of .diverge.yaml.
 type DotDivergeSpec struct {
-	Namespace   string              `yaml:"namespace"`
-	ServiceName string              `yaml:"serviceName"`
-	Port        int32               `yaml:"port"`
-	Routing     DotDivergeRouting   `yaml:"routing"`
-	Container   DotDivergeContainer `yaml:"container"`
+	// Namespace is the target namespace for the preview environment.
+	Namespace string `yaml:"namespace"`
+	// ServiceName is the name of the service to deploy.
+	ServiceName string `yaml:"serviceName"`
+	// Port is the container port the service listens on.
+	Port int32 `yaml:"port"`
+	// Routing configures the ingress routing for the service.
+	Routing DotDivergeRouting `yaml:"routing"`
+	// WebSocket configures WebSocket proxy settings.
+	WebSocket *v1alpha1.WebSocketSpec `yaml:"websocket"`
+	// Container configures the container execution environment.
+	Container DotDivergeContainer `yaml:"container"`
 }
 
 // DotDivergeRouting configures preview routing.
 type DotDivergeRouting struct {
+	// ParentRef specifies the Gateway API parent reference.
 	ParentRef string `yaml:"parentRef"`
+	// HeaderKey is the routing header key.
 	HeaderKey string `yaml:"headerKey"`
 }
 
 // DotDivergeContainer configures the preview container.
 type DotDivergeContainer struct {
+	// Env contains a list of environment variables.
 	Env []struct {
-		Name  string `yaml:"name"`
+		// Name is the environment variable name.
+		Name string `yaml:"name"`
+		// Value is the environment variable value.
 		Value string `yaml:"value"`
 	} `yaml:"env"`
 }
@@ -55,6 +73,11 @@ func ParseDotDivergeConfig(data []byte) (*DotDivergeConfig, error) {
 	if cfg.Spec.Port < 1 || cfg.Spec.Port > 65535 {
 		return nil, fmt.Errorf("port %d out of valid range 1-65535", cfg.Spec.Port)
 	}
+	if cfg.Spec.WebSocket != nil && cfg.Spec.WebSocket.Timeout != "" {
+		if _, err := time.ParseDuration(cfg.Spec.WebSocket.Timeout); err != nil {
+			return nil, fmt.Errorf("invalid websocket timeout: %w", err)
+		}
+	}
 	return &cfg, nil
 }
 
@@ -67,6 +90,7 @@ func (c *DotDivergeConfig) ToServicePreviewConfig(image string) *v1alpha1.Servic
 		Image:       image,
 		ParentRef:   c.Spec.Routing.ParentRef,
 		HeaderKey:   c.Spec.Routing.HeaderKey,
+		WebSocket:   c.Spec.WebSocket,
 	}
 	for _, env := range c.Spec.Container.Env {
 		cfg.Env = append(cfg.Env, v1alpha1.EnvVar{Name: env.Name, Value: env.Value})
