@@ -53,6 +53,7 @@ func (r *GitHubActionsRunner) Trigger(ctx context.Context, env *v1alpha1.Environ
 			"diverge_header_value": headerValue(env),
 			"diverge_env_name":     env.Name,
 		},
+		"return_run_details": true,
 	}
 
 	body, err := json.Marshal(payload)
@@ -75,7 +76,15 @@ func (r *GitHubActionsRunner) Trigger(ctx context.Context, env *v1alpha1.Environ
 	defer func() { _ = resp.Body.Close() }()
 
 	// GitHub returns 204 No Content for successful dispatches
-	if resp.StatusCode != http.StatusNoContent {
+	// but with return_run_details it might return 200 OK
+	if resp.StatusCode == http.StatusOK {
+		var result struct {
+			ID int64 `json:"id"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err == nil && result.ID != 0 {
+			return fmt.Sprintf("%d", result.ID), nil
+		}
+	} else if resp.StatusCode != http.StatusNoContent {
 		return "", fmt.Errorf("unexpected status %d dispatching event", resp.StatusCode)
 	}
 
@@ -151,9 +160,28 @@ func (r *GitHubActionsRunner) Status(ctx context.Context, env *v1alpha1.Environm
 
 	// If runID is "dispatch-pending", search for recent workflow runs
 	if runID == "dispatch-pending" {
-		// For dispatch-pending, we check if a recent run appeared
-		// This is a best-effort approach since GitHub dispatch is async
-		return &TestResult{State: v1alpha1.TestStateRunning, Summary: "Waiting for workflow to start"}, nil
+		eventType := env.Spec.Testing.Trigger.EventType
+		if eventType == "" {
+			eventType = "diverge-test"
+		}
+
+		var dispatchedAt time.Time
+		if env.Status.TestStatus != nil && env.Status.TestStatus.StartedAt != nil {
+			dispatchedAt = env.Status.TestStatus.StartedAt.Time
+		} else {
+			dispatchedAt = time.Now().Add(-5 * time.Minute) // fallback
+		}
+
+		resolved, err := r.resolveDispatchRun(ctx, repo, eventType, dispatchedAt)
+		if err != nil || resolved == "" {
+			return &TestResult{State: v1alpha1.TestStateRunning, Summary: "Resolving dispatch..."}, nil
+		}
+
+		// Update the stored run ID
+		if env.Status.TestStatus != nil {
+			env.Status.TestStatus.RunID = resolved
+		}
+		runID = resolved
 	}
 
 	apiURL := fmt.Sprintf("%s/repos/%s/actions/runs/%s", r.baseURL(), repo, runID)

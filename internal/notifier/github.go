@@ -441,6 +441,9 @@ func (g *GitHubNotifier) resolveDispatchRun(ctx context.Context, owner, repo, wo
 			params.Set("event", "workflow_dispatch")
 			params.Set("branch", branch)
 			params.Set("created", ">="+createdAtFilter)
+			if workflow != "" {
+				params.Set("workflow_id", workflow)
+			}
 			apiURL := fmt.Sprintf("%s/repos/%s/actions/runs?%s", g.BaseURL, escapedProject, params.Encode())
 
 			req, err := http.NewRequestWithContext(pollCtx, http.MethodGet, apiURL, nil)
@@ -458,12 +461,16 @@ func (g *GitHubNotifier) resolveDispatchRun(ctx context.Context, owner, repo, wo
 			switch {
 			case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusForbidden:
 				retryAfter := resp.Header.Get("Retry-After")
+				backoff := 5 * time.Second
 				if secs, err := strconv.Atoi(retryAfter); err == nil {
-					time.Sleep(time.Duration(secs) * time.Second)
-				} else {
-					time.Sleep(5 * time.Second) // backoff
+					backoff = time.Duration(secs) * time.Second
 				}
 				_ = resp.Body.Close()
+				select {
+				case <-pollCtx.Done():
+					return 0, pollCtx.Err()
+				case <-time.After(backoff):
+				}
 				continue
 			case resp.StatusCode >= 400:
 				_ = resp.Body.Close()
