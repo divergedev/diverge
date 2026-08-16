@@ -1,0 +1,44 @@
+stages:
+  - build
+  - preview
+  - test
+
+variables:
+  DIVERGE_VERSION: "0.3.0"
+  REGISTRY: ${CI_REGISTRY_IMAGE}
+
+# Build the service image
+build:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
+  script:
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"${CI_REGISTRY}\":{\"auth\":\"$(printf "%s:%s" "${CI_REGISTRY_USER}" "${CI_REGISTRY_PASSWORD}" | base64 | tr -d '\n')\"}}}" > /kaniko/.docker/config.json
+    - /kaniko/executor --context $CI_PROJECT_DIR --dockerfile $CI_PROJECT_DIR/Dockerfile --destination ${REGISTRY}:${CI_COMMIT_SHORT_SHA}
+  rules:
+    - if: $CI_MERGE_REQUEST_IID
+
+# Create preview environment on MR open
+preview:create:
+  stage: preview
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache curl tar
+    - curl -sL https://github.com/divergedev/diverge/releases/download/v${DIVERGE_VERSION}/diverge_${DIVERGE_VERSION}_linux_amd64.tar.gz | tar xz -C /usr/local/bin diverge
+  script:
+    - diverge create --mr ${CI_MERGE_REQUEST_IID}
+  rules:
+    - if: $CI_MERGE_REQUEST_IID
+      when: always
+
+# Run tests against preview
+test:preview:
+  stage: test
+  image: curlimages/curl:latest
+  script:
+    - curl -H "x-diverge-env: preview-mr-${CI_MERGE_REQUEST_IID}" https://preview.example.com/health
+  rules:
+    - if: $CI_MERGE_REQUEST_IID
+  needs: ["preview:create"]

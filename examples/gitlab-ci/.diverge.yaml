@@ -1,0 +1,21 @@
+version: "1"
+services:
+  frontend:
+    paths: ["src/frontend"]
+    image:
+      repository: "${REGISTRY}/frontend"
+      tag_template: "${CI_COMMIT_SHORT_SHA}"
+  backend:
+    paths: ["src/backend"]
+    image:
+      repository: "${REGISTRY}/backend"
+      tag_template: "${CI_COMMIT_SHORT_SHA}"
+  worker:
+    paths: ["src/worker"]
+    image:
+      repository: "${REGISTRY}/worker"
+      tag_template: "${CI_COMMIT_SHORT_SHA}"
+defaults:
+  routing:
+    mode: header
+    header_key: x-diverge-env
