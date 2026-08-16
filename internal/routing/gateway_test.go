@@ -766,3 +766,102 @@ func TestGatewayRouter_Reconcile_CookieRegexDoesNotMatchOverlapping(t *testing.T
 	assert.False(t, importRegexp.MatchString("x-env=feat-10"), "feat-1 should not match feat-10")
 	assert.False(t, importRegexp.MatchString("my-x-env=feat-1"), "should match whole key")
 }
+
+func TestGatewayRouter_Reconcile_WebSocket(t *testing.T) {
+	c := fake.NewClientBuilder().Build()
+	r := &GatewayRouter{Client: c, Namespace: "default"}
+
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-env",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Deploy: v1alpha1.EnvironmentDeploy{
+				ChangedServices: []string{"web"},
+			},
+			ServiceConfig: &v1alpha1.ServicePreviewConfig{
+				WebSocket: &v1alpha1.WebSocketSpec{
+					Enabled: true,
+				},
+			},
+		},
+	}
+
+	err := r.Reconcile(context.Background(), env)
+	require.NoError(t, err)
+
+	u := &unstructured.Unstructured{}
+	u.SetAPIVersion("gateway.networking.k8s.io/v1")
+	u.SetKind("HTTPRoute")
+	err = c.Get(context.Background(), client.ObjectKey{Name: "test-env-web", Namespace: "default"}, u)
+	require.NoError(t, err)
+
+	rules, found, err := unstructured.NestedSlice(u.Object, "spec", "rules")
+	require.NoError(t, err)
+	require.True(t, found, "spec.rules should exist")
+	require.Len(t, rules, 1)
+
+	rule := rules[0].(map[string]interface{})
+	timeouts, found, err := unstructured.NestedMap(rule, "timeouts")
+	require.NoError(t, err)
+	require.True(t, found, "timeouts should exist")
+	assert.Equal(t, "0s", timeouts["request"])
+}
+
+func TestGatewayRouter_Reconcile_WebSocketWithPath(t *testing.T) {
+	c := fake.NewClientBuilder().Build()
+	r := &GatewayRouter{Client: c, Namespace: "default"}
+
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-env",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Deploy: v1alpha1.EnvironmentDeploy{
+				ChangedServices: []string{"web"},
+			},
+			ServiceConfig: &v1alpha1.ServicePreviewConfig{
+				WebSocket: &v1alpha1.WebSocketSpec{
+					Enabled: true,
+					Path:    "/ws",
+					Timeout: "3600s",
+				},
+			},
+		},
+	}
+
+	err := r.Reconcile(context.Background(), env)
+	require.NoError(t, err)
+
+	u := &unstructured.Unstructured{}
+	u.SetAPIVersion("gateway.networking.k8s.io/v1")
+	u.SetKind("HTTPRoute")
+	err = c.Get(context.Background(), client.ObjectKey{Name: "test-env-web", Namespace: "default"}, u)
+	require.NoError(t, err)
+
+	rules, found, err := unstructured.NestedSlice(u.Object, "spec", "rules")
+	require.NoError(t, err)
+	require.True(t, found, "spec.rules should exist")
+	require.Len(t, rules, 2) // One for /ws, one for everything else
+
+	// Check WS rule
+	wsRule := rules[0].(map[string]interface{})
+	timeouts, found, err := unstructured.NestedMap(wsRule, "timeouts")
+	require.NoError(t, err)
+	require.True(t, found, "timeouts should exist on WS rule")
+	assert.Equal(t, "3600s", timeouts["request"])
+
+	wsMatches, _, _ := unstructured.NestedSlice(wsRule, "matches")
+	wsMatch := wsMatches[0].(map[string]interface{})
+	pathMatch, _, _ := unstructured.NestedMap(wsMatch, "path")
+	assert.Equal(t, "/ws", pathMatch["value"])
+
+	// Check default rule
+	defaultRule := rules[1].(map[string]interface{})
+	_, defaultHasTimeouts, _ := unstructured.NestedMap(defaultRule, "timeouts")
+	assert.False(t, defaultHasTimeouts, "default rule should not have timeouts")
+}
+}
+

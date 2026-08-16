@@ -257,6 +257,16 @@ type ServicePreviewConfig struct {
 	// Resources overrides the resource requests/limits for the preview pod.
 	// +optional
 	Resources *ResourceOverride `json:"resources,omitempty"`
+	// WebSocket configures WebSocket proxy support.
+	// +optional
+	WebSocket *WebSocketSpec `json:"websocket,omitempty"`
+}
+
+// WebSocketSpec defines WebSocket proxy configuration.
+type WebSocketSpec struct {
+	Enabled bool   `json:"enabled,omitempty"`
+	Path    string `json:"path,omitempty"`    // e.g., "/ws", default: all paths
+	Timeout string `json:"timeout,omitempty"` // e.g., "3600s", default: no timeout
 }
 
 // EnvVar represents an environment variable for a preview container.
