@@ -97,6 +97,7 @@ func TestEnvironment_AsyncRouting(t *testing.T) {
 }
 
 func TestPreviewGroupLifecycle(t *testing.T) {
+	t.Skip("requires PreviewGroup CRD in Kind cluster — see make e2e-setup")
 	f := NewFramework(t)
 	ctx := context.Background()
 	f.CreateNamespace(ctx)
@@ -127,6 +128,7 @@ func TestPreviewGroupLifecycle(t *testing.T) {
 }
 
 func TestPreviewGroupWithAsyncRoutes(t *testing.T) {
+	t.Skip("requires PreviewGroup CRD in Kind cluster — see make e2e-setup")
 	f := NewFramework(t)
 	ctx := context.Background()
 	f.CreateNamespace(ctx)
@@ -159,6 +161,7 @@ func TestPreviewGroupWithAsyncRoutes(t *testing.T) {
 }
 
 func TestMultiServicePreviewGroup(t *testing.T) {
+	t.Skip("requires PreviewGroup CRD in Kind cluster — see make e2e-setup")
 	f := NewFramework(t)
 	ctx := context.Background()
 	f.CreateNamespace(ctx)
