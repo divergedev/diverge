@@ -16,6 +16,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
@@ -33,7 +34,7 @@ func TestEnvironment_CreateAndDelete(t *testing.T) {
 			Namespace: f.Namespace,
 		},
 		Spec: v1alpha1.EnvironmentSpec{
-			Source: v1alpha1.EnvironmentSource{Provider: "github"},
+			Source: v1alpha1.EnvironmentSource{Provider: "github", Project: "divergedev/test-app", Branch: "feat/test-branch"},
 		},
 	}
 
@@ -44,14 +45,14 @@ func TestEnvironment_CreateAndDelete(t *testing.T) {
 		t.Skip("controller not deployed — skipping reconciliation assertions")
 	}
 
-	err = f.WaitForCondition(ctx, env.Name, "Ready", metav1.ConditionTrue, 1*time.Minute)
+	err = f.WaitForCondition(ctx, env.Name, "Ready", metav1.ConditionTrue, defaultTimeout)
 	require.NoError(t, err, "WaitForCondition Ready timed out")
 
 	// Delete Environment
 	err = f.Client.Delete(ctx, env)
 	require.NoError(t, err, "Failed to delete Environment")
 
-	err = f.WaitForEnvironmentDeleted(ctx, env.Name, 1*time.Minute)
+	err = f.WaitForEnvironmentDeleted(ctx, env.Name, defaultTimeout)
 	require.NoError(t, err, "Environment did not delete in time")
 
 	// Assert no orphaned Deployments
@@ -86,10 +87,12 @@ func TestEnvironment_AsyncRouting(t *testing.T) {
 			Namespace: f.Namespace,
 		},
 		Spec: v1alpha1.EnvironmentSpec{
-			Source: v1alpha1.EnvironmentSource{Provider: "github"},
-			AsyncRoutes: []v1alpha1.AsyncRouteSpec{
-				{Protocol: "kafka", Target: "topic-test"},
-				{Protocol: "temporal", Target: "task-queue-test"},
+			Source: v1alpha1.EnvironmentSource{Provider: "github", Project: "divergedev/test-app", Branch: "feat/test-branch"},
+			Routing: v1alpha1.EnvironmentRouting{
+				AsyncRoutes: []v1alpha1.AsyncRouteSpec{
+					{Protocol: "kafka", Target: "topic-test"},
+					{Protocol: "temporal", Target: "task-queue-test"},
+				},
 			},
 		},
 	}
@@ -101,7 +104,7 @@ func TestEnvironment_AsyncRouting(t *testing.T) {
 		t.Skip("controller not deployed — skipping reconciliation assertions")
 	}
 
-	err = f.WaitForCondition(ctx, env.Name, "Ready", metav1.ConditionTrue, 1*time.Minute)
+	err = f.WaitForCondition(ctx, env.Name, "Ready", metav1.ConditionTrue, defaultTimeout)
 	require.NoError(t, err, "WaitForCondition timed out")
 
 	// Assert AsyncEnvVars populated
@@ -135,7 +138,7 @@ func TestPreviewGroupLifecycle(t *testing.T) {
 			Name: pgName,
 		},
 		Spec: v1alpha1.PreviewGroupSpec{
-			Source: v1alpha1.EnvironmentSource{Provider: "github"},
+			Source: v1alpha1.EnvironmentSource{Provider: "github", Project: "divergedev/test-app", Branch: "feat/test-branch"},
 			Routing: v1alpha1.PreviewGroupRouting{
 				HeaderValue: "test-pg",
 			},
@@ -159,10 +162,10 @@ func TestPreviewGroupLifecycle(t *testing.T) {
 		envNameA := fmt.Sprintf("%s-%s", pg.Name, "svc-a")
 		envNameB := fmt.Sprintf("%s-%s", pg.Name, "svc-b")
 
-		err = f.WaitForCondition(ctx, envNameA, "Ready", metav1.ConditionTrue, 1*time.Minute)
+		err = f.WaitForCondition(ctx, envNameA, "Ready", metav1.ConditionTrue, defaultTimeout)
 		require.NoError(t, err, "Child Environment svc-a should reach Ready")
 
-		err = f.WaitForCondition(ctx, envNameB, "Ready", metav1.ConditionTrue, 1*time.Minute)
+		err = f.WaitForCondition(ctx, envNameB, "Ready", metav1.ConditionTrue, defaultTimeout)
 		require.NoError(t, err, "Child Environment svc-b should reach Ready")
 
 		// Delete PreviewGroup
@@ -170,10 +173,10 @@ func TestPreviewGroupLifecycle(t *testing.T) {
 		require.NoError(t, err, "Failed to delete PreviewGroup")
 
 		// Assert child Environments are cleaned up
-		err = f.WaitForEnvironmentDeleted(ctx, envNameA, 1*time.Minute)
+		err = f.WaitForEnvironmentDeleted(ctx, envNameA, defaultTimeout)
 		require.NoError(t, err, "Child Environment svc-a not deleted")
 
-		err = f.WaitForEnvironmentDeleted(ctx, envNameB, 1*time.Minute)
+		err = f.WaitForEnvironmentDeleted(ctx, envNameB, defaultTimeout)
 		require.NoError(t, err, "Child Environment svc-b not deleted")
 	} else {
 		t.Skip("controller not deployed — skipping reconciliation assertions")
@@ -193,7 +196,7 @@ func TestMultiServicePreviewGroup(t *testing.T) {
 			Name: pgName,
 		},
 		Spec: v1alpha1.PreviewGroupSpec{
-			Source: v1alpha1.EnvironmentSource{Provider: "github"},
+			Source: v1alpha1.EnvironmentSource{Provider: "github", Project: "divergedev/test-app", Branch: "feat/test-branch"},
 			Routing: v1alpha1.PreviewGroupRouting{
 				HeaderValue: "multi-pg",
 			},
@@ -217,33 +220,25 @@ func TestMultiServicePreviewGroup(t *testing.T) {
 		// Assert each gets HTTPRoute and check routing header propagation
 		for _, svc := range pg.Spec.Services {
 			envName := fmt.Sprintf("%s-%s", pg.Name, svc.Name)
-			err = f.WaitForCondition(ctx, envName, "Ready", metav1.ConditionTrue, 1*time.Minute)
+			err = f.WaitForCondition(ctx, envName, "Ready", metav1.ConditionTrue, defaultTimeout)
 			require.NoError(t, err, fmt.Sprintf("Child Environment %s should reach Ready", svc.Name))
 
 			// Assert each service gets its own HTTPRoute
 			var route gatewayv1.HTTPRoute
 			routeName := envName // assuming route uses env name
-			err = f.Client.Get(ctx, types.NamespacedName{Name: routeName, Namespace: f.Namespace}, &route)
-			if err != nil && apierrors.IsNotFound(err) {
-				// Retry slightly if just delayed
-				time.Sleep(2 * time.Second)
-				err = f.Client.Get(ctx, types.NamespacedName{Name: routeName, Namespace: f.Namespace}, &route)
-			}
+			err = wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, defaultTimeout, true, func(ctx context.Context) (bool, error) {
+				getErr := f.Client.Get(ctx, types.NamespacedName{Name: routeName, Namespace: f.Namespace}, &route)
+				if getErr != nil {
+					if apierrors.IsNotFound(getErr) {
+						return false, nil
+					}
+					return false, getErr
+				}
+				return true, nil
+			})
 			require.NoError(t, err, "Expected HTTPRoute for service "+svc.Name)
 
-			// Assert routing header propagation exists in rules
-			hasHeaderMatch := false
-			for _, rule := range route.Spec.Rules {
-				for _, match := range rule.Matches {
-					for _, header := range match.Headers {
-						if header.Name == "X-Preview-Group" && header.Value == "multi-pg" { // Example header matching logic
-							hasHeaderMatch = true
-						}
-					}
-				}
-			}
-			// Don't strongly assert header match logic here unless we know exact diverge header implementation,
-			// but we can assert we got the route successfully and it has rules.
+			// Assert the route was created with rules
 			assert.NotEmpty(t, route.Spec.Rules, "HTTPRoute should have rules")
 		}
 
