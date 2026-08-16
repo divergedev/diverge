@@ -13,17 +13,20 @@
 
 2. Run with Diverge:
    ```bash
-   diverge dev --service my-api --env-output file -- air
+   # In-memory injection (recommended):
+   diverge dev --service my-api -- air
    ```
 
-Air reads `.env.diverge` and restarts `go build && ./tmp/main` on file changes.
+In `--env-output inject` (the default mode), `diverge dev` injects environment variables directly into the Air process environment, which propagates them to your compiled application binary upon restart.
+
+> **Note on `--env-output file`**: If you use `--env-output file`, Diverge writes variables to `.env.diverge`. Air does not read `.env.diverge` by default — you must configure Air (via `.air.toml` / build commands) or use an env loader (such as `godotenv`) in your application to source the file.
 
 ## Node.js (with nodemon)
 
 [nodemon](https://nodemon.io/) watches Node files and restarts on change.
 
 ```bash
-diverge dev --service my-api --env-output file -- npx nodemon server.js
+diverge dev --service my-api -- npx nodemon server.js
 ```
 
 ## Any Language (with watchexec)
@@ -31,23 +34,23 @@ diverge dev --service my-api --env-output file -- npx nodemon server.js
 [watchexec](https://watchexec.github.io/) is a language-agnostic file watcher.
 
 ```bash
-diverge dev --service my-api --env-output file -- watchexec -r ./run.sh
+diverge dev --service my-api -- watchexec -r ./run.sh
 ```
 
 ## How It Works
 
 1. `diverge dev` creates the Environment CR and waits for async routes to provision.
-2. Once ready, it writes env vars to `.env.diverge` (with `--env-output file`).
+2. Once ready, it injects baseline env vars into the child process environment (or writes to `.env.diverge` with `--env-output file`).
 3. The child process (Air/nodemon/watchexec) starts and watches for file changes.
-4. On file change, the watcher restarts your app — env vars persist in `.env.diverge`.
+4. On file change, the watcher restarts your app with the environment variables preserved.
 5. On Ctrl+C, Diverge tears down the Environment and cleans up.
 
 ## `--env-output` Modes
 
 | Mode | Behavior |
 |------|----------|
-| `inject` (default) | Env vars injected in-memory into the child process. Simple but requires restart of `diverge dev` to pick up new vars. |
-| `file` | Env vars written to `.env.diverge`. File watchers like Air can source this file. Recommended for hot-reload workflows. |
+| `inject` (default) | Env vars injected in-memory into the child process (Air/nodemon/watchexec) and inherited by restarted binaries. Recommended for most hot-reload workflows. |
+| `file` | Env vars written to `.env.diverge`. Requires configuring your file watcher or application to source the `.env.diverge` file. |
 
 ## When to Use DevSpace Instead
 

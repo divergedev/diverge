@@ -6,6 +6,12 @@ Diverge provides built-in observability by exposing Prometheus metrics and stand
 
 The controller uses standard controller-runtime metrics at `:8080/metrics` (workqueue depth, reconcile duration, etc).
 
+In addition, Diverge exposes custom controller metrics under the `diverge_controller` namespace:
+- `diverge_controller_async_provisions_total` (labels: protocol, result) — Total async route provisions
+- `diverge_controller_async_provision_duration_seconds` (labels: protocol) — Async route provisioning duration
+- `diverge_controller_async_teardowns_total` (labels: protocol, result) — Total async route teardowns
+- `diverge_controller_async_active_routes` (labels: protocol) — Currently active async routes
+
 ## Server Metrics
 
 Under `diverge_server` namespace:

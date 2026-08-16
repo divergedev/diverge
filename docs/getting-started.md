@@ -20,7 +20,7 @@ You can install Diverge via our installation script or Go.
 
 **Install via Shell Script**
 ```bash
-curl -fsSL https://divergedev.com/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/v0.5.0/install.sh | sh
 ```
 
 **Install via Go**
