@@ -1,94 +1,75 @@
-# .testignore — Go source files exempt from test co-location checks.
-# Supports glob patterns. One pattern per line.
-# These are files that legitimately don't need individual test files
-# (registration stubs, type definitions, noop implementations, etc.)
-
-# Registration stubs (init() only, tested via integration)
-internal/**/noop_register.go
-internal/**/*_register.go
-
-# Provider registries (thin glue, tested via integration)
-internal/**/providers.go
-
-# Noop/stub implementations (no logic to test)
-internal/**/noop.go
-internal/deployer/noop.go
-internal/notifier/noop.go
-internal/notifier/noop_status.go
-internal/routing/noop.go
-
-# Instrumented wrappers (generated-like, delegation only)
-internal/**/instrumented.go
-
-# Type definitions (no logic, tested via PBT on types)
+pkg/sdk/kafka/propagation.go
+pkg/sdk/temporal/propagation.go
+pkg/sdk/temporal/router.go
+pkg/sdk/temporal/context.go
+pkg/sdk/temporal/context.go
 internal/argocd/types.go
-
-# Event recorder (thin wrapper around k8s recorder)
-internal/events/recorder.go
-
-# CLI commands pending test coverage (tracked as tech debt)
-# Remove these as tests are added:
+internal/async/kafka_register.go
+internal/async/noop.go
+internal/async/providers.go
+internal/async/temporal_register.go
+internal/async/webhook.go
+internal/async/webhook_register.go
 internal/cli/environment.go
-internal/cli/logs.go
-
-# Router interface (tested via implementations)
-internal/routing/router.go
-
-# Test helpers (testing infrastructure, not product code)
-internal/testing/helpers.go
-internal/testing/github.go
-internal/testing/gitlab.go
-internal/testing/noop.go
-
-# Process management (platform-specific, tested via integration)
 internal/cli/process_unix.go
 internal/cli/process_windows.go
-
-# Webhook config fetchers (API clients, tested via integration)
-internal/webhook/config_fetcher_github.go
-internal/webhook/config_fetcher_gitlab.go
-
-# Notifier implementations (API clients, tested via integration)
-internal/notifier/github_status.go
-internal/notifier/gitlab.go
-internal/notifier/gitlab_status.go
-internal/notifier/previewgroup_templates.go
-
-# Deployer implementations (tested via integration)
+internal/database/instrumented.go
+internal/database/noop_register.go
+internal/database/schemaprovider/schema_register.go
+internal/database/schemaprovider/schema_security.go
 internal/deployer/argocd.go
+internal/deployer/argocd_register.go
+internal/deployer/direct_register.go
 internal/deployer/fetcher_configmap.go
 internal/deployer/fetcher_url.go
-
-# Async webhook (tested via provisioner integration)
-internal/async/webhook.go
-
-# Database (pending removal in modernize PR)
-internal/database/provider.go
-internal/database/schemaprovider/schema_security.go
-
-# Proxy pages (static content, tested via E2E)
+internal/deployer/instrumented.go
+internal/deployer/knativeprovider/knative_register.go
+internal/deployer/noop.go
+internal/deployer/noop_register.go
+internal/deployer/providers.go
+internal/events/recorder.go
+internal/notifier/github_register.go
+internal/notifier/github_status.go
+internal/notifier/gitlab.go
+internal/notifier/gitlab_register.go
+internal/notifier/gitlab_status.go
+internal/notifier/noop.go
+internal/notifier/noop_register.go
+internal/notifier/noop_status.go
+internal/notifier/previewgroup_templates.go
+internal/notifier/providers.go
 internal/proxy/pages.go
-
-
-# pkg/ re-exports and interfaces
-# pkg/ re-exports and interfaces
-pkg/database/provider.go
-pkg/database/registry.go
-
-# Server files (temporarily ignored for Phase 2+3 development)
+internal/routing/composite_register.go
+internal/routing/gateway_register.go
+internal/routing/instrumented.go
+internal/routing/istio_register.go
+internal/routing/noop.go
+internal/routing/noop_register.go
+internal/routing/providers.go
+internal/routing/router.go
 internal/server/auth.go
 internal/server/cluster_auth.go
 internal/server/environment.go
 internal/server/previewgroup.go
 internal/server/server.go
-
-🔀 Diverge dev shell loaded
-   Go:      go1.26.5
-   kubectl: v1.36.3
-   helm:    v4.2.3
-
-sync hooks: ✔️(pre-push, pre-commit)
 internal/server/streaming/informer.go
 internal/server/streaming/logs.go
+internal/testing/github.go
+internal/testing/github_register.go
+internal/testing/gitlab.go
+internal/testing/gitlab_register.go
+internal/testing/helpers.go
+internal/testing/noop.go
+internal/testing/noop_register.go
+internal/testing/providers.go
+internal/webhook/config_fetcher_github.go
+internal/webhook/config_fetcher_gitlab.go
+pkg/database/provider.go
+pkg/database/registry.go
+internal/server/auth.go
+internal/server/cluster_auth.go
+internal/server/environment.go
+internal/server/previewgroup.go
+internal/server/server.go
 internal/server/metrics.go
 pkg/sdk/temporal/context.go

@@ -1,8 +1,10 @@
 package kafka
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 )
 
 const HeaderKey = "x-diverge-env"
@@ -17,14 +19,18 @@ func Headers() map[string]string {
 	return headers
 }
 
-// Topic returns the environment-scoped topic name.
-// If DIVERGE_ENV is empty (production), returns the base name unchanged.
-func Topic(base string) string {
-	env := os.Getenv("DIVERGE_ENV")
-	if env == "" {
-		return base
+var ErrInvalidTopic = errors.New("topic name must not contain '--' delimiter")
+
+// Topic returns the preview-scoped Kafka topic name.
+// Uses "--" as delimiter to avoid collision with topics containing single hyphens.
+func Topic(baseTopic, envName string) (string, error) {
+	if envName == "" {
+		return baseTopic, nil
 	}
-	return fmt.Sprintf("%s-%s", base, env)
+	if strings.Contains(baseTopic, "--") {
+		return "", ErrInvalidTopic
+	}
+	return fmt.Sprintf("%s--%s", baseTopic, envName), nil
 }
 
 // ConsumerGroup returns the environment-scoped consumer group.

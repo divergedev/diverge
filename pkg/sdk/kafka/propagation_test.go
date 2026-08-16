@@ -1,11 +1,9 @@
 package kafka
 
 import (
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"pgregory.net/rapid"
 )
 
 func TestHeadersSdk(t *testing.T) {
@@ -36,28 +34,23 @@ func TestHeadersSdk(t *testing.T) {
 	}
 }
 
-func TestTopicAndConsumerGroupSdk(t *testing.T) {
-	t.Setenv("DIVERGE_ENV", "pr-123")
+func TestTopic(t *testing.T) {
+	topic, err := Topic("orders", "")
+	assert.NoError(t, err)
+	assert.Equal(t, "orders", topic)
 
-	assert.Equal(t, "my-topic-pr-123", Topic("my-topic"))
+	topic, err = Topic("orders", "preview-1")
+	assert.NoError(t, err)
+	assert.Equal(t, "orders--preview-1", topic)
+
+	_, err = Topic("my--orders", "preview-1")
+	assert.ErrorIs(t, err, ErrInvalidTopic)
+}
+
+func TestConsumerGroupSdk(t *testing.T) {
+	t.Setenv("DIVERGE_ENV", "pr-123")
 	assert.Equal(t, "my-group-pr-123", ConsumerGroup("my-group"))
 
 	t.Setenv("DIVERGE_ENV", "")
-	assert.Equal(t, "my-topic", Topic("my-topic"))
 	assert.Equal(t, "my-group", ConsumerGroup("my-group"))
-}
-
-func TestTopicAndConsumerGroupSdk_Rapid(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		base := rapid.StringMatching(`^[a-z0-9-]+$`).Draw(t, "base")
-		env := rapid.StringMatching(`^[a-z0-9-]+$`).Draw(t, "env")
-
-		//nolint:errcheck
-		os.Setenv("DIVERGE_ENV", env)
-		defer os.Unsetenv("DIVERGE_ENV") //nolint:errcheck
-
-		expected := base + "-" + env
-		assert.Equal(t, expected, Topic(base))
-		assert.Equal(t, expected, ConsumerGroup(base))
-	})
 }

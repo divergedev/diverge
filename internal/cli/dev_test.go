@@ -579,16 +579,3 @@ func TestRunChildProcess_EnvInjection(t *testing.T) {
 	err = cmd.Wait()
 	require.NoError(t, err, "child process failed, env var was not injected")
 }
-
-func TestRunChildProcess_CancelPropagation(t *testing.T) {
-	t.Skip("skipping due to CI failures and Windows compatibility")
-	ctx, cancel := context.WithCancel(context.Background())
-
-	cmd, err := runChildProcess(ctx, []string{"sleep", "10"}, nil)
-	require.NoError(t, err)
-
-	cancel()
-
-	err = cmd.Wait()
-	require.Error(t, err)
-}

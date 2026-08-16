@@ -42,6 +42,11 @@ func runChildProcess(ctx context.Context, args []string, envMap map[string]strin
 	}
 	cmd.Env = env
 
+	cmd.Cancel = func() error {
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+	}
+	cmd.WaitDelay = 5 * time.Second
+
 	if err := cmd.Start(); err != nil {
 		fmt.Printf("⚠️  Failed to start child process: %v\n", err)
 		return nil, err

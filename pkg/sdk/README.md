@@ -22,6 +22,6 @@ w := worker.New(c, temporal.TaskQueue("my-queue"), worker.Options{
 ```go
 import "github.com/divergedev/diverge/pkg/sdk/kafka"
 
-topic := kafka.Topic("my-topic")
+topic, _ := kafka.Topic("my-topic", os.Getenv("DIVERGE_ENV"))
 headers := kafka.Headers() // returns map[string]string with x-diverge-env
 ```

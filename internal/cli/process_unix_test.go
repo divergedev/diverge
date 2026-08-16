@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRunChildProcess_ProcessGroupKill(t *testing.T) {
@@ -33,4 +34,16 @@ func TestRunChildProcess_ProcessGroupKill(t *testing.T) {
 	err := <-errCh
 	// Should exit with context error, not hang
 	assert.Error(t, err)
+}
+
+func TestRunChildProcess_CancelPropagation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	cmd, err := runChildProcess(ctx, []string{"sleep", "10"}, nil)
+	require.NoError(t, err)
+
+	cancel()
+
+	err = cmd.Wait()
+	require.Error(t, err)
 }
