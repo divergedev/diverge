@@ -3,6 +3,10 @@ set -e
 
 # Diverge Environment Engine Operator Installer
 
+error() {
+    echo "Error: $1" >&2
+}
+
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
 
@@ -11,28 +15,45 @@ if [ "$ARCH" = "x86_64" ]; then
 elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
     ARCH="arm64"
 else
-    echo "Unsupported architecture: $ARCH"
+    error "Unsupported architecture: $ARCH"
     exit 1
 fi
 
 REPO="divergedev/diverge"
-LATEST_RELEASE_URL="https://api.github.com/repos/$REPO/releases/latest"
 
-echo "Fetching latest release from $LATEST_RELEASE_URL..."
-DOWNLOAD_URL=$(curl -s $LATEST_RELEASE_URL | grep "browser_download_url" | grep "diverge_${OS}_${ARCH}.tar.gz" | cut -d '"' -f 4 | head -n 1)
+TAG=$(curl -sI "https://github.com/$REPO/releases/latest" | grep -i "^location:" | sed -n 's/.*\/tag\/\([^[:space:]]*\).*/\1/p' | tr -d '\r')
 
-if [ -z "$DOWNLOAD_URL" ]; then
-    echo "Could not find a release for $OS $ARCH."
-    exit 1
+if [ "$TAG" = "latest" ] || [ -z "$TAG" ]; then
+  error "Could not determine latest release tag"
+  exit 1
 fi
 
-echo "Downloading $DOWNLOAD_URL..."
+DOWNLOAD_URL="https://github.com/$REPO/releases/download/$TAG/diverge_${OS}_${ARCH}.tar.gz"
+CHECKSUM_URL="https://github.com/$REPO/releases/download/$TAG/checksums.txt"
+
+echo "Downloading release $TAG..."
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
+
 curl -sL "$DOWNLOAD_URL" -o "$TMP_DIR/diverge.tar.gz"
+curl -sL "$CHECKSUM_URL" -o "$TMP_DIR/checksums.txt"
+
+echo "Verifying checksum..."
+(
+    cd "$TMP_DIR"
+    if ! grep "diverge_${OS}_${ARCH}.tar.gz" checksums.txt | sha256sum -c -; then
+        echo "Error: Checksum verification failed!" >&2
+        exit 1
+    fi
+)
 
 echo "Extracting..."
 tar -xzf "$TMP_DIR/diverge.tar.gz" -C "$TMP_DIR"
+
+if [ ! -f "$TMP_DIR/diverge" ]; then
+    error "Binary 'diverge' not found in archive."
+    exit 1
+fi
 
 INSTALL_DIR="/usr/local/bin"
 if [ ! -w "$INSTALL_DIR" ]; then
@@ -48,6 +69,7 @@ echo "Installation complete."
 
 "$INSTALL_DIR/diverge" version
 
-if ! command -v diverge >/dev/null 2>&1; then
-    echo "Please add $INSTALL_DIR to your PATH."
-fi
+case ":$PATH:" in
+    *":$INSTALL_DIR:"*) ;;
+    *) echo "Please add $INSTALL_DIR to your PATH." ;;
+esac
