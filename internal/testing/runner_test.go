@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -104,11 +106,24 @@ func TestGitLabPipelineRunner_Status_Failed(t *testing.T) {
 func TestGitHubActionsRunner_Trigger(t *testing.T) {
 	var receivedBody map[string]interface{}
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "POST", r.Method)
-		assert.Contains(t, r.URL.Path, "/dispatches")
-		assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
-		_ = json.NewDecoder(r.Body).Decode(&receivedBody)
-		w.WriteHeader(http.StatusNoContent)
+		if r.Method == "POST" && strings.Contains(r.URL.Path, "/dispatches") {
+			assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+			_ = json.NewDecoder(r.Body).Decode(&receivedBody)
+			w.WriteHeader(http.StatusNoContent)
+		} else if r.Method == "GET" && strings.Contains(r.URL.Path, "/actions/runs") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{
+				"workflow_runs": [
+					{
+						"id": 12345,
+						"created_at": "` + time.Now().Add(5*time.Second).Format(time.RFC3339) + `"
+					}
+				]
+			}`))
+		} else {
+			w.WriteHeader(http.StatusNotFound)
+		}
 	}))
 	defer ts.Close()
 
@@ -122,7 +137,7 @@ func TestGitHubActionsRunner_Trigger(t *testing.T) {
 	runner := &GitHubActionsRunner{BaseURL: ts.URL, Token: "test-token", HTTPClient: ts.Client()}
 	runID, err := runner.Trigger(context.Background(), env)
 	require.NoError(t, err)
-	assert.Equal(t, "dispatch-pending", runID)
+	assert.Equal(t, "12345", runID)
 	assert.Equal(t, "preview-test", receivedBody["event_type"])
 }
 
