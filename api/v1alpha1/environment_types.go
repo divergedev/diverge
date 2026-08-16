@@ -111,6 +111,9 @@ type EnvironmentRouting struct {
 	// Cookie enables sticky routing using cookies.
 	// +optional
 	Cookie *CookieSpec `json:"cookie,omitempty"`
+	// Banner configures a preview indicator banner to inject into responses.
+	// +optional
+	Banner *BannerSpec `json:"banner,omitempty"`
 }
 
 // CookieSpec defines the configuration for sticky routing cookies.
@@ -121,6 +124,18 @@ type CookieSpec struct {
 	// +kubebuilder:validation:Enum=Lax;Strict;None
 	SameSite string `json:"sameSite,omitempty"` // Lax, Strict, None
 	Secure   bool   `json:"secure,omitempty"`
+}
+
+// BannerSpec configures the visual preview environment indicator
+type BannerSpec struct {
+	Enabled bool `json:"enabled,omitempty"`
+	// +kubebuilder:default="Preview Environment"
+	Text string `json:"text,omitempty"`
+	// +kubebuilder:validation:Enum=top;bottom
+	// +kubebuilder:default=top
+	Position string `json:"position,omitempty"`
+	// +kubebuilder:default="#FF6B00"
+	Color string `json:"color,omitempty"`
 }
 
 // EnvironmentDatabase defines the database configuration

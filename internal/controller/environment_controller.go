@@ -20,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/config/banner"
 	"github.com/divergedev/diverge/internal/async"
 	"github.com/divergedev/diverge/internal/changeset"
 	"github.com/divergedev/diverge/internal/deployer"
@@ -286,6 +287,25 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			Status:  metav1.ConditionTrue,
 			Reason:  "AsyncProvisioned",
 			Message: fmt.Sprintf("%d async routes provisioned", len(env.Spec.Routing.AsyncRoutes)),
+		})
+	}
+
+	// 7.6. Ensure banner ConfigMap
+	if env.Spec.Routing.Banner != nil && env.Spec.Routing.Banner.Enabled {
+		if err := r.ensureBannerConfigMap(ctx, &env); err != nil {
+			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+				Type:    "BannerReady",
+				Status:  metav1.ConditionFalse,
+				Reason:  "BannerProvisionFailed",
+				Message: err.Error(),
+			})
+			return r.updateStatusWithRequeue(ctx, &env, statusBase, err, 0)
+		}
+		meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+			Type:    "BannerReady",
+			Status:  metav1.ConditionTrue,
+			Reason:  "BannerProvisioned",
+			Message: "Preview banner ConfigMap is ready",
 		})
 	}
 
@@ -596,6 +616,55 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		r.Recorder.Event(env, "Normal", "Terminated", "Teardown complete")
 	}
 	return ctrl.Result{}, nil
+}
+
+func (r *EnvironmentReconciler) ensureBannerConfigMap(ctx context.Context, env *divergeiov1alpha1.Environment) error {
+	bannerSpec := env.Spec.Routing.Banner
+	if bannerSpec == nil || !bannerSpec.Enabled {
+		return nil
+	}
+
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "diverge-preview-banner",
+			Namespace: env.PreviewNamespace(),
+			Labels: map[string]string{
+				"diverge.io/environment": env.Name,
+				"diverge.io/managed-by":  "diverge",
+			},
+		},
+	}
+
+	script := banner.Script
+	text := "Preview Environment"
+	if bannerSpec.Text != "" {
+		text = bannerSpec.Text
+	}
+	color := "#FF6B00"
+	if bannerSpec.Color != "" {
+		color = bannerSpec.Color
+	}
+	position := "top"
+	if bannerSpec.Position != "" {
+		position = bannerSpec.Position
+	}
+
+	script = strings.ReplaceAll(script, "{{TEXT}}", text)
+	script = strings.ReplaceAll(script, "{{BRANCH}}", env.Spec.Source.Branch)
+	script = strings.ReplaceAll(script, "{{COLOR}}", color)
+	script = strings.ReplaceAll(script, "{{POSITION}}", position)
+
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
+		if cm.Data == nil {
+			cm.Data = make(map[string]string)
+		}
+		cm.Data["diverge-banner.js"] = script
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create or update banner ConfigMap: %w", err)
+	}
+	return nil
 }
 
 func (r *EnvironmentReconciler) ensureNamespace(ctx context.Context, env *divergeiov1alpha1.Environment) error {
