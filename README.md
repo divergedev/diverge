@@ -118,27 +118,28 @@ The `diverge` CLI helps you manage environments efficiently:
 Install via shell script:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/v0.3.0/install.sh | sh
 ```
 
 Or install via Go:
 
 ```bash
-go install github.com/divergedev/diverge/cmd/diverge@latest
+go install github.com/divergedev/diverge/cmd/diverge@v0.3.0
 ```
 
-Docker pull:
+### Install via Helm (Kubernetes Operator)
 
+```bash
+helm repo add diverge https://divergedev.github.io/diverge
+helm repo update
+helm install diverge diverge/diverge --namespace diverge-system --create-namespace --version v0.3.0
+```
+
+### Docker Images (for reference)
+
+The controller and proxy images are available at:
 ```bash
 docker pull ghcr.io/divergedev/diverge:v0.3.0
-```
-
-Install via Helm:
-
-```bash
-helm repo add diverge https://charts.divergedev.io
-helm repo update
-helm install diverge diverge/diverge --namespace diverge-system --create-namespace
 ```
 
 Or download the binary from [Releases](https://github.com/divergedev/diverge/releases).
