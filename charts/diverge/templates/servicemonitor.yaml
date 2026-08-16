@@ -14,7 +14,7 @@ spec:
       control-plane: controller-manager
   endpoints:
     - port: metrics
-      interval: {{ .Values.server.metrics.serviceMonitor.interval | default "30s" }}
+      interval: {{ .Values.metrics.serviceMonitor.interval }}
 {{- end }}
 
 ---
@@ -33,5 +33,5 @@ spec:
   endpoints:
     - port: http
       path: /metrics
-      interval: 30s
+      interval: {{ .Values.server.metrics.serviceMonitor.interval | default "30s" }}
 {{- end }}

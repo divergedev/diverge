@@ -11,6 +11,9 @@ func Topic(baseTopic, envName string) string {
 	if envName == "" {
 		return baseTopic
 	}
+	if strings.Contains(baseTopic, "--") {
+		panic("baseTopic must not contain '--' delimiter")
+	}
 	return fmt.Sprintf("%s--%s", baseTopic, envName)
 }
 
