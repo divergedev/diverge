@@ -124,6 +124,43 @@ func runDevTestSetup(t *testing.T, detector EnvironmentDetector) (*App, client.C
 	cmd := &cobra.Command{}
 	cmd.SetContext(ctx)
 
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(10 * time.Millisecond):
+				var pgs divergeiov1alpha1.PreviewGroupList
+				if err := c.List(ctx, &pgs); err == nil {
+					for i := range pgs.Items {
+						pg := &pgs.Items[i]
+						changed := false
+						for j := range pg.Spec.Services {
+							if len(pg.Status.Services) <= j {
+								pg.Status.Services = append(pg.Status.Services, divergeiov1alpha1.PreviewGroupServiceStatus{
+									Name: pg.Spec.Services[j].Name,
+								})
+								changed = true
+							}
+							if pg.Status.Services[j].EnvironmentName == "" {
+								pg.Status.Services[j].EnvironmentName = "env-" + pg.Spec.Services[j].Name
+								changed = true
+
+								env := &divergeiov1alpha1.Environment{
+									ObjectMeta: metav1.ObjectMeta{Name: pg.Status.Services[j].EnvironmentName, Namespace: "default"},
+								}
+								_ = c.Create(ctx, env)
+							}
+						}
+						if changed {
+							_ = c.Update(ctx, pg)
+						}
+					}
+				}
+			}
+		}
+	}()
+
 	return app, c, cmd, cancel
 }
 

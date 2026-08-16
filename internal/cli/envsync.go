@@ -71,6 +71,8 @@ type syncEnvOptions struct {
 	Namespace string
 	// ServiceName is the baseline service name to find pods for.
 	ServiceName string
+	// Overrides are environment variables that override the baseline.
+	Overrides map[string]string
 }
 
 // syncBaselineEnvToFile writes environment variables from a baseline pod to a file.
@@ -137,6 +139,11 @@ func syncBaselineEnv(ctx context.Context, clientset kubernetes.Interface, opts s
 		} else if envFrom.SecretRef != nil {
 			envMap[fmt.Sprintf("# [envFrom] secret:%s", envFrom.SecretRef.Name)] = envEntry{}
 		}
+	}
+
+	// Merge overrides
+	for k, v := range opts.Overrides {
+		envMap[k] = envEntry{Value: v, Source: "diverge-controller"}
 	}
 
 	// Sort keys for deterministic output

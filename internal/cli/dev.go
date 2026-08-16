@@ -14,6 +14,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/git"
@@ -149,50 +150,9 @@ func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, e
 		return fmt.Errorf("failed to create Kubernetes client: %w", err)
 	}
 
-	// Sync env vars from baseline pod
 	ns := app.Namespace
 	if ns == "" {
 		ns = "default"
-	}
-
-	if envOutputFlag == "file" {
-		synced, syncErr := syncBaselineEnvToFile(ctx, clientset, syncEnvOptions{
-			Namespace:   ns,
-			ServiceName: serviceName,
-		}, ".env.diverge")
-		if syncErr != nil {
-			fmt.Printf("⚠️  Could not sync env vars: %v\n", syncErr)
-		} else if synced > 0 {
-			fmt.Printf("📋 Synced %d env vars from baseline → .env.diverge\n", synced)
-		}
-	} else {
-		if len(args) == 0 {
-			// Instead of writing to file, capture env vars in a buffer
-			var envBuf bytes.Buffer
-			synced, syncErr := syncBaselineEnv(ctx, clientset, syncEnvOptions{
-				Namespace:   ns,
-				ServiceName: serviceName,
-			}, &envBuf)
-
-			if syncErr == nil && synced > 0 {
-				fmt.Printf("📋 Captured %d env vars from baseline (in-memory, no file written)\n", synced)
-			} else if syncErr != nil {
-				fmt.Printf("⚠️  Could not sync env vars: %v\n", syncErr)
-			}
-		} else {
-			// Resolve env directly into a map for child process
-			pod, err := findBaselinePod(ctx, clientset, ns, serviceName)
-			if err != nil {
-				return fmt.Errorf("failed to find baseline pod: %w", err)
-			}
-			resolvedEnv, err := resolveBaselineEnv(ctx, clientset, pod)
-			if err != nil {
-				return fmt.Errorf("failed to resolve baseline env: %w", err)
-			}
-			fmt.Printf("📋 Resolved %d env vars from baseline (in-memory, no file written)\n", len(resolvedEnv))
-			// We will inject these into the command process below
-			devOpts.resolvedEnvMap = resolvedEnv
-		}
 	}
 
 	fmt.Printf("Starting dev session for service %q...\n", serviceName)
@@ -254,6 +214,56 @@ func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, e
 
 	// 7. Print status
 	_ = runPreviewStatus(ctx, app, groupName, cmd.OutOrStdout())
+
+	asyncVars, err := waitForAsyncRoutes(ctx, c, groupName, serviceName, ns)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil
+		}
+		return fmt.Errorf("failed waiting for async routes: %w", err)
+	}
+
+	if envOutputFlag == "file" {
+		synced, syncErr := syncBaselineEnvToFile(ctx, clientset, syncEnvOptions{
+			Namespace:   ns,
+			ServiceName: serviceName,
+			Overrides:   asyncVars,
+		}, ".env.diverge")
+		if syncErr != nil {
+			fmt.Printf("⚠️  Could not sync env vars: %v\n", syncErr)
+		} else if synced > 0 {
+			fmt.Printf("📋 Synced %d env vars from baseline → .env.diverge\n", synced)
+		}
+	} else {
+		if len(args) == 0 {
+			var envBuf bytes.Buffer
+			synced, syncErr := syncBaselineEnv(ctx, clientset, syncEnvOptions{
+				Namespace:   ns,
+				ServiceName: serviceName,
+				Overrides:   asyncVars,
+			}, &envBuf)
+
+			if syncErr == nil && synced > 0 {
+				fmt.Printf("📋 Captured %d env vars from baseline (in-memory, no file written)\n", synced)
+			} else if syncErr != nil {
+				fmt.Printf("⚠️  Could not sync env vars: %v\n", syncErr)
+			}
+		} else {
+			pod, err := findBaselinePod(ctx, clientset, ns, serviceName)
+			if err != nil {
+				return fmt.Errorf("failed to find baseline pod: %w", err)
+			}
+			resolvedEnv, err := resolveBaselineEnv(ctx, clientset, pod)
+			if err != nil {
+				return fmt.Errorf("failed to resolve baseline env: %w", err)
+			}
+			for k, v := range asyncVars {
+				resolvedEnv[k] = v
+			}
+			fmt.Printf("📋 Resolved %d env vars from baseline (in-memory, no file written)\n", len(resolvedEnv))
+			devOpts.resolvedEnvMap = resolvedEnv
+		}
+	}
 
 	if len(args) > 0 {
 		fmt.Printf("🚀 Starting child process: %v\n", args)
@@ -378,4 +388,92 @@ func runPreviewRelease(app *App, service, groupName string, ctx context.Context)
 
 	fmt.Printf("Released intercept for %s in group %s\n", service, groupName)
 	return nil
+}
+
+func waitForAsyncRoutes(ctx context.Context, c client.Client, groupName string, serviceName string, defaultNs string) (map[string]string, error) {
+	var envName string
+	var envNs string
+	backoff := 100 * time.Millisecond
+	maxBackoff := 1500 * time.Millisecond
+
+	for {
+		var pg divergeiov1alpha1.PreviewGroup
+		if err := c.Get(ctx, types.NamespacedName{Name: groupName}, &pg); err == nil {
+			for _, svc := range pg.Status.Services {
+				if svc.Name == serviceName && svc.EnvironmentName != "" {
+					envName = svc.EnvironmentName
+					envNs = svc.Namespace
+					if envNs == "" {
+						envNs = defaultNs
+					}
+					break
+				}
+			}
+		}
+		if envName != "" {
+			break
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+		}
+	}
+
+	var env divergeiov1alpha1.Environment
+	if err := c.Get(ctx, types.NamespacedName{Name: envName, Namespace: envNs}, &env); err != nil {
+		return nil, fmt.Errorf("failed to get Environment %q: %w", envName, err)
+	}
+
+	if len(env.Spec.Routing.AsyncRoutes) == 0 {
+		return nil, nil
+	}
+
+	fmt.Println("⏳ Waiting for async routes...")
+
+	backoff = 100 * time.Millisecond
+	for {
+		if err := c.Get(ctx, types.NamespacedName{Name: envName, Namespace: envNs}, &env); err != nil {
+			return nil, fmt.Errorf("failed to refresh Environment %q: %w", envName, err)
+		}
+
+		ready := false
+		for _, cond := range env.Status.Conditions {
+			if cond.Type == "AsyncRoutingReady" {
+				if cond.Status == metav1.ConditionTrue {
+					ready = true
+				}
+				break
+			}
+		}
+
+		if ready {
+			break
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+		}
+	}
+
+	fmt.Printf("✅ Async routes ready (%d routes provisioned)\n", len(env.Spec.Routing.AsyncRoutes))
+
+	asyncVars := make(map[string]string)
+	if env.Spec.ServiceConfig != nil {
+		for _, v := range env.Spec.ServiceConfig.Env {
+			asyncVars[v.Name] = v.Value
+		}
+	}
+	return asyncVars, nil
 }
