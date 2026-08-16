@@ -8,7 +8,6 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
@@ -42,32 +41,31 @@ func newListCmd(app *App) *cobra.Command {
 		Use:   "list",
 		Short: "List all environments in the cluster",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, _, err := app.KubeClient()
+			envClient, err := app.EnvironmentClient()
 			if err != nil {
 				return err
 			}
 
-			var envList divergeiov1alpha1.EnvironmentList
-			listOpts := []client.ListOption{}
-
-			if !allNamespaces {
-				listOpts = append(listOpts, client.InNamespace(app.Namespace))
+			namespace := app.Namespace
+			if allNamespaces {
+				namespace = ""
 			}
 
-			if err := c.List(cmd.Context(), &envList, listOpts...); err != nil {
+			envs, err := envClient.ListEnvironments(cmd.Context(), namespace)
+			if err != nil {
 				return fmt.Errorf("failed to list environments: %w", err)
 			}
 
 			switch outputFormat {
 			case "json":
-				b, err := json.MarshalIndent(envList.Items, "", "  ")
+				b, err := json.MarshalIndent(envs, "", "  ")
 				if err != nil {
 					return fmt.Errorf("failed to marshal JSON: %w", err)
 				}
 				cmd.Println(string(b))
 				return nil
 			case "yaml":
-				b, err := yaml.Marshal(envList.Items)
+				b, err := yaml.Marshal(envs)
 				if err != nil {
 					return fmt.Errorf("failed to marshal YAML: %w", err)
 				}
@@ -82,7 +80,7 @@ func newListCmd(app *App) *cobra.Command {
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 3, ' ', 0)
 			_, _ = fmt.Fprintln(w, "NAME\tPHASE\tAGE\tURL\tMR\tSERVICES")
 
-			for _, env := range envList.Items {
+			for _, env := range envs {
 				phase := string(env.Status.Phase)
 				if !app.NoColor {
 					switch env.Status.Phase {

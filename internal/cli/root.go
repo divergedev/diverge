@@ -187,3 +187,23 @@ func (app *App) KubeClient() (client.Client, kubernetes.Interface, error) {
 
 	return c, clientset, nil
 }
+
+// EnvironmentClient returns an EnvironmentClient based on current context.
+func (app *App) EnvironmentClient() (EnvironmentClient, error) {
+	if app.ServerURL != "" {
+		token := ""
+		if app.Config != nil {
+			var err error
+			token, err = app.Config.ActiveToken()
+			if err != nil {
+				return nil, err
+			}
+		}
+		return NewConnectClient(app.ServerURL, token), nil
+	}
+	c, cs, err := app.KubeClient()
+	if err != nil {
+		return nil, err
+	}
+	return NewK8sClient(c, cs, app), nil
+}

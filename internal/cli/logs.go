@@ -29,19 +29,9 @@ func newLogsCmd(app *App) *cobra.Command {
 }
 
 func runLogs(app *App, cmd *cobra.Command, args []string) error {
-	var envClient EnvironmentClient
-	if app.ServerURL != "" {
-		token := ""
-		if app.Config != nil {
-			token = app.Config.ActiveToken()
-		}
-		envClient = NewConnectClient(app.ServerURL, token)
-	} else {
-		c, cs, err := app.KubeClient()
-		if err != nil {
-			return err
-		}
-		envClient = NewK8sClient(c, cs, app)
+	envClient, err := app.EnvironmentClient()
+	if err != nil {
+		return err
 	}
 
 	name := args[0]

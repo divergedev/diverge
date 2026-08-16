@@ -67,19 +67,9 @@ func newStatusCmd(app *App) *cobra.Command {
 		Short: "Show active preview environments and preview groups",
 		Long:  "Display a summary of all active preview environments, preview groups, and their current state.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			var envClient EnvironmentClient
-			if app.ServerURL != "" {
-				token := ""
-				if app.Config != nil {
-					token = app.Config.ActiveToken()
-				}
-				envClient = NewConnectClient(app.ServerURL, token)
-			} else {
-				c, cs, err := app.KubeClient()
-				if err != nil {
-					return err
-				}
-				envClient = NewK8sClient(c, cs, app)
+			envClient, err := app.EnvironmentClient()
+			if err != nil {
+				return err
 			}
 
 			namespace := app.Namespace

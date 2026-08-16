@@ -52,6 +52,13 @@ func (c *K8sClient) GetEnvironment(ctx context.Context, namespace, name string) 
 	return &env, nil
 }
 
+func (c *K8sClient) CreateEnvironment(ctx context.Context, env *divergev1alpha1.Environment) (*divergev1alpha1.Environment, error) {
+	if err := c.client.Create(ctx, env); err != nil {
+		return nil, err
+	}
+	return env, nil
+}
+
 func (c *K8sClient) DeleteEnvironment(ctx context.Context, namespace, name string) error {
 	env := &divergev1alpha1.Environment{}
 	env.Namespace = namespace

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -49,17 +50,25 @@ func LoadConfig() (*Config, error) {
 	return &c, nil
 }
 
-// Save writes the CLI config to disk.
 func (c *Config) Save() error {
 	path := configPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0600)
+	// Atomic write: tmpfile + rename
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
+		return fmt.Errorf("writing temp config: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("renaming config: %w", err)
+	}
+	return nil
 }
 
 // ActiveServerURL returns the current server URL, or empty for direct K8s mode.
@@ -73,15 +82,22 @@ func (c *Config) ActiveServerURL() string {
 	return ""
 }
 
-// ActiveToken returns the bearer token for the active context.
-func (c *Config) ActiveToken() string {
-	if c.ActiveContext == "" {
-		return ""
+// ActiveToken returns the bearer token, refreshing if expired.
+func (c *Config) ActiveToken() (string, error) {
+	ctx, ok := c.Contexts[c.ActiveContext]
+	if !ok {
+		return "", fmt.Errorf("no active context")
 	}
-	if ctx, ok := c.Contexts[c.ActiveContext]; ok {
-		return ctx.AccessToken
+	// If token hasn't expired, return it
+	if ctx.ExpiresAt.IsZero() || time.Now().Before(ctx.ExpiresAt.Add(-30*time.Second)) {
+		return ctx.AccessToken, nil
 	}
-	return ""
+	// Token expired but we have a refresh token
+	if ctx.RefreshToken != "" {
+		// TODO: implement token refresh via OIDC token endpoint
+		return "", fmt.Errorf("access token expired, please run 'diverge login' again")
+	}
+	return "", fmt.Errorf("access token expired and no refresh token available")
 }
 
 func saveCredentials(serverURL, accessToken, refreshToken string, expiresAt time.Time) error {

@@ -35,5 +35,7 @@ func TestConfigRoundtrip(t *testing.T) {
 	assert.Equal(t, expires.UTC(), ctx.ExpiresAt.UTC())
 
 	assert.Equal(t, "https://api.diverge.dev", cfg2.ActiveServerURL())
-	assert.Equal(t, "my-token", cfg2.ActiveToken())
+	token, err := cfg2.ActiveToken()
+	require.NoError(t, err)
+	assert.Equal(t, "my-token", token)
 }
