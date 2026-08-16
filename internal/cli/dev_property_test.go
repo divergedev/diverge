@@ -93,7 +93,7 @@ func TestProperty_AsyncEnvAlwaysWins(t *testing.T) {
 			Overrides: map[string]string{key: asyncVal},
 		}, &buf)
 		require.NoError(ht, err)
-		require.Contains(ht, buf.String(), fmt.Sprintf("%s=%s", key, asyncVal))
-		require.NotContains(ht, buf.String(), fmt.Sprintf("%s=%s", key, baselineVal))
+		require.Contains(ht, buf.String(), fmt.Sprintf("%s=%s\n", key, asyncVal))
+		require.NotContains(ht, buf.String(), fmt.Sprintf("%s=%s\n", key, baselineVal))
 	})
 }

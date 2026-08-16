@@ -1,0 +1,26 @@
+version: v2beta1
+name: diverge-dev
+
+# Import Diverge dev vars
+vars:
+  DIVERGE_SERVICE: ${DIVERGE_SERVICE:-my-service}
+  DIVERGE_BRANCH:
+    command: git branch --show-current
+
+pipelines:
+  diverge-dev:
+    run: |-
+      diverge dev --service ${DIVERGE_SERVICE} -- devspace dev
+
+dev:
+  app:
+    imageSelector: ${DIVERGE_SERVICE}
+    sync:
+      - path: ./:/app
+        excludePaths:
+          - .git/
+          - node_modules/
+    terminal:
+      command: ./start-dev.sh
+    ports:
+      - port: "8080:8080"

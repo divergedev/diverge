@@ -1,0 +1,20 @@
+version: v2beta1
+name: diverge-example
+
+vars:
+  DIVERGE_SERVICE: ${DIVERGE_SERVICE:-example-service}
+
+pipelines:
+  diverge-dev:
+    run: |-
+      diverge dev --service ${DIVERGE_SERVICE} -- devspace dev
+
+dev:
+  app:
+    imageSelector: ${DIVERGE_SERVICE}
+    sync:
+      - path: ./:/app
+    terminal:
+      command: ./start.sh
+    ports:
+      - port: "8080:8080"

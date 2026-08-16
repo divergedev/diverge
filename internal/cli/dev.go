@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -43,6 +44,7 @@ func newDevCmd(app *App) *cobra.Command {
 		portFlag      int32
 		endpointFlag  string
 		envOutputFlag string
+		devspaceFlag  bool
 	)
 
 	cmd := &cobra.Command{
@@ -51,19 +53,71 @@ func newDevCmd(app *App) *cobra.Command {
 		Long: `Start a local development session by creating a PreviewGroup that routes
 traffic for the specified service to your local machine's Tailscale IP.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDev(app, serviceFlag, portFlag, endpointFlag, envOutputFlag, args, cmd)
+			return runDev(app, serviceFlag, portFlag, endpointFlag, envOutputFlag, devspaceFlag, args, cmd)
 		},
 	}
 	cmd.Flags().StringVar(&serviceFlag, "service", "", "Service name (default: auto-detect)")
 	cmd.Flags().Int32Var(&portFlag, "port", 0, "Local port (default: 8080)")
 	cmd.Flags().StringVar(&endpointFlag, "endpoint", "", "Local endpoint IP (default: tailscale ip -4)")
 	cmd.Flags().StringVar(&envOutputFlag, "env-output", "inject", "How to handle env vars: inject (in-memory), file (.env.diverge)")
+	cmd.Flags().BoolVar(&devspaceFlag, "devspace", false, "Generate a devspace.yaml template and show DevSpace instructions")
 
 	return cmd
 }
 
-func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, envOutputFlag string, args []string, cmd *cobra.Command, opts ...DevOption) error {
+func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, envOutputFlag string, devspaceFlag bool, args []string, cmd *cobra.Command, opts ...DevOption) error {
 	ctx := cmd.Context()
+
+	if devspaceFlag {
+		defaultService := "my-service"
+		if serviceFlag != "" {
+			defaultService = serviceFlag
+		}
+
+		devspaceTemplate := fmt.Sprintf(`version: v2beta1
+name: diverge-dev
+
+# Import Diverge dev vars
+vars:
+  DIVERGE_SERVICE: ${DIVERGE_SERVICE:-%s}
+  DIVERGE_BRANCH:
+    command: git branch --show-current
+
+pipelines:
+  diverge-dev:
+    run: |-
+      diverge dev --service ${DIVERGE_SERVICE} -- devspace dev
+
+dev:
+  app:
+    imageSelector: ${DIVERGE_SERVICE}
+    sync:
+      - path: ./:/app
+        excludePaths:
+          - .git/
+          - node_modules/
+    terminal:
+      command: ./start-dev.sh
+    ports:
+      - port: "8080:8080"
+`, defaultService)
+
+		if _, err := os.Stat("devspace.yaml"); err == nil {
+			fmt.Println("ℹ️  devspace.yaml already exists, skipping creation.")
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("checking devspace.yaml: %w", err)
+		} else {
+			if err := os.WriteFile("devspace.yaml", []byte(devspaceTemplate), 0644); err != nil {
+				return fmt.Errorf("failed to create devspace.yaml: %w", err)
+			}
+			fmt.Println("✅ Created devspace.yaml template in current directory.")
+		}
+		fmt.Println("\nTo start developing with DevSpace and Diverge:")
+		fmt.Println("  1. Edit devspace.yaml to match your service.")
+		fmt.Println("  2. Run: DIVERGE_SERVICE=your-service devspace run diverge-dev")
+		fmt.Println("\nFor more details, see docs/guides/devspace-integration.md")
+		return nil
+	}
 
 	devOpts := &DevOptions{
 		Detector: &DefaultEnvironmentDetector{},
@@ -274,6 +328,9 @@ func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, e
 		if childCmd != nil {
 			// Wait for the child command to finish or context to be canceled
 			if err := childCmd.Wait(); err != nil {
+				if ctx.Err() != nil {
+					return nil // graceful shutdown
+				}
 				return fmt.Errorf("child process failed: %w", err)
 			}
 		}
