@@ -3,6 +3,7 @@ package routing
 import (
 	"context"
 	"errors"
+	"regexp"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -553,4 +554,215 @@ func TestGatewayRouter_Reconcile_MeshRoutes(t *testing.T) {
 
 	_, found, _ := unstructured.NestedSlice(rules[0].(map[string]interface{}), "filters")
 	assert.False(t, found, "mesh route should not have filters")
+}
+
+func TestGatewayRouter_Reconcile_StickyCookie(t *testing.T) {
+	c := fake.NewClientBuilder().Build()
+	r := &GatewayRouter{Client: c, Namespace: "default"}
+
+	tests := []struct {
+		name        string
+		envName     string
+		headerKey   string
+		headerValue string
+		protocol    string
+		mode        string
+		cookieSpec  *v1alpha1.CookieSpec
+		wantCookie  bool
+		wantRegex   string
+		wantSetC    string
+	}{
+		{
+			name:        "Cookie enabled with defaults",
+			envName:     "feat-1",
+			headerKey:   "x-env",
+			headerValue: "feat-1",
+			cookieSpec:  &v1alpha1.CookieSpec{Enabled: true},
+			wantCookie:  true,
+			wantRegex:   `(?:^|;\s*)x-env=feat-1(?:;|$)`,
+			wantSetC:    `x-env=feat-1; Path=/; Max-Age=86400; SameSite=Lax`,
+		},
+		{
+			name:        "Regex injection escaped",
+			envName:     "feat.1",
+			headerKey:   "x-env",
+			headerValue: "feat.1",
+			cookieSpec:  &v1alpha1.CookieSpec{Enabled: true},
+			wantCookie:  true,
+			wantRegex:   `(?:^|;\s*)x-env=feat\.1(?:;|$)`,
+			wantSetC:    `x-env=feat.1; Path=/; Max-Age=86400; SameSite=Lax`,
+		},
+		{
+			name:        "SameSite None includes Secure",
+			envName:     "feat-1",
+			headerKey:   "x-env",
+			headerValue: "feat-1",
+			cookieSpec:  &v1alpha1.CookieSpec{Enabled: true, SameSite: "None"},
+			wantCookie:  true,
+			wantRegex:   `(?:^|;\s*)x-env=feat-1(?:;|$)`,
+			wantSetC:    `x-env=feat-1; Path=/; Max-Age=86400; SameSite=None; Secure`,
+		},
+		{
+			name:        "Explicit Secure flag with Lax",
+			envName:     "feat-1",
+			headerKey:   "x-env",
+			headerValue: "feat-1",
+			cookieSpec:  &v1alpha1.CookieSpec{Enabled: true, SameSite: "Lax", Secure: true},
+			wantCookie:  true,
+			wantRegex:   `(?:^|;\s*)x-env=feat-1(?:;|$)`,
+			wantSetC:    `x-env=feat-1; Path=/; Max-Age=86400; SameSite=Lax; Secure`,
+		},
+		{
+			name:        "Custom MaxAge",
+			envName:     "feat-1",
+			headerKey:   "x-env",
+			headerValue: "feat-1",
+			cookieSpec:  &v1alpha1.CookieSpec{Enabled: true, MaxAge: 3600},
+			wantCookie:  true,
+			wantRegex:   `(?:^|;\s*)x-env=feat-1(?:;|$)`,
+			wantSetC:    `x-env=feat-1; Path=/; Max-Age=3600; SameSite=Lax`,
+		},
+		{
+			name:        "Subdomain mode prevents cookie match and Set-Cookie",
+			envName:     "feat-1",
+			headerKey:   "x-env",
+			headerValue: "feat-1",
+			mode:        "subdomain",
+			cookieSpec:  &v1alpha1.CookieSpec{Enabled: true},
+			wantCookie:  false,
+		},
+		{
+			name:        "GRPCRoute prevents Set-Cookie",
+			envName:     "feat-1",
+			headerKey:   "x-env",
+			headerValue: "feat-1",
+			protocol:    "grpc",
+			cookieSpec:  &v1alpha1.CookieSpec{Enabled: true},
+			wantCookie:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := &v1alpha1.Environment{
+				ObjectMeta: metav1.ObjectMeta{Name: tt.envName, Namespace: "default"},
+				Spec: v1alpha1.EnvironmentSpec{
+					Deploy: v1alpha1.EnvironmentDeploy{
+						ChangedServices: []string{"web"},
+					},
+					Routing: v1alpha1.EnvironmentRouting{
+						HeaderKey:   tt.headerKey,
+						HeaderValue: tt.headerValue,
+						Cookie:      tt.cookieSpec,
+						Mode:        tt.mode,
+						BaseDomain:  "example.com",
+					},
+					ServiceConfig: &v1alpha1.ServicePreviewConfig{
+						Protocol: tt.protocol,
+					},
+				},
+			}
+
+			err := r.Reconcile(context.Background(), env)
+			require.NoError(t, err)
+
+			kind := "HTTPRoute"
+			apiVersion := "gateway.networking.k8s.io/v1"
+			if tt.protocol == "grpc" {
+				kind = "GRPCRoute"
+				apiVersion = "gateway.networking.k8s.io/v1alpha2"
+			}
+
+			u := &unstructured.Unstructured{}
+			u.SetAPIVersion(apiVersion)
+			u.SetKind(kind)
+			err = c.Get(context.Background(), client.ObjectKey{Name: tt.envName + "-web", Namespace: "default"}, u)
+			require.NoError(t, err)
+
+			rules, _, _ := unstructured.NestedSlice(u.Object, "spec", "rules")
+			require.Len(t, rules, 1)
+
+			matches, _, _ := unstructured.NestedSlice(rules[0].(map[string]interface{}), "matches")
+			if tt.wantCookie {
+				require.Len(t, matches, 2, "expected header match and cookie match")
+
+				// header precedence: header match first
+				headers0, _, _ := unstructured.NestedSlice(matches[0].(map[string]interface{}), "headers")
+				assert.Equal(t, "Exact", headers0[0].(map[string]interface{})["type"])
+				assert.Equal(t, tt.headerKey, headers0[0].(map[string]interface{})["name"])
+
+				// cookie match second
+				headers1, _, _ := unstructured.NestedSlice(matches[1].(map[string]interface{}), "headers")
+				assert.Equal(t, "RegularExpression", headers1[0].(map[string]interface{})["type"])
+				assert.Equal(t, "Cookie", headers1[0].(map[string]interface{})["name"])
+				assert.Equal(t, tt.wantRegex, headers1[0].(map[string]interface{})["value"])
+			} else {
+				require.Len(t, matches, 1, "expected only 1 match (either header or hostname)")
+			}
+
+			filters, _, _ := unstructured.NestedSlice(rules[0].(map[string]interface{}), "filters")
+			hasSetCookie := false
+			for _, f := range filters {
+				fMap := f.(map[string]interface{})
+				if fMap["type"] == "ResponseHeaderModifier" {
+					rm, _, _ := unstructured.NestedMap(fMap, "responseHeaderModifier")
+					add, _, _ := unstructured.NestedSlice(rm, "add")
+					for _, h := range add {
+						hMap := h.(map[string]interface{})
+						if hMap["name"] == "Set-Cookie" {
+							hasSetCookie = true
+							assert.Equal(t, tt.wantSetC, hMap["value"])
+						}
+					}
+				}
+			}
+
+			if tt.wantCookie {
+				assert.True(t, hasSetCookie, "expected Set-Cookie filter")
+			} else {
+				assert.False(t, hasSetCookie, "did not expect Set-Cookie filter")
+			}
+		})
+	}
+}
+
+func TestGatewayRouter_Reconcile_CookieRegexDoesNotMatchOverlapping(t *testing.T) {
+	c := fake.NewClientBuilder().Build()
+	r := &GatewayRouter{Client: c, Namespace: "default"}
+
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "feat-1", Namespace: "default"},
+		Spec: v1alpha1.EnvironmentSpec{
+			Deploy: v1alpha1.EnvironmentDeploy{
+				ChangedServices: []string{"web"},
+			},
+			Routing: v1alpha1.EnvironmentRouting{
+				HeaderKey:   "x-env",
+				HeaderValue: "feat-1",
+				Cookie:      &v1alpha1.CookieSpec{Enabled: true},
+			},
+		},
+	}
+
+	err := r.Reconcile(context.Background(), env)
+	require.NoError(t, err)
+
+	u := &unstructured.Unstructured{}
+	u.SetAPIVersion("gateway.networking.k8s.io/v1")
+	u.SetKind("HTTPRoute")
+	err = c.Get(context.Background(), client.ObjectKey{Name: "feat-1-web", Namespace: "default"}, u)
+	require.NoError(t, err)
+
+	rules, _, _ := unstructured.NestedSlice(u.Object, "spec", "rules")
+	matches, _, _ := unstructured.NestedSlice(rules[0].(map[string]interface{}), "matches")
+	headers, _, _ := unstructured.NestedSlice(matches[1].(map[string]interface{}), "headers")
+	pattern := headers[0].(map[string]interface{})["value"].(string)
+
+	importRegexp := regexp.MustCompile(pattern)
+
+	assert.True(t, importRegexp.MatchString("x-env=feat-1"))
+	assert.True(t, importRegexp.MatchString("x-env=feat-1; Other=cookie"))
+	assert.True(t, importRegexp.MatchString("Other=cookie; x-env=feat-1"))
+	assert.False(t, importRegexp.MatchString("x-env=feat-10"), "feat-1 should not match feat-10")
+	assert.False(t, importRegexp.MatchString("my-x-env=feat-1"), "should match whole key")
 }

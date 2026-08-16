@@ -115,9 +115,12 @@ type EnvironmentRouting struct {
 
 // CookieSpec defines the configuration for sticky routing cookies.
 type CookieSpec struct {
-	Enabled  bool   `json:"enabled,omitempty"`
-	MaxAge   int    `json:"maxAge,omitempty"`   // seconds, default 86400 (24h)
+	Enabled bool `json:"enabled,omitempty"`
+	// +kubebuilder:validation:Minimum=0
+	MaxAge int `json:"maxAge,omitempty"` // seconds, default 86400 (24h)
+	// +kubebuilder:validation:Enum=Lax;Strict;None
 	SameSite string `json:"sameSite,omitempty"` // Lax, Strict, None
+	Secure   bool   `json:"secure,omitempty"`
 }
 
 // EnvironmentDatabase defines the database configuration

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -159,13 +160,13 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 		}
 		matches = []interface{}{matchRule}
 
-		if env.Spec.Routing.Cookie != nil && env.Spec.Routing.Cookie.Enabled {
+		if env.Spec.Routing.Cookie != nil && env.Spec.Routing.Cookie.Enabled && kind == "HTTPRoute" {
 			cookieMatch := map[string]interface{}{
 				"headers": []interface{}{
 					map[string]interface{}{
 						"type":  "RegularExpression",
 						"name":  "Cookie",
-						"value": fmt.Sprintf(`.*%s=%s.*`, headerKey, headerValue),
+						"value": fmt.Sprintf(`(?:^|;\s*)%s=%s(?:;|$)`, regexp.QuoteMeta(headerKey), regexp.QuoteMeta(headerValue)),
 					},
 				},
 			}
@@ -210,7 +211,7 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 		})
 	}
 
-	if env.Spec.Routing.Cookie != nil && env.Spec.Routing.Cookie.Enabled && kind == "HTTPRoute" {
+	if env.Spec.Routing.Cookie != nil && env.Spec.Routing.Cookie.Enabled && kind == "HTTPRoute" && env.Spec.Routing.Mode != "subdomain" {
 		maxAge := 86400
 		if env.Spec.Routing.Cookie.MaxAge > 0 {
 			maxAge = env.Spec.Routing.Cookie.MaxAge
@@ -219,13 +220,19 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 		if env.Spec.Routing.Cookie.SameSite != "" {
 			sameSite = env.Spec.Routing.Cookie.SameSite
 		}
+
+		cookieValue := fmt.Sprintf("%s=%s; Path=/; Max-Age=%d; SameSite=%s", headerKey, headerValue, maxAge, sameSite)
+		if sameSite == "None" || env.Spec.Routing.Cookie.Secure {
+			cookieValue += "; Secure"
+		}
+
 		filters = append(filters, map[string]interface{}{
 			"type": "ResponseHeaderModifier",
 			"responseHeaderModifier": map[string]interface{}{
 				"add": []interface{}{
 					map[string]interface{}{
 						"name":  "Set-Cookie",
-						"value": fmt.Sprintf("%s=%s; Path=/; Max-Age=%d; SameSite=%s", headerKey, headerValue, maxAge, sameSite),
+						"value": cookieValue,
 					},
 				},
 			},

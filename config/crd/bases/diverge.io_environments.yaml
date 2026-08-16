@@ -198,9 +198,16 @@ spec:
                       enabled:
                         type: boolean
                       maxAge:
+                        minimum: 0
                         type: integer
                       sameSite:
+                        enum:
+                        - Lax
+                        - Strict
+                        - None
                         type: string
+                      secure:
+                        type: boolean
                     type: object
                   devIP:
                     type: string
