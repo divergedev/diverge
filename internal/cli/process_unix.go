@@ -15,18 +15,22 @@ import (
 
 func runChildProcess(ctx context.Context, args []string, envMap map[string]string) (*exec.Cmd, error) {
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	cmd.WaitDelay = 5 * time.Second
 	cmd.Cancel = func() error {
-		// Signal entire process group
-		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err != nil {
-			// Process may have already exited
+		pgid := -cmd.Process.Pid
+		if err := syscall.Kill(pgid, syscall.SIGTERM); err != nil {
 			if errors.Is(err, syscall.ESRCH) {
-				return nil
+				return os.ErrProcessDone
 			}
 			return err
 		}
+		// Start SIGKILL fallback after WaitDelay
+		go func() {
+			time.Sleep(cmd.WaitDelay)
+			_ = syscall.Kill(pgid, syscall.SIGKILL)
+		}()
 		return nil
 	}
-	cmd.WaitDelay = 5 * time.Second
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
