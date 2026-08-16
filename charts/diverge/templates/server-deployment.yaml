@@ -9,15 +9,27 @@ spec:
   replicas: {{ .Values.server.replicas }}
   selector:
     matchLabels:
+      {{- include "diverge.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: server
   template:
     metadata:
       labels:
+        {{- include "diverge.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: server
     spec:
       serviceAccountName: {{ if .Values.server.serviceAccount.create }}{{ include "diverge.fullname" . }}-server{{ else }}{{ .Values.server.serviceAccount.name | default (printf "%s-server" (include "diverge.fullname" .)) }}{{ end }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: server
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           image: "{{ .Values.server.image.repository }}:{{ .Values.server.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.server.image.pullPolicy }}
           args:

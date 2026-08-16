@@ -1,0 +1,7 @@
+.git
+.github
+docs
+test
+web
+*.md
+.goreleaser.yaml
