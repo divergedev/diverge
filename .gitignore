@@ -32,3 +32,4 @@ coverage/
 
 # Diverge dev session
 .env.diverge
+internal/cli/.hegel/

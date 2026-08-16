@@ -108,6 +108,9 @@ func TestPreviewGroupLifecycle(t *testing.T) {
 		},
 		Spec: v1alpha1.PreviewGroupSpec{
 			Source: v1alpha1.EnvironmentSource{Provider: "github"},
+			Routing: v1alpha1.PreviewGroupRouting{
+				HeaderValue: "test-pg",
+			},
 			Services: []v1alpha1.PreviewGroupServiceSpec{
 				{Name: "svc-a"},
 			},
@@ -138,6 +141,9 @@ func TestPreviewGroupWithAsyncRoutes(t *testing.T) {
 		},
 		Spec: v1alpha1.PreviewGroupSpec{
 			Source: v1alpha1.EnvironmentSource{Provider: "github"},
+			Routing: v1alpha1.PreviewGroupRouting{
+				HeaderValue: "async-pg",
+			},
 			Services: []v1alpha1.PreviewGroupServiceSpec{
 				{
 					Name: "svc-worker",
@@ -170,6 +176,9 @@ func TestMultiServicePreviewGroup(t *testing.T) {
 		},
 		Spec: v1alpha1.PreviewGroupSpec{
 			Source: v1alpha1.EnvironmentSource{Provider: "github"},
+			Routing: v1alpha1.PreviewGroupRouting{
+				HeaderValue: "multi-pg",
+			},
 			Services: []v1alpha1.PreviewGroupServiceSpec{
 				{Name: "svc-frontend"},
 				{Name: "svc-backend"},
