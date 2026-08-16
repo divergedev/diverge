@@ -17,11 +17,9 @@ manifests: ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefin
 	controller-gen crd paths=./api/... output:crd:dir=config/crd/bases
 
 .PHONY: proto
-proto: ## Generate protobuf Go types, ConnectRPC stubs, and domain types.
+proto: ## Generate protobuf code
+	buf lint
 	buf generate
-	buf generate --template buf.gen.domain.yaml
-	@# Remove domain types for diverge/v1 (propagation.proto uses non-module import path)
-	rm -rf gen/domain/diverge/v1
 
 .PHONY: generate
 generate: proto ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
