@@ -14,7 +14,7 @@ help: ## Display this help.
 
 .PHONY: manifests
 manifests: ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
-	echo "Mocking manifests..."
+	controller-gen crd paths=./api/... output:crd:dir=config/crd/bases
 
 .PHONY: proto
 proto: ## Generate protobuf Go types, ConnectRPC stubs, and domain types.
@@ -25,7 +25,7 @@ proto: ## Generate protobuf Go types, ConnectRPC stubs, and domain types.
 
 .PHONY: generate
 generate: proto ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
-	echo "Mocking generate..."
+	controller-gen object paths=./api/...
 
 .PHONY: fmt
 fmt: ## Run go fmt against code.
