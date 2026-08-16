@@ -23,6 +23,7 @@ flowchart TD
         G --> ASYNC[Async Provisioner]
         G --> N[Notifier]
         G --> S[Status Reporter]
+        G --> METRICS[Prometheus Metrics :9090]
     end
 
     F -->|Analyzes .diverge.yaml| ARGO[Argo CD Application CRs / Deployments]
@@ -36,6 +37,7 @@ flowchart TD
     K -->|Fallback| M[Baseline Services]
     TASK -->|SDK Propagates Context| L
     TASK -->|Fallback| M
+    METRICS -->|Scrapes| PROM[Prometheus / Grafana]
 ```
 
 ## Components
@@ -185,3 +187,14 @@ Diverge incorporates secure-by-default design principles:
 ## Observability
 
 The controller provides rich observability by emitting standard Kubernetes events (`Normal` and `Warning`) during all key lifecycle transitions, failures, and teardowns, ensuring tight integration with existing cluster monitoring tools.
+
+### Controller Metrics
+
+The Diverge controller exposes Prometheus metrics on port `:9090` at `/metrics` and `/healthz`. Key metrics include:
+- `rpc_requests_total`: Total internal RPC requests.
+- `rpc_request_duration_seconds`: RPC latency histogram.
+- `rpc_active_streams`: Currently active streaming connections (e.g. for CLI `diverge logs`).
+- `rpc_panics_total`: Counter for caught panics.
+- `auth_attempts_total`: Authentication status tracking.
+
+These metrics provide deep insights into controller health, routing events, and environment lifecycles. They can be visualized using the provided Grafana dashboard and monitored with Prometheus Alertmanager. For detailed setup instructions, refer to the [Operator Observability Guide](./guides/observability.md).

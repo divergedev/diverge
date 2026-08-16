@@ -8,11 +8,13 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
@@ -48,6 +50,9 @@ func NewFramework(t *testing.T) *Framework {
 
 	if err := v1alpha1.AddToScheme(c.Scheme()); err != nil {
 		t.Fatalf("Failed to add scheme: %v", err)
+	}
+	if err := gatewayv1.AddToScheme(c.Scheme()); err != nil {
+		t.Fatalf("Failed to add gateway scheme: %v", err)
 	}
 
 	return &Framework{
@@ -116,11 +121,31 @@ func (f *Framework) WaitForCondition(ctx context.Context, name, condType string,
 	}
 }
 
+// WaitForEnvironmentDeleted waits for an Environment to be deleted.
+func (f *Framework) WaitForEnvironmentDeleted(ctx context.Context, name string, timeout time.Duration) error {
+	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	for {
+		select {
+		case <-timeoutCtx.Done():
+			return fmt.Errorf("timeout waiting for Environment %s to be deleted", name)
+		default:
+			var env v1alpha1.Environment
+			err := f.Client.Get(ctx, client.ObjectKey{Name: name, Namespace: f.Namespace}, &env)
+			if apierrors.IsNotFound(err) {
+				return nil
+			}
+			time.Sleep(1 * time.Second)
+		}
+	}
+}
+
 // CreateEnvironment creates an Environment CR and waits for it to be reconciled.
 func (f *Framework) CreateEnvironment(ctx context.Context, env *v1alpha1.Environment) error {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctxCreate, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	return f.Client.Create(ctx, env)
+	return f.Client.Create(ctxCreate, env)
 }
 
 // ControllerRunning checks if the diverge-controller deployment exists and has ready replicas.
