@@ -92,7 +92,7 @@ To enable automatic environment creation when a Merge Request (MR) is opened, co
 
 ### GitLab Example
 1. Go to your GitLab Project -> **Settings** -> **Webhooks**.
-2. Set the URL to your Diverge ingress endpoint (e.g., `https://diverge.yourdomain.com/webhook/gitlab`).
+2. Set the URL to your Diverge ingress endpoint (e.g., `https://diverge.yourdomain.com/gitlab-webhook`).
 3. Check **Merge request events**.
 4. Click **Add webhook**.
 
