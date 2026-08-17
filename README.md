@@ -17,7 +17,7 @@ Environment-as-a-service engine for Kubernetes. Diverge creates ephemeral previe
 ### Get Started
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/v0.5.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/v0.6.0/install.sh | sh
 ```
 
 Documentation: [https://divergedev.com](https://divergedev.com)
@@ -58,6 +58,7 @@ diverge dev --service my-app
 *   **TTL Auto-Expiry**: Automatic environment cleanup after configurable TTL with requeue-based expiry.
 *   **Multi-SCM Notifiers**: GitLab MR comments and GitHub PR comments with status updates.
 *   **E2E Tested**: Dual-cluster end-to-end tests with k3d, Envoy Gateway, and real CRD reconciliation.
+*   **ConnectRPC API Server**: Opt-in API server (`server.enabled: true` in Helm) featuring ConnectRPC (HTTP/1.1 + HTTP/2, browser-native, curlable), OIDC JWT + K8s TokenReview authentication, namespace-scoped RBAC authorization, structured audit logging, list pagination, optimistic concurrency, and CORS for browser/SPA clients.
 
 ### Async Routing
 
@@ -140,7 +141,7 @@ sh install.sh
 Or install via Go:
 
 ```bash
-go install github.com/divergedev/diverge/cmd/diverge@v0.5.0
+go install github.com/divergedev/diverge/cmd/diverge@v0.6.0
 ```
 
 ### Install via Helm (Kubernetes Operator)
@@ -148,14 +149,14 @@ go install github.com/divergedev/diverge/cmd/diverge@v0.5.0
 ```bash
 helm repo add diverge https://divergedev.github.io/diverge
 helm repo update
-helm install diverge diverge/diverge --namespace diverge-system --create-namespace --version v0.5.0
+helm install diverge diverge/diverge --namespace diverge-system --create-namespace --version v0.6.0
 ```
 
 ### Docker Images (for reference)
 
 The controller and proxy images are available at:
 ```bash
-docker pull ghcr.io/divergedev/diverge:v0.5.0
+docker pull ghcr.io/divergedev/diverge:v0.6.0
 ```
 
 Or download the binary from [Releases](https://github.com/divergedev/diverge/releases).
@@ -188,7 +189,7 @@ Currently, the project contains **147 tests** utilizing table-driven tests, `tes
 - [ ] **Async Router** — Preview environments for event-driven backends (Kafka, Temporal)
 - [ ] **Subdomain Routing** — Browser-accessible frontend preview environments
 - [ ] **Slim Build** — Build tags to exclude ArgoCD/Temporal for smaller binaries
-- [ ] **ConnectRPC API Server** (#12) — gRPC/ConnectRPC API server for environment management
+- [x] **ConnectRPC API Server** (#12) — gRPC/ConnectRPC API server for environment management
 - [ ] **WebSocket Support** (#6) — Full WebSocket proxying for real-time preview environments
 
 ## License
