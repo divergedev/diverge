@@ -1,0 +1,23 @@
+{{- if .Values.server.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "diverge.fullname" . }}-server
+  labels:
+    {{- include "diverge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  type: {{ .Values.server.service.type }}
+  ports:
+    - port: {{ .Values.server.service.port }}
+      targetPort: grpc
+      protocol: TCP
+      name: grpc
+    - port: 9090
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+  selector:
+    {{- include "diverge.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+{{- end }}

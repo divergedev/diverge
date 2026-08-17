@@ -1,56 +1,64 @@
 package server
 
 import (
-	"log"
+	"log/slog"
 	"net/http"
 
 	"connectrpc.com/connect"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	crmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	"github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
 	"github.com/divergedev/diverge/internal/server/streaming"
 )
 
-var StreamSemaphore = make(chan struct{}, 100)
+// ServeMuxConfig holds all dependencies for the ConnectRPC server mux.
+type ServeMuxConfig struct {
+	Client          client.Client
+	K8sClient       kubernetes.Interface
+	InformerMgr     *streaming.InformerManager
+	LogStreamer     *streaming.LogStreamer
+	StreamSemaphore chan struct{}
+	Logger          *slog.Logger
+	AuditLogger     *AuditLogger
+	Version         string
+}
 
-func NewServeMux(c client.Client, informerMgr *streaming.InformerManager, logStreamer *streaming.LogStreamer) *http.ServeMux {
+// NewServeMux creates the ConnectRPC service mux with all handlers registered.
+// Auth is NOT applied here — it is applied at the net/http middleware layer.
+func NewServeMux(cfg ServeMuxConfig) *http.ServeMux {
+	// Default nil dependencies to prevent panics
+	if cfg.Logger == nil {
+		cfg.Logger = slog.Default()
+	}
+	if cfg.AuditLogger == nil {
+		cfg.AuditLogger = NewAuditLogger(cfg.Logger)
+	}
+	if cfg.StreamSemaphore == nil {
+		cfg.StreamSemaphore = make(chan struct{}, 1000) // Default max streams
+	}
+
 	mux := http.NewServeMux()
 
 	interceptors := connect.WithInterceptors(
 		NewMetricsInterceptor(),
-		NewAuthInterceptor(authAttemptsTotal),
 	)
 
-	envService := NewEnvironmentService(c, informerMgr, logStreamer)
+	envService := NewEnvironmentService(cfg.Client, cfg.K8sClient, cfg.InformerMgr, cfg.LogStreamer, cfg.StreamSemaphore, cfg.Logger, cfg.AuditLogger)
 	envPath, envHandler := divergev1alpha1connect.NewEnvironmentServiceHandler(envService, interceptors)
 	mux.Handle(envPath, envHandler)
 
-	pgService := NewPreviewGroupService(c, informerMgr)
+	pgService := NewPreviewGroupService(cfg.Client, cfg.K8sClient, cfg.InformerMgr, cfg.StreamSemaphore, cfg.Logger, cfg.AuditLogger)
 	pgPath, pgHandler := divergev1alpha1connect.NewPreviewGroupServiceHandler(pgService, interceptors)
 	mux.Handle(pgPath, pgHandler)
 
-	clusterService := NewClusterService()
+	clusterService := NewClusterService(cfg.Client, cfg.K8sClient, cfg.Logger, cfg.Version)
 	clusterPath, clusterHandler := divergev1alpha1connect.NewClusterServiceHandler(clusterService, interceptors)
 	mux.Handle(clusterPath, clusterHandler)
 
-	authService := NewAuthService()
+	authService := NewAuthService(cfg.K8sClient, cfg.Logger)
 	authPath, authHandler := divergev1alpha1connect.NewAuthServiceHandler(authService, interceptors)
 	mux.Handle(authPath, authHandler)
-
-	metricsMux := http.NewServeMux()
-	metricsMux.Handle("/metrics", promhttp.HandlerFor(crmetrics.Registry, promhttp.HandlerOpts{}))
-	metricsMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-
-	go func() {
-		log.Printf("Metrics server listening on :9090")
-		if err := http.ListenAndServe(":9090", metricsMux); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("metrics server failed: %v", err)
-		}
-	}()
 
 	return mux
 }

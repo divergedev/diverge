@@ -1,10 +1,5 @@
 replicaCount: 1
 
-server:
-  metrics:
-    serviceMonitor:
-      enabled: false
-      interval: 30s
 
 
 image:
@@ -113,3 +108,28 @@ activatorProxy:
     limits:
       cpu: 200m
       memory: 128Mi
+
+server:
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: ""  # defaults to same as controller
+    tag: ""  # defaults to .Chart.AppVersion
+  resources:
+    limits:
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  service:
+    type: ClusterIP
+    port: 8443
+  auth:
+    tokenCacheTTL: 5s
+    audiences:
+      - diverge-server
+    maxStreams: 1000
+  metrics:
+    serviceMonitor:
+      enabled: false
+      interval: 30s

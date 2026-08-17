@@ -3,12 +3,10 @@ package server
 import (
 	"context"
 	"errors"
-	"fmt"
-	"time"
+	"log/slog"
 
 	"connectrpc.com/connect"
-	authorizationv1 "k8s.io/api/authorization/v1"
-	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	pb "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
@@ -19,14 +17,22 @@ import (
 )
 
 type PreviewGroupService struct {
-	client      client.Client
-	informerMgr *streaming.InformerManager
+	client          client.Client
+	k8sClient       kubernetes.Interface
+	informerMgr     *streaming.InformerManager
+	streamSemaphore chan struct{}
+	logger          *slog.Logger
+	auditLogger     *AuditLogger
 }
 
-func NewPreviewGroupService(c client.Client, informerMgr *streaming.InformerManager) divergev1alpha1connect.PreviewGroupServiceHandler {
+func NewPreviewGroupService(c client.Client, k8s kubernetes.Interface, informerMgr *streaming.InformerManager, sem chan struct{}, logger *slog.Logger, audit *AuditLogger) divergev1alpha1connect.PreviewGroupServiceHandler {
 	return &PreviewGroupService{
-		client:      c,
-		informerMgr: informerMgr,
+		client:          c,
+		k8sClient:       k8s,
+		informerMgr:     informerMgr,
+		streamSemaphore: sem,
+		logger:          logger,
+		auditLogger:     audit,
 	}
 }
 
@@ -36,25 +42,48 @@ func (s *PreviewGroupService) CreatePreviewGroup(ctx context.Context, req *conne
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("preview group is required"))
 	}
 
+	namespace := msg.Namespace
+	if namespace == "" {
+		namespace = "default"
+	}
+	if err := ValidateDNS1123Label(namespace, "namespace"); err != nil {
+		return nil, err
+	}
+
+	if msg.PreviewGroup.Name != "" {
+		if err := ValidateDNS1123Label(msg.PreviewGroup.Name, "name"); err != nil {
+			return nil, err
+		}
+	}
+	if msg.PreviewGroup.Namespace != "" {
+		if err := ValidateNamespaceMatch(namespace, msg.PreviewGroup.Namespace); err != nil {
+			return nil, err
+		}
+	}
+
+	// RBAC check
+	if err := AuthorizeAction(ctx, s.k8sClient, s.logger, "create", namespace, "previewgroups"); err != nil {
+		return nil, err
+	}
+
 	var dom domain.PreviewGroup
 	dom.FromProto(msg.PreviewGroup)
 
 	realCrd, err := DomainPgToCRD(&dom)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
 	}
 
-	realCrd.Namespace = msg.Namespace
-	if realCrd.Namespace == "" {
-		realCrd.Namespace = "default"
-	}
+	realCrd.Namespace = namespace
 
 	if err := s.client.Create(ctx, realCrd); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, SanitizeK8sError(s.logger, err)
 	}
 
-	var back domain.PreviewGroup
+	s.auditLogger.LogMutation(ctx, "resource.created", "previewgroup", realCrd.Name, realCrd.Namespace)
+
 	domBack, _ := CRDPgToDomain(realCrd)
+	var back domain.PreviewGroup
 	if domBack != nil {
 		back = *domBack
 	}
@@ -64,14 +93,25 @@ func (s *PreviewGroupService) CreatePreviewGroup(ctx context.Context, req *conne
 }
 
 func (s *PreviewGroupService) GetPreviewGroup(ctx context.Context, req *connect.Request[pb.GetPreviewGroupRequest]) (*connect.Response[pb.GetPreviewGroupResponse], error) {
+	if err := ValidateDNS1123Label(req.Msg.Name, "name"); err != nil {
+		return nil, err
+	}
+	if err := ValidateDNS1123Label(req.Msg.Namespace, "namespace"); err != nil {
+		return nil, err
+	}
+
+	// RBAC check
+	if err := AuthorizeAction(ctx, s.k8sClient, s.logger, "get", req.Msg.Namespace, "previewgroups"); err != nil {
+		return nil, err
+	}
+
 	var crd v1alpha1.PreviewGroup
-	err := s.client.Get(ctx, types.NamespacedName{Name: req.Msg.Name, Namespace: req.Msg.Namespace}, &crd)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeNotFound, err)
+	if err := s.client.Get(ctx, client.ObjectKey{Name: req.Msg.Name, Namespace: req.Msg.Namespace}, &crd); err != nil {
+		return nil, SanitizeK8sError(s.logger, err)
 	}
 	dom, err := CRDPgToDomain(&crd)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
 	}
 	return connect.NewResponse(&pb.GetPreviewGroupResponse{
 		PreviewGroup: dom.ToProto(),
@@ -79,14 +119,34 @@ func (s *PreviewGroupService) GetPreviewGroup(ctx context.Context, req *connect.
 }
 
 func (s *PreviewGroupService) ListPreviewGroups(ctx context.Context, req *connect.Request[pb.ListPreviewGroupsRequest]) (*connect.Response[pb.ListPreviewGroupsResponse], error) {
+	namespace := req.Msg.Namespace
+	if namespace != "" {
+		if err := ValidateDNS1123Label(namespace, "namespace"); err != nil {
+			return nil, err
+		}
+	}
+
+	// RBAC check
+	if err := AuthorizeAction(ctx, s.k8sClient, s.logger, "list", namespace, "previewgroups"); err != nil {
+		return nil, err
+	}
+
 	var list v1alpha1.PreviewGroupList
-	if err := s.client.List(ctx, &list, client.InNamespace(req.Msg.Namespace)); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+	opts := []client.ListOption{}
+	if namespace != "" {
+		opts = append(opts, client.InNamespace(namespace))
+	}
+	if err := s.client.List(ctx, &list, opts...); err != nil {
+		return nil, SanitizeK8sError(s.logger, err)
 	}
 
 	var pbs []*pb.PreviewGroup
 	for i := range list.Items {
-		dom, _ := CRDPgToDomain(&list.Items[i])
+		dom, err := CRDPgToDomain(&list.Items[i])
+		if err != nil {
+			s.logger.Warn("mapper error", "resource", list.Items[i].Name, "error", err)
+			continue
+		}
 		if dom != nil {
 			pbs = append(pbs, dom.ToProto())
 		}
@@ -98,33 +158,28 @@ func (s *PreviewGroupService) ListPreviewGroups(ctx context.Context, req *connec
 }
 
 func (s *PreviewGroupService) DeletePreviewGroup(ctx context.Context, req *connect.Request[pb.DeletePreviewGroupRequest]) (*connect.Response[pb.DeletePreviewGroupResponse], error) {
+	if err := ValidateDNS1123Label(req.Msg.Name, "name"); err != nil {
+		return nil, err
+	}
+	if err := ValidateDNS1123Label(req.Msg.Namespace, "namespace"); err != nil {
+		return nil, err
+	}
+
+	// RBAC check
+	if err := AuthorizeAction(ctx, s.k8sClient, s.logger, "delete", req.Msg.Namespace, "previewgroups"); err != nil {
+		return nil, err
+	}
+
 	var crd v1alpha1.PreviewGroup
 	crd.Name = req.Msg.Name
 	crd.Namespace = req.Msg.Namespace
 	if err := s.client.Delete(ctx, &crd); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, SanitizeK8sError(s.logger, err)
 	}
-	return connect.NewResponse(&pb.DeletePreviewGroupResponse{}), nil
-}
 
-func (s *PreviewGroupService) authorizeAction(ctx context.Context, verb, namespace string) error {
-	sar := &authorizationv1.SubjectAccessReview{
-		Spec: authorizationv1.SubjectAccessReviewSpec{
-			ResourceAttributes: &authorizationv1.ResourceAttributes{
-				Namespace: namespace,
-				Verb:      verb,
-				Group:     "diverge.dev",
-				Resource:  "previewgroups",
-			},
-		},
-	}
-	if err := s.client.Create(ctx, sar); err != nil {
-		return connect.NewError(connect.CodeInternal, fmt.Errorf("authorization check failed: %w", err))
-	}
-	if !sar.Status.Allowed {
-		return connect.NewError(connect.CodePermissionDenied, errors.New("permission denied"))
-	}
-	return nil
+	s.auditLogger.LogMutation(ctx, "resource.deleted", "previewgroup", req.Msg.Name, req.Msg.Namespace)
+
+	return connect.NewResponse(&pb.DeletePreviewGroupResponse{}), nil
 }
 
 func (s *PreviewGroupService) WatchPreviewGroups(ctx context.Context, req *connect.Request[pb.WatchPreviewGroupsRequest], stream *connect.ServerStream[pb.WatchPreviewGroupsResponse]) error {
@@ -133,39 +188,53 @@ func (s *PreviewGroupService) WatchPreviewGroups(ctx context.Context, req *conne
 	}
 
 	select {
-	case StreamSemaphore <- struct{}{}:
-		defer func() { <-StreamSemaphore }()
+	case s.streamSemaphore <- struct{}{}:
+		defer func() { <-s.streamSemaphore }()
 	default:
 		return connect.NewError(connect.CodeResourceExhausted, errors.New("too many concurrent streams"))
 	}
 
-	streamCtx, cancel := context.WithTimeout(ctx, 4*time.Hour)
-	defer cancel()
-
 	namespace := req.Msg.Namespace
 	if namespace != "" {
-		if err := s.authorizeAction(streamCtx, "watch", namespace); err != nil {
+		if err := ValidateDNS1123Label(namespace, "namespace"); err != nil {
 			return err
 		}
 	}
 
-	// List initial state
+	// RBAC check — required even for cluster-wide watches
+	if namespace != "" {
+		if err := AuthorizeAction(ctx, s.k8sClient, s.logger, "watch", namespace, "previewgroups"); err != nil {
+			return err
+		}
+	} else {
+		// Cluster-wide watch: check watch permission at cluster scope (empty namespace)
+		if err := AuthorizeAction(ctx, s.k8sClient, s.logger, "watch", "", "previewgroups"); err != nil {
+			return err
+		}
+	}
+
+	// Subscribe FIRST to prevent race condition (Subscribe → List → deduplicate)
+	sub := s.informerMgr.PgBroadcaster.Subscribe(ctx)
+	defer s.informerMgr.PgBroadcaster.Unsubscribe(sub.ID())
+
+	// List current state
 	var list v1alpha1.PreviewGroupList
 	opts := []client.ListOption{}
 	if namespace != "" {
 		opts = append(opts, client.InNamespace(namespace))
 	}
-	if err := s.client.List(streamCtx, &list, opts...); err != nil {
-		return connect.NewError(connect.CodeInternal, err)
+	if err := s.client.List(ctx, &list, opts...); err != nil {
+		return SanitizeK8sError(s.logger, err)
 	}
 
-	sub := s.informerMgr.PgBroadcaster.Subscribe(streamCtx)
-	defer s.informerMgr.PgBroadcaster.Unsubscribe(sub.ID())
+	// Track resource versions sent during initial List for deduplication
+	sentRVs := make(map[string]struct{}, len(list.Items))
 
 	for i := range list.Items {
 		crd := &list.Items[i]
 		dom, _ := CRDPgToDomain(crd)
 		if dom != nil {
+			sentRVs[crd.Namespace+"/"+crd.Name+"@"+crd.ResourceVersion] = struct{}{}
 			if err := stream.Send(&pb.WatchPreviewGroupsResponse{
 				Type:            pb.WatchEventType_WATCH_EVENT_TYPE_ADDED,
 				PreviewGroup:    dom.ToProto(),
@@ -178,11 +247,19 @@ func (s *PreviewGroupService) WatchPreviewGroups(ctx context.Context, req *conne
 
 	for {
 		select {
-		case <-streamCtx.Done():
+		case <-ctx.Done():
 			return nil
 		case event, ok := <-sub.Events():
 			if !ok {
 				return connect.NewError(connect.CodeResourceExhausted, errors.New("event buffer overflow, please reconnect"))
+			}
+
+			// Deduplicate: skip events already sent during the initial List
+			if event.Object != nil && event.Version != "" {
+				key := event.Object.Namespace + "/" + event.Object.Name + "@" + event.Version
+				if _, sent := sentRVs[key]; sent {
+					continue
+				}
 			}
 
 			if namespace != "" && event.Object.Namespace != namespace {

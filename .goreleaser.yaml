@@ -14,9 +14,42 @@ builds:
       - arm64
     ldflags:
       - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+  - id: diverge-server
+    main: ./cmd/server
+    binary: diverge-server
+    flags:
+      - -trimpath
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
   - id: diverge-controller-slim
     main: cmd/controller/main.go
     binary: diverge-controller
+    flags:
+      - -trimpath
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+    tags:
+      - no_knative
+      - no_schema
+      - no_temporal
+      - no_kafka
+  - id: diverge-server-slim
+    main: ./cmd/server
+    binary: diverge-server
     flags:
       - -trimpath
     env:
@@ -99,6 +132,7 @@ archives:
     builds:
       - diverge
       - diverge-controller
+      - diverge-server
       - diverge-proxy
       - diverge-activator-proxy
     files:
@@ -110,6 +144,7 @@ archives:
     builds:
       - diverge-slim
       - diverge-controller-slim
+      - diverge-server-slim
     files:
       - src: README*
       - src: LICENSE*
@@ -121,6 +156,7 @@ dockers:
     use: buildx
     ids:
       - diverge-controller
+      - diverge-server
       - diverge-proxy
     build_flag_templates:
       - "--platform=linux/amd64"
@@ -133,6 +169,7 @@ dockers:
     use: buildx
     ids:
       - diverge-controller
+      - diverge-server
       - diverge-proxy
     build_flag_templates:
       - "--platform=linux/arm64"
@@ -145,6 +182,7 @@ dockers:
     use: buildx
     ids:
       - diverge-controller-slim
+      - diverge-server-slim
       - diverge-proxy
     build_flag_templates:
       - "--platform=linux/amd64"
@@ -157,6 +195,7 @@ dockers:
     use: buildx
     ids:
       - diverge-controller-slim
+      - diverge-server-slim
       - diverge-proxy
     build_flag_templates:
       - "--platform=linux/arm64"

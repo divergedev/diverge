@@ -5,14 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
 
 	"connectrpc.com/connect"
-	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	pb "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
@@ -24,16 +24,24 @@ import (
 )
 
 type EnvironmentService struct {
-	client      client.Client
-	informerMgr *streaming.InformerManager
-	logStreamer *streaming.LogStreamer
+	client          client.Client
+	k8sClient       kubernetes.Interface
+	informerMgr     *streaming.InformerManager
+	logStreamer     *streaming.LogStreamer
+	streamSemaphore chan struct{}
+	logger          *slog.Logger
+	auditLogger     *AuditLogger
 }
 
-func NewEnvironmentService(c client.Client, informerMgr *streaming.InformerManager, logStreamer *streaming.LogStreamer) divergev1alpha1connect.EnvironmentServiceHandler {
+func NewEnvironmentService(c client.Client, k8s kubernetes.Interface, informerMgr *streaming.InformerManager, logStreamer *streaming.LogStreamer, sem chan struct{}, logger *slog.Logger, audit *AuditLogger) divergev1alpha1connect.EnvironmentServiceHandler {
 	return &EnvironmentService{
-		client:      c,
-		informerMgr: informerMgr,
-		logStreamer: logStreamer,
+		client:          c,
+		k8sClient:       k8s,
+		informerMgr:     informerMgr,
+		logStreamer:     logStreamer,
+		streamSemaphore: sem,
+		logger:          logger,
+		auditLogger:     audit,
 	}
 }
 
@@ -43,25 +51,49 @@ func (s *EnvironmentService) CreateEnvironment(ctx context.Context, req *connect
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("environment is required"))
 	}
 
+	namespace := msg.Namespace
+	if namespace == "" {
+		namespace = "default"
+	}
+	if err := ValidateDNS1123Label(namespace, "namespace"); err != nil {
+		return nil, err
+	}
+
+	// Validate namespace match
+	if msg.Environment.Name != "" {
+		if err := ValidateDNS1123Label(msg.Environment.Name, "name"); err != nil {
+			return nil, err
+		}
+	}
+	if msg.Environment.Namespace != "" {
+		if err := ValidateNamespaceMatch(namespace, msg.Environment.Namespace); err != nil {
+			return nil, err
+		}
+	}
+
+	// RBAC check
+	if err := AuthorizeAction(ctx, s.k8sClient, s.logger, "create", namespace, "environments"); err != nil {
+		return nil, err
+	}
+
 	var dom domain.Environment
 	dom.FromProto(msg.Environment)
 
 	realCrd, err := DomainEnvToCRD(&dom)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
 	}
 
-	realCrd.Namespace = msg.Namespace
-	if realCrd.Namespace == "" {
-		realCrd.Namespace = "default"
-	}
+	realCrd.Namespace = namespace
 
 	if err := s.client.Create(ctx, realCrd); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, SanitizeK8sError(s.logger, err)
 	}
 
-	var back domain.Environment
+	s.auditLogger.LogMutation(ctx, "resource.created", "environment", realCrd.Name, realCrd.Namespace)
+
 	domBack, _ := CRDEnvToDomain(realCrd)
+	var back domain.Environment
 	if domBack != nil {
 		back = *domBack
 	}
@@ -71,14 +103,25 @@ func (s *EnvironmentService) CreateEnvironment(ctx context.Context, req *connect
 }
 
 func (s *EnvironmentService) GetEnvironment(ctx context.Context, req *connect.Request[pb.GetEnvironmentRequest]) (*connect.Response[pb.GetEnvironmentResponse], error) {
+	if err := ValidateDNS1123Label(req.Msg.Name, "name"); err != nil {
+		return nil, err
+	}
+	if err := ValidateDNS1123Label(req.Msg.Namespace, "namespace"); err != nil {
+		return nil, err
+	}
+
+	// RBAC check
+	if err := AuthorizeAction(ctx, s.k8sClient, s.logger, "get", req.Msg.Namespace, "environments"); err != nil {
+		return nil, err
+	}
+
 	var crd v1alpha1.Environment
-	err := s.client.Get(ctx, types.NamespacedName{Name: req.Msg.Name, Namespace: req.Msg.Namespace}, &crd)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeNotFound, err)
+	if err := s.client.Get(ctx, client.ObjectKey{Name: req.Msg.Name, Namespace: req.Msg.Namespace}, &crd); err != nil {
+		return nil, SanitizeK8sError(s.logger, err)
 	}
 	dom, err := CRDEnvToDomain(&crd)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
 	}
 	return connect.NewResponse(&pb.GetEnvironmentResponse{
 		Environment: dom.ToProto(),
@@ -86,14 +129,34 @@ func (s *EnvironmentService) GetEnvironment(ctx context.Context, req *connect.Re
 }
 
 func (s *EnvironmentService) ListEnvironments(ctx context.Context, req *connect.Request[pb.ListEnvironmentsRequest]) (*connect.Response[pb.ListEnvironmentsResponse], error) {
+	namespace := req.Msg.Namespace
+	if namespace != "" {
+		if err := ValidateDNS1123Label(namespace, "namespace"); err != nil {
+			return nil, err
+		}
+	}
+
+	// RBAC check
+	if err := AuthorizeAction(ctx, s.k8sClient, s.logger, "list", namespace, "environments"); err != nil {
+		return nil, err
+	}
+
 	var list v1alpha1.EnvironmentList
-	if err := s.client.List(ctx, &list, client.InNamespace(req.Msg.Namespace)); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+	opts := []client.ListOption{}
+	if namespace != "" {
+		opts = append(opts, client.InNamespace(namespace))
+	}
+	if err := s.client.List(ctx, &list, opts...); err != nil {
+		return nil, SanitizeK8sError(s.logger, err)
 	}
 
 	var pbs []*pb.Environment
 	for i := range list.Items {
-		dom, _ := CRDEnvToDomain(&list.Items[i])
+		dom, err := CRDEnvToDomain(&list.Items[i])
+		if err != nil {
+			s.logger.Warn("mapper error", "resource", list.Items[i].Name, "error", err)
+			continue
+		}
 		if dom != nil {
 			pbs = append(pbs, dom.ToProto())
 		}
@@ -110,56 +173,79 @@ func (s *EnvironmentService) UpdateEnvironment(ctx context.Context, req *connect
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("environment is required"))
 	}
 
+	// Validate name
+	if msg.Environment.Name != "" {
+		if err := ValidateDNS1123Label(msg.Environment.Name, "name"); err != nil {
+			return nil, err
+		}
+	}
+
+	namespace := msg.Environment.Namespace
+	if namespace == "" {
+		namespace = "default"
+	}
+	if err := ValidateDNS1123Label(namespace, "namespace"); err != nil {
+		return nil, err
+	}
+
+	// RBAC check
+	if err := AuthorizeAction(ctx, s.k8sClient, s.logger, "update", namespace, "environments"); err != nil {
+		return nil, err
+	}
+
 	var dom domain.Environment
 	dom.FromProto(msg.Environment)
 
 	realCrd, err := DomainEnvToCRD(&dom)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
 	}
+
+	// Enforce the authorized namespace on the CRD to prevent RBAC bypass
+	realCrd.Namespace = namespace
 
 	if err := s.client.Update(ctx, realCrd); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, SanitizeK8sError(s.logger, err)
 	}
 
+	s.auditLogger.LogMutation(ctx, "resource.updated", "environment", realCrd.Name, realCrd.Namespace)
+
 	domBack, _ := CRDEnvToDomain(realCrd)
+	if domBack == nil {
+		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
+	}
 	return connect.NewResponse(&pb.UpdateEnvironmentResponse{
 		Environment: domBack.ToProto(),
 	}), nil
 }
 
 func (s *EnvironmentService) DeleteEnvironment(ctx context.Context, req *connect.Request[pb.DeleteEnvironmentRequest]) (*connect.Response[pb.DeleteEnvironmentResponse], error) {
+	if err := ValidateDNS1123Label(req.Msg.Name, "name"); err != nil {
+		return nil, err
+	}
+	if err := ValidateDNS1123Label(req.Msg.Namespace, "namespace"); err != nil {
+		return nil, err
+	}
+
+	// RBAC check
+	if err := AuthorizeAction(ctx, s.k8sClient, s.logger, "delete", req.Msg.Namespace, "environments"); err != nil {
+		return nil, err
+	}
+
 	var crd v1alpha1.Environment
 	crd.Name = req.Msg.Name
 	crd.Namespace = req.Msg.Namespace
 	if err := s.client.Delete(ctx, &crd); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, SanitizeK8sError(s.logger, err)
 	}
+
+	s.auditLogger.LogMutation(ctx, "resource.deleted", "environment", req.Msg.Name, req.Msg.Namespace)
+
 	return connect.NewResponse(&pb.DeleteEnvironmentResponse{}), nil
 }
 
 func (s *EnvironmentService) ExtendTTL(ctx context.Context, req *connect.Request[pb.ExtendTTLRequest]) (*connect.Response[pb.ExtendTTLResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
-}
-
-func (s *EnvironmentService) authorizeAction(ctx context.Context, verb, namespace string) error {
-	sar := &authorizationv1.SubjectAccessReview{
-		Spec: authorizationv1.SubjectAccessReviewSpec{
-			ResourceAttributes: &authorizationv1.ResourceAttributes{
-				Namespace: namespace,
-				Verb:      verb,
-				Group:     "diverge.dev",
-				Resource:  "environments",
-			},
-		},
-	}
-	if err := s.client.Create(ctx, sar); err != nil {
-		return connect.NewError(connect.CodeInternal, fmt.Errorf("authorization check failed: %w", err))
-	}
-	if !sar.Status.Allowed {
-		return connect.NewError(connect.CodePermissionDenied, errors.New("permission denied"))
-	}
-	return nil
 }
 
 func (s *EnvironmentService) WatchEnvironments(ctx context.Context, req *connect.Request[pb.WatchEnvironmentsRequest], stream *connect.ServerStream[pb.WatchEnvironmentsResponse]) error {
@@ -168,41 +254,54 @@ func (s *EnvironmentService) WatchEnvironments(ctx context.Context, req *connect
 	}
 
 	select {
-	case StreamSemaphore <- struct{}{}:
-		defer func() { <-StreamSemaphore }()
+	case s.streamSemaphore <- struct{}{}:
+		defer func() { <-s.streamSemaphore }()
 	default:
 		return connect.NewError(connect.CodeResourceExhausted, errors.New("too many concurrent streams"))
 	}
 
-	streamCtx, cancel := context.WithTimeout(ctx, 4*time.Hour)
-	defer cancel()
-
 	namespace := req.Msg.Namespace
 	if namespace != "" {
-		if err := s.authorizeAction(streamCtx, "watch", namespace); err != nil {
+		if err := ValidateDNS1123Label(namespace, "namespace"); err != nil {
 			return err
 		}
 	}
 
-	// 1. List current state to get latestRV
+	// RBAC check — required even for cluster-wide watches
+	if namespace != "" {
+		if err := AuthorizeAction(ctx, s.k8sClient, s.logger, "watch", namespace, "environments"); err != nil {
+			return err
+		}
+	} else {
+		// Cluster-wide watch: check watch permission at cluster scope (empty namespace)
+		if err := AuthorizeAction(ctx, s.k8sClient, s.logger, "watch", "", "environments"); err != nil {
+			return err
+		}
+	}
+
+	// Subscribe FIRST to prevent race condition (Subscribe → List → deduplicate)
+	sub := s.informerMgr.EnvBroadcaster.Subscribe(ctx)
+	defer s.informerMgr.EnvBroadcaster.Unsubscribe(sub.ID())
+
+	// List current state
 	var list v1alpha1.EnvironmentList
 	opts := []client.ListOption{}
 	if namespace != "" {
 		opts = append(opts, client.InNamespace(namespace))
 	}
-	if err := s.client.List(streamCtx, &list, opts...); err != nil {
-		return connect.NewError(connect.CodeInternal, err)
+	if err := s.client.List(ctx, &list, opts...); err != nil {
+		return SanitizeK8sError(s.logger, err)
 	}
 
-	// 2. Subscribe AFTER getting the list
-	sub := s.informerMgr.EnvBroadcaster.Subscribe(streamCtx)
-	defer s.informerMgr.EnvBroadcaster.Unsubscribe(sub.ID())
+	// Track resource versions sent during initial List for deduplication
+	sentRVs := make(map[string]struct{}, len(list.Items))
 
-	// 3. Send current state as ADDED
+	// Send current state as ADDED
 	for i := range list.Items {
 		crd := &list.Items[i]
 		dom, _ := CRDEnvToDomain(crd)
 		if dom != nil {
+			sentRVs[crd.Namespace+"/"+crd.Name+"@"+crd.ResourceVersion] = struct{}{}
 			if err := stream.Send(&pb.WatchEnvironmentsResponse{
 				Type:            pb.WatchEventType_WATCH_EVENT_TYPE_ADDED,
 				Environment:     dom.ToProto(),
@@ -213,14 +312,22 @@ func (s *EnvironmentService) WatchEnvironments(ctx context.Context, req *connect
 		}
 	}
 
-	// 4. Stream deltas
+	// Stream deltas, deduplicating events already covered by the List
 	for {
 		select {
-		case <-streamCtx.Done():
+		case <-ctx.Done():
 			return nil
 		case event, ok := <-sub.Events():
 			if !ok {
 				return connect.NewError(connect.CodeResourceExhausted, errors.New("event buffer overflow, please reconnect"))
+			}
+
+			// Deduplicate: skip events already sent during the initial List
+			if event.Object != nil && event.Version != "" {
+				key := event.Object.Namespace + "/" + event.Object.Name + "@" + event.Version
+				if _, sent := sentRVs[key]; sent {
+					continue
+				}
 			}
 
 			if namespace != "" && event.Object.Namespace != namespace {
@@ -268,21 +375,28 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 	}
 
 	select {
-	case StreamSemaphore <- struct{}{}:
-		defer func() { <-StreamSemaphore }()
+	case s.streamSemaphore <- struct{}{}:
+		defer func() { <-s.streamSemaphore }()
 	default:
 		return connect.NewError(connect.CodeResourceExhausted, errors.New("too many concurrent streams"))
 	}
-
-	streamCtx, cancel := context.WithTimeout(ctx, 4*time.Hour)
-	defer cancel()
 
 	msg := req.Msg
 	if msg.EnvironmentName == "" || msg.Namespace == "" {
 		return connect.NewError(connect.CodeInvalidArgument, errors.New("environment name and namespace are required"))
 	}
+	if err := ValidateDNS1123Label(msg.Namespace, "namespace"); err != nil {
+		return err
+	}
+	if err := ValidateDNS1123Label(msg.EnvironmentName, "environment_name"); err != nil {
+		return err
+	}
 
-	if err := s.authorizeAction(streamCtx, "get", msg.Namespace); err != nil {
+	// RBAC: check environment read AND pods/log access
+	if err := AuthorizeAction(ctx, s.k8sClient, s.logger, "get", msg.Namespace, "environments"); err != nil {
+		return err
+	}
+	if err := AuthorizePodLogs(ctx, s.k8sClient, s.logger, msg.Namespace); err != nil {
 		return err
 	}
 
@@ -291,8 +405,8 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 		client.MatchingLabels{"diverge.dev/environment": msg.EnvironmentName},
 	}
 	var podList corev1.PodList
-	if err := s.client.List(streamCtx, &podList, opts...); err != nil {
-		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list pods: %w", err))
+	if err := s.client.List(ctx, &podList, opts...); err != nil {
+		return SanitizeK8sError(s.logger, err)
 	}
 
 	var targetPods []corev1.Pod
@@ -310,7 +424,19 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 		return connect.NewError(connect.CodeNotFound, errors.New("no pods found for environment and service"))
 	}
 
-	logCh := make(chan logMessage, 100)
+	// Cap at MaxStreamLogsPods to prevent goroutine bomb
+	if len(targetPods) > MaxStreamLogsPods {
+		s.logger.Warn("pod count exceeds StreamLogs limit",
+			"requested", len(targetPods),
+			"limit", MaxStreamLogsPods,
+			"environment", msg.EnvironmentName,
+			"namespace", msg.Namespace,
+		)
+		return connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("too many pods (%d), limit is %d; narrow your request using service_name", len(targetPods), MaxStreamLogsPods))
+	}
+
+	logCh := make(chan logMessage, 256) // Bounded buffer with backpressure
 	errCh := make(chan error, len(targetPods))
 
 	var wg sync.WaitGroup
@@ -327,7 +453,7 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 				since = &t
 			}
 
-			logsStream, err := s.logStreamer.StreamPodLogs(streamCtx, p.Namespace, p.Name, containerName, msg.Follow, msg.TailLines, since)
+			logsStream, err := s.logStreamer.StreamPodLogs(ctx, p.Namespace, p.Name, containerName, msg.Follow, msg.TailLines, since)
 			if err != nil {
 				errCh <- fmt.Errorf("failed to open stream for pod %s: %w", p.Name, err)
 				return
@@ -336,8 +462,11 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 				_ = logsStream.Close()
 			}()
 
+			// Use 64KB initial buffer, allow up to 1MB for long log lines
 			scanner := bufio.NewScanner(logsStream)
-			scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+			buf := make([]byte, 64*1024)
+			scanner.Buffer(buf, 1024*1024)
+
 			for scanner.Scan() {
 				line := scanner.Text()
 
@@ -354,7 +483,7 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 				}
 
 				select {
-				case <-streamCtx.Done():
+				case <-ctx.Done():
 					return
 				case logCh <- logMessage{
 					pod:       p.Name,
@@ -378,10 +507,10 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 	// Send logs to stream
 	for {
 		select {
-		case <-streamCtx.Done():
+		case <-ctx.Done():
 			return nil
 		case err := <-errCh:
-			return connect.NewError(connect.CodeInternal, err)
+			return SanitizeK8sError(s.logger, err)
 		case msg, ok := <-logCh:
 			if !ok {
 				// All streams completed
@@ -393,7 +522,7 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 				ContainerName: msg.container,
 				Content:       msg.content,
 				Timestamp:     msg.timestamp,
-				ServiceName:   req.Msg.ServiceName, // Echo back what they asked for, or parse from pod labels
+				ServiceName:   req.Msg.ServiceName,
 			}
 
 			if err := stream.Send(resp); err != nil {

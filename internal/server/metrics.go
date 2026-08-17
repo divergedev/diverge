@@ -8,6 +8,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	crmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
+	"github.com/divergedev/diverge/internal/server/auth"
 	"github.com/divergedev/diverge/internal/server/streaming"
 )
 
@@ -76,6 +77,28 @@ var (
 		Help:      "Authentication attempts by provider and result",
 	}, []string{"provider", "result"})
 
+	authLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "diverge",
+		Subsystem: "server",
+		Name:      "auth_latency_seconds",
+		Help:      "Time spent authenticating requests via TokenReview",
+		Buckets:   []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0},
+	}, []string{"provider", "result"})
+
+	authCacheHits = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "diverge",
+		Subsystem: "server",
+		Name:      "auth_cache_hits_total",
+		Help:      "Total auth cache hits",
+	})
+
+	authCacheMisses = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "diverge",
+		Subsystem: "server",
+		Name:      "auth_cache_misses_total",
+		Help:      "Total auth cache misses",
+	})
+
 	broadcasterSubscribers = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: "diverge",
 		Subsystem: "server",
@@ -105,10 +128,23 @@ func init() {
 		rpcStreamDuration,
 		rpcActiveStreams,
 		authAttemptsTotal,
+		authLatency,
+		authCacheHits,
+		authCacheMisses,
 		broadcasterSubscribers,
 		broadcasterEventsTotal,
 		broadcasterDropsTotal,
 	)
+}
+
+// NewAuthMetrics returns the auth metrics wired to the auth middleware's expected types.
+func NewAuthMetrics() *auth.AuthMetrics {
+	return &auth.AuthMetrics{
+		Latency:     authLatency,
+		CacheHits:   authCacheHits,
+		CacheMisses: authCacheMisses,
+		Attempts:    authAttemptsTotal,
+	}
 }
 
 type metricsInterceptor struct{}

@@ -1,5 +1,6 @@
 FROM gcr.io/distroless/static:nonroot
 COPY diverge-controller /diverge-controller
+COPY diverge-server /diverge-server
 COPY diverge-proxy /diverge-proxy
 USER 65532:65532
 ENTRYPOINT ["/diverge-controller"]
