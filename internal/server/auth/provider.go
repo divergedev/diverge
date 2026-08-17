@@ -3,8 +3,10 @@ package auth
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
+	authorizationv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
@@ -42,9 +44,26 @@ func (p *TokenReviewProvider) Authenticate(ctx context.Context, token string) (*
 		return nil, fmt.Errorf("token not authenticated: %s", result.Status.Error)
 	}
 
+	var extra map[string]authorizationv1.ExtraValue
+	if len(result.Status.User.Extra) > 0 {
+		extraCount := 0
+		extra = make(map[string]authorizationv1.ExtraValue, len(result.Status.User.Extra))
+		for k, v := range result.Status.User.Extra {
+			if extraCount >= 50 {
+				slog.Warn("TokenReview returned more than 50 extra keys, truncating")
+				break
+			}
+			val := make(authorizationv1.ExtraValue, len(v))
+			copy(val, v)
+			extra[k] = val
+			extraCount++
+		}
+	}
+
 	return &UserInfo{
 		Username: result.Status.User.Username,
 		UID:      result.Status.User.UID,
 		Groups:   result.Status.User.Groups,
+		Extra:    extra,
 	}, nil
 }

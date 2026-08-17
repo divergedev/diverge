@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	authorizationv1 "k8s.io/api/authorization/v1"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
@@ -31,7 +33,7 @@ func (m *mockProvider) Authenticate(ctx context.Context, token string) (*UserInf
 	if m.user != nil {
 		return m.user, nil
 	}
-	return &UserInfo{Username: token}, nil
+	return &UserInfo{Username: token, UID: "fallback-uid", Extra: map[string]authorizationv1.ExtraValue{"default": {"val"}}}, nil
 }
 
 func testLogger() *slog.Logger {
@@ -104,7 +106,7 @@ func TestMiddleware_EmptyBearerToken(t *testing.T) {
 }
 
 func TestMiddleware_SuccessfulAuth(t *testing.T) {
-	user := &UserInfo{Username: "test-user"}
+	user := &UserInfo{Username: "test-user", UID: "uid-123", Extra: map[string]authorizationv1.ExtraValue{"k1": {"v1"}}}
 	cfg := MiddlewareConfig{
 		Provider: &mockProvider{user: user},
 		Cache:    NewTokenCache(10, time.Minute),
@@ -126,6 +128,8 @@ func TestMiddleware_SuccessfulAuth(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Result().StatusCode)
 	require.NotNil(t, ctxUser)
 	assert.Equal(t, user.Username, ctxUser.Username)
+	assert.Equal(t, user.UID, ctxUser.UID)
+	assert.Equal(t, user.Extra, ctxUser.Extra)
 }
 
 func TestMiddleware_FailedAuth(t *testing.T) {
@@ -148,14 +152,16 @@ func TestMiddleware_FailedAuth(t *testing.T) {
 }
 
 func TestMiddleware_CacheHit(t *testing.T) {
-	provider := &mockProvider{user: &UserInfo{Username: "cached-user"}}
+	provider := &mockProvider{user: &UserInfo{Username: "cached-user", UID: "cached-uid", Extra: map[string]authorizationv1.ExtraValue{"cache": {"hit"}}}}
 	cfg := MiddlewareConfig{
 		Provider: provider,
 		Cache:    NewTokenCache(10, time.Minute),
 		Logger:   testLogger(),
 	}
 	mw := NewMiddleware(cfg)
+	var ctxUser *UserInfo
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctxUser, _ = UserInfoFromContext(r.Context())
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -174,10 +180,14 @@ func TestMiddleware_CacheHit(t *testing.T) {
 	handler.ServeHTTP(w2, req2)
 	assert.Equal(t, http.StatusOK, w2.Result().StatusCode)
 	assert.Equal(t, 1, provider.calls) // Still 1 call
+
+	require.NotNil(t, ctxUser)
+	assert.Equal(t, "cached-uid", ctxUser.UID)
+	assert.Equal(t, map[string]authorizationv1.ExtraValue{"cache": {"hit"}}, ctxUser.Extra)
 }
 
 func TestMiddleware_CacheExpiry(t *testing.T) {
-	provider := &mockProvider{user: &UserInfo{Username: "cached-user"}}
+	provider := &mockProvider{user: &UserInfo{Username: "cached-user", UID: "cached-uid", Extra: map[string]authorizationv1.ExtraValue{"cache": {"hit"}}}}
 	cfg := MiddlewareConfig{
 		Provider: provider,
 		Cache:    NewTokenCache(10, time.Millisecond*50),
@@ -205,7 +215,7 @@ func TestMiddleware_CacheExpiry(t *testing.T) {
 func TestMiddleware_MetricsIncremented(t *testing.T) {
 	metrics := testMetrics()
 	cfg := MiddlewareConfig{
-		Provider: &mockProvider{user: &UserInfo{Username: "user"}},
+		Provider: &mockProvider{user: &UserInfo{Username: "user", UID: "user-uid", Extra: map[string]authorizationv1.ExtraValue{"cache": {"hit"}}}},
 		Cache:    NewTokenCache(10, time.Minute),
 		Logger:   testLogger(),
 		Metrics:  metrics,
@@ -272,6 +282,8 @@ func TestMiddleware_PBT(t *testing.T) {
 			assert.Equal(t, http.StatusOK, w.Result().StatusCode)
 			require.NotNil(t, ctxUser)
 			assert.Equal(t, token, ctxUser.Username)
+			assert.Equal(t, "fallback-uid", ctxUser.UID)
+			assert.Equal(t, map[string]authorizationv1.ExtraValue{"default": {"val"}}, ctxUser.Extra)
 		}
 	})
 }

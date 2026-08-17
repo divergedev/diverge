@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	authenticationv1 "k8s.io/api/authentication/v1"
+	authorizationv1 "k8s.io/api/authorization/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	coretesting "k8s.io/client-go/testing"
@@ -22,7 +23,7 @@ func TestTokenReviewProvider_Authenticate(t *testing.T) {
 		wantErr       bool
 		wantUser      *UserInfo
 	}{
-		{"authenticated token", true, "", nil, false, &UserInfo{Username: "testuser", UID: "123", Groups: []string{"dev"}}},
+		{"authenticated token", true, "", nil, false, &UserInfo{Username: "testuser", UID: "123", Groups: []string{"dev"}, Extra: map[string]authorizationv1.ExtraValue{"foo": {"bar"}}}},
 		{"rejected token", false, "token expired", nil, true, nil},
 		{"unauthenticated", false, "", nil, true, nil},
 		{"client error", false, "", errors.New("client error"), true, nil},
@@ -42,10 +43,18 @@ func TestTokenReviewProvider_Authenticate(t *testing.T) {
 					Error:         tc.statusError,
 				}
 				if tc.authenticated && tc.wantUser != nil {
+					var authzExtra map[string]authenticationv1.ExtraValue
+					if tc.wantUser.Extra != nil {
+						authzExtra = make(map[string]authenticationv1.ExtraValue)
+						for k, v := range tc.wantUser.Extra {
+							authzExtra[k] = authenticationv1.ExtraValue(v)
+						}
+					}
 					tr.Status.User = authenticationv1.UserInfo{
 						Username: tc.wantUser.Username,
 						UID:      tc.wantUser.UID,
 						Groups:   tc.wantUser.Groups,
+						Extra:    authzExtra,
 					}
 				}
 

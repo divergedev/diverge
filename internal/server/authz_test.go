@@ -1,9 +1,17 @@
 package server
 
 import (
+	"context"
+	"log/slog"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/divergedev/diverge/internal/server/auth"
+	authorizationv1 "k8s.io/api/authorization/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/fake"
+	coretesting "k8s.io/client-go/testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -90,5 +98,101 @@ func TestValidateDNS1123Label_PBT(t *testing.T) {
 		if validPattern.MatchString(str) {
 			require.NoError(t, err)
 		}
+	})
+}
+
+func TestAuthorizeAction_PassesUIDAndExtra(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	var capturedSAR *authorizationv1.SubjectAccessReview
+	client.PrependReactor("create", "subjectaccessreviews", func(action coretesting.Action) (handled bool, ret runtime.Object, err error) {
+		capturedSAR = action.(coretesting.CreateAction).GetObject().(*authorizationv1.SubjectAccessReview)
+		capturedSAR.Status.Allowed = true
+		return true, capturedSAR, nil
+	})
+
+	ctx := context.Background()
+	info := &auth.UserInfo{
+		Username: "bob",
+		UID:      "u-123",
+		Groups:   []string{"admins"},
+		Extra: map[string]authorizationv1.ExtraValue{
+			"custom": {"val1", "val2"},
+		},
+	}
+	ctx = auth.ContextWithUserInfo(ctx, info)
+
+	logger := slog.Default()
+	err := AuthorizeAction(ctx, client, logger, "get", "default", "things")
+	require.NoError(t, err)
+	require.NotNil(t, capturedSAR)
+	assert.Equal(t, "bob", capturedSAR.Spec.User)
+	assert.Equal(t, "u-123", capturedSAR.Spec.UID)
+	assert.Equal(t, info.Groups, capturedSAR.Spec.Groups)
+	assert.Equal(t, info.Extra, capturedSAR.Spec.Extra)
+}
+
+func TestAuthorizePodLogs_PassesUIDAndExtra(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	var capturedSAR *authorizationv1.SubjectAccessReview
+	client.PrependReactor("create", "subjectaccessreviews", func(action coretesting.Action) (handled bool, ret runtime.Object, err error) {
+		capturedSAR = action.(coretesting.CreateAction).GetObject().(*authorizationv1.SubjectAccessReview)
+		capturedSAR.Status.Allowed = true
+		return true, capturedSAR, nil
+	})
+
+	ctx := context.Background()
+	info := &auth.UserInfo{
+		Username: "bob",
+		UID:      "u-123",
+		Groups:   []string{"admins"},
+		Extra: map[string]authorizationv1.ExtraValue{
+			"custom": {"val1", "val2"},
+		},
+	}
+	ctx = auth.ContextWithUserInfo(ctx, info)
+
+	logger := slog.Default()
+	err := AuthorizePodLogs(ctx, client, logger, "default")
+	require.NoError(t, err)
+	require.NotNil(t, capturedSAR)
+	assert.Equal(t, "bob", capturedSAR.Spec.User)
+	assert.Equal(t, "u-123", capturedSAR.Spec.UID)
+	assert.Equal(t, info.Groups, capturedSAR.Spec.Groups)
+	assert.Equal(t, info.Extra, capturedSAR.Spec.Extra)
+}
+
+func TestCheckSAR_ExtraPassthrough_PBT(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		client := fake.NewSimpleClientset()
+		var capturedSAR *authorizationv1.SubjectAccessReview
+		client.PrependReactor("create", "subjectaccessreviews", func(action coretesting.Action) (handled bool, ret runtime.Object, err error) {
+			capturedSAR = action.(coretesting.CreateAction).GetObject().(*authorizationv1.SubjectAccessReview)
+			capturedSAR.Status.Allowed = true
+			return true, capturedSAR, nil
+		})
+
+		// Generate random Extra maps
+		keys := rapid.SliceOf(rapid.String()).Draw(t, "keys")
+		extra := make(map[string]authorizationv1.ExtraValue)
+		for _, k := range keys {
+			vals := rapid.SliceOf(rapid.String()).Draw(t, "vals_"+k)
+			extra[k] = authorizationv1.ExtraValue(vals)
+		}
+
+		ctx := context.Background()
+		info := &auth.UserInfo{
+			Username: "pbt-user",
+			UID:      "pbt-uid",
+			Groups:   []string{"pbt-group"},
+			Extra:    extra,
+		}
+		ctx = auth.ContextWithUserInfo(ctx, info)
+
+		logger := slog.Default()
+		err := AuthorizeAction(ctx, client, logger, "get", "default", "things")
+		require.NoError(t, err)
+		require.NotNil(t, capturedSAR)
+
+		assert.Equal(t, extra, capturedSAR.Spec.Extra)
 	})
 }
