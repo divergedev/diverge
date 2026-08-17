@@ -129,6 +129,8 @@ server:
     audiences:
       - diverge-server
     maxStreams: 1000
+  rbac:
+    targetNamespaces: []
   metrics:
     serviceMonitor:
       enabled: false
