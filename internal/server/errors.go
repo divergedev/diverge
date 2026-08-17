@@ -27,7 +27,7 @@ func SanitizeK8sError(logger *slog.Logger, err error) error {
 		return connect.NewError(connect.CodeAlreadyExists, errors.New("resource already exists"))
 	case apierrors.IsConflict(err):
 		logger.Debug("resource conflict", "error", err)
-		return connect.NewError(connect.CodeAborted, errors.New("resource version conflict, please retry with the latest version"))
+		return connect.NewError(connect.CodeAborted, errors.New("resource was modified, please retry with the latest resource_version"))
 	case apierrors.IsResourceExpired(err):
 		logger.Debug("resource expired", "error", err)
 		return connect.NewError(connect.CodeAborted, fmt.Errorf("pagination token expired, please restart listing from the beginning"))

@@ -210,6 +210,11 @@ func (s *EnvironmentService) UpdateEnvironment(ctx context.Context, req *connect
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("environment is required"))
 	}
 
+	if msg.Environment.ResourceVersion == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("resource_version is required; fetch the current resource first and include its resource_version to prevent concurrent modification"))
+	}
+
 	// Validate name
 	if msg.Environment.Name != "" {
 		if err := ValidateDNS1123Label(msg.Environment.Name, "name"); err != nil {
@@ -230,24 +235,62 @@ func (s *EnvironmentService) UpdateEnvironment(ctx context.Context, req *connect
 		return nil, err
 	}
 
+	var existingCrd v1alpha1.Environment
+	if err := s.client.Get(ctx, client.ObjectKey{Name: msg.Environment.Name, Namespace: namespace}, &existingCrd); err != nil {
+		return nil, SanitizeK8sError(s.logger, err)
+	}
+
+	if msg.Environment.ResourceVersion != "" {
+		existingCrd.ResourceVersion = msg.Environment.ResourceVersion
+	}
+
 	var dom domain.Environment
 	dom.FromProto(msg.Environment)
 
-	realCrd, err := DomainEnvToCRD(&dom)
+	newCrd, err := DomainEnvToCRD(&dom)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
 	}
 
-	// Enforce the authorized namespace on the CRD to prevent RBAC bypass
-	realCrd.Namespace = namespace
+	// NOTE: FieldMask currently supports top-level paths only (spec, labels, annotations).
+	// Nested paths like "spec.source" are not supported and will be rejected.
+	// Full sub-field updates require replacing the entire parent (e.g., path="spec").
+	if msg.UpdateMask != nil && len(msg.UpdateMask.Paths) > 0 {
+		allowedPaths := map[string]bool{"spec": true, "labels": true, "annotations": true}
+		for _, path := range msg.UpdateMask.Paths {
+			if !allowedPaths[path] {
+				return nil, connect.NewError(connect.CodeInvalidArgument,
+					fmt.Errorf("unsupported field mask path: %q; allowed paths are: spec, labels, annotations", path))
+			}
+		}
 
-	if err := s.client.Update(ctx, realCrd); err != nil {
+		for _, path := range msg.UpdateMask.Paths {
+			switch path {
+			case "spec":
+				existingCrd.Spec = newCrd.Spec
+			case "labels":
+				existingCrd.Labels = newCrd.Labels
+			case "annotations":
+				existingCrd.Annotations = newCrd.Annotations
+			}
+		}
+	} else {
+		existingCrd.Spec = newCrd.Spec
+		existingCrd.Labels = newCrd.Labels
+		existingCrd.Annotations = newCrd.Annotations
+	}
+
+	if err := s.client.Update(ctx, &existingCrd); err != nil {
 		return nil, SanitizeK8sError(s.logger, err)
 	}
 
-	s.auditLogger.LogMutation(ctx, "resource.updated", "environment", realCrd.Name, realCrd.Namespace)
+	if msg.UpdateMask != nil && len(msg.UpdateMask.Paths) > 0 {
+		s.logger.Info("partial update applied", "resource", "environment", "name", existingCrd.Name, "paths", msg.UpdateMask.Paths)
+	}
 
-	domBack, _ := CRDEnvToDomain(realCrd)
+	s.auditLogger.LogMutation(ctx, "resource.updated", "environment", existingCrd.Name, existingCrd.Namespace)
+
+	domBack, _ := CRDEnvToDomain(&existingCrd)
 	if domBack == nil {
 		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
 	}

@@ -41,9 +41,9 @@ func TestSanitizeK8sError(t *testing.T) {
 		},
 		{
 			name:         "conflict",
-			err:          apierrors.NewConflict(gr, "my-deploy", errors.New("conflict")),
+			err:          apierrors.NewConflict(schema.GroupResource{Group: "foo"}, "bar", errors.New("conflict")),
 			expectedCode: connect.CodeAborted,
-			expectedMsg:  "resource version conflict, please retry with the latest version",
+			expectedMsg:  "resource was modified, please retry with the latest resource_version",
 		},
 		{
 			name:         "forbidden",

@@ -2351,13 +2351,14 @@ func (e *EnvironmentStatus) Equal(other *EnvironmentStatus) bool {
 
 // Environment is the domain representation of diverge.v1alpha1.Environment.
 type Environment struct {
-	Name        string             `json:"name,omitempty"`
-	Namespace   string             `json:"namespace,omitempty"`
-	Spec        *EnvironmentSpec   `json:"spec,omitempty"`
-	Status      *EnvironmentStatus `json:"status,omitempty"`
-	CreatedAt   time.Time          `json:"created_at,omitempty"`
-	Labels      map[string]string  `json:"labels,omitempty"`
-	Annotations map[string]string  `json:"annotations,omitempty"`
+	Name            string             `json:"name,omitempty"`
+	Namespace       string             `json:"namespace,omitempty"`
+	Spec            *EnvironmentSpec   `json:"spec,omitempty"`
+	Status          *EnvironmentStatus `json:"status,omitempty"`
+	CreatedAt       time.Time          `json:"created_at,omitempty"`
+	Labels          map[string]string  `json:"labels,omitempty"`
+	Annotations     map[string]string  `json:"annotations,omitempty"`
+	ResourceVersion string             `json:"resource_version,omitempty"`
 }
 
 // ToProto converts to the protobuf message.
@@ -2366,10 +2367,11 @@ func (e *Environment) ToProto() *v1alpha1.Environment {
 		return nil
 	}
 	out := &v1alpha1.Environment{
-		Name:        e.Name,
-		Namespace:   e.Namespace,
-		Labels:      e.Labels,
-		Annotations: e.Annotations,
+		Name:            e.Name,
+		Namespace:       e.Namespace,
+		Labels:          e.Labels,
+		Annotations:     e.Annotations,
+		ResourceVersion: e.ResourceVersion,
 	}
 	if e.Spec != nil {
 		out.Spec = e.Spec.ToProto()
@@ -2408,6 +2410,7 @@ func (e *Environment) FromProto(msg *v1alpha1.Environment) {
 	e.Labels = msg.Labels
 	e.Annotations = nil
 	e.Annotations = msg.Annotations
+	e.ResourceVersion = msg.ResourceVersion
 }
 
 // ApplyFieldMaskEnvironment copies fields from src to dst based on the given paths.
@@ -2431,6 +2434,8 @@ func ApplyFieldMaskEnvironment(dst, src *Environment, paths []string) {
 			dst.Labels = src.Labels
 		case "annotations":
 			dst.Annotations = src.Annotations
+		case "resource_version":
+			dst.ResourceVersion = src.ResourceVersion
 		}
 	}
 }
@@ -2441,9 +2446,10 @@ func (e *Environment) Clone() *Environment {
 		return nil
 	}
 	clone := &Environment{
-		Name:      e.Name,
-		Namespace: e.Namespace,
-		CreatedAt: e.CreatedAt,
+		Name:            e.Name,
+		Namespace:       e.Namespace,
+		CreatedAt:       e.CreatedAt,
+		ResourceVersion: e.ResourceVersion,
 	}
 	if e.Labels != nil {
 		clone.Labels = make(map[string]string, len(e.Labels))
@@ -2518,6 +2524,9 @@ func (e *Environment) Equal(other *Environment) bool {
 		if v != ov {
 			return false
 		}
+	}
+	if e.ResourceVersion != other.ResourceVersion {
+		return false
 	}
 	return true
 }

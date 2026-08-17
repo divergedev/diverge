@@ -1563,16 +1563,17 @@ func (x *EnvironmentStatus) GetTestStatus() *TestStatus {
 }
 
 type Environment struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Namespace     string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
-	Spec          *EnvironmentSpec       `protobuf:"bytes,3,opt,name=spec,proto3" json:"spec,omitempty"`
-	Status        *EnvironmentStatus     `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	Labels        map[string]string      `protobuf:"bytes,6,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	Annotations   map[string]string      `protobuf:"bytes,7,rep,name=annotations,proto3" json:"annotations,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Name            string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Namespace       string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Spec            *EnvironmentSpec       `protobuf:"bytes,3,opt,name=spec,proto3" json:"spec,omitempty"`
+	Status          *EnvironmentStatus     `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
+	CreatedAt       *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	Labels          map[string]string      `protobuf:"bytes,6,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Annotations     map[string]string      `protobuf:"bytes,7,rep,name=annotations,proto3" json:"annotations,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	ResourceVersion string                 `protobuf:"bytes,8,opt,name=resource_version,json=resourceVersion,proto3" json:"resource_version,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *Environment) Reset() {
@@ -1652,6 +1653,13 @@ func (x *Environment) GetAnnotations() map[string]string {
 		return x.Annotations
 	}
 	return nil
+}
+
+func (x *Environment) GetResourceVersion() string {
+	if x != nil {
+		return x.ResourceVersion
+	}
+	return ""
 }
 
 type CreateEnvironmentRequest struct {
@@ -2753,7 +2761,7 @@ const file_diverge_v1alpha1_environment_proto_rawDesc = "" +
 	" \x01(\x05R\tcommentId\x12*\n" +
 	"\x11commit_status_url\x18\v \x01(\tR\x0fcommitStatusUrl\x12=\n" +
 	"\vtest_status\x18\f \x01(\v2\x1c.diverge.v1alpha1.TestStatusR\n" +
-	"testStatus\"\xfe\x03\n" +
+	"testStatus\"\xa9\x04\n" +
 	"\vEnvironment\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
 	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x125\n" +
@@ -2762,7 +2770,8 @@ const file_diverge_v1alpha1_environment_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12A\n" +
 	"\x06labels\x18\x06 \x03(\v2).diverge.v1alpha1.Environment.LabelsEntryR\x06labels\x12P\n" +
-	"\vannotations\x18\a \x03(\v2..diverge.v1alpha1.Environment.AnnotationsEntryR\vannotations\x1a9\n" +
+	"\vannotations\x18\a \x03(\v2..diverge.v1alpha1.Environment.AnnotationsEntryR\vannotations\x12)\n" +
+	"\x10resource_version\x18\b \x01(\tR\x0fresourceVersion\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a>\n" +

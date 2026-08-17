@@ -6,6 +6,7 @@ package divergedomainv1alpha1
 import (
 	v1alpha1 "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 	durationpb "google.golang.org/protobuf/types/known/durationpb"
+	fieldmaskpb "google.golang.org/protobuf/types/known/fieldmaskpb"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -971,13 +972,14 @@ func (p *PreviewGroupStatus) Equal(other *PreviewGroupStatus) bool {
 
 // PreviewGroup is the domain representation of diverge.v1alpha1.PreviewGroup.
 type PreviewGroup struct {
-	Name        string              `json:"name,omitempty"`
-	Namespace   string              `json:"namespace,omitempty"`
-	Spec        *PreviewGroupSpec   `json:"spec,omitempty"`
-	Status      *PreviewGroupStatus `json:"status,omitempty"`
-	CreatedAt   time.Time           `json:"created_at,omitempty"`
-	Labels      map[string]string   `json:"labels,omitempty"`
-	Annotations map[string]string   `json:"annotations,omitempty"`
+	Name            string              `json:"name,omitempty"`
+	Namespace       string              `json:"namespace,omitempty"`
+	Spec            *PreviewGroupSpec   `json:"spec,omitempty"`
+	Status          *PreviewGroupStatus `json:"status,omitempty"`
+	CreatedAt       time.Time           `json:"created_at,omitempty"`
+	Labels          map[string]string   `json:"labels,omitempty"`
+	Annotations     map[string]string   `json:"annotations,omitempty"`
+	ResourceVersion string              `json:"resource_version,omitempty"`
 }
 
 // ToProto converts to the protobuf message.
@@ -986,10 +988,11 @@ func (p *PreviewGroup) ToProto() *v1alpha1.PreviewGroup {
 		return nil
 	}
 	out := &v1alpha1.PreviewGroup{
-		Name:        p.Name,
-		Namespace:   p.Namespace,
-		Labels:      p.Labels,
-		Annotations: p.Annotations,
+		Name:            p.Name,
+		Namespace:       p.Namespace,
+		Labels:          p.Labels,
+		Annotations:     p.Annotations,
+		ResourceVersion: p.ResourceVersion,
 	}
 	if p.Spec != nil {
 		out.Spec = p.Spec.ToProto()
@@ -1028,6 +1031,7 @@ func (p *PreviewGroup) FromProto(msg *v1alpha1.PreviewGroup) {
 	p.Labels = msg.Labels
 	p.Annotations = nil
 	p.Annotations = msg.Annotations
+	p.ResourceVersion = msg.ResourceVersion
 }
 
 // ApplyFieldMaskPreviewGroup copies fields from src to dst based on the given paths.
@@ -1051,6 +1055,8 @@ func ApplyFieldMaskPreviewGroup(dst, src *PreviewGroup, paths []string) {
 			dst.Labels = src.Labels
 		case "annotations":
 			dst.Annotations = src.Annotations
+		case "resource_version":
+			dst.ResourceVersion = src.ResourceVersion
 		}
 	}
 }
@@ -1061,9 +1067,10 @@ func (p *PreviewGroup) Clone() *PreviewGroup {
 		return nil
 	}
 	clone := &PreviewGroup{
-		Name:      p.Name,
-		Namespace: p.Namespace,
-		CreatedAt: p.CreatedAt,
+		Name:            p.Name,
+		Namespace:       p.Namespace,
+		CreatedAt:       p.CreatedAt,
+		ResourceVersion: p.ResourceVersion,
 	}
 	if p.Labels != nil {
 		clone.Labels = make(map[string]string, len(p.Labels))
@@ -1138,6 +1145,9 @@ func (p *PreviewGroup) Equal(other *PreviewGroup) bool {
 		if v != ov {
 			return false
 		}
+	}
+	if p.ResourceVersion != other.ResourceVersion {
+		return false
 	}
 	return true
 }
@@ -1633,6 +1643,179 @@ func (l *ListPreviewGroupsResponse) Equal(other *ListPreviewGroupsResponse) bool
 		return false
 	}
 	if l.TotalSize != other.TotalSize {
+		return false
+	}
+	return true
+}
+
+// UpdatePreviewGroupRequest is the domain representation of diverge.v1alpha1.UpdatePreviewGroupRequest.
+type UpdatePreviewGroupRequest struct {
+	PreviewGroup *PreviewGroup `json:"preview_group,omitempty"`
+	UpdateMask   []string      `json:"update_mask,omitempty"`
+}
+
+// ToProto converts to the protobuf message.
+func (u *UpdatePreviewGroupRequest) ToProto() *v1alpha1.UpdatePreviewGroupRequest {
+	if u == nil {
+		return nil
+	}
+	out := &v1alpha1.UpdatePreviewGroupRequest{}
+	if u.PreviewGroup != nil {
+		out.PreviewGroup = u.PreviewGroup.ToProto()
+	}
+	if len(u.UpdateMask) > 0 {
+		paths := make([]string, len(u.UpdateMask))
+		copy(paths, u.UpdateMask)
+		out.UpdateMask = &fieldmaskpb.FieldMask{Paths: paths}
+	}
+	return out
+}
+
+// FromProto populates from a protobuf message.
+func (u *UpdatePreviewGroupRequest) FromProto(msg *v1alpha1.UpdatePreviewGroupRequest) {
+	if msg == nil {
+		return
+	}
+	u.PreviewGroup = nil
+	if msg.PreviewGroup != nil {
+		u.PreviewGroup = &PreviewGroup{}
+		u.PreviewGroup.FromProto(msg.PreviewGroup)
+	}
+	u.UpdateMask = nil
+	if msg.UpdateMask != nil {
+		src := msg.UpdateMask.GetPaths()
+		u.UpdateMask = make([]string, len(src))
+		copy(u.UpdateMask, src)
+	}
+}
+
+// ApplyFieldMaskUpdatePreviewGroupRequest copies fields from src to dst based on the given paths.
+func ApplyFieldMaskUpdatePreviewGroupRequest(dst, src *UpdatePreviewGroupRequest, paths []string) {
+	if dst == nil || src == nil {
+		return
+	}
+	for _, path := range paths {
+		switch path {
+		case "preview_group":
+			dst.PreviewGroup = src.PreviewGroup.Clone()
+		case "update_mask":
+			if src.UpdateMask != nil {
+				dst.UpdateMask = make([]string, len(src.UpdateMask))
+				copy(dst.UpdateMask, src.UpdateMask)
+			} else {
+				dst.UpdateMask = nil
+			}
+		}
+	}
+}
+
+// Clone returns a deep copy of UpdatePreviewGroupRequest.
+func (u *UpdatePreviewGroupRequest) Clone() *UpdatePreviewGroupRequest {
+	if u == nil {
+		return nil
+	}
+	clone := &UpdatePreviewGroupRequest{}
+	if u.PreviewGroup != nil {
+		clone.PreviewGroup = u.PreviewGroup.Clone()
+	}
+	if u.UpdateMask != nil {
+		clone.UpdateMask = make([]string, len(u.UpdateMask))
+		copy(clone.UpdateMask, u.UpdateMask)
+	}
+	return clone
+}
+
+// Equal reports whether u and other are equal.
+func (u *UpdatePreviewGroupRequest) Equal(other *UpdatePreviewGroupRequest) bool {
+	if u == other {
+		return true
+	}
+	if u == nil || other == nil {
+		return false
+	}
+	if (u.PreviewGroup == nil) != (other.PreviewGroup == nil) {
+		return false
+	}
+	if u.PreviewGroup != nil && !u.PreviewGroup.Equal(other.PreviewGroup) {
+		return false
+	}
+	if len(u.UpdateMask) != len(other.UpdateMask) {
+		return false
+	}
+	for i := range u.UpdateMask {
+		if u.UpdateMask[i] != other.UpdateMask[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// UpdatePreviewGroupResponse is the domain representation of diverge.v1alpha1.UpdatePreviewGroupResponse.
+type UpdatePreviewGroupResponse struct {
+	PreviewGroup *PreviewGroup `json:"preview_group,omitempty"`
+}
+
+// ToProto converts to the protobuf message.
+func (u *UpdatePreviewGroupResponse) ToProto() *v1alpha1.UpdatePreviewGroupResponse {
+	if u == nil {
+		return nil
+	}
+	out := &v1alpha1.UpdatePreviewGroupResponse{}
+	if u.PreviewGroup != nil {
+		out.PreviewGroup = u.PreviewGroup.ToProto()
+	}
+	return out
+}
+
+// FromProto populates from a protobuf message.
+func (u *UpdatePreviewGroupResponse) FromProto(msg *v1alpha1.UpdatePreviewGroupResponse) {
+	if msg == nil {
+		return
+	}
+	u.PreviewGroup = nil
+	if msg.PreviewGroup != nil {
+		u.PreviewGroup = &PreviewGroup{}
+		u.PreviewGroup.FromProto(msg.PreviewGroup)
+	}
+}
+
+// ApplyFieldMaskUpdatePreviewGroupResponse copies fields from src to dst based on the given paths.
+func ApplyFieldMaskUpdatePreviewGroupResponse(dst, src *UpdatePreviewGroupResponse, paths []string) {
+	if dst == nil || src == nil {
+		return
+	}
+	for _, path := range paths {
+		switch path {
+		case "preview_group":
+			dst.PreviewGroup = src.PreviewGroup.Clone()
+		}
+	}
+}
+
+// Clone returns a deep copy of UpdatePreviewGroupResponse.
+func (u *UpdatePreviewGroupResponse) Clone() *UpdatePreviewGroupResponse {
+	if u == nil {
+		return nil
+	}
+	clone := &UpdatePreviewGroupResponse{}
+	if u.PreviewGroup != nil {
+		clone.PreviewGroup = u.PreviewGroup.Clone()
+	}
+	return clone
+}
+
+// Equal reports whether u and other are equal.
+func (u *UpdatePreviewGroupResponse) Equal(other *UpdatePreviewGroupResponse) bool {
+	if u == other {
+		return true
+	}
+	if u == nil || other == nil {
+		return false
+	}
+	if (u.PreviewGroup == nil) != (other.PreviewGroup == nil) {
+		return false
+	}
+	if u.PreviewGroup != nil && !u.PreviewGroup.Equal(other.PreviewGroup) {
 		return false
 	}
 	return true

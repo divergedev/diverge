@@ -10,6 +10,7 @@ import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	durationpb "google.golang.org/protobuf/types/known/durationpb"
+	fieldmaskpb "google.golang.org/protobuf/types/known/fieldmaskpb"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
@@ -592,16 +593,17 @@ func (x *PreviewGroupStatus) GetLeaseRenewedAt() *timestamppb.Timestamp {
 }
 
 type PreviewGroup struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Namespace     string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
-	Spec          *PreviewGroupSpec      `protobuf:"bytes,3,opt,name=spec,proto3" json:"spec,omitempty"`
-	Status        *PreviewGroupStatus    `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	Labels        map[string]string      `protobuf:"bytes,6,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	Annotations   map[string]string      `protobuf:"bytes,7,rep,name=annotations,proto3" json:"annotations,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Name            string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Namespace       string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Spec            *PreviewGroupSpec      `protobuf:"bytes,3,opt,name=spec,proto3" json:"spec,omitempty"`
+	Status          *PreviewGroupStatus    `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
+	CreatedAt       *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	Labels          map[string]string      `protobuf:"bytes,6,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Annotations     map[string]string      `protobuf:"bytes,7,rep,name=annotations,proto3" json:"annotations,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	ResourceVersion string                 `protobuf:"bytes,8,opt,name=resource_version,json=resourceVersion,proto3" json:"resource_version,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *PreviewGroup) Reset() {
@@ -681,6 +683,13 @@ func (x *PreviewGroup) GetAnnotations() map[string]string {
 		return x.Annotations
 	}
 	return nil
+}
+
+func (x *PreviewGroup) GetResourceVersion() string {
+	if x != nil {
+		return x.ResourceVersion
+	}
+	return ""
 }
 
 type CreatePreviewGroupRequest struct {
@@ -1003,6 +1012,102 @@ func (x *ListPreviewGroupsResponse) GetTotalSize() int32 {
 	return 0
 }
 
+type UpdatePreviewGroupRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PreviewGroup  *PreviewGroup          `protobuf:"bytes,1,opt,name=preview_group,json=previewGroup,proto3" json:"preview_group,omitempty"`
+	UpdateMask    *fieldmaskpb.FieldMask `protobuf:"bytes,2,opt,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdatePreviewGroupRequest) Reset() {
+	*x = UpdatePreviewGroupRequest{}
+	mi := &file_diverge_v1alpha1_previewgroup_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdatePreviewGroupRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdatePreviewGroupRequest) ProtoMessage() {}
+
+func (x *UpdatePreviewGroupRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_previewgroup_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdatePreviewGroupRequest.ProtoReflect.Descriptor instead.
+func (*UpdatePreviewGroupRequest) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_previewgroup_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *UpdatePreviewGroupRequest) GetPreviewGroup() *PreviewGroup {
+	if x != nil {
+		return x.PreviewGroup
+	}
+	return nil
+}
+
+func (x *UpdatePreviewGroupRequest) GetUpdateMask() *fieldmaskpb.FieldMask {
+	if x != nil {
+		return x.UpdateMask
+	}
+	return nil
+}
+
+type UpdatePreviewGroupResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PreviewGroup  *PreviewGroup          `protobuf:"bytes,1,opt,name=preview_group,json=previewGroup,proto3" json:"preview_group,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdatePreviewGroupResponse) Reset() {
+	*x = UpdatePreviewGroupResponse{}
+	mi := &file_diverge_v1alpha1_previewgroup_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdatePreviewGroupResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdatePreviewGroupResponse) ProtoMessage() {}
+
+func (x *UpdatePreviewGroupResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_previewgroup_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdatePreviewGroupResponse.ProtoReflect.Descriptor instead.
+func (*UpdatePreviewGroupResponse) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_previewgroup_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *UpdatePreviewGroupResponse) GetPreviewGroup() *PreviewGroup {
+	if x != nil {
+		return x.PreviewGroup
+	}
+	return nil
+}
+
 type DeletePreviewGroupRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Namespace     string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
@@ -1013,7 +1118,7 @@ type DeletePreviewGroupRequest struct {
 
 func (x *DeletePreviewGroupRequest) Reset() {
 	*x = DeletePreviewGroupRequest{}
-	mi := &file_diverge_v1alpha1_previewgroup_proto_msgTypes[13]
+	mi := &file_diverge_v1alpha1_previewgroup_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1025,7 +1130,7 @@ func (x *DeletePreviewGroupRequest) String() string {
 func (*DeletePreviewGroupRequest) ProtoMessage() {}
 
 func (x *DeletePreviewGroupRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_previewgroup_proto_msgTypes[13]
+	mi := &file_diverge_v1alpha1_previewgroup_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1038,7 +1143,7 @@ func (x *DeletePreviewGroupRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeletePreviewGroupRequest.ProtoReflect.Descriptor instead.
 func (*DeletePreviewGroupRequest) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_previewgroup_proto_rawDescGZIP(), []int{13}
+	return file_diverge_v1alpha1_previewgroup_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *DeletePreviewGroupRequest) GetNamespace() string {
@@ -1063,7 +1168,7 @@ type DeletePreviewGroupResponse struct {
 
 func (x *DeletePreviewGroupResponse) Reset() {
 	*x = DeletePreviewGroupResponse{}
-	mi := &file_diverge_v1alpha1_previewgroup_proto_msgTypes[14]
+	mi := &file_diverge_v1alpha1_previewgroup_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1075,7 +1180,7 @@ func (x *DeletePreviewGroupResponse) String() string {
 func (*DeletePreviewGroupResponse) ProtoMessage() {}
 
 func (x *DeletePreviewGroupResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_previewgroup_proto_msgTypes[14]
+	mi := &file_diverge_v1alpha1_previewgroup_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1088,7 +1193,7 @@ func (x *DeletePreviewGroupResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeletePreviewGroupResponse.ProtoReflect.Descriptor instead.
 func (*DeletePreviewGroupResponse) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_previewgroup_proto_rawDescGZIP(), []int{14}
+	return file_diverge_v1alpha1_previewgroup_proto_rawDescGZIP(), []int{16}
 }
 
 type WatchPreviewGroupsRequest struct {
@@ -1102,7 +1207,7 @@ type WatchPreviewGroupsRequest struct {
 
 func (x *WatchPreviewGroupsRequest) Reset() {
 	*x = WatchPreviewGroupsRequest{}
-	mi := &file_diverge_v1alpha1_previewgroup_proto_msgTypes[15]
+	mi := &file_diverge_v1alpha1_previewgroup_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1114,7 +1219,7 @@ func (x *WatchPreviewGroupsRequest) String() string {
 func (*WatchPreviewGroupsRequest) ProtoMessage() {}
 
 func (x *WatchPreviewGroupsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_previewgroup_proto_msgTypes[15]
+	mi := &file_diverge_v1alpha1_previewgroup_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1127,7 +1232,7 @@ func (x *WatchPreviewGroupsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchPreviewGroupsRequest.ProtoReflect.Descriptor instead.
 func (*WatchPreviewGroupsRequest) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_previewgroup_proto_rawDescGZIP(), []int{15}
+	return file_diverge_v1alpha1_previewgroup_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *WatchPreviewGroupsRequest) GetNamespace() string {
@@ -1163,7 +1268,7 @@ type WatchPreviewGroupsResponse struct {
 
 func (x *WatchPreviewGroupsResponse) Reset() {
 	*x = WatchPreviewGroupsResponse{}
-	mi := &file_diverge_v1alpha1_previewgroup_proto_msgTypes[16]
+	mi := &file_diverge_v1alpha1_previewgroup_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1175,7 +1280,7 @@ func (x *WatchPreviewGroupsResponse) String() string {
 func (*WatchPreviewGroupsResponse) ProtoMessage() {}
 
 func (x *WatchPreviewGroupsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_previewgroup_proto_msgTypes[16]
+	mi := &file_diverge_v1alpha1_previewgroup_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1188,7 +1293,7 @@ func (x *WatchPreviewGroupsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchPreviewGroupsResponse.ProtoReflect.Descriptor instead.
 func (*WatchPreviewGroupsResponse) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_previewgroup_proto_rawDescGZIP(), []int{16}
+	return file_diverge_v1alpha1_previewgroup_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *WatchPreviewGroupsResponse) GetType() WatchEventType {
@@ -1223,7 +1328,7 @@ var File_diverge_v1alpha1_previewgroup_proto protoreflect.FileDescriptor
 
 const file_diverge_v1alpha1_previewgroup_proto_rawDesc = "" +
 	"\n" +
-	"#diverge/v1alpha1/previewgroup.proto\x12\x10diverge.v1alpha1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1cdiverge/v1alpha1/types.proto\x1a\"diverge/v1alpha1/environment.proto\"\xa3\x04\n" +
+	"#diverge/v1alpha1/previewgroup.proto\x12\x10diverge.v1alpha1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1egoogle/protobuf/duration.proto\x1a google/protobuf/field_mask.proto\x1a\x1cdiverge/v1alpha1/types.proto\x1a\"diverge/v1alpha1/environment.proto\"\xa3\x04\n" +
 	"\x17PreviewGroupServiceSpec\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\x12\x12\n" +
@@ -1283,7 +1388,7 @@ const file_diverge_v1alpha1_previewgroup_proto_rawDesc = "" +
 	"conditions\x12\x1d\n" +
 	"\n" +
 	"comment_id\x18\b \x01(\x03R\tcommentId\x12D\n" +
-	"\x10lease_renewed_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\x0eleaseRenewedAt\"\x83\x04\n" +
+	"\x10lease_renewed_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\x0eleaseRenewedAt\"\xae\x04\n" +
 	"\fPreviewGroup\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
 	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x126\n" +
@@ -1292,7 +1397,8 @@ const file_diverge_v1alpha1_previewgroup_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12B\n" +
 	"\x06labels\x18\x06 \x03(\v2*.diverge.v1alpha1.PreviewGroup.LabelsEntryR\x06labels\x12Q\n" +
-	"\vannotations\x18\a \x03(\v2/.diverge.v1alpha1.PreviewGroup.AnnotationsEntryR\vannotations\x1a9\n" +
+	"\vannotations\x18\a \x03(\v2/.diverge.v1alpha1.PreviewGroup.AnnotationsEntryR\vannotations\x12)\n" +
+	"\x10resource_version\x18\b \x01(\tR\x0fresourceVersion\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a>\n" +
@@ -1319,7 +1425,13 @@ const file_diverge_v1alpha1_previewgroup_proto_rawDesc = "" +
 	"\x0epreview_groups\x18\x01 \x03(\v2\x1e.diverge.v1alpha1.PreviewGroupR\rpreviewGroups\x12&\n" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\x12\x1d\n" +
 	"\n" +
-	"total_size\x18\x03 \x01(\x05R\ttotalSize\"M\n" +
+	"total_size\x18\x03 \x01(\x05R\ttotalSize\"\x9d\x01\n" +
+	"\x19UpdatePreviewGroupRequest\x12C\n" +
+	"\rpreview_group\x18\x01 \x01(\v2\x1e.diverge.v1alpha1.PreviewGroupR\fpreviewGroup\x12;\n" +
+	"\vupdate_mask\x18\x02 \x01(\v2\x1a.google.protobuf.FieldMaskR\n" +
+	"updateMask\"a\n" +
+	"\x1aUpdatePreviewGroupResponse\x12C\n" +
+	"\rpreview_group\x18\x01 \x01(\v2\x1e.diverge.v1alpha1.PreviewGroupR\fpreviewGroup\"M\n" +
 	"\x19DeletePreviewGroupRequest\x12\x1c\n" +
 	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\"\x1c\n" +
@@ -1332,11 +1444,12 @@ const file_diverge_v1alpha1_previewgroup_proto_rawDesc = "" +
 	"\x04type\x18\x01 \x01(\x0e2 .diverge.v1alpha1.WatchEventTypeR\x04type\x12C\n" +
 	"\rpreview_group\x18\x02 \x01(\v2\x1e.diverge.v1alpha1.PreviewGroupR\fpreviewGroup\x128\n" +
 	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12)\n" +
-	"\x10resource_version\x18\x04 \x01(\tR\x0fresourceVersion2\xc0\x04\n" +
+	"\x10resource_version\x18\x04 \x01(\tR\x0fresourceVersion2\xb1\x05\n" +
 	"\x13PreviewGroupService\x12o\n" +
 	"\x12CreatePreviewGroup\x12+.diverge.v1alpha1.CreatePreviewGroupRequest\x1a,.diverge.v1alpha1.CreatePreviewGroupResponse\x12f\n" +
 	"\x0fGetPreviewGroup\x12(.diverge.v1alpha1.GetPreviewGroupRequest\x1a).diverge.v1alpha1.GetPreviewGroupResponse\x12l\n" +
 	"\x11ListPreviewGroups\x12*.diverge.v1alpha1.ListPreviewGroupsRequest\x1a+.diverge.v1alpha1.ListPreviewGroupsResponse\x12o\n" +
+	"\x12UpdatePreviewGroup\x12+.diverge.v1alpha1.UpdatePreviewGroupRequest\x1a,.diverge.v1alpha1.UpdatePreviewGroupResponse\x12o\n" +
 	"\x12DeletePreviewGroup\x12+.diverge.v1alpha1.DeletePreviewGroupRequest\x1a,.diverge.v1alpha1.DeletePreviewGroupResponse\x12q\n" +
 	"\x12WatchPreviewGroups\x12+.diverge.v1alpha1.WatchPreviewGroupsRequest\x1a,.diverge.v1alpha1.WatchPreviewGroupsResponse0\x01BHZFgithub.com/divergedev/diverge/api/gen/diverge/v1alpha1;divergev1alpha1b\x06proto3"
 
@@ -1352,7 +1465,7 @@ func file_diverge_v1alpha1_previewgroup_proto_rawDescGZIP() []byte {
 	return file_diverge_v1alpha1_previewgroup_proto_rawDescData
 }
 
-var file_diverge_v1alpha1_previewgroup_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_diverge_v1alpha1_previewgroup_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_diverge_v1alpha1_previewgroup_proto_goTypes = []any{
 	(*PreviewGroupServiceSpec)(nil),    // 0: diverge.v1alpha1.PreviewGroupServiceSpec
 	(*PreviewGroupRouting)(nil),        // 1: diverge.v1alpha1.PreviewGroupRouting
@@ -1367,65 +1480,73 @@ var file_diverge_v1alpha1_previewgroup_proto_goTypes = []any{
 	(*GetPreviewGroupResponse)(nil),    // 10: diverge.v1alpha1.GetPreviewGroupResponse
 	(*ListPreviewGroupsRequest)(nil),   // 11: diverge.v1alpha1.ListPreviewGroupsRequest
 	(*ListPreviewGroupsResponse)(nil),  // 12: diverge.v1alpha1.ListPreviewGroupsResponse
-	(*DeletePreviewGroupRequest)(nil),  // 13: diverge.v1alpha1.DeletePreviewGroupRequest
-	(*DeletePreviewGroupResponse)(nil), // 14: diverge.v1alpha1.DeletePreviewGroupResponse
-	(*WatchPreviewGroupsRequest)(nil),  // 15: diverge.v1alpha1.WatchPreviewGroupsRequest
-	(*WatchPreviewGroupsResponse)(nil), // 16: diverge.v1alpha1.WatchPreviewGroupsResponse
-	nil,                                // 17: diverge.v1alpha1.PreviewGroup.LabelsEntry
-	nil,                                // 18: diverge.v1alpha1.PreviewGroup.AnnotationsEntry
-	(*AsyncRouteSpec)(nil),             // 19: diverge.v1alpha1.AsyncRouteSpec
-	(*EnvVar)(nil),                     // 20: diverge.v1alpha1.EnvVar
-	(*ResourceOverride)(nil),           // 21: diverge.v1alpha1.ResourceOverride
-	(*EnvironmentDatabase)(nil),        // 22: diverge.v1alpha1.EnvironmentDatabase
-	(*durationpb.Duration)(nil),        // 23: google.protobuf.Duration
-	(*EnvironmentSource)(nil),          // 24: diverge.v1alpha1.EnvironmentSource
-	(*timestamppb.Timestamp)(nil),      // 25: google.protobuf.Timestamp
-	(*Condition)(nil),                  // 26: diverge.v1alpha1.Condition
-	(WatchEventType)(0),                // 27: diverge.v1alpha1.WatchEventType
+	(*UpdatePreviewGroupRequest)(nil),  // 13: diverge.v1alpha1.UpdatePreviewGroupRequest
+	(*UpdatePreviewGroupResponse)(nil), // 14: diverge.v1alpha1.UpdatePreviewGroupResponse
+	(*DeletePreviewGroupRequest)(nil),  // 15: diverge.v1alpha1.DeletePreviewGroupRequest
+	(*DeletePreviewGroupResponse)(nil), // 16: diverge.v1alpha1.DeletePreviewGroupResponse
+	(*WatchPreviewGroupsRequest)(nil),  // 17: diverge.v1alpha1.WatchPreviewGroupsRequest
+	(*WatchPreviewGroupsResponse)(nil), // 18: diverge.v1alpha1.WatchPreviewGroupsResponse
+	nil,                                // 19: diverge.v1alpha1.PreviewGroup.LabelsEntry
+	nil,                                // 20: diverge.v1alpha1.PreviewGroup.AnnotationsEntry
+	(*AsyncRouteSpec)(nil),             // 21: diverge.v1alpha1.AsyncRouteSpec
+	(*EnvVar)(nil),                     // 22: diverge.v1alpha1.EnvVar
+	(*ResourceOverride)(nil),           // 23: diverge.v1alpha1.ResourceOverride
+	(*EnvironmentDatabase)(nil),        // 24: diverge.v1alpha1.EnvironmentDatabase
+	(*durationpb.Duration)(nil),        // 25: google.protobuf.Duration
+	(*EnvironmentSource)(nil),          // 26: diverge.v1alpha1.EnvironmentSource
+	(*timestamppb.Timestamp)(nil),      // 27: google.protobuf.Timestamp
+	(*Condition)(nil),                  // 28: diverge.v1alpha1.Condition
+	(*fieldmaskpb.FieldMask)(nil),      // 29: google.protobuf.FieldMask
+	(WatchEventType)(0),                // 30: diverge.v1alpha1.WatchEventType
 }
 var file_diverge_v1alpha1_previewgroup_proto_depIdxs = []int32{
-	19, // 0: diverge.v1alpha1.PreviewGroupServiceSpec.async_routes:type_name -> diverge.v1alpha1.AsyncRouteSpec
-	20, // 1: diverge.v1alpha1.PreviewGroupServiceSpec.env:type_name -> diverge.v1alpha1.EnvVar
-	21, // 2: diverge.v1alpha1.PreviewGroupServiceSpec.resources:type_name -> diverge.v1alpha1.ResourceOverride
-	22, // 3: diverge.v1alpha1.PreviewGroupServiceSpec.database:type_name -> diverge.v1alpha1.EnvironmentDatabase
-	23, // 4: diverge.v1alpha1.PreviewGroupLifecycle.ttl:type_name -> google.protobuf.Duration
-	24, // 5: diverge.v1alpha1.PreviewGroupSpec.source:type_name -> diverge.v1alpha1.EnvironmentSource
+	21, // 0: diverge.v1alpha1.PreviewGroupServiceSpec.async_routes:type_name -> diverge.v1alpha1.AsyncRouteSpec
+	22, // 1: diverge.v1alpha1.PreviewGroupServiceSpec.env:type_name -> diverge.v1alpha1.EnvVar
+	23, // 2: diverge.v1alpha1.PreviewGroupServiceSpec.resources:type_name -> diverge.v1alpha1.ResourceOverride
+	24, // 3: diverge.v1alpha1.PreviewGroupServiceSpec.database:type_name -> diverge.v1alpha1.EnvironmentDatabase
+	25, // 4: diverge.v1alpha1.PreviewGroupLifecycle.ttl:type_name -> google.protobuf.Duration
+	26, // 5: diverge.v1alpha1.PreviewGroupSpec.source:type_name -> diverge.v1alpha1.EnvironmentSource
 	1,  // 6: diverge.v1alpha1.PreviewGroupSpec.routing:type_name -> diverge.v1alpha1.PreviewGroupRouting
 	0,  // 7: diverge.v1alpha1.PreviewGroupSpec.services:type_name -> diverge.v1alpha1.PreviewGroupServiceSpec
-	22, // 8: diverge.v1alpha1.PreviewGroupSpec.database:type_name -> diverge.v1alpha1.EnvironmentDatabase
+	24, // 8: diverge.v1alpha1.PreviewGroupSpec.database:type_name -> diverge.v1alpha1.EnvironmentDatabase
 	2,  // 9: diverge.v1alpha1.PreviewGroupSpec.lifecycle:type_name -> diverge.v1alpha1.PreviewGroupLifecycle
 	4,  // 10: diverge.v1alpha1.PreviewGroupStatus.services:type_name -> diverge.v1alpha1.PreviewGroupServiceStatus
-	25, // 11: diverge.v1alpha1.PreviewGroupStatus.created_at:type_name -> google.protobuf.Timestamp
-	25, // 12: diverge.v1alpha1.PreviewGroupStatus.expires_at:type_name -> google.protobuf.Timestamp
-	26, // 13: diverge.v1alpha1.PreviewGroupStatus.conditions:type_name -> diverge.v1alpha1.Condition
-	25, // 14: diverge.v1alpha1.PreviewGroupStatus.lease_renewed_at:type_name -> google.protobuf.Timestamp
+	27, // 11: diverge.v1alpha1.PreviewGroupStatus.created_at:type_name -> google.protobuf.Timestamp
+	27, // 12: diverge.v1alpha1.PreviewGroupStatus.expires_at:type_name -> google.protobuf.Timestamp
+	28, // 13: diverge.v1alpha1.PreviewGroupStatus.conditions:type_name -> diverge.v1alpha1.Condition
+	27, // 14: diverge.v1alpha1.PreviewGroupStatus.lease_renewed_at:type_name -> google.protobuf.Timestamp
 	3,  // 15: diverge.v1alpha1.PreviewGroup.spec:type_name -> diverge.v1alpha1.PreviewGroupSpec
 	5,  // 16: diverge.v1alpha1.PreviewGroup.status:type_name -> diverge.v1alpha1.PreviewGroupStatus
-	25, // 17: diverge.v1alpha1.PreviewGroup.created_at:type_name -> google.protobuf.Timestamp
-	17, // 18: diverge.v1alpha1.PreviewGroup.labels:type_name -> diverge.v1alpha1.PreviewGroup.LabelsEntry
-	18, // 19: diverge.v1alpha1.PreviewGroup.annotations:type_name -> diverge.v1alpha1.PreviewGroup.AnnotationsEntry
+	27, // 17: diverge.v1alpha1.PreviewGroup.created_at:type_name -> google.protobuf.Timestamp
+	19, // 18: diverge.v1alpha1.PreviewGroup.labels:type_name -> diverge.v1alpha1.PreviewGroup.LabelsEntry
+	20, // 19: diverge.v1alpha1.PreviewGroup.annotations:type_name -> diverge.v1alpha1.PreviewGroup.AnnotationsEntry
 	6,  // 20: diverge.v1alpha1.CreatePreviewGroupRequest.preview_group:type_name -> diverge.v1alpha1.PreviewGroup
 	6,  // 21: diverge.v1alpha1.CreatePreviewGroupResponse.preview_group:type_name -> diverge.v1alpha1.PreviewGroup
 	6,  // 22: diverge.v1alpha1.GetPreviewGroupResponse.preview_group:type_name -> diverge.v1alpha1.PreviewGroup
 	6,  // 23: diverge.v1alpha1.ListPreviewGroupsResponse.preview_groups:type_name -> diverge.v1alpha1.PreviewGroup
-	27, // 24: diverge.v1alpha1.WatchPreviewGroupsResponse.type:type_name -> diverge.v1alpha1.WatchEventType
-	6,  // 25: diverge.v1alpha1.WatchPreviewGroupsResponse.preview_group:type_name -> diverge.v1alpha1.PreviewGroup
-	25, // 26: diverge.v1alpha1.WatchPreviewGroupsResponse.timestamp:type_name -> google.protobuf.Timestamp
-	7,  // 27: diverge.v1alpha1.PreviewGroupService.CreatePreviewGroup:input_type -> diverge.v1alpha1.CreatePreviewGroupRequest
-	9,  // 28: diverge.v1alpha1.PreviewGroupService.GetPreviewGroup:input_type -> diverge.v1alpha1.GetPreviewGroupRequest
-	11, // 29: diverge.v1alpha1.PreviewGroupService.ListPreviewGroups:input_type -> diverge.v1alpha1.ListPreviewGroupsRequest
-	13, // 30: diverge.v1alpha1.PreviewGroupService.DeletePreviewGroup:input_type -> diverge.v1alpha1.DeletePreviewGroupRequest
-	15, // 31: diverge.v1alpha1.PreviewGroupService.WatchPreviewGroups:input_type -> diverge.v1alpha1.WatchPreviewGroupsRequest
-	8,  // 32: diverge.v1alpha1.PreviewGroupService.CreatePreviewGroup:output_type -> diverge.v1alpha1.CreatePreviewGroupResponse
-	10, // 33: diverge.v1alpha1.PreviewGroupService.GetPreviewGroup:output_type -> diverge.v1alpha1.GetPreviewGroupResponse
-	12, // 34: diverge.v1alpha1.PreviewGroupService.ListPreviewGroups:output_type -> diverge.v1alpha1.ListPreviewGroupsResponse
-	14, // 35: diverge.v1alpha1.PreviewGroupService.DeletePreviewGroup:output_type -> diverge.v1alpha1.DeletePreviewGroupResponse
-	16, // 36: diverge.v1alpha1.PreviewGroupService.WatchPreviewGroups:output_type -> diverge.v1alpha1.WatchPreviewGroupsResponse
-	32, // [32:37] is the sub-list for method output_type
-	27, // [27:32] is the sub-list for method input_type
-	27, // [27:27] is the sub-list for extension type_name
-	27, // [27:27] is the sub-list for extension extendee
-	0,  // [0:27] is the sub-list for field type_name
+	6,  // 24: diverge.v1alpha1.UpdatePreviewGroupRequest.preview_group:type_name -> diverge.v1alpha1.PreviewGroup
+	29, // 25: diverge.v1alpha1.UpdatePreviewGroupRequest.update_mask:type_name -> google.protobuf.FieldMask
+	6,  // 26: diverge.v1alpha1.UpdatePreviewGroupResponse.preview_group:type_name -> diverge.v1alpha1.PreviewGroup
+	30, // 27: diverge.v1alpha1.WatchPreviewGroupsResponse.type:type_name -> diverge.v1alpha1.WatchEventType
+	6,  // 28: diverge.v1alpha1.WatchPreviewGroupsResponse.preview_group:type_name -> diverge.v1alpha1.PreviewGroup
+	27, // 29: diverge.v1alpha1.WatchPreviewGroupsResponse.timestamp:type_name -> google.protobuf.Timestamp
+	7,  // 30: diverge.v1alpha1.PreviewGroupService.CreatePreviewGroup:input_type -> diverge.v1alpha1.CreatePreviewGroupRequest
+	9,  // 31: diverge.v1alpha1.PreviewGroupService.GetPreviewGroup:input_type -> diverge.v1alpha1.GetPreviewGroupRequest
+	11, // 32: diverge.v1alpha1.PreviewGroupService.ListPreviewGroups:input_type -> diverge.v1alpha1.ListPreviewGroupsRequest
+	13, // 33: diverge.v1alpha1.PreviewGroupService.UpdatePreviewGroup:input_type -> diverge.v1alpha1.UpdatePreviewGroupRequest
+	15, // 34: diverge.v1alpha1.PreviewGroupService.DeletePreviewGroup:input_type -> diverge.v1alpha1.DeletePreviewGroupRequest
+	17, // 35: diverge.v1alpha1.PreviewGroupService.WatchPreviewGroups:input_type -> diverge.v1alpha1.WatchPreviewGroupsRequest
+	8,  // 36: diverge.v1alpha1.PreviewGroupService.CreatePreviewGroup:output_type -> diverge.v1alpha1.CreatePreviewGroupResponse
+	10, // 37: diverge.v1alpha1.PreviewGroupService.GetPreviewGroup:output_type -> diverge.v1alpha1.GetPreviewGroupResponse
+	12, // 38: diverge.v1alpha1.PreviewGroupService.ListPreviewGroups:output_type -> diverge.v1alpha1.ListPreviewGroupsResponse
+	14, // 39: diverge.v1alpha1.PreviewGroupService.UpdatePreviewGroup:output_type -> diverge.v1alpha1.UpdatePreviewGroupResponse
+	16, // 40: diverge.v1alpha1.PreviewGroupService.DeletePreviewGroup:output_type -> diverge.v1alpha1.DeletePreviewGroupResponse
+	18, // 41: diverge.v1alpha1.PreviewGroupService.WatchPreviewGroups:output_type -> diverge.v1alpha1.WatchPreviewGroupsResponse
+	36, // [36:42] is the sub-list for method output_type
+	30, // [30:36] is the sub-list for method input_type
+	30, // [30:30] is the sub-list for extension type_name
+	30, // [30:30] is the sub-list for extension extendee
+	0,  // [0:30] is the sub-list for field type_name
 }
 
 func init() { file_diverge_v1alpha1_previewgroup_proto_init() }
@@ -1441,7 +1562,7 @@ func file_diverge_v1alpha1_previewgroup_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_diverge_v1alpha1_previewgroup_proto_rawDesc), len(file_diverge_v1alpha1_previewgroup_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   19,
+			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

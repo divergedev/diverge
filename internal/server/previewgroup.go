@@ -3,13 +3,13 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"connectrpc.com/connect"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"fmt"
 	pb "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 	"github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
 	"github.com/divergedev/diverge/api/v1alpha1"
@@ -192,6 +192,100 @@ func (s *PreviewGroupService) ListPreviewGroups(ctx context.Context, req *connec
 	return connect.NewResponse(&pb.ListPreviewGroupsResponse{
 		PreviewGroups: pbs,
 		NextPageToken: list.Continue,
+	}), nil
+}
+
+func (s *PreviewGroupService) UpdatePreviewGroup(ctx context.Context, req *connect.Request[pb.UpdatePreviewGroupRequest]) (*connect.Response[pb.UpdatePreviewGroupResponse], error) {
+	msg := req.Msg
+	if msg.PreviewGroup == nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("preview group is required"))
+	}
+
+	if msg.PreviewGroup.ResourceVersion == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("resource_version is required; fetch the current resource first and include its resource_version to prevent concurrent modification"))
+	}
+
+	if msg.PreviewGroup.Name != "" {
+		if err := ValidateDNS1123Label(msg.PreviewGroup.Name, "name"); err != nil {
+			return nil, err
+		}
+	}
+
+	namespace := msg.PreviewGroup.Namespace
+	if namespace == "" {
+		namespace = "default"
+	}
+	if err := ValidateDNS1123Label(namespace, "namespace"); err != nil {
+		return nil, err
+	}
+
+	// RBAC check
+	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "update", namespace, "previewgroups"); err != nil {
+		return nil, err
+	}
+
+	var existingCrd v1alpha1.PreviewGroup
+	if err := s.client.Get(ctx, client.ObjectKey{Name: msg.PreviewGroup.Name, Namespace: namespace}, &existingCrd); err != nil {
+		return nil, SanitizeK8sError(s.logger, err)
+	}
+
+	if msg.PreviewGroup.ResourceVersion != "" {
+		existingCrd.ResourceVersion = msg.PreviewGroup.ResourceVersion
+	}
+
+	var dom domain.PreviewGroup
+	dom.FromProto(msg.PreviewGroup)
+
+	newCrd, err := DomainPgToCRD(&dom)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
+	}
+
+	// NOTE: FieldMask currently supports top-level paths only (spec, labels, annotations).
+	// Nested paths like "spec.source" are not supported and will be rejected.
+	// Full sub-field updates require replacing the entire parent (e.g., path="spec").
+	if msg.UpdateMask != nil && len(msg.UpdateMask.Paths) > 0 {
+		allowedPaths := map[string]bool{"spec": true, "labels": true, "annotations": true}
+		for _, path := range msg.UpdateMask.Paths {
+			if !allowedPaths[path] {
+				return nil, connect.NewError(connect.CodeInvalidArgument,
+					fmt.Errorf("unsupported field mask path: %q; allowed paths are: spec, labels, annotations", path))
+			}
+		}
+
+		for _, path := range msg.UpdateMask.Paths {
+			switch path {
+			case "spec":
+				existingCrd.Spec = newCrd.Spec
+			case "labels":
+				existingCrd.Labels = newCrd.Labels
+			case "annotations":
+				existingCrd.Annotations = newCrd.Annotations
+			}
+		}
+	} else {
+		existingCrd.Spec = newCrd.Spec
+		existingCrd.Labels = newCrd.Labels
+		existingCrd.Annotations = newCrd.Annotations
+	}
+
+	if err := s.client.Update(ctx, &existingCrd); err != nil {
+		return nil, SanitizeK8sError(s.logger, err)
+	}
+
+	if msg.UpdateMask != nil && len(msg.UpdateMask.Paths) > 0 {
+		s.logger.Info("partial update applied", "resource", "previewgroup", "name", existingCrd.Name, "paths", msg.UpdateMask.Paths)
+	}
+
+	s.auditLogger.LogMutation(ctx, "resource.updated", "previewgroup", existingCrd.Name, existingCrd.Namespace)
+
+	domBack, _ := CRDPgToDomain(&existingCrd)
+	if domBack == nil {
+		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
+	}
+	return connect.NewResponse(&pb.UpdatePreviewGroupResponse{
+		PreviewGroup: domBack.ToProto(),
 	}), nil
 }
 
