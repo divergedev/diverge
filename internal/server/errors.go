@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"connectrpc.com/connect"
@@ -27,6 +28,9 @@ func SanitizeK8sError(logger *slog.Logger, err error) error {
 	case apierrors.IsConflict(err):
 		logger.Debug("resource conflict", "error", err)
 		return connect.NewError(connect.CodeAborted, errors.New("resource version conflict, please retry with the latest version"))
+	case apierrors.IsResourceExpired(err):
+		logger.Debug("resource expired", "error", err)
+		return connect.NewError(connect.CodeAborted, fmt.Errorf("pagination token expired, please restart listing from the beginning"))
 	case apierrors.IsForbidden(err):
 		logger.Warn("forbidden access", "error", err)
 		return connect.NewError(connect.CodePermissionDenied, errors.New("permission denied"))

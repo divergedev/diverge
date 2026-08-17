@@ -128,6 +128,20 @@ func (s *PreviewGroupService) ListPreviewGroups(ctx context.Context, req *connec
 		}
 	}
 
+	const maxPageTokenLen = 4096
+	const maxLabelSelectorLen = 1024
+
+	if len(req.Msg.PageToken) > maxPageTokenLen {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("page_token exceeds maximum length of %d", maxPageTokenLen))
+	}
+	if len(req.Msg.LabelSelector) > maxLabelSelectorLen {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("label_selector exceeds maximum length of %d", maxLabelSelectorLen))
+	}
+
+	// NOTE: page_token is tied to the original query's label_selector and resource_version.
+	// Changing label_selector between pages will result in an error.
+	// Tokens may expire if the underlying data changes significantly.
+
 	// RBAC check
 	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "list", namespace, "previewgroups"); err != nil {
 		return nil, err

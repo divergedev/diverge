@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"math/rand"
 	"testing"
 
 	"github.com/divergedev/diverge/internal/server/auth"
@@ -22,6 +21,16 @@ import (
 	pb "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
+
+type interceptingClient struct {
+	client.Client
+	opts []client.ListOption
+}
+
+func (i *interceptingClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	i.opts = opts
+	return i.Client.List(ctx, list, opts...)
+}
 
 func setupTestEnvs(t *testing.T, count int) client.Client {
 	scheme := runtime.NewScheme()
@@ -54,7 +63,8 @@ func TestListEnvironments_Pagination(t *testing.T) {
 		return true, sar, nil
 	})
 
-	svc := NewEnvironmentService(c, k8sClient, nil, nil, nil, slog.Default(), NewAuditLogger(slog.Default())) // Assuming simplified constructor
+	ic := &interceptingClient{Client: c}
+	svc := NewEnvironmentService(ic, k8sClient, nil, nil, nil, slog.Default(), NewAuditLogger(slog.Default()))
 
 	ctx := auth.ContextWithUserInfo(context.Background(), &auth.UserInfo{
 		Username: "test-user",
@@ -66,16 +76,15 @@ func TestListEnvironments_Pagination(t *testing.T) {
 		req := connect.NewRequest(&pb.ListEnvironmentsRequest{
 			Namespace: "default",
 		})
-		res, err := svc.ListEnvironments(ctx, req)
+		_, err := svc.ListEnvironments(ctx, req)
 		require.NoError(t, err)
-		require.NotNil(t, res)
-		// Assuming fake client supports Limit
-		// Wait, fake client in controller-runtime might not fully support List limit and continue properly depending on version.
-		// If it does, we expect 100 items. If not, it will return all 250.
-		// We'll see when we run tests.
-		if len(res.Msg.Environments) != 250 {
-			require.Equal(t, 100, len(res.Msg.Environments))
+
+		listOpts := &client.ListOptions{}
+		for _, opt := range ic.opts {
+			opt.ApplyToList(listOpts)
 		}
+		require.Equal(t, int64(100), listOpts.Limit)
+		require.Equal(t, "default", listOpts.Namespace)
 	})
 
 	t.Run("page size is respected and capped at 1000", func(t *testing.T) {
@@ -83,58 +92,57 @@ func TestListEnvironments_Pagination(t *testing.T) {
 			Namespace: "default",
 			PageSize:  50,
 		})
-		res, err := svc.ListEnvironments(ctx, req)
+		_, err := svc.ListEnvironments(ctx, req)
 		require.NoError(t, err)
-		if len(res.Msg.Environments) != 250 {
-			require.Equal(t, 50, len(res.Msg.Environments))
+
+		listOpts := &client.ListOptions{}
+		for _, opt := range ic.opts {
+			opt.ApplyToList(listOpts)
 		}
+		require.Equal(t, int64(50), listOpts.Limit)
 
 		reqCap := connect.NewRequest(&pb.ListEnvironmentsRequest{
 			Namespace: "default",
 			PageSize:  2000,
 		})
-		resCap, err := svc.ListEnvironments(ctx, reqCap)
+		_, err = svc.ListEnvironments(ctx, reqCap)
 		require.NoError(t, err)
-		// It's capped at 1000, but we only have 250.
-		require.Equal(t, 250, len(resCap.Msg.Environments))
+
+		listOptsCap := &client.ListOptions{}
+		for _, opt := range ic.opts {
+			opt.ApplyToList(listOptsCap)
+		}
+		require.Equal(t, int64(1000), listOptsCap.Limit)
 	})
 
-	t.Run("label selector filters results", func(t *testing.T) {
+	t.Run("continue token is applied", func(t *testing.T) {
+		req := connect.NewRequest(&pb.ListEnvironmentsRequest{
+			Namespace: "default",
+			PageToken: "test-continue-token",
+		})
+		_, err := svc.ListEnvironments(ctx, req)
+		require.NoError(t, err)
+
+		listOpts := &client.ListOptions{}
+		for _, opt := range ic.opts {
+			opt.ApplyToList(listOpts)
+		}
+		require.Equal(t, "test-continue-token", listOpts.Continue)
+	})
+
+	t.Run("label selector sets matching labels", func(t *testing.T) {
 		req := connect.NewRequest(&pb.ListEnvironmentsRequest{
 			Namespace:     "default",
 			LabelSelector: "mod=0",
 		})
-		res, err := svc.ListEnvironments(ctx, req)
+		_, err := svc.ListEnvironments(ctx, req)
 		require.NoError(t, err)
-		require.Equal(t, 125, len(res.Msg.Environments))
-	})
 
-	t.Run("property based testing: random page sizes", func(t *testing.T) {
-
-		var allEnvs []string
-		pageToken := ""
-
-		for {
-			pageSize := int32(rand.Intn(50) + 1) // 1 to 50
-			req := connect.NewRequest(&pb.ListEnvironmentsRequest{
-				Namespace: "default",
-				PageSize:  pageSize,
-				PageToken: pageToken,
-			})
-			res, err := svc.ListEnvironments(ctx, req)
-			require.NoError(t, err)
-
-			for _, e := range res.Msg.Environments {
-				allEnvs = append(allEnvs, e.Name)
-			}
-
-			pageToken = res.Msg.NextPageToken
-			if pageToken == "" {
-				break
-			}
+		listOpts := &client.ListOptions{}
+		for _, opt := range ic.opts {
+			opt.ApplyToList(listOpts)
 		}
-
-		// If fake client doesn't support pagination, it returns all in first page and nextToken=""
-		require.Equal(t, totalCount, len(allEnvs))
+		require.NotNil(t, listOpts.LabelSelector)
+		require.Equal(t, "mod=0", listOpts.LabelSelector.String())
 	})
 }
