@@ -1,12 +1,17 @@
 package auth
 
-import "context"
+import (
+	"context"
+
+	authorizationv1 "k8s.io/api/authorization/v1"
+)
 
 // UserInfo represents the authenticated user's identity from a Kubernetes TokenReview.
 type UserInfo struct {
 	Username string
 	UID      string
 	Groups   []string
+	Extra    map[string]authorizationv1.ExtraValue
 }
 
 type contextKey string

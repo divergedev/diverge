@@ -41,7 +41,9 @@ func checkSAR(ctx context.Context, k8sClient kubernetes.Interface, logger *slog.
 	sar := &authorizationv1.SubjectAccessReview{
 		Spec: authorizationv1.SubjectAccessReviewSpec{
 			User:               user.Username,
+			UID:                user.UID,
 			Groups:             user.Groups,
+			Extra:              user.Extra,
 			ResourceAttributes: attrs,
 		},
 	}
