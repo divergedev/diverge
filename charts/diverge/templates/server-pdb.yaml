@@ -1,0 +1,15 @@
+{{- if and .Values.server.enabled (gt (int .Values.server.replicaCount) 1) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "diverge.fullname" . }}-server
+  labels:
+    {{- include "diverge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "diverge.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: server
+{{- end }}

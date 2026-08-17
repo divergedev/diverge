@@ -81,7 +81,7 @@ jobs:
       - name: Proto lint and breaking check
         run: |
           buf lint api/proto
-          buf breaking api/proto --against 'https://github.com/divergedev/diverge.git#branch=main' || true
+          buf breaking api/proto --against 'https://github.com/divergedev/diverge.git#branch=main'
       - name: Clean and regenerate protos
         run: |
           rm -rf api/gen/diverge/
