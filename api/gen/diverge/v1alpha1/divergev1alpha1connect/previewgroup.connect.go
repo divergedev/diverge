@@ -42,6 +42,9 @@ const (
 	// PreviewGroupServiceListPreviewGroupsProcedure is the fully-qualified name of the
 	// PreviewGroupService's ListPreviewGroups RPC.
 	PreviewGroupServiceListPreviewGroupsProcedure = "/diverge.v1alpha1.PreviewGroupService/ListPreviewGroups"
+	// PreviewGroupServiceUpdatePreviewGroupProcedure is the fully-qualified name of the
+	// PreviewGroupService's UpdatePreviewGroup RPC.
+	PreviewGroupServiceUpdatePreviewGroupProcedure = "/diverge.v1alpha1.PreviewGroupService/UpdatePreviewGroup"
 	// PreviewGroupServiceDeletePreviewGroupProcedure is the fully-qualified name of the
 	// PreviewGroupService's DeletePreviewGroup RPC.
 	PreviewGroupServiceDeletePreviewGroupProcedure = "/diverge.v1alpha1.PreviewGroupService/DeletePreviewGroup"
@@ -55,6 +58,7 @@ type PreviewGroupServiceClient interface {
 	CreatePreviewGroup(context.Context, *connect.Request[v1alpha1.CreatePreviewGroupRequest]) (*connect.Response[v1alpha1.CreatePreviewGroupResponse], error)
 	GetPreviewGroup(context.Context, *connect.Request[v1alpha1.GetPreviewGroupRequest]) (*connect.Response[v1alpha1.GetPreviewGroupResponse], error)
 	ListPreviewGroups(context.Context, *connect.Request[v1alpha1.ListPreviewGroupsRequest]) (*connect.Response[v1alpha1.ListPreviewGroupsResponse], error)
+	UpdatePreviewGroup(context.Context, *connect.Request[v1alpha1.UpdatePreviewGroupRequest]) (*connect.Response[v1alpha1.UpdatePreviewGroupResponse], error)
 	DeletePreviewGroup(context.Context, *connect.Request[v1alpha1.DeletePreviewGroupRequest]) (*connect.Response[v1alpha1.DeletePreviewGroupResponse], error)
 	WatchPreviewGroups(context.Context, *connect.Request[v1alpha1.WatchPreviewGroupsRequest]) (*connect.ServerStreamForClient[v1alpha1.WatchPreviewGroupsResponse], error)
 }
@@ -88,6 +92,12 @@ func NewPreviewGroupServiceClient(httpClient connect.HTTPClient, baseURL string,
 			connect.WithSchema(previewGroupServiceMethods.ByName("ListPreviewGroups")),
 			connect.WithClientOptions(opts...),
 		),
+		updatePreviewGroup: connect.NewClient[v1alpha1.UpdatePreviewGroupRequest, v1alpha1.UpdatePreviewGroupResponse](
+			httpClient,
+			baseURL+PreviewGroupServiceUpdatePreviewGroupProcedure,
+			connect.WithSchema(previewGroupServiceMethods.ByName("UpdatePreviewGroup")),
+			connect.WithClientOptions(opts...),
+		),
 		deletePreviewGroup: connect.NewClient[v1alpha1.DeletePreviewGroupRequest, v1alpha1.DeletePreviewGroupResponse](
 			httpClient,
 			baseURL+PreviewGroupServiceDeletePreviewGroupProcedure,
@@ -108,6 +118,7 @@ type previewGroupServiceClient struct {
 	createPreviewGroup *connect.Client[v1alpha1.CreatePreviewGroupRequest, v1alpha1.CreatePreviewGroupResponse]
 	getPreviewGroup    *connect.Client[v1alpha1.GetPreviewGroupRequest, v1alpha1.GetPreviewGroupResponse]
 	listPreviewGroups  *connect.Client[v1alpha1.ListPreviewGroupsRequest, v1alpha1.ListPreviewGroupsResponse]
+	updatePreviewGroup *connect.Client[v1alpha1.UpdatePreviewGroupRequest, v1alpha1.UpdatePreviewGroupResponse]
 	deletePreviewGroup *connect.Client[v1alpha1.DeletePreviewGroupRequest, v1alpha1.DeletePreviewGroupResponse]
 	watchPreviewGroups *connect.Client[v1alpha1.WatchPreviewGroupsRequest, v1alpha1.WatchPreviewGroupsResponse]
 }
@@ -127,6 +138,11 @@ func (c *previewGroupServiceClient) ListPreviewGroups(ctx context.Context, req *
 	return c.listPreviewGroups.CallUnary(ctx, req)
 }
 
+// UpdatePreviewGroup calls diverge.v1alpha1.PreviewGroupService.UpdatePreviewGroup.
+func (c *previewGroupServiceClient) UpdatePreviewGroup(ctx context.Context, req *connect.Request[v1alpha1.UpdatePreviewGroupRequest]) (*connect.Response[v1alpha1.UpdatePreviewGroupResponse], error) {
+	return c.updatePreviewGroup.CallUnary(ctx, req)
+}
+
 // DeletePreviewGroup calls diverge.v1alpha1.PreviewGroupService.DeletePreviewGroup.
 func (c *previewGroupServiceClient) DeletePreviewGroup(ctx context.Context, req *connect.Request[v1alpha1.DeletePreviewGroupRequest]) (*connect.Response[v1alpha1.DeletePreviewGroupResponse], error) {
 	return c.deletePreviewGroup.CallUnary(ctx, req)
@@ -143,6 +159,7 @@ type PreviewGroupServiceHandler interface {
 	CreatePreviewGroup(context.Context, *connect.Request[v1alpha1.CreatePreviewGroupRequest]) (*connect.Response[v1alpha1.CreatePreviewGroupResponse], error)
 	GetPreviewGroup(context.Context, *connect.Request[v1alpha1.GetPreviewGroupRequest]) (*connect.Response[v1alpha1.GetPreviewGroupResponse], error)
 	ListPreviewGroups(context.Context, *connect.Request[v1alpha1.ListPreviewGroupsRequest]) (*connect.Response[v1alpha1.ListPreviewGroupsResponse], error)
+	UpdatePreviewGroup(context.Context, *connect.Request[v1alpha1.UpdatePreviewGroupRequest]) (*connect.Response[v1alpha1.UpdatePreviewGroupResponse], error)
 	DeletePreviewGroup(context.Context, *connect.Request[v1alpha1.DeletePreviewGroupRequest]) (*connect.Response[v1alpha1.DeletePreviewGroupResponse], error)
 	WatchPreviewGroups(context.Context, *connect.Request[v1alpha1.WatchPreviewGroupsRequest], *connect.ServerStream[v1alpha1.WatchPreviewGroupsResponse]) error
 }
@@ -172,6 +189,12 @@ func NewPreviewGroupServiceHandler(svc PreviewGroupServiceHandler, opts ...conne
 		connect.WithSchema(previewGroupServiceMethods.ByName("ListPreviewGroups")),
 		connect.WithHandlerOptions(opts...),
 	)
+	previewGroupServiceUpdatePreviewGroupHandler := connect.NewUnaryHandler(
+		PreviewGroupServiceUpdatePreviewGroupProcedure,
+		svc.UpdatePreviewGroup,
+		connect.WithSchema(previewGroupServiceMethods.ByName("UpdatePreviewGroup")),
+		connect.WithHandlerOptions(opts...),
+	)
 	previewGroupServiceDeletePreviewGroupHandler := connect.NewUnaryHandler(
 		PreviewGroupServiceDeletePreviewGroupProcedure,
 		svc.DeletePreviewGroup,
@@ -192,6 +215,8 @@ func NewPreviewGroupServiceHandler(svc PreviewGroupServiceHandler, opts ...conne
 			previewGroupServiceGetPreviewGroupHandler.ServeHTTP(w, r)
 		case PreviewGroupServiceListPreviewGroupsProcedure:
 			previewGroupServiceListPreviewGroupsHandler.ServeHTTP(w, r)
+		case PreviewGroupServiceUpdatePreviewGroupProcedure:
+			previewGroupServiceUpdatePreviewGroupHandler.ServeHTTP(w, r)
 		case PreviewGroupServiceDeletePreviewGroupProcedure:
 			previewGroupServiceDeletePreviewGroupHandler.ServeHTTP(w, r)
 		case PreviewGroupServiceWatchPreviewGroupsProcedure:
@@ -215,6 +240,10 @@ func (UnimplementedPreviewGroupServiceHandler) GetPreviewGroup(context.Context, 
 
 func (UnimplementedPreviewGroupServiceHandler) ListPreviewGroups(context.Context, *connect.Request[v1alpha1.ListPreviewGroupsRequest]) (*connect.Response[v1alpha1.ListPreviewGroupsResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("diverge.v1alpha1.PreviewGroupService.ListPreviewGroups is not implemented"))
+}
+
+func (UnimplementedPreviewGroupServiceHandler) UpdatePreviewGroup(context.Context, *connect.Request[v1alpha1.UpdatePreviewGroupRequest]) (*connect.Response[v1alpha1.UpdatePreviewGroupResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("diverge.v1alpha1.PreviewGroupService.UpdatePreviewGroup is not implemented"))
 }
 
 func (UnimplementedPreviewGroupServiceHandler) DeletePreviewGroup(context.Context, *connect.Request[v1alpha1.DeletePreviewGroupRequest]) (*connect.Response[v1alpha1.DeletePreviewGroupResponse], error) {

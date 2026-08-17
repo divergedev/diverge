@@ -195,6 +195,80 @@ func (s *PreviewGroupService) ListPreviewGroups(ctx context.Context, req *connec
 	}), nil
 }
 
+func (s *PreviewGroupService) UpdatePreviewGroup(ctx context.Context, req *connect.Request[pb.UpdatePreviewGroupRequest]) (*connect.Response[pb.UpdatePreviewGroupResponse], error) {
+	msg := req.Msg
+	if msg.PreviewGroup == nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("preview group is required"))
+	}
+
+	if msg.PreviewGroup.Name != "" {
+		if err := ValidateDNS1123Label(msg.PreviewGroup.Name, "name"); err != nil {
+			return nil, err
+		}
+	}
+
+	namespace := msg.PreviewGroup.Namespace
+	if namespace == "" {
+		namespace = "default"
+	}
+	if err := ValidateDNS1123Label(namespace, "namespace"); err != nil {
+		return nil, err
+	}
+
+	// RBAC check
+	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "update", namespace, "previewgroups"); err != nil {
+		return nil, err
+	}
+
+	var existingCrd v1alpha1.PreviewGroup
+	if err := s.client.Get(ctx, client.ObjectKey{Name: msg.PreviewGroup.Name, Namespace: namespace}, &existingCrd); err != nil {
+		return nil, SanitizeK8sError(s.logger, err)
+	}
+
+	if msg.PreviewGroup.ResourceVersion != "" {
+		existingCrd.ResourceVersion = msg.PreviewGroup.ResourceVersion
+	}
+
+	var dom domain.PreviewGroup
+	dom.FromProto(msg.PreviewGroup)
+
+	newCrd, err := DomainPgToCRD(&dom)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
+	}
+
+	if msg.UpdateMask != nil && len(msg.UpdateMask.Paths) > 0 {
+		for _, path := range msg.UpdateMask.Paths {
+			switch path {
+			case "spec":
+				existingCrd.Spec = newCrd.Spec
+			case "labels":
+				existingCrd.Labels = newCrd.Labels
+			case "annotations":
+				existingCrd.Annotations = newCrd.Annotations
+			}
+		}
+	} else {
+		existingCrd.Spec = newCrd.Spec
+		existingCrd.Labels = newCrd.Labels
+		existingCrd.Annotations = newCrd.Annotations
+	}
+
+	if err := s.client.Update(ctx, &existingCrd); err != nil {
+		return nil, SanitizeK8sError(s.logger, err)
+	}
+
+	s.auditLogger.LogMutation(ctx, "resource.updated", "previewgroup", existingCrd.Name, existingCrd.Namespace)
+
+	domBack, _ := CRDPgToDomain(&existingCrd)
+	if domBack == nil {
+		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
+	}
+	return connect.NewResponse(&pb.UpdatePreviewGroupResponse{
+		PreviewGroup: domBack.ToProto(),
+	}), nil
+}
+
 func (s *PreviewGroupService) DeletePreviewGroup(ctx context.Context, req *connect.Request[pb.DeletePreviewGroupRequest]) (*connect.Response[pb.DeletePreviewGroupResponse], error) {
 	if err := ValidateDNS1123Label(req.Msg.Name, "name"); err != nil {
 		return nil, err

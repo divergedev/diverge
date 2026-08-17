@@ -25,6 +25,7 @@ func CRDEnvToDomain(crd *v1alpha1.Environment) (*domain.Environment, error) {
 	dom.Namespace = crd.Namespace
 	dom.Labels = crd.Labels
 	dom.Annotations = crd.Annotations
+	dom.ResourceVersion = crd.ResourceVersion
 	return &dom, nil
 }
 
@@ -45,6 +46,7 @@ func DomainEnvToCRD(dom *domain.Environment) (*v1alpha1.Environment, error) {
 	crd.Namespace = dom.Namespace
 	crd.Labels = dom.Labels
 	crd.Annotations = dom.Annotations
+	crd.ResourceVersion = dom.ResourceVersion
 	return &crd, nil
 }
 
@@ -65,6 +67,7 @@ func CRDPgToDomain(crd *v1alpha1.PreviewGroup) (*domain.PreviewGroup, error) {
 	dom.Namespace = crd.Namespace
 	dom.Labels = crd.Labels
 	dom.Annotations = crd.Annotations
+	dom.ResourceVersion = crd.ResourceVersion
 	return &dom, nil
 }
 
@@ -85,5 +88,6 @@ func DomainPgToCRD(dom *domain.PreviewGroup) (*v1alpha1.PreviewGroup, error) {
 	crd.Namespace = dom.Namespace
 	crd.Labels = dom.Labels
 	crd.Annotations = dom.Annotations
+	crd.ResourceVersion = dom.ResourceVersion
 	return &crd, nil
 }

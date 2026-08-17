@@ -230,24 +230,47 @@ func (s *EnvironmentService) UpdateEnvironment(ctx context.Context, req *connect
 		return nil, err
 	}
 
+	var existingCrd v1alpha1.Environment
+	if err := s.client.Get(ctx, client.ObjectKey{Name: msg.Environment.Name, Namespace: namespace}, &existingCrd); err != nil {
+		return nil, SanitizeK8sError(s.logger, err)
+	}
+
+	if msg.Environment.ResourceVersion != "" {
+		existingCrd.ResourceVersion = msg.Environment.ResourceVersion
+	}
+
 	var dom domain.Environment
 	dom.FromProto(msg.Environment)
 
-	realCrd, err := DomainEnvToCRD(&dom)
+	newCrd, err := DomainEnvToCRD(&dom)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
 	}
 
-	// Enforce the authorized namespace on the CRD to prevent RBAC bypass
-	realCrd.Namespace = namespace
+	if msg.UpdateMask != nil && len(msg.UpdateMask.Paths) > 0 {
+		for _, path := range msg.UpdateMask.Paths {
+			switch path {
+			case "spec":
+				existingCrd.Spec = newCrd.Spec
+			case "labels":
+				existingCrd.Labels = newCrd.Labels
+			case "annotations":
+				existingCrd.Annotations = newCrd.Annotations
+			}
+		}
+	} else {
+		existingCrd.Spec = newCrd.Spec
+		existingCrd.Labels = newCrd.Labels
+		existingCrd.Annotations = newCrd.Annotations
+	}
 
-	if err := s.client.Update(ctx, realCrd); err != nil {
+	if err := s.client.Update(ctx, &existingCrd); err != nil {
 		return nil, SanitizeK8sError(s.logger, err)
 	}
 
-	s.auditLogger.LogMutation(ctx, "resource.updated", "environment", realCrd.Name, realCrd.Namespace)
+	s.auditLogger.LogMutation(ctx, "resource.updated", "environment", existingCrd.Name, existingCrd.Namespace)
 
-	domBack, _ := CRDEnvToDomain(realCrd)
+	domBack, _ := CRDEnvToDomain(&existingCrd)
 	if domBack == nil {
 		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
 	}

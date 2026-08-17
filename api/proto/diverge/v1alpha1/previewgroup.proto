@@ -5,6 +5,7 @@ option go_package = "github.com/divergedev/diverge/api/gen/diverge/v1alpha1;dive
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/duration.proto";
+import "google/protobuf/field_mask.proto";
 import "diverge/v1alpha1/types.proto";
 import "diverge/v1alpha1/environment.proto";
 
@@ -78,12 +79,14 @@ message PreviewGroup {
   google.protobuf.Timestamp created_at = 5;
   map<string, string> labels = 6;
   map<string, string> annotations = 7;
+  string resource_version = 8;
 }
 
 service PreviewGroupService {
   rpc CreatePreviewGroup(CreatePreviewGroupRequest) returns (CreatePreviewGroupResponse);
   rpc GetPreviewGroup(GetPreviewGroupRequest) returns (GetPreviewGroupResponse);
   rpc ListPreviewGroups(ListPreviewGroupsRequest) returns (ListPreviewGroupsResponse);
+  rpc UpdatePreviewGroup(UpdatePreviewGroupRequest) returns (UpdatePreviewGroupResponse);
   rpc DeletePreviewGroup(DeletePreviewGroupRequest) returns (DeletePreviewGroupResponse);
   rpc WatchPreviewGroups(WatchPreviewGroupsRequest) returns (stream WatchPreviewGroupsResponse);
 }
@@ -114,6 +117,14 @@ message ListPreviewGroupsResponse {
   repeated PreviewGroup preview_groups = 1;
   string next_page_token = 2;
   int32 total_size = 3;
+}
+
+message UpdatePreviewGroupRequest {
+  PreviewGroup preview_group = 1;
+  google.protobuf.FieldMask update_mask = 2;
+}
+message UpdatePreviewGroupResponse {
+  PreviewGroup preview_group = 1;
 }
 
 message DeletePreviewGroupRequest {
