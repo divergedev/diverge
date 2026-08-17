@@ -129,6 +129,16 @@ server:
     audiences:
       - diverge-server
     maxStreams: 1000
+  rbac:
+    # -- If true, grants cluster-wide pods/log access via ClusterRole.
+    # If false, restricts pods/log access to targetNamespaces only.
+    # When false and targetNamespaces is empty, NO pod access is granted.
+    clusterWidePodAccess: true
+    # -- List of namespaces where the server can access pods/log.
+    # Only used when clusterWidePodAccess is false.
+    # NOTE: Target namespaces must exist before helm install/upgrade.
+    # The chart does NOT create these namespaces.
+    targetNamespaces: []
   metrics:
     serviceMonitor:
       enabled: false
