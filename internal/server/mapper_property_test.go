@@ -26,6 +26,9 @@ func TestEnvironmentMapper_Property(t *testing.T) {
 			name := hegel.Draw(ht, hegel.Text())
 			namespace := hegel.Draw(ht, hegel.Text())
 			rv := hegel.Draw(ht, hegel.Text())
+			deployMode := hegel.Draw(ht, hegel.Text())
+			routingMode := hegel.Draw(ht, hegel.Text())
+			phase := hegel.Draw(ht, hegel.Text())
 
 			crd := &v1alpha1.Environment{
 				ObjectMeta: metav1.ObjectMeta{
@@ -37,56 +40,79 @@ func TestEnvironmentMapper_Property(t *testing.T) {
 				},
 				Spec: v1alpha1.EnvironmentSpec{
 					Deploy: v1alpha1.EnvironmentDeploy{
-						Mode: hegel.Draw(ht, hegel.Text()),
+						Mode: deployMode,
 					},
 					Routing: v1alpha1.EnvironmentRouting{
-						Mode: hegel.Draw(ht, hegel.Text()),
+						Mode: routingMode,
 					},
 				},
 				Status: v1alpha1.EnvironmentStatus{
-					Phase: v1alpha1.EnvironmentPhase(hegel.Draw(ht, hegel.Text())),
+					Phase: v1alpha1.EnvironmentPhase(phase),
 				},
 			}
 
 			dom, err := CRDEnvToDomain(crd)
-			require.NoError(t, err)
-			require.NotNil(t, dom)
+			require.NoError(ht, err)
+			require.NotNil(ht, dom)
 
 			crd2, err := DomainEnvToCRD(dom)
-			require.NoError(t, err)
-			require.NotNil(t, crd2)
+			require.NoError(ht, err)
+			require.NotNil(ht, crd2)
 
-			assert.Equal(t, crd.Name, crd2.Name)
-			assert.Equal(t, crd.Namespace, crd2.Namespace)
-			assert.Equal(t, crd.ResourceVersion, crd2.ResourceVersion)
-			// we don't test deep fields in crd2 since the mapper only copies top level fields right now
-			// wait, mapper.go only copies Name, Namespace, Labels, Annotations, ResourceVersion!
-			// Ah! "dom.Name = crd.Name" etc. It uses json marshal/unmarshal for the rest.
-			// The json marshal/unmarshal should copy everything as long as domain tags match!
+			assert.Equal(ht, crd.Name, crd2.Name)
+			assert.Equal(ht, crd.Namespace, crd2.Namespace)
+			assert.Equal(ht, crd.ResourceVersion, crd2.ResourceVersion)
+			assert.Equal(ht, crd.Labels, crd2.Labels)
+			assert.Equal(ht, crd.Annotations, crd2.Annotations)
+			assert.Equal(ht, crd.Spec.Deploy.Mode, crd2.Spec.Deploy.Mode)
+			assert.Equal(ht, crd.Spec.Routing.Mode, crd2.Spec.Routing.Mode)
+			assert.Equal(ht, crd.Status.Phase, crd2.Status.Phase)
 		})
 	})
 
 	t.Run("Domain -> CRD -> Domain roundtrip preserves fields", func(t *testing.T) {
 		hegel.Test(t, func(ht *hegel.T) {
+			deployMode := hegel.Draw(ht, hegel.Text())
+			routingMode := hegel.Draw(ht, hegel.Text())
+			phase := hegel.Draw(ht, hegel.Text())
+
 			dom := &domain.Environment{
 				Name:            hegel.Draw(ht, hegel.Text()),
 				Namespace:       hegel.Draw(ht, hegel.Text()),
 				ResourceVersion: hegel.Draw(ht, hegel.Text()),
 				Labels:          map[string]string{"foo": "bar"},
 				Annotations:     map[string]string{"baz": "qux"},
+				Spec: &domain.EnvironmentSpec{
+					Deploy: &domain.EnvironmentDeploy{
+						Mode: deployMode,
+					},
+					Routing: &domain.EnvironmentRouting{
+						Mode: routingMode,
+					},
+				},
+				Status: &domain.EnvironmentStatus{
+					Phase: phase,
+				},
 			}
 
 			crd, err := DomainEnvToCRD(dom)
-			require.NoError(t, err)
-			require.NotNil(t, crd)
+			require.NoError(ht, err)
+			require.NotNil(ht, crd)
 
 			dom2, err := CRDEnvToDomain(crd)
-			require.NoError(t, err)
-			require.NotNil(t, dom2)
+			require.NoError(ht, err)
+			require.NotNil(ht, dom2)
 
-			assert.Equal(t, dom.Name, dom2.Name)
-			assert.Equal(t, dom.Namespace, dom2.Namespace)
-			assert.Equal(t, dom.ResourceVersion, dom2.ResourceVersion)
+			assert.Equal(ht, dom.Name, dom2.Name)
+			assert.Equal(ht, dom.Namespace, dom2.Namespace)
+			assert.Equal(ht, dom.ResourceVersion, dom2.ResourceVersion)
+			assert.Equal(ht, dom.Labels, dom2.Labels)
+			assert.Equal(ht, dom.Annotations, dom2.Annotations)
+			require.NotNil(ht, dom2.Spec)
+			assert.Equal(ht, dom.Spec.Deploy.Mode, dom2.Spec.Deploy.Mode)
+			assert.Equal(ht, dom.Spec.Routing.Mode, dom2.Spec.Routing.Mode)
+			require.NotNil(ht, dom2.Status)
+			assert.Equal(ht, dom.Status.Phase, dom2.Status.Phase)
 		})
 	})
 }
@@ -105,6 +131,9 @@ func TestPreviewGroupMapper_Property(t *testing.T) {
 			name := hegel.Draw(ht, hegel.Text())
 			namespace := hegel.Draw(ht, hegel.Text())
 			rv := hegel.Draw(ht, hegel.Text())
+			owner := hegel.Draw(ht, hegel.Text())
+			routingMode := hegel.Draw(ht, hegel.Text())
+			phase := hegel.Draw(ht, hegel.Text())
 
 			crd := &v1alpha1.PreviewGroup{
 				ObjectMeta: metav1.ObjectMeta{
@@ -114,46 +143,80 @@ func TestPreviewGroupMapper_Property(t *testing.T) {
 					Labels:          map[string]string{"group": "test"},
 					Annotations:     map[string]string{"foo": "bar"},
 				},
+				Spec: v1alpha1.PreviewGroupSpec{
+					Owner: owner,
+					Routing: v1alpha1.PreviewGroupRouting{
+						Mode: routingMode,
+					},
+				},
 				Status: v1alpha1.PreviewGroupStatus{
-					Phase: v1alpha1.PreviewGroupPhase(hegel.Draw(ht, hegel.Text())),
+					Phase: v1alpha1.PreviewGroupPhase(phase),
 				},
 			}
 
 			dom, err := CRDPgToDomain(crd)
-			require.NoError(t, err)
-			require.NotNil(t, dom)
+			require.NoError(ht, err)
+			require.NotNil(ht, dom)
 
 			crd2, err := DomainPgToCRD(dom)
-			require.NoError(t, err)
-			require.NotNil(t, crd2)
+			require.NoError(ht, err)
+			require.NotNil(ht, crd2)
 
-			assert.Equal(t, crd.Name, crd2.Name)
-			assert.Equal(t, crd.Namespace, crd2.Namespace)
-			assert.Equal(t, crd.ResourceVersion, crd2.ResourceVersion)
+			assert.Equal(ht, crd.Name, crd2.Name)
+			assert.Equal(ht, crd.Namespace, crd2.Namespace)
+			assert.Equal(ht, crd.ResourceVersion, crd2.ResourceVersion)
+			assert.Equal(ht, crd.Labels, crd2.Labels)
+			assert.Equal(ht, crd.Annotations, crd2.Annotations)
+			assert.Equal(ht, crd.Spec.Owner, crd2.Spec.Owner)
+			assert.Equal(ht, crd.Spec.Routing.Mode, crd2.Spec.Routing.Mode)
+			assert.Equal(ht, crd.Status.Phase, crd2.Status.Phase)
 		})
 	})
 
 	t.Run("Domain -> CRD -> Domain roundtrip preserves fields for PreviewGroup", func(t *testing.T) {
 		hegel.Test(t, func(ht *hegel.T) {
+			name := hegel.Draw(ht, hegel.Text())
+			namespace := hegel.Draw(ht, hegel.Text())
+			rv := hegel.Draw(ht, hegel.Text())
+			owner := hegel.Draw(ht, hegel.Text())
+			routingMode := hegel.Draw(ht, hegel.Text())
+			phase := hegel.Draw(ht, hegel.Text())
+
 			dom := &domain.PreviewGroup{
-				Name:            hegel.Draw(ht, hegel.Text()),
-				Namespace:       hegel.Draw(ht, hegel.Text()),
-				ResourceVersion: hegel.Draw(ht, hegel.Text()),
+				Name:            name,
+				Namespace:       namespace,
+				ResourceVersion: rv,
 				Labels:          map[string]string{"group": "test"},
 				Annotations:     map[string]string{"foo": "bar"},
+				Spec: &domain.PreviewGroupSpec{
+					Owner: owner,
+					Routing: &domain.PreviewGroupRouting{
+						Mode: routingMode,
+					},
+				},
+				Status: &domain.PreviewGroupStatus{
+					Phase: phase,
+				},
 			}
 
 			crd, err := DomainPgToCRD(dom)
-			require.NoError(t, err)
-			require.NotNil(t, crd)
+			require.NoError(ht, err)
+			require.NotNil(ht, crd)
 
 			dom2, err := CRDPgToDomain(crd)
-			require.NoError(t, err)
-			require.NotNil(t, dom2)
+			require.NoError(ht, err)
+			require.NotNil(ht, dom2)
 
-			assert.Equal(t, dom.Name, dom2.Name)
-			assert.Equal(t, dom.Namespace, dom2.Namespace)
-			assert.Equal(t, dom.ResourceVersion, dom2.ResourceVersion)
+			assert.Equal(ht, dom.Name, dom2.Name)
+			assert.Equal(ht, dom.Namespace, dom2.Namespace)
+			assert.Equal(ht, dom.ResourceVersion, dom2.ResourceVersion)
+			assert.Equal(ht, dom.Labels, dom2.Labels)
+			assert.Equal(ht, dom.Annotations, dom2.Annotations)
+			require.NotNil(ht, dom2.Spec)
+			assert.Equal(ht, dom.Spec.Owner, dom2.Spec.Owner)
+			assert.Equal(ht, dom.Spec.Routing.Mode, dom2.Spec.Routing.Mode)
+			require.NotNil(ht, dom2.Status)
+			assert.Equal(ht, dom.Status.Phase, dom2.Status.Phase)
 		})
 	})
 }
