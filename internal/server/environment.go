@@ -21,6 +21,7 @@ import (
 	domain "github.com/divergedev/diverge/gen/domain/github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 	"github.com/divergedev/diverge/internal/server/streaming"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"k8s.io/apimachinery/pkg/labels"
 )
 
 type EnvironmentService struct {
@@ -136,6 +137,20 @@ func (s *EnvironmentService) ListEnvironments(ctx context.Context, req *connect.
 		}
 	}
 
+	const maxPageTokenLen = 4096
+	const maxLabelSelectorLen = 1024
+
+	if len(req.Msg.PageToken) > maxPageTokenLen {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("page_token exceeds maximum length of %d", maxPageTokenLen))
+	}
+	if len(req.Msg.LabelSelector) > maxLabelSelectorLen {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("label_selector exceeds maximum length of %d", maxLabelSelectorLen))
+	}
+
+	// NOTE: page_token is tied to the original query's label_selector and resource_version.
+	// Changing label_selector between pages will result in an error.
+	// Tokens may expire if the underlying data changes significantly.
+
 	// RBAC check
 	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "list", namespace, "environments"); err != nil {
 		return nil, err
@@ -146,6 +161,27 @@ func (s *EnvironmentService) ListEnvironments(ctx context.Context, req *connect.
 	if namespace != "" {
 		opts = append(opts, client.InNamespace(namespace))
 	}
+
+	pageSize := req.Msg.PageSize
+	if pageSize <= 0 {
+		pageSize = 100
+	} else if pageSize > 1000 {
+		pageSize = 1000
+	}
+	opts = append(opts, client.Limit(pageSize))
+
+	if req.Msg.PageToken != "" {
+		opts = append(opts, client.Continue(req.Msg.PageToken))
+	}
+
+	if req.Msg.LabelSelector != "" {
+		selector, err := labels.Parse(req.Msg.LabelSelector)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid label_selector: %w", err))
+		}
+		opts = append(opts, client.MatchingLabelsSelector{Selector: selector})
+	}
+
 	if err := s.client.List(ctx, &list, opts...); err != nil {
 		return nil, SanitizeK8sError(s.logger, err)
 	}
@@ -163,7 +199,8 @@ func (s *EnvironmentService) ListEnvironments(ctx context.Context, req *connect.
 	}
 
 	return connect.NewResponse(&pb.ListEnvironmentsResponse{
-		Environments: pbs,
+		Environments:  pbs,
+		NextPageToken: list.Continue,
 	}), nil
 }
 
