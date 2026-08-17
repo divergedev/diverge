@@ -45,7 +45,7 @@ docker pull ghcr.io/divergedev/diverge:v0.6.0
 ```bash
 helm repo add diverge https://divergedev.github.io/diverge
 helm repo update
-helm install diverge diverge/diverge --namespace diverge-system --create-namespace --version v0.6.0
+helm install diverge diverge/diverge --namespace diverge-system --create-namespace
 ```
 
 Alternatively, to install from source for development:
@@ -195,8 +195,7 @@ To enable it during Helm installation, set `server.enabled: true`:
 helm upgrade --install diverge diverge/diverge \
   --namespace diverge-system \
   --create-namespace \
-  --set server.enabled=true \
-  --version v0.6.0
+  --set server.enabled=true
 ```
 
 The server provides a stateless K8s CRD facade with built-in RBAC, token auth, and structured audit logging. For more details on interacting with the server, see the [ConnectRPC Server Guide](guides/server.md).

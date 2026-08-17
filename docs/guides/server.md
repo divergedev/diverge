@@ -14,8 +14,7 @@ The API server is disabled by default. To enable it during deployment, set `serv
 helm upgrade --install diverge diverge/diverge \
   --namespace diverge-system \
   --create-namespace \
-  --set server.enabled=true \
-  --version v0.6.0
+  --set server.enabled=true
 ```
 
 ## Security Features
@@ -26,7 +25,7 @@ The API server uses Kubernetes `TokenReview` for authentication.
 It supports standard OIDC JWTs (JSON Web Tokens) or Kubernetes ServiceAccount tokens.
 
 To authenticate requests, pass your token in the `Authorization` header as a Bearer token:
-```
+```http
 Authorization: Bearer <your-jwt-or-sa-token>
 ```
 

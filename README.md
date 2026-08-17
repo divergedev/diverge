@@ -149,7 +149,7 @@ go install github.com/divergedev/diverge/cmd/diverge@v0.6.0
 ```bash
 helm repo add diverge https://divergedev.github.io/diverge
 helm repo update
-helm install diverge diverge/diverge --namespace diverge-system --create-namespace --version v0.6.0
+helm install diverge diverge/diverge --namespace diverge-system --create-namespace
 ```
 
 ### Docker Images (for reference)
