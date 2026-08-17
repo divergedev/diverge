@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"regexp"
 
 	"connectrpc.com/connect"
@@ -37,7 +36,7 @@ func ValidateDNS1123Label(value, field string) error {
 
 // checkSAR performs a SubjectAccessReview for the given user and resource attributes.
 // This is the shared helper used by both AuthorizeAction and AuthorizePodLogs.
-func checkSAR(ctx context.Context, k8sClient kubernetes.Interface, logger *slog.Logger, user *auth.UserInfo, attrs *authorizationv1.ResourceAttributes, denialMsg string) error {
+func checkSAR(ctx context.Context, k8sClient kubernetes.Interface, auditLogger *AuditLogger, user *auth.UserInfo, attrs *authorizationv1.ResourceAttributes, denialMsg string) error {
 	sar := &authorizationv1.SubjectAccessReview{
 		Spec: authorizationv1.SubjectAccessReviewSpec{
 			User:               user.Username,
@@ -50,26 +49,24 @@ func checkSAR(ctx context.Context, k8sClient kubernetes.Interface, logger *slog.
 
 	result, err := k8sClient.AuthorizationV1().SubjectAccessReviews().Create(ctx, sar, metav1.CreateOptions{})
 	if err != nil {
-		logger.Error("authz.error",
-			"user", user.Username,
-			"verb", attrs.Verb,
-			"resource", attrs.Resource,
-			"subresource", attrs.Subresource,
-			"namespace", attrs.Namespace,
-			"error", err,
-		)
+		resource := attrs.Resource
+		if attrs.Subresource != "" {
+			resource = resource + "/" + attrs.Subresource
+		}
+		if auditLogger != nil {
+			auditLogger.LogAuthz(ctx, "authz.error", user, attrs.Verb, resource, attrs.Namespace)
+		}
 		return connect.NewError(connect.CodeInternal, errors.New("authorization check failed"))
 	}
 
 	if !result.Status.Allowed {
-		logger.Warn("authz.denied",
-			"user", user.Username,
-			"groups", user.Groups,
-			"verb", attrs.Verb,
-			"resource", attrs.Resource,
-			"subresource", attrs.Subresource,
-			"namespace", attrs.Namespace,
-		)
+		resource := attrs.Resource
+		if attrs.Subresource != "" {
+			resource = resource + "/" + attrs.Subresource
+		}
+		if auditLogger != nil {
+			auditLogger.LogAuthz(ctx, "authz.denied", user, attrs.Verb, resource, attrs.Namespace)
+		}
 		return connect.NewError(connect.CodePermissionDenied, errors.New(denialMsg))
 	}
 
@@ -79,13 +76,13 @@ func checkSAR(ctx context.Context, k8sClient kubernetes.Interface, logger *slog.
 // AuthorizeAction performs a Kubernetes SubjectAccessReview for the authenticated
 // user against a Diverge resource. The user's identity is extracted from the
 // request context (set by the auth middleware).
-func AuthorizeAction(ctx context.Context, k8sClient kubernetes.Interface, logger *slog.Logger, verb, namespace, resource string) error {
+func AuthorizeAction(ctx context.Context, k8sClient kubernetes.Interface, auditLogger *AuditLogger, verb, namespace, resource string) error {
 	user, ok := auth.UserInfoFromContext(ctx)
 	if !ok {
 		return connect.NewError(connect.CodeUnauthenticated, errors.New("not authenticated"))
 	}
 
-	return checkSAR(ctx, k8sClient, logger, user, &authorizationv1.ResourceAttributes{
+	return checkSAR(ctx, k8sClient, auditLogger, user, &authorizationv1.ResourceAttributes{
 		Namespace: namespace,
 		Verb:      verb,
 		Group:     "diverge.dev",
@@ -95,13 +92,13 @@ func AuthorizeAction(ctx context.Context, k8sClient kubernetes.Interface, logger
 
 // AuthorizePodLogs performs a SubjectAccessReview for pods/log access.
 // StreamLogs requires both environment read AND pod log read permissions.
-func AuthorizePodLogs(ctx context.Context, k8sClient kubernetes.Interface, logger *slog.Logger, namespace string) error {
+func AuthorizePodLogs(ctx context.Context, k8sClient kubernetes.Interface, auditLogger *AuditLogger, namespace string) error {
 	user, ok := auth.UserInfoFromContext(ctx)
 	if !ok {
 		return connect.NewError(connect.CodeUnauthenticated, errors.New("not authenticated"))
 	}
 
-	return checkSAR(ctx, k8sClient, logger, user, &authorizationv1.ResourceAttributes{
+	return checkSAR(ctx, k8sClient, auditLogger, user, &authorizationv1.ResourceAttributes{
 		Namespace:   namespace,
 		Verb:        "get",
 		Group:       "",

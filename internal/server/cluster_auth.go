@@ -17,19 +17,20 @@ import (
 )
 
 type ClusterService struct {
-	client    client.Client
-	k8sClient kubernetes.Interface
-	logger    *slog.Logger
-	version   string
+	client      client.Client
+	k8sClient   kubernetes.Interface
+	logger      *slog.Logger
+	auditLogger *AuditLogger
+	version     string
 }
 
 // NewClusterService creates a ClusterService with the given version string.
 // Pass the build-injected version (e.g. from ldflags) for accurate reporting.
-func NewClusterService(c client.Client, k8s kubernetes.Interface, logger *slog.Logger, version string) divergev1alpha1connect.ClusterServiceHandler {
+func NewClusterService(c client.Client, k8s kubernetes.Interface, logger *slog.Logger, auditLogger *AuditLogger, version string) divergev1alpha1connect.ClusterServiceHandler {
 	if version == "" {
 		version = "dev"
 	}
-	return &ClusterService{client: c, k8sClient: k8s, logger: logger, version: version}
+	return &ClusterService{client: c, k8sClient: k8s, logger: logger, auditLogger: auditLogger, version: version}
 }
 
 func (s *ClusterService) GetClusterInfo(ctx context.Context, req *connect.Request[pb.GetClusterInfoRequest]) (*connect.Response[pb.GetClusterInfoResponse], error) {
@@ -37,7 +38,7 @@ func (s *ClusterService) GetClusterInfo(ctx context.Context, req *connect.Reques
 
 	// RBAC check: cluster-scoped read of environments
 	sarCtx, sarCancel := context.WithTimeout(ctx, apiTimeout)
-	err := AuthorizeAction(sarCtx, s.k8sClient, s.logger, "list", "", "environments")
+	err := AuthorizeAction(sarCtx, s.k8sClient, s.auditLogger, "list", "", "environments")
 	sarCancel()
 	if err != nil {
 		return nil, err
@@ -45,7 +46,7 @@ func (s *ClusterService) GetClusterInfo(ctx context.Context, req *connect.Reques
 
 	// RBAC check: cluster-scoped read of previewgroups
 	sarCtx2, sarCancel2 := context.WithTimeout(ctx, apiTimeout)
-	err = AuthorizeAction(sarCtx2, s.k8sClient, s.logger, "list", "", "previewgroups")
+	err = AuthorizeAction(sarCtx2, s.k8sClient, s.auditLogger, "list", "", "previewgroups")
 	sarCancel2()
 	if err != nil {
 		return nil, err
@@ -76,12 +77,13 @@ func (s *ClusterService) GetClusterInfo(ctx context.Context, req *connect.Reques
 }
 
 type AuthService struct {
-	k8sClient kubernetes.Interface
-	logger    *slog.Logger
+	k8sClient   kubernetes.Interface
+	logger      *slog.Logger
+	auditLogger *AuditLogger
 }
 
-func NewAuthService(k8s kubernetes.Interface, logger *slog.Logger) divergev1alpha1connect.AuthServiceHandler {
-	return &AuthService{k8sClient: k8s, logger: logger}
+func NewAuthService(k8s kubernetes.Interface, logger *slog.Logger, auditLogger *AuditLogger) divergev1alpha1connect.AuthServiceHandler {
+	return &AuthService{k8sClient: k8s, logger: logger, auditLogger: auditLogger}
 }
 
 func (s *AuthService) GetCurrentUser(ctx context.Context, req *connect.Request[pb.GetCurrentUserRequest]) (*connect.Response[pb.GetCurrentUserResponse], error) {
@@ -123,7 +125,7 @@ func (s *AuthService) ListPermissions(ctx context.Context, req *connect.Request[
 	for _, resource := range resources {
 		var allowedVerbs []string
 		for _, verb := range verbs {
-			err := AuthorizeAction(scanCtx, s.k8sClient, s.logger, verb, namespace, resource)
+			err := AuthorizeAction(scanCtx, s.k8sClient, s.auditLogger, verb, namespace, resource)
 
 			if err == nil {
 				allowedVerbs = append(allowedVerbs, verb)

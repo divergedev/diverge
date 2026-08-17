@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -17,12 +18,17 @@ type AuthMetrics struct {
 	Attempts    *prometheus.CounterVec // provider, result
 }
 
+type AuditLogger interface {
+	LogAuth(ctx context.Context, event string, user *UserInfo, r *http.Request, attrs ...slog.Attr)
+}
+
 // MiddlewareConfig configures the auth middleware.
 type MiddlewareConfig struct {
-	Provider AuthProvider
-	Cache    *TokenCache
-	Logger   *slog.Logger
-	Metrics  *AuthMetrics
+	Provider    AuthProvider
+	Cache       *TokenCache
+	Logger      *slog.Logger
+	AuditLogger AuditLogger
+	Metrics     *AuthMetrics
 	// ExemptPaths are paths that bypass authentication (e.g., /healthz)
 	ExemptPaths []string
 }
@@ -45,7 +51,11 @@ func NewMiddleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 				if cfg.Metrics != nil && cfg.Metrics.Attempts != nil {
 					cfg.Metrics.Attempts.WithLabelValues("none", "failure").Inc()
 				}
-				cfg.Logger.Warn("auth.failure", "reason", "missing_token", "path", r.URL.Path, "source_ip", r.RemoteAddr)
+				if cfg.AuditLogger != nil {
+					cfg.AuditLogger.LogAuth(r.Context(), "auth.failure", nil, r, slog.String("reason", "missing_token"))
+				} else {
+					cfg.Logger.Warn("auth.failure", "reason", "missing_token", "path", r.URL.Path, "source_ip", r.RemoteAddr)
+				}
 				http.Error(w, "missing or invalid authorization header", http.StatusUnauthorized)
 				return
 			}
@@ -86,7 +96,11 @@ func NewMiddleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 				if cfg.Metrics != nil && cfg.Metrics.Attempts != nil {
 					cfg.Metrics.Attempts.WithLabelValues("tokenreview", "failure").Inc()
 				}
-				cfg.Logger.Warn("auth.failure", "reason", "token_review_rejected", "path", r.URL.Path, "source_ip", r.RemoteAddr, "error", err)
+				if cfg.AuditLogger != nil {
+					cfg.AuditLogger.LogAuth(r.Context(), "auth.failure", nil, r, slog.String("reason", "token_review_rejected"), slog.Any("error", err))
+				} else {
+					cfg.Logger.Warn("auth.failure", "reason", "token_review_rejected", "path", r.URL.Path, "source_ip", r.RemoteAddr, "error", err)
+				}
 				http.Error(w, "authentication failed", http.StatusUnauthorized)
 				return
 			}
@@ -97,7 +111,11 @@ func NewMiddleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 			if cfg.Metrics != nil && cfg.Metrics.Attempts != nil {
 				cfg.Metrics.Attempts.WithLabelValues("tokenreview", "success").Inc()
 			}
-			cfg.Logger.Info("auth.success", "user", user.Username, "groups", user.Groups, "path", r.URL.Path, "source_ip", r.RemoteAddr)
+			if cfg.AuditLogger != nil {
+				cfg.AuditLogger.LogAuth(r.Context(), "auth.success", user, r)
+			} else {
+				cfg.Logger.Info("auth.success", "user", user.Username, "groups", user.Groups, "path", r.URL.Path, "source_ip", r.RemoteAddr)
+			}
 
 			ctx := ContextWithUserInfo(r.Context(), user)
 			next.ServeHTTP(w, r.WithContext(ctx))

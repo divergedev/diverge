@@ -72,7 +72,7 @@ func (s *EnvironmentService) CreateEnvironment(ctx context.Context, req *connect
 	}
 
 	// RBAC check
-	if err := AuthorizeAction(ctx, s.k8sClient, s.logger, "create", namespace, "environments"); err != nil {
+	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "create", namespace, "environments"); err != nil {
 		return nil, err
 	}
 
@@ -111,7 +111,7 @@ func (s *EnvironmentService) GetEnvironment(ctx context.Context, req *connect.Re
 	}
 
 	// RBAC check
-	if err := AuthorizeAction(ctx, s.k8sClient, s.logger, "get", req.Msg.Namespace, "environments"); err != nil {
+	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "get", req.Msg.Namespace, "environments"); err != nil {
 		return nil, err
 	}
 
@@ -137,7 +137,7 @@ func (s *EnvironmentService) ListEnvironments(ctx context.Context, req *connect.
 	}
 
 	// RBAC check
-	if err := AuthorizeAction(ctx, s.k8sClient, s.logger, "list", namespace, "environments"); err != nil {
+	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "list", namespace, "environments"); err != nil {
 		return nil, err
 	}
 
@@ -189,7 +189,7 @@ func (s *EnvironmentService) UpdateEnvironment(ctx context.Context, req *connect
 	}
 
 	// RBAC check
-	if err := AuthorizeAction(ctx, s.k8sClient, s.logger, "update", namespace, "environments"); err != nil {
+	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "update", namespace, "environments"); err != nil {
 		return nil, err
 	}
 
@@ -228,7 +228,7 @@ func (s *EnvironmentService) DeleteEnvironment(ctx context.Context, req *connect
 	}
 
 	// RBAC check
-	if err := AuthorizeAction(ctx, s.k8sClient, s.logger, "delete", req.Msg.Namespace, "environments"); err != nil {
+	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "delete", req.Msg.Namespace, "environments"); err != nil {
 		return nil, err
 	}
 
@@ -269,12 +269,12 @@ func (s *EnvironmentService) WatchEnvironments(ctx context.Context, req *connect
 
 	// RBAC check — required even for cluster-wide watches
 	if namespace != "" {
-		if err := AuthorizeAction(ctx, s.k8sClient, s.logger, "watch", namespace, "environments"); err != nil {
+		if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "watch", namespace, "environments"); err != nil {
 			return err
 		}
 	} else {
 		// Cluster-wide watch: check watch permission at cluster scope (empty namespace)
-		if err := AuthorizeAction(ctx, s.k8sClient, s.logger, "watch", "", "environments"); err != nil {
+		if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "watch", "", "environments"); err != nil {
 			return err
 		}
 	}
@@ -393,10 +393,10 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 	}
 
 	// RBAC: check environment read AND pods/log access
-	if err := AuthorizeAction(ctx, s.k8sClient, s.logger, "get", msg.Namespace, "environments"); err != nil {
+	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "get", msg.Namespace, "environments"); err != nil {
 		return err
 	}
-	if err := AuthorizePodLogs(ctx, s.k8sClient, s.logger, msg.Namespace); err != nil {
+	if err := AuthorizePodLogs(ctx, s.k8sClient, s.auditLogger, msg.Namespace); err != nil {
 		return err
 	}
 
