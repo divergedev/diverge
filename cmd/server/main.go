@@ -88,7 +88,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create controller-runtime client (for CRD operations)
+	// Create controller-runtime client (for CRD operations).
+	// We intentionally use client.New() (direct, uncached client) instead of
+	// a cached client to avoid read-your-writes cache lag. This ensures API
+	// clients always read the most up-to-date state immediately after mutations.
 	crClient, err := client.New(cfg, client.Options{Scheme: scheme})
 	if err != nil {
 		logger.Error("failed to create controller-runtime client", "error", err)
