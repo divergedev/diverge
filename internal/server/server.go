@@ -52,11 +52,11 @@ func NewServeMux(cfg ServeMuxConfig) *http.ServeMux {
 	pgPath, pgHandler := divergev1alpha1connect.NewPreviewGroupServiceHandler(pgService, interceptors)
 	mux.Handle(pgPath, pgHandler)
 
-	clusterService := NewClusterService(cfg.Client, cfg.K8sClient, cfg.Logger, cfg.Version)
+	clusterService := NewClusterService(cfg.Client, cfg.K8sClient, cfg.Logger, cfg.AuditLogger, cfg.Version)
 	clusterPath, clusterHandler := divergev1alpha1connect.NewClusterServiceHandler(clusterService, interceptors)
 	mux.Handle(clusterPath, clusterHandler)
 
-	authService := NewAuthService(cfg.K8sClient, cfg.Logger)
+	authService := NewAuthService(cfg.K8sClient, cfg.Logger, cfg.AuditLogger)
 	authPath, authHandler := divergev1alpha1connect.NewAuthServiceHandler(authService, interceptors)
 	mux.Handle(authPath, authHandler)
 

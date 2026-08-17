@@ -62,7 +62,7 @@ func (s *PreviewGroupService) CreatePreviewGroup(ctx context.Context, req *conne
 	}
 
 	// RBAC check
-	if err := AuthorizeAction(ctx, s.k8sClient, s.logger, "create", namespace, "previewgroups"); err != nil {
+	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "create", namespace, "previewgroups"); err != nil {
 		return nil, err
 	}
 
@@ -101,7 +101,7 @@ func (s *PreviewGroupService) GetPreviewGroup(ctx context.Context, req *connect.
 	}
 
 	// RBAC check
-	if err := AuthorizeAction(ctx, s.k8sClient, s.logger, "get", req.Msg.Namespace, "previewgroups"); err != nil {
+	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "get", req.Msg.Namespace, "previewgroups"); err != nil {
 		return nil, err
 	}
 
@@ -127,7 +127,7 @@ func (s *PreviewGroupService) ListPreviewGroups(ctx context.Context, req *connec
 	}
 
 	// RBAC check
-	if err := AuthorizeAction(ctx, s.k8sClient, s.logger, "list", namespace, "previewgroups"); err != nil {
+	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "list", namespace, "previewgroups"); err != nil {
 		return nil, err
 	}
 
@@ -166,7 +166,7 @@ func (s *PreviewGroupService) DeletePreviewGroup(ctx context.Context, req *conne
 	}
 
 	// RBAC check
-	if err := AuthorizeAction(ctx, s.k8sClient, s.logger, "delete", req.Msg.Namespace, "previewgroups"); err != nil {
+	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "delete", req.Msg.Namespace, "previewgroups"); err != nil {
 		return nil, err
 	}
 
@@ -203,12 +203,12 @@ func (s *PreviewGroupService) WatchPreviewGroups(ctx context.Context, req *conne
 
 	// RBAC check — required even for cluster-wide watches
 	if namespace != "" {
-		if err := AuthorizeAction(ctx, s.k8sClient, s.logger, "watch", namespace, "previewgroups"); err != nil {
+		if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "watch", namespace, "previewgroups"); err != nil {
 			return err
 		}
 	} else {
 		// Cluster-wide watch: check watch permission at cluster scope (empty namespace)
-		if err := AuthorizeAction(ctx, s.k8sClient, s.logger, "watch", "", "previewgroups"); err != nil {
+		if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "watch", "", "previewgroups"); err != nil {
 			return err
 		}
 	}
