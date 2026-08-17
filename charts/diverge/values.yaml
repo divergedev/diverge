@@ -130,6 +130,8 @@ server:
       - diverge-server
     maxStreams: 1000
   cors:
+    # WARNING: Default "*" allows all origins. In production, set this to your
+    # specific domain(s) to prevent unauthorized cross-origin access.
     allowedOrigins: "*"
     maxAge: 86400
   rbac:

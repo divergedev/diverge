@@ -17,43 +17,55 @@ func TestCORSHandler(t *testing.T) {
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	corsAllowedOrigins := "*"
-	corsMaxAge := 86400
+	setupCORS := func(corsAllowedOrigins string) http.Handler {
+		corsMaxAge := 86400
+		rawOrigins := strings.Split(corsAllowedOrigins, ",")
+		origins := make([]string, 0, len(rawOrigins))
+		for _, o := range rawOrigins {
+			trimmed := strings.TrimSpace(o)
+			if trimmed != "" {
+				origins = append(origins, trimmed)
+			}
+		}
 
-	var allowedOrigins []string
-	if corsAllowedOrigins == "*" {
-		allowedOrigins = []string{"*"}
-	} else {
-		allowedOrigins = strings.Split(corsAllowedOrigins, ",")
+		opts := cors.Options{
+			AllowedMethods:   []string{"GET", "POST"},
+			AllowedHeaders:   []string{"Authorization", "Content-Type", "Connect-Protocol-Version", "Connect-Timeout-Ms", "X-Grpc-Web", "X-User-Agent", "Grpc-Timeout"},
+			ExposedHeaders:   []string{"Grpc-Status", "Grpc-Message", "Grpc-Status-Details-Bin"},
+			AllowCredentials: true,
+			MaxAge:           corsMaxAge,
+		}
+		if len(origins) == 1 && origins[0] == "*" {
+			opts.AllowOriginFunc = func(origin string) bool { return true }
+		} else {
+			opts.AllowedOrigins = origins
+		}
+
+		corsHandler := cors.New(opts)
+		return corsHandler.Handler(dummyHandler)
 	}
 
-	corsHandler := cors.New(cors.Options{
-		AllowedOrigins:   allowedOrigins,
-		AllowedMethods:   []string{"POST"},
-		AllowedHeaders:   []string{"Authorization", "Content-Type", "Connect-Protocol-Version"},
-		AllowCredentials: true,
-		MaxAge:           corsMaxAge,
-	})
+	handler := setupCORS("*")
 
-	handler := corsHandler.Handler(dummyHandler)
-
-	t.Run("OPTIONS preflight returns correct CORS headers", func(t *testing.T) {
+	t.Run("OPTIONS preflight returns correct CORS headers including GET and new headers", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodOptions, "/test", nil)
 		req.Header.Set("Origin", "http://localhost:3000")
-		req.Header.Set("Access-Control-Request-Method", "POST")
+		req.Header.Set("Access-Control-Request-Method", "GET")
 		req.Header.Set("Access-Control-Request-Headers", "content-type")
 
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
 		assert.Equal(t, http.StatusNoContent, rec.Code)
-		assert.Equal(t, "*", rec.Header().Get("Access-Control-Allow-Origin"))
-		assert.Contains(t, rec.Header().Get("Access-Control-Allow-Methods"), "POST")
+		// With credentials and *, origin should be reflected instead of *
+		assert.Equal(t, "http://localhost:3000", rec.Header().Get("Access-Control-Allow-Origin"))
+		assert.Equal(t, "true", rec.Header().Get("Access-Control-Allow-Credentials"))
+		assert.Contains(t, rec.Header().Get("Access-Control-Allow-Methods"), "GET")
 		assert.Contains(t, strings.ToLower(rec.Header().Get("Access-Control-Allow-Headers")), "content-type")
 		assert.Equal(t, "86400", rec.Header().Get("Access-Control-Max-Age"))
 	})
 
-	t.Run("POST request includes CORS headers in response", func(t *testing.T) {
+	t.Run("POST request includes CORS headers and exposed headers in response", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/test", nil)
 		req.Header.Set("Origin", "http://localhost:3000")
 
@@ -61,39 +73,27 @@ func TestCORSHandler(t *testing.T) {
 		handler.ServeHTTP(rec, req)
 
 		assert.Equal(t, http.StatusOK, rec.Code)
-		assert.Equal(t, "*", rec.Header().Get("Access-Control-Allow-Origin"))
+		assert.Equal(t, "http://localhost:3000", rec.Header().Get("Access-Control-Allow-Origin"))
+		assert.Equal(t, "true", rec.Header().Get("Access-Control-Allow-Credentials"))
+		assert.Contains(t, rec.Header().Get("Access-Control-Expose-Headers"), "Grpc-Status")
 		assert.Equal(t, "ok", rec.Body.String())
 	})
 
-	t.Run("Specific origins allowed", func(t *testing.T) {
-		corsHandlerSpecific := cors.New(cors.Options{
-			AllowedOrigins:   []string{"http://localhost:3000"},
-			AllowedMethods:   []string{"POST"},
-			AllowedHeaders:   []string{"Authorization", "Content-Type", "Connect-Protocol-Version"},
-			AllowCredentials: true,
-			MaxAge:           86400,
-		})
-		h := corsHandlerSpecific.Handler(dummyHandler)
+	t.Run("Specific origins allowed and trimmed", func(t *testing.T) {
+		h := setupCORS(" http://localhost:3000 , http://example.com  ")
 
 		req := httptest.NewRequest(http.MethodPost, "/test", nil)
-		req.Header.Set("Origin", "http://localhost:3000")
+		req.Header.Set("Origin", "http://example.com")
 
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 
 		assert.Equal(t, http.StatusOK, rec.Code)
-		assert.Equal(t, "http://localhost:3000", rec.Header().Get("Access-Control-Allow-Origin"))
+		assert.Equal(t, "http://example.com", rec.Header().Get("Access-Control-Allow-Origin"))
 	})
 
 	t.Run("Disallowed origins rejected", func(t *testing.T) {
-		corsHandlerSpecific := cors.New(cors.Options{
-			AllowedOrigins:   []string{"http://localhost:3000"},
-			AllowedMethods:   []string{"POST"},
-			AllowedHeaders:   []string{"Authorization", "Content-Type", "Connect-Protocol-Version"},
-			AllowCredentials: true,
-			MaxAge:           86400,
-		})
-		h := corsHandlerSpecific.Handler(dummyHandler)
+		h := setupCORS("http://localhost:3000")
 
 		req := httptest.NewRequest(http.MethodPost, "/test", nil)
 		req.Header.Set("Origin", "http://malicious.com")
