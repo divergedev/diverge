@@ -36,6 +36,8 @@ spec:
             - --metrics-addr=:9090
             - --token-cache-ttl={{ .Values.server.auth.tokenCacheTTL }}
             - --max-streams={{ .Values.server.auth.maxStreams }}
+            - --cors-allowed-origins={{ .Values.server.cors.allowedOrigins }}
+            - --cors-max-age={{ .Values.server.cors.maxAge }}
           ports:
             - name: grpc
               containerPort: {{ .Values.server.service.port }}

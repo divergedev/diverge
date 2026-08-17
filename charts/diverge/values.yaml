@@ -129,6 +129,9 @@ server:
     audiences:
       - diverge-server
     maxStreams: 1000
+  cors:
+    allowedOrigins: "*"
+    maxAge: 86400
   rbac:
     # -- If true, grants cluster-wide pods/log access via ClusterRole.
     # If false, restricts pods/log access to targetNamespaces only.

@@ -8,10 +8,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/rs/cors"
 	"golang.org/x/sync/errgroup"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -39,13 +41,15 @@ func init() {
 
 func main() {
 	var (
-		addr          string
-		metricsAddr   string
-		tlsCertFile   string
-		tlsKeyFile    string
-		tokenCacheTTL time.Duration
-		maxStreams    int
-		audiences     string
+		addr               string
+		metricsAddr        string
+		tlsCertFile        string
+		tlsKeyFile         string
+		tokenCacheTTL      time.Duration
+		maxStreams         int
+		audiences          string
+		corsAllowedOrigins string
+		corsMaxAge         int
 	)
 
 	flag.StringVar(&addr, "addr", ":8443", "Main server listen address")
@@ -55,6 +59,8 @@ func main() {
 	flag.DurationVar(&tokenCacheTTL, "token-cache-ttl", 5*time.Second, "TokenReview cache TTL")
 	flag.IntVar(&maxStreams, "max-streams", 1000, "Maximum concurrent streams")
 	flag.StringVar(&audiences, "audiences", "diverge-server", "Comma-separated list of valid token audiences")
+	flag.StringVar(&corsAllowedOrigins, "cors-allowed-origins", "*", "Comma-separated list of allowed CORS origins")
+	flag.IntVar(&corsMaxAge, "cors-max-age", 86400, "CORS max age in seconds")
 	flag.Parse()
 
 	// Structured logger
@@ -139,6 +145,23 @@ func main() {
 
 	// Wrap with auth middleware
 	handler := authMiddleware(mux)
+
+	var allowedOrigins []string
+	if corsAllowedOrigins == "*" {
+		allowedOrigins = []string{"*"}
+	} else {
+		allowedOrigins = strings.Split(corsAllowedOrigins, ",")
+	}
+
+	corsHandler := cors.New(cors.Options{
+		AllowedOrigins:   allowedOrigins,
+		AllowedMethods:   []string{"POST"},
+		AllowedHeaders:   []string{"Authorization", "Content-Type", "Connect-Protocol-Version"},
+		AllowCredentials: true,
+		MaxAge:           corsMaxAge,
+	})
+
+	handler = corsHandler.Handler(handler)
 
 	// Signal-driven graceful shutdown
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
