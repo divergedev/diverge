@@ -3,13 +3,13 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"connectrpc.com/connect"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"fmt"
 	pb "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 	"github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
 	"github.com/divergedev/diverge/api/v1alpha1"
@@ -201,6 +201,11 @@ func (s *PreviewGroupService) UpdatePreviewGroup(ctx context.Context, req *conne
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("preview group is required"))
 	}
 
+	if msg.PreviewGroup.ResourceVersion == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("resource_version is required; fetch the current resource first and include its resource_version to prevent concurrent modification"))
+	}
+
 	if msg.PreviewGroup.Name != "" {
 		if err := ValidateDNS1123Label(msg.PreviewGroup.Name, "name"); err != nil {
 			return nil, err
@@ -237,7 +242,18 @@ func (s *PreviewGroupService) UpdatePreviewGroup(ctx context.Context, req *conne
 		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
 	}
 
+	// NOTE: FieldMask currently supports top-level paths only (spec, labels, annotations).
+	// Nested paths like "spec.source" are not supported and will be rejected.
+	// Full sub-field updates require replacing the entire parent (e.g., path="spec").
 	if msg.UpdateMask != nil && len(msg.UpdateMask.Paths) > 0 {
+		allowedPaths := map[string]bool{"spec": true, "labels": true, "annotations": true}
+		for _, path := range msg.UpdateMask.Paths {
+			if !allowedPaths[path] {
+				return nil, connect.NewError(connect.CodeInvalidArgument,
+					fmt.Errorf("unsupported field mask path: %q; allowed paths are: spec, labels, annotations", path))
+			}
+		}
+
 		for _, path := range msg.UpdateMask.Paths {
 			switch path {
 			case "spec":
@@ -256,6 +272,10 @@ func (s *PreviewGroupService) UpdatePreviewGroup(ctx context.Context, req *conne
 
 	if err := s.client.Update(ctx, &existingCrd); err != nil {
 		return nil, SanitizeK8sError(s.logger, err)
+	}
+
+	if msg.UpdateMask != nil && len(msg.UpdateMask.Paths) > 0 {
+		s.logger.Info("partial update applied", "resource", "previewgroup", "name", existingCrd.Name, "paths", msg.UpdateMask.Paths)
 	}
 
 	s.auditLogger.LogMutation(ctx, "resource.updated", "previewgroup", existingCrd.Name, existingCrd.Namespace)

@@ -210,6 +210,11 @@ func (s *EnvironmentService) UpdateEnvironment(ctx context.Context, req *connect
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("environment is required"))
 	}
 
+	if msg.Environment.ResourceVersion == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("resource_version is required; fetch the current resource first and include its resource_version to prevent concurrent modification"))
+	}
+
 	// Validate name
 	if msg.Environment.Name != "" {
 		if err := ValidateDNS1123Label(msg.Environment.Name, "name"); err != nil {
@@ -247,7 +252,18 @@ func (s *EnvironmentService) UpdateEnvironment(ctx context.Context, req *connect
 		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
 	}
 
+	// NOTE: FieldMask currently supports top-level paths only (spec, labels, annotations).
+	// Nested paths like "spec.source" are not supported and will be rejected.
+	// Full sub-field updates require replacing the entire parent (e.g., path="spec").
 	if msg.UpdateMask != nil && len(msg.UpdateMask.Paths) > 0 {
+		allowedPaths := map[string]bool{"spec": true, "labels": true, "annotations": true}
+		for _, path := range msg.UpdateMask.Paths {
+			if !allowedPaths[path] {
+				return nil, connect.NewError(connect.CodeInvalidArgument,
+					fmt.Errorf("unsupported field mask path: %q; allowed paths are: spec, labels, annotations", path))
+			}
+		}
+
 		for _, path := range msg.UpdateMask.Paths {
 			switch path {
 			case "spec":
@@ -266,6 +282,10 @@ func (s *EnvironmentService) UpdateEnvironment(ctx context.Context, req *connect
 
 	if err := s.client.Update(ctx, &existingCrd); err != nil {
 		return nil, SanitizeK8sError(s.logger, err)
+	}
+
+	if msg.UpdateMask != nil && len(msg.UpdateMask.Paths) > 0 {
+		s.logger.Info("partial update applied", "resource", "environment", "name", existingCrd.Name, "paths", msg.UpdateMask.Paths)
 	}
 
 	s.auditLogger.LogMutation(ctx, "resource.updated", "environment", existingCrd.Name, existingCrd.Namespace)

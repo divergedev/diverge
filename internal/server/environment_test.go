@@ -170,7 +170,10 @@ func TestUpdateEnvironment_FieldMask(t *testing.T) {
 
 func TestUpdateEnvironment_PBT(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		rv := rapid.StringMatching(`^[a-zA-Z0-9]+$`).Draw(t, "resource_version")
+		rv := rapid.OneOf(
+			rapid.Just(""),
+			rapid.StringMatching(`^[a-zA-Z0-9]+$`),
+		).Draw(t, "resource_version")
 
 		_, c, k8s, logger := buildEnvTestSetup()
 		audit := NewAuditLogger(logger)
@@ -197,7 +200,12 @@ func TestUpdateEnvironment_PBT(t *testing.T) {
 
 		_, err := svc.UpdateEnvironment(ctx, connect.NewRequest(req))
 
-		if rv != existing.ResourceVersion {
+		if rv == "" {
+			require.Error(t, err)
+			var cErr *connect.Error
+			require.ErrorAs(t, err, &cErr)
+			assert.Equal(t, connect.CodeInvalidArgument, cErr.Code())
+		} else if rv != existing.ResourceVersion {
 			require.Error(t, err)
 			var cErr *connect.Error
 			require.ErrorAs(t, err, &cErr)
