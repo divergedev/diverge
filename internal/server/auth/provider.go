@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
@@ -45,9 +46,17 @@ func (p *TokenReviewProvider) Authenticate(ctx context.Context, token string) (*
 
 	var extra map[string]authorizationv1.ExtraValue
 	if len(result.Status.User.Extra) > 0 {
+		extraCount := 0
 		extra = make(map[string]authorizationv1.ExtraValue, len(result.Status.User.Extra))
 		for k, v := range result.Status.User.Extra {
-			extra[k] = authorizationv1.ExtraValue(v)
+			if extraCount >= 50 {
+				slog.Warn("TokenReview returned more than 50 extra keys, truncating")
+				break
+			}
+			val := make(authorizationv1.ExtraValue, len(v))
+			copy(val, v)
+			extra[k] = val
+			extraCount++
 		}
 	}
 

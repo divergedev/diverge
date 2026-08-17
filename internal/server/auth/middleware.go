@@ -92,7 +92,7 @@ func NewMiddleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 			}
 
 			// Cache successful auth (never cache failures)
-			cfg.Cache.Set(token, user)
+			cfg.Cache.Set(token, user.DeepCopy())
 
 			if cfg.Metrics != nil && cfg.Metrics.Attempts != nil {
 				cfg.Metrics.Attempts.WithLabelValues("tokenreview", "success").Inc()
