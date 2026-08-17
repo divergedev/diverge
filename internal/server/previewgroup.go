@@ -9,11 +9,13 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"fmt"
 	pb "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 	"github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
 	"github.com/divergedev/diverge/api/v1alpha1"
 	domain "github.com/divergedev/diverge/gen/domain/github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 	"github.com/divergedev/diverge/internal/server/streaming"
+	"k8s.io/apimachinery/pkg/labels"
 )
 
 type PreviewGroupService struct {
@@ -136,6 +138,27 @@ func (s *PreviewGroupService) ListPreviewGroups(ctx context.Context, req *connec
 	if namespace != "" {
 		opts = append(opts, client.InNamespace(namespace))
 	}
+
+	pageSize := req.Msg.PageSize
+	if pageSize <= 0 {
+		pageSize = 100
+	} else if pageSize > 1000 {
+		pageSize = 1000
+	}
+	opts = append(opts, client.Limit(pageSize))
+
+	if req.Msg.PageToken != "" {
+		opts = append(opts, client.Continue(req.Msg.PageToken))
+	}
+
+	if req.Msg.LabelSelector != "" {
+		selector, err := labels.Parse(req.Msg.LabelSelector)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid label_selector: %w", err))
+		}
+		opts = append(opts, client.MatchingLabelsSelector{Selector: selector})
+	}
+
 	if err := s.client.List(ctx, &list, opts...); err != nil {
 		return nil, SanitizeK8sError(s.logger, err)
 	}
@@ -154,6 +177,7 @@ func (s *PreviewGroupService) ListPreviewGroups(ctx context.Context, req *connec
 
 	return connect.NewResponse(&pb.ListPreviewGroupsResponse{
 		PreviewGroups: pbs,
+		NextPageToken: list.Continue,
 	}), nil
 }
 

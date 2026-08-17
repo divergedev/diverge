@@ -121,8 +121,8 @@ func TestAuthorizeAction_PassesUIDAndExtra(t *testing.T) {
 	}
 	ctx = auth.ContextWithUserInfo(ctx, info)
 
-	logger := slog.Default()
-	err := AuthorizeAction(ctx, client, logger, "get", "default", "things")
+	auditLogger := NewAuditLogger(slog.Default())
+	err := AuthorizeAction(ctx, client, auditLogger, "get", "default", "things")
 	require.NoError(t, err)
 	require.NotNil(t, capturedSAR)
 	assert.Equal(t, "bob", capturedSAR.Spec.User)
@@ -151,8 +151,8 @@ func TestAuthorizePodLogs_PassesUIDAndExtra(t *testing.T) {
 	}
 	ctx = auth.ContextWithUserInfo(ctx, info)
 
-	logger := slog.Default()
-	err := AuthorizePodLogs(ctx, client, logger, "default")
+	auditLogger := NewAuditLogger(slog.Default())
+	err := AuthorizePodLogs(ctx, client, auditLogger, "default")
 	require.NoError(t, err)
 	require.NotNil(t, capturedSAR)
 	assert.Equal(t, "bob", capturedSAR.Spec.User)
@@ -188,8 +188,8 @@ func TestCheckSAR_ExtraPassthrough_PBT(t *testing.T) {
 		}
 		ctx = auth.ContextWithUserInfo(ctx, info)
 
-		logger := slog.Default()
-		err := AuthorizeAction(ctx, client, logger, "get", "default", "things")
+		auditLogger := NewAuditLogger(slog.Default())
+		err := AuthorizeAction(ctx, client, auditLogger, "get", "default", "things")
 		require.NoError(t, err)
 		require.NotNil(t, capturedSAR)
 
