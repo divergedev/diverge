@@ -186,9 +186,10 @@ dev:
 			Owner: username,
 			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
 				{
-					Name:     serviceName,
-					Mode:     divergeiov1alpha1.ServiceModeLocal,
-					Endpoint: endpoint,
+					Name:      serviceName,
+					Namespace: app.Namespace,
+					Mode:      divergeiov1alpha1.ServiceModeLocal,
+					Endpoint:  endpoint,
 				},
 			},
 			Routing: divergeiov1alpha1.PreviewGroupRouting{
@@ -196,7 +197,8 @@ dev:
 				HeaderValue: headerValue,
 			},
 			Source: divergeiov1alpha1.EnvironmentSource{
-				Branch: headerValue,
+				Provider: "local",
+				Branch:   headerValue,
 			},
 		},
 	}
