@@ -33,7 +33,7 @@ func TestDevLifecycle_CreateAndCleanup(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runDev(app, "", 0, "", "inject", false, nil, cmd, WithEnvironmentDetector(detector))
+		errCh <- runDev(app, "", 0, "", "inject", false, "", nil, cmd, WithEnvironmentDetector(detector))
 	}()
 
 	var pg divergeiov1alpha1.PreviewGroup
@@ -97,7 +97,7 @@ func TestDevLifecycle_EnvSync(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runDev(app, "", 0, "", "file", false, []string{"echo", "done"}, cmd, WithEnvironmentDetector(detector))
+		errCh <- runDev(app, "", 0, "", "file", false, "", []string{"echo", "done"}, cmd, WithEnvironmentDetector(detector))
 	}()
 
 	require.NoError(t, <-errCh)
@@ -122,7 +122,7 @@ func TestDevLifecycle_GracefulShutdown(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runDev(app, "", 0, "", "inject", false, nil, cmd, WithEnvironmentDetector(detector))
+		errCh <- runDev(app, "", 0, "", "inject", false, "", nil, cmd, WithEnvironmentDetector(detector))
 	}()
 
 	var pg divergeiov1alpha1.PreviewGroup
@@ -175,7 +175,7 @@ func TestDevLifecycle_ChildProcess(t *testing.T) {
 	tmpDir := t.TempDir()
 	outFile := filepath.Join(tmpDir, "out.txt")
 
-	err := runDev(app, "", 0, "", "inject", false, []string{"sh", "-c", "echo $DIVERGE_CHILD_TEST > " + outFile}, cmd, WithEnvironmentDetector(detector))
+	err := runDev(app, "", 0, "", "inject", false, "", []string{"sh", "-c", "echo $DIVERGE_CHILD_TEST > " + outFile}, cmd, WithEnvironmentDetector(detector))
 	require.NoError(t, err)
 
 	content, err := os.ReadFile(outFile)
@@ -198,7 +198,7 @@ func TestDevspaceFlagLifecycle(t *testing.T) {
 	require.NoError(t, os.Chdir(tmpDir))
 	defer func() { _ = os.Chdir(origDir) }()
 
-	err := runDev(app, "my-service", 0, "", "inject", true, nil, cmd)
+	err := runDev(app, "my-service", 0, "", "inject", true, "", nil, cmd)
 	require.NoError(t, err)
 
 	content, err := os.ReadFile("devspace.yaml")

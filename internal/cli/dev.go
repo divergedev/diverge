@@ -47,6 +47,7 @@ func newDevCmd(app *App) *cobra.Command {
 		endpointFlag  string
 		envOutputFlag string
 		devspaceFlag  bool
+		previewIdFlag string
 	)
 
 	cmd := &cobra.Command{
@@ -55,7 +56,7 @@ func newDevCmd(app *App) *cobra.Command {
 		Long: `Start a local development session by creating a PreviewGroup that routes
 traffic for the specified service to your local machine's Tailscale IP.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDev(app, serviceFlag, portFlag, endpointFlag, envOutputFlag, devspaceFlag, args, cmd)
+			return runDev(app, serviceFlag, portFlag, endpointFlag, envOutputFlag, devspaceFlag, previewIdFlag, args, cmd)
 		},
 	}
 	cmd.Flags().StringVar(&serviceFlag, "service", "", "Service name (default: auto-detect)")
@@ -63,11 +64,12 @@ traffic for the specified service to your local machine's Tailscale IP.`,
 	cmd.Flags().StringVar(&endpointFlag, "endpoint", "", "Local endpoint IP (default: tailscale ip -4)")
 	cmd.Flags().StringVar(&envOutputFlag, "env-output", "inject", "How to handle env vars: inject (in-memory), file (.env.diverge)")
 	cmd.Flags().BoolVar(&devspaceFlag, "devspace", false, "Generate a devspace.yaml template and show DevSpace instructions")
+	cmd.Flags().StringVar(&previewIdFlag, "preview-id", "", "Preview ID for routing (default: git branch name)")
 
 	return cmd
 }
 
-func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, envOutputFlag string, devspaceFlag bool, args []string, cmd *cobra.Command, opts ...DevOption) error {
+func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, envOutputFlag string, devspaceFlag bool, previewIdFlag string, args []string, cmd *cobra.Command, opts ...DevOption) error {
 	ctx := cmd.Context()
 
 	if devspaceFlag {
@@ -161,11 +163,15 @@ dev:
 
 	// 4. Construct header value
 	headerValue := "local-dev"
-	branch, err := detector.DetectGitBranch(ctx)
-	if err == nil && branch != "" {
-		headerValue = git.SlugifyBranch(branch)
-	} else if err != nil {
-		slog.Debug("failed to detect git branch", "error", err)
+	if previewIdFlag != "" {
+		headerValue = previewIdFlag
+	} else {
+		branch, err := detector.DetectGitBranch(ctx)
+		if err == nil && branch != "" {
+			headerValue = git.SlugifyBranch(branch)
+		} else if err != nil {
+			slog.Debug("failed to detect git branch", "error", err)
+		}
 	}
 
 	// 5. Construct group name

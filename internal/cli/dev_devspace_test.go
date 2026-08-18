@@ -21,7 +21,7 @@ func TestDevCmd_DevspaceFlag_CreatesFile(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())
 
-	err := runDev(nil, "", 0, "", "", true, nil, cmd)
+	err := runDev(nil, "", 0, "", "", true, "", nil, cmd)
 	require.NoError(t, err)
 
 	_, err = os.Stat("devspace.yaml")
@@ -43,7 +43,7 @@ func TestDevCmd_DevspaceFlag_SkipsWhenExists(t *testing.T) {
 	err := os.WriteFile("devspace.yaml", existingContent, 0644)
 	require.NoError(t, err)
 
-	err = runDev(nil, "", 0, "", "", true, nil, cmd)
+	err = runDev(nil, "", 0, "", "", true, "", nil, cmd)
 	require.NoError(t, err)
 
 	content, err := os.ReadFile("devspace.yaml")
@@ -62,7 +62,7 @@ func TestDevCmd_DevspaceFlag_InjectsServiceName(t *testing.T) {
 	cmd.SetContext(context.Background())
 
 	// Use custom service name
-	err := runDev(nil, "custom-app", 0, "", "", true, nil, cmd)
+	err := runDev(nil, "custom-app", 0, "", "", true, "", nil, cmd)
 	require.NoError(t, err)
 
 	content, err := os.ReadFile("devspace.yaml")
@@ -81,7 +81,7 @@ func TestDevCmd_DevspaceFlag_ValidYaml(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())
 
-	err := runDev(nil, "test-app", 0, "", "", true, nil, cmd)
+	err := runDev(nil, "test-app", 0, "", "", true, "", nil, cmd)
 	require.NoError(t, err)
 
 	content, err := os.ReadFile("devspace.yaml")
