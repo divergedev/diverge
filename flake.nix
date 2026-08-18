@@ -34,6 +34,7 @@
             buf
             protoc-gen-go
             protoc-gen-connect-go
+            air
 
             # Container
             docker-client
