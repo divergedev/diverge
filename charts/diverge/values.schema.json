@@ -1,0 +1,43 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "controller": { "type": "object" },
+    "metrics": { "type": "object" },
+    "server": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "replicaCount": { "type": "integer", "minimum": 1 },
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string" },
+            "tag": { "type": "string" }
+          }
+        },
+        "auth": {
+          "type": "object",
+          "properties": {
+            "oidc": {
+              "type": "object",
+              "properties": {
+                "issuerURL": { "type": "string", "format": "uri" }
+              }
+            }
+          }
+        },
+        "cors": {
+          "type": "object",
+          "properties": {
+            "allowedOrigins": {
+              "type": ["string", "array"],
+              "items": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "required": ["server"]
+}
