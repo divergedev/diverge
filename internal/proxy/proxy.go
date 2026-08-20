@@ -79,10 +79,9 @@ func NewServer(cfg Config, lister EnvironmentLister) (*Server, error) {
 		config:    cfg,
 		envLister: lister,
 		proxy: &httputil.ReverseProxy{
-			Director: func(req *http.Request) {
-				req.URL.Scheme = targetURL.Scheme
-				req.URL.Host = targetURL.Host
-				req.Host = targetURL.Host
+			Rewrite: func(r *httputil.ProxyRequest) {
+				r.SetURL(targetURL)
+				r.Out.Host = targetURL.Host
 			},
 		},
 	}
