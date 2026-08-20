@@ -340,9 +340,12 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	if requeueAfter > 0 {
-		return ctrl.Result{Requeue: requeue, RequeueAfter: requeueAfter}, nil
+		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
-	return ctrl.Result{Requeue: requeue}, nil
+	if requeue {
+		return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
+	}
+	return ctrl.Result{}, nil
 }
 
 // handleTeardown deletes all child Environments and removes the finalizer.
