@@ -15,6 +15,8 @@ description: |
 
 Use this pattern when you need to convert between Kubernetes CRD types (`api/v1alpha1/`) and Protobuf-generated types (`api/gen/`) in a server or API layer.
 
+**Note regarding Issue #151:** The protojson bridge IS the direct mapping approach (no intermediate domain types). JSON serialization is used as the transport mechanism to bridge the structs, not as a domain layer.
+
 **Do NOT:**
 - Generate an intermediate "domain" layer (e.g., via `proto2type`)
 - Hand-write field-by-field struct mappers (500+ lines, breaks on every schema change)
@@ -49,8 +51,18 @@ func CRDToProto(crd *v1alpha1.MyResource) (*pb.MyResource, error) {
     // Step 3: Copy ObjectMeta (not part of proto schema)
     proto.Name = crd.Name
     proto.Namespace = crd.Namespace
-    proto.Labels = crd.Labels
-    proto.Annotations = crd.Annotations
+    if crd.Labels != nil {
+        proto.Labels = make(map[string]string, len(crd.Labels))
+        for k, v := range crd.Labels {
+            proto.Labels[k] = v
+        }
+    }
+    if crd.Annotations != nil {
+        proto.Annotations = make(map[string]string, len(crd.Annotations))
+        for k, v := range crd.Annotations {
+            proto.Annotations[k] = v
+        }
+    }
     proto.ResourceVersion = crd.ResourceVersion
     return &proto, nil
 }
@@ -78,8 +90,18 @@ func ProtoToCRD(proto *pb.MyResource) (*v1alpha1.MyResource, error) {
     // Step 3: Copy ObjectMeta
     crd.Name = proto.Name
     crd.Namespace = proto.Namespace
-    crd.Labels = proto.Labels
-    crd.Annotations = proto.Annotations
+    if proto.Labels != nil {
+        crd.Labels = make(map[string]string, len(proto.Labels))
+        for k, v := range proto.Labels {
+            crd.Labels[k] = v
+        }
+    }
+    if proto.Annotations != nil {
+        crd.Annotations = make(map[string]string, len(proto.Annotations))
+        for k, v := range proto.Annotations {
+            crd.Annotations[k] = v
+        }
+    }
     crd.ResourceVersion = proto.ResourceVersion
     return &crd, nil
 }
@@ -106,6 +128,12 @@ protojson.UnmarshalOptions{DiscardUnknown: true}
 // If CRD tags use camelCase (K8s convention), omit UseProtoNames.
 protojson.MarshalOptions{UseProtoNames: true}  // or omit for camelCase
 ```
+
+## Create vs Update Paths
+
+- **Create:** Do NOT set ResourceVersion on the CRD (K8s assigns it)
+- **Update:** Preserve ResourceVersion from the proto for optimistic concurrency
+- The service handler is responsible for this distinction, not the mapper
 
 ## ResourceVersion Handling
 

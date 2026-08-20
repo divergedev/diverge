@@ -42,8 +42,8 @@ mkdir -p config/crd/bases
 controller-gen crd webhook rbac:roleName=manager-role paths="./..." output:crd:dir=config/crd/bases
 
 # Check for modified or untracked files
-DIFF_OUTPUT=$(git diff -I 'protoc-gen-go v' -I 'controller-gen' --stat api/ config/crd/bases/ config/rbac/ config/webhook/ 2>/dev/null || true)
-UNTRACKED=$(git ls-files --others --exclude-standard -- api/ config/crd/bases/ config/rbac/ config/webhook/ 2>/dev/null || true)
+DIFF_OUTPUT=$(git diff -I 'protoc-gen-go v' -I 'controller-gen' --stat api/ gen/ config/crd/bases/ config/rbac/ config/webhook/ 2>/dev/null || true)
+UNTRACKED=$(git ls-files --others --exclude-standard -- api/ gen/ config/crd/bases/ config/rbac/ config/webhook/ 2>/dev/null || true)
 
 if [[ -n "$DIFF_OUTPUT" || -n "$UNTRACKED" ]]; then
     echo ""

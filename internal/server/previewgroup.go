@@ -81,7 +81,10 @@ func (s *PreviewGroupService) CreatePreviewGroup(ctx context.Context, req *conne
 
 	s.auditLogger.LogMutation(ctx, "resource.created", "previewgroup", realCrd.Name, realCrd.Namespace)
 
-	domBack, _ := CRDPgToProto(realCrd)
+	domBack, err := CRDPgToProto(realCrd)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
+	}
 	return connect.NewResponse(&pb.CreatePreviewGroupResponse{
 		PreviewGroup: domBack,
 	}), nil
@@ -270,7 +273,10 @@ func (s *PreviewGroupService) UpdatePreviewGroup(ctx context.Context, req *conne
 
 	s.auditLogger.LogMutation(ctx, "resource.updated", "previewgroup", existingCrd.Name, existingCrd.Namespace)
 
-	domBack, _ := CRDPgToProto(&existingCrd)
+	domBack, err := CRDPgToProto(&existingCrd)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
+	}
 	if domBack == nil {
 		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
 	}
@@ -354,7 +360,11 @@ func (s *PreviewGroupService) WatchPreviewGroups(ctx context.Context, req *conne
 
 	for i := range list.Items {
 		crd := &list.Items[i]
-		dom, _ := CRDPgToProto(crd)
+		dom, err := CRDPgToProto(crd)
+		if err != nil {
+			s.logger.Warn("mapper error", "resource", crd.Name, "error", err)
+			continue
+		}
 		if dom != nil {
 			sentRVs[crd.Namespace+"/"+crd.Name+"@"+crd.ResourceVersion] = struct{}{}
 			if err := stream.Send(&pb.WatchPreviewGroupsResponse{
@@ -389,7 +399,11 @@ func (s *PreviewGroupService) WatchPreviewGroups(ctx context.Context, req *conne
 			}
 
 			dom, err := CRDPgToProto(event.Object)
-			if err != nil || dom == nil {
+			if err != nil {
+				s.logger.Warn("mapper error", "resource", event.Object.Name, "error", err)
+				continue
+			}
+			if dom == nil {
 				continue
 			}
 

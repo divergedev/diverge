@@ -90,7 +90,10 @@ func (s *EnvironmentService) CreateEnvironment(ctx context.Context, req *connect
 
 	s.auditLogger.LogMutation(ctx, "resource.created", "environment", realCrd.Name, realCrd.Namespace)
 
-	domBack, _ := CRDEnvToProto(realCrd)
+	domBack, err := CRDEnvToProto(realCrd)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
+	}
 	return connect.NewResponse(&pb.CreateEnvironmentResponse{
 		Environment: domBack,
 	}), nil
@@ -280,7 +283,10 @@ func (s *EnvironmentService) UpdateEnvironment(ctx context.Context, req *connect
 
 	s.auditLogger.LogMutation(ctx, "resource.updated", "environment", existingCrd.Name, existingCrd.Namespace)
 
-	domBack, _ := CRDEnvToProto(&existingCrd)
+	domBack, err := CRDEnvToProto(&existingCrd)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
+	}
 	if domBack == nil {
 		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
 	}
@@ -369,7 +375,11 @@ func (s *EnvironmentService) WatchEnvironments(ctx context.Context, req *connect
 	// Send current state as ADDED
 	for i := range list.Items {
 		crd := &list.Items[i]
-		dom, _ := CRDEnvToProto(crd)
+		dom, err := CRDEnvToProto(crd)
+		if err != nil {
+			s.logger.Warn("mapper error", "resource", crd.Name, "error", err)
+			continue
+		}
 		if dom != nil {
 			sentRVs[crd.Namespace+"/"+crd.Name+"@"+crd.ResourceVersion] = struct{}{}
 			if err := stream.Send(&pb.WatchEnvironmentsResponse{
@@ -405,7 +415,11 @@ func (s *EnvironmentService) WatchEnvironments(ctx context.Context, req *connect
 			}
 
 			dom, err := CRDEnvToProto(event.Object)
-			if err != nil || dom == nil {
+			if err != nil {
+				s.logger.Warn("mapper error", "resource", event.Object.Name, "error", err)
+				continue
+			}
+			if dom == nil {
 				continue
 			}
 
