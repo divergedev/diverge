@@ -1,7 +1,0 @@
-version: v2
-plugins:
-  - local: protoc-gen-proto2type
-    out: gen/domain
-    opt:
-      - lang=go
-      - go_package=github.com/divergedev/diverge/gen/domain/diverge/v1alpha1;divergedomainv1alpha1

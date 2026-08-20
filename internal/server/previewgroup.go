@@ -13,7 +13,7 @@ import (
 	pb "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 	"github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
 	"github.com/divergedev/diverge/api/v1alpha1"
-	domain "github.com/divergedev/diverge/gen/domain/github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
+
 	"github.com/divergedev/diverge/internal/server/streaming"
 	"k8s.io/apimachinery/pkg/labels"
 )
@@ -68,10 +68,7 @@ func (s *PreviewGroupService) CreatePreviewGroup(ctx context.Context, req *conne
 		return nil, err
 	}
 
-	var dom domain.PreviewGroup
-	dom.FromProto(msg.PreviewGroup)
-
-	realCrd, err := DomainPgToCRD(&dom)
+	realCrd, err := ProtoPgToCRD(msg.PreviewGroup)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
 	}
@@ -84,13 +81,9 @@ func (s *PreviewGroupService) CreatePreviewGroup(ctx context.Context, req *conne
 
 	s.auditLogger.LogMutation(ctx, "resource.created", "previewgroup", realCrd.Name, realCrd.Namespace)
 
-	domBack, _ := CRDPgToDomain(realCrd)
-	var back domain.PreviewGroup
-	if domBack != nil {
-		back = *domBack
-	}
+	domBack, _ := CRDPgToProto(realCrd)
 	return connect.NewResponse(&pb.CreatePreviewGroupResponse{
-		PreviewGroup: back.ToProto(),
+		PreviewGroup: domBack,
 	}), nil
 }
 
@@ -111,12 +104,12 @@ func (s *PreviewGroupService) GetPreviewGroup(ctx context.Context, req *connect.
 	if err := s.client.Get(ctx, client.ObjectKey{Name: req.Msg.Name, Namespace: req.Msg.Namespace}, &crd); err != nil {
 		return nil, SanitizeK8sError(s.logger, err)
 	}
-	dom, err := CRDPgToDomain(&crd)
+	dom, err := CRDPgToProto(&crd)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
 	}
 	return connect.NewResponse(&pb.GetPreviewGroupResponse{
-		PreviewGroup: dom.ToProto(),
+		PreviewGroup: dom,
 	}), nil
 }
 
@@ -179,13 +172,13 @@ func (s *PreviewGroupService) ListPreviewGroups(ctx context.Context, req *connec
 
 	var pbs []*pb.PreviewGroup
 	for i := range list.Items {
-		dom, err := CRDPgToDomain(&list.Items[i])
+		dom, err := CRDPgToProto(&list.Items[i])
 		if err != nil {
 			s.logger.Warn("mapper error", "resource", list.Items[i].Name, "error", err)
 			continue
 		}
 		if dom != nil {
-			pbs = append(pbs, dom.ToProto())
+			pbs = append(pbs, dom)
 		}
 	}
 
@@ -234,10 +227,7 @@ func (s *PreviewGroupService) UpdatePreviewGroup(ctx context.Context, req *conne
 		existingCrd.ResourceVersion = msg.PreviewGroup.ResourceVersion
 	}
 
-	var dom domain.PreviewGroup
-	dom.FromProto(msg.PreviewGroup)
-
-	newCrd, err := DomainPgToCRD(&dom)
+	newCrd, err := ProtoPgToCRD(msg.PreviewGroup)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
 	}
@@ -280,12 +270,12 @@ func (s *PreviewGroupService) UpdatePreviewGroup(ctx context.Context, req *conne
 
 	s.auditLogger.LogMutation(ctx, "resource.updated", "previewgroup", existingCrd.Name, existingCrd.Namespace)
 
-	domBack, _ := CRDPgToDomain(&existingCrd)
+	domBack, _ := CRDPgToProto(&existingCrd)
 	if domBack == nil {
 		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
 	}
 	return connect.NewResponse(&pb.UpdatePreviewGroupResponse{
-		PreviewGroup: domBack.ToProto(),
+		PreviewGroup: domBack,
 	}), nil
 }
 
@@ -364,12 +354,12 @@ func (s *PreviewGroupService) WatchPreviewGroups(ctx context.Context, req *conne
 
 	for i := range list.Items {
 		crd := &list.Items[i]
-		dom, _ := CRDPgToDomain(crd)
+		dom, _ := CRDPgToProto(crd)
 		if dom != nil {
 			sentRVs[crd.Namespace+"/"+crd.Name+"@"+crd.ResourceVersion] = struct{}{}
 			if err := stream.Send(&pb.WatchPreviewGroupsResponse{
 				Type:            pb.WatchEventType_WATCH_EVENT_TYPE_ADDED,
-				PreviewGroup:    dom.ToProto(),
+				PreviewGroup:    dom,
 				ResourceVersion: crd.ResourceVersion,
 			}); err != nil {
 				return err
@@ -398,7 +388,7 @@ func (s *PreviewGroupService) WatchPreviewGroups(ctx context.Context, req *conne
 				continue
 			}
 
-			dom, err := CRDPgToDomain(event.Object)
+			dom, err := CRDPgToProto(event.Object)
 			if err != nil || dom == nil {
 				continue
 			}
@@ -417,7 +407,7 @@ func (s *PreviewGroupService) WatchPreviewGroups(ctx context.Context, req *conne
 
 			if err := stream.Send(&pb.WatchPreviewGroupsResponse{
 				Type:            eventType,
-				PreviewGroup:    dom.ToProto(),
+				PreviewGroup:    dom,
 				ResourceVersion: event.Version,
 			}); err != nil {
 				return err

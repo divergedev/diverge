@@ -18,7 +18,7 @@ import (
 	pb "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 	"github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
 	"github.com/divergedev/diverge/api/v1alpha1"
-	domain "github.com/divergedev/diverge/gen/domain/github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
+
 	"github.com/divergedev/diverge/internal/server/streaming"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/labels"
@@ -77,10 +77,7 @@ func (s *EnvironmentService) CreateEnvironment(ctx context.Context, req *connect
 		return nil, err
 	}
 
-	var dom domain.Environment
-	dom.FromProto(msg.Environment)
-
-	realCrd, err := DomainEnvToCRD(&dom)
+	realCrd, err := ProtoEnvToCRD(msg.Environment)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
 	}
@@ -93,13 +90,9 @@ func (s *EnvironmentService) CreateEnvironment(ctx context.Context, req *connect
 
 	s.auditLogger.LogMutation(ctx, "resource.created", "environment", realCrd.Name, realCrd.Namespace)
 
-	domBack, _ := CRDEnvToDomain(realCrd)
-	var back domain.Environment
-	if domBack != nil {
-		back = *domBack
-	}
+	domBack, _ := CRDEnvToProto(realCrd)
 	return connect.NewResponse(&pb.CreateEnvironmentResponse{
-		Environment: back.ToProto(),
+		Environment: domBack,
 	}), nil
 }
 
@@ -120,12 +113,12 @@ func (s *EnvironmentService) GetEnvironment(ctx context.Context, req *connect.Re
 	if err := s.client.Get(ctx, client.ObjectKey{Name: req.Msg.Name, Namespace: req.Msg.Namespace}, &crd); err != nil {
 		return nil, SanitizeK8sError(s.logger, err)
 	}
-	dom, err := CRDEnvToDomain(&crd)
+	dom, err := CRDEnvToProto(&crd)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
 	}
 	return connect.NewResponse(&pb.GetEnvironmentResponse{
-		Environment: dom.ToProto(),
+		Environment: dom,
 	}), nil
 }
 
@@ -188,13 +181,13 @@ func (s *EnvironmentService) ListEnvironments(ctx context.Context, req *connect.
 
 	var pbs []*pb.Environment
 	for i := range list.Items {
-		dom, err := CRDEnvToDomain(&list.Items[i])
+		dom, err := CRDEnvToProto(&list.Items[i])
 		if err != nil {
 			s.logger.Warn("mapper error", "resource", list.Items[i].Name, "error", err)
 			continue
 		}
 		if dom != nil {
-			pbs = append(pbs, dom.ToProto())
+			pbs = append(pbs, dom)
 		}
 	}
 
@@ -244,10 +237,7 @@ func (s *EnvironmentService) UpdateEnvironment(ctx context.Context, req *connect
 		existingCrd.ResourceVersion = msg.Environment.ResourceVersion
 	}
 
-	var dom domain.Environment
-	dom.FromProto(msg.Environment)
-
-	newCrd, err := DomainEnvToCRD(&dom)
+	newCrd, err := ProtoEnvToCRD(msg.Environment)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
 	}
@@ -290,12 +280,12 @@ func (s *EnvironmentService) UpdateEnvironment(ctx context.Context, req *connect
 
 	s.auditLogger.LogMutation(ctx, "resource.updated", "environment", existingCrd.Name, existingCrd.Namespace)
 
-	domBack, _ := CRDEnvToDomain(&existingCrd)
+	domBack, _ := CRDEnvToProto(&existingCrd)
 	if domBack == nil {
 		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
 	}
 	return connect.NewResponse(&pb.UpdateEnvironmentResponse{
-		Environment: domBack.ToProto(),
+		Environment: domBack,
 	}), nil
 }
 
@@ -379,12 +369,12 @@ func (s *EnvironmentService) WatchEnvironments(ctx context.Context, req *connect
 	// Send current state as ADDED
 	for i := range list.Items {
 		crd := &list.Items[i]
-		dom, _ := CRDEnvToDomain(crd)
+		dom, _ := CRDEnvToProto(crd)
 		if dom != nil {
 			sentRVs[crd.Namespace+"/"+crd.Name+"@"+crd.ResourceVersion] = struct{}{}
 			if err := stream.Send(&pb.WatchEnvironmentsResponse{
 				Type:            pb.WatchEventType_WATCH_EVENT_TYPE_ADDED,
-				Environment:     dom.ToProto(),
+				Environment:     dom,
 				ResourceVersion: crd.ResourceVersion,
 			}); err != nil {
 				return err
@@ -414,7 +404,7 @@ func (s *EnvironmentService) WatchEnvironments(ctx context.Context, req *connect
 				continue
 			}
 
-			dom, err := CRDEnvToDomain(event.Object)
+			dom, err := CRDEnvToProto(event.Object)
 			if err != nil || dom == nil {
 				continue
 			}
@@ -433,7 +423,7 @@ func (s *EnvironmentService) WatchEnvironments(ctx context.Context, req *connect
 
 			if err := stream.Send(&pb.WatchEnvironmentsResponse{
 				Type:            eventType,
-				Environment:     dom.ToProto(),
+				Environment:     dom,
 				ResourceVersion: event.Version,
 			}); err != nil {
 				return err

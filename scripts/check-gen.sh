@@ -35,8 +35,6 @@ done
 # Run code generation (same as `make generate manifests`)
 echo "▸ Running buf generate..."
 buf generate
-buf generate --template buf.gen.domain.yaml
-rm -rf gen/domain/diverge/v1
 
 echo "▸ Running controller-gen..."
 controller-gen object paths=./api/...
@@ -44,8 +42,8 @@ mkdir -p config/crd/bases
 controller-gen crd webhook rbac:roleName=manager-role paths="./..." output:crd:dir=config/crd/bases
 
 # Check for modified or untracked files
-DIFF_OUTPUT=$(git diff -I 'protoc-gen-go v' -I 'controller-gen' --stat gen/ api/ config/crd/bases/ config/rbac/ config/webhook/ 2>/dev/null || true)
-UNTRACKED=$(git ls-files --others --exclude-standard -- gen/ api/ config/crd/bases/ config/rbac/ config/webhook/ 2>/dev/null || true)
+DIFF_OUTPUT=$(git diff -I 'protoc-gen-go v' -I 'controller-gen' --stat api/ config/crd/bases/ config/rbac/ config/webhook/ 2>/dev/null || true)
+UNTRACKED=$(git ls-files --others --exclude-standard -- api/ config/crd/bases/ config/rbac/ config/webhook/ 2>/dev/null || true)
 
 if [[ -n "$DIFF_OUTPUT" || -n "$UNTRACKED" ]]; then
     echo ""

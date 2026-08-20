@@ -3,45 +3,156 @@ package server
 import (
 	"testing"
 
+	pb "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 	"github.com/divergedev/diverge/api/v1alpha1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func TestMapper_Environment(t *testing.T) {
-	tests := []struct {
-		name string
-		env  v1alpha1.Environment
-	}{
-		{
-			name: "basic mapping",
-			env: v1alpha1.Environment{
-				Spec: v1alpha1.EnvironmentSpec{
-					Deploy: v1alpha1.EnvironmentDeploy{
-						Mode: "delta",
-					},
-				},
-			},
+func TestCRDEnvToProto_Nil(t *testing.T) {
+	proto, err := CRDEnvToProto(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if proto != nil {
+		t.Fatalf("expected nil, got %v", proto)
+	}
+}
+
+func TestProtoEnvToCRD_Nil(t *testing.T) {
+	crd, err := ProtoEnvToCRD(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if crd != nil {
+		t.Fatalf("expected nil, got %v", crd)
+	}
+}
+
+func TestCRDPgToProto_Nil(t *testing.T) {
+	proto, err := CRDPgToProto(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if proto != nil {
+		t.Fatalf("expected nil, got %v", proto)
+	}
+}
+
+func TestProtoPgToCRD_Nil(t *testing.T) {
+	crd, err := ProtoPgToCRD(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if crd != nil {
+		t.Fatalf("expected nil, got %v", crd)
+	}
+}
+
+func TestEnvironment_RoundTrip_CRD_To_Proto_To_CRD(t *testing.T) {
+	original := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            "test-env",
+			Namespace:       "test-ns",
+			ResourceVersion: "12345",
+			Labels:          map[string]string{"env": "prod"},
+			Annotations:     map[string]string{"foo": "bar"},
 		},
-		{
-			name: "empty mapping",
-			env:  v1alpha1.Environment{},
+		Spec: v1alpha1.EnvironmentSpec{
+			Deploy: v1alpha1.EnvironmentDeploy{
+				Mode: "delta",
+			},
+			Routing: v1alpha1.EnvironmentRouting{
+				HeaderKey: "x-env",
+			},
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			dom, err := CRDEnvToDomain(&tc.env)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
+	proto, err := CRDEnvToProto(original)
+	if err != nil {
+		t.Fatalf("CRDEnvToProto failed: %v", err)
+	}
 
-			crd, err := DomainEnvToCRD(dom)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
+	if proto.Name != "test-env" {
+		t.Errorf("expected proto.Name to be 'test-env', got '%s'", proto.Name)
+	}
+	if proto.ResourceVersion != "12345" {
+		t.Errorf("expected proto.ResourceVersion to be '12345', got '%s'", proto.ResourceVersion)
+	}
 
-			if crd.Spec.Deploy.Mode != tc.env.Spec.Deploy.Mode {
-				t.Fatalf("mapped values differ: expected Mode=%v, got Mode=%v", tc.env.Spec.Deploy.Mode, crd.Spec.Deploy.Mode)
-			}
-		})
+	crd, err := ProtoEnvToCRD(proto)
+	if err != nil {
+		t.Fatalf("ProtoEnvToCRD failed: %v", err)
+	}
+
+	if crd.Name != "test-env" {
+		t.Errorf("expected crd.Name to be 'test-env', got '%s'", crd.Name)
+	}
+	if crd.Namespace != "test-ns" {
+		t.Errorf("expected crd.Namespace to be 'test-ns', got '%s'", crd.Namespace)
+	}
+	if crd.ResourceVersion != "12345" {
+		t.Errorf("expected crd.ResourceVersion to be '12345', got '%s'", crd.ResourceVersion)
+	}
+	if crd.Labels["env"] != "prod" {
+		t.Errorf("expected crd.Labels['env'] to be 'prod', got '%s'", crd.Labels["env"])
+	}
+	if crd.Annotations["foo"] != "bar" {
+		t.Errorf("expected crd.Annotations['foo'] to be 'bar', got '%s'", crd.Annotations["foo"])
+	}
+	if crd.Spec.Deploy.Mode != "delta" {
+		t.Errorf("expected Spec.Deploy.Mode to be 'delta', got '%s'", crd.Spec.Deploy.Mode)
+	}
+	if crd.Spec.Routing.HeaderKey != "x-env" {
+		t.Errorf("expected Spec.Routing.HeaderKey to be 'x-env', got '%s'", crd.Spec.Routing.HeaderKey)
+	}
+}
+
+func TestEnvironment_RoundTrip_Proto_To_CRD_To_Proto(t *testing.T) {
+	original := &pb.Environment{
+		Name:            "test-env",
+		Namespace:       "test-ns",
+		ResourceVersion: "12345",
+		Labels:          map[string]string{"env": "prod"},
+		Annotations:     map[string]string{"foo": "bar"},
+		Spec: &pb.EnvironmentSpec{
+			Deploy: &pb.EnvironmentDeploy{
+				Mode: "delta",
+			},
+			Routing: &pb.EnvironmentRouting{
+				HeaderKey: "x-env",
+			},
+		},
+	}
+
+	crd, err := ProtoEnvToCRD(original)
+	if err != nil {
+		t.Fatalf("ProtoEnvToCRD failed: %v", err)
+	}
+	if crd.Name != "test-env" {
+		t.Errorf("expected crd.Name to be 'test-env', got '%s'", crd.Name)
+	}
+
+	proto, err := CRDEnvToProto(crd)
+	if err != nil {
+		t.Fatalf("CRDEnvToProto failed: %v", err)
+	}
+
+	if proto.Name != "test-env" {
+		t.Errorf("expected proto.Name to be 'test-env', got '%s'", proto.Name)
+	}
+	if proto.ResourceVersion != "12345" {
+		t.Errorf("expected proto.ResourceVersion to be '12345', got '%s'", proto.ResourceVersion)
+	}
+	if proto.Labels["env"] != "prod" {
+		t.Errorf("expected proto.Labels['env'] to be 'prod', got '%s'", proto.Labels["env"])
+	}
+	if proto.Annotations["foo"] != "bar" {
+		t.Errorf("expected proto.Annotations['foo'] to be 'bar', got '%s'", proto.Annotations["foo"])
+	}
+	if proto.Spec.Deploy.Mode != "delta" {
+		t.Errorf("expected Spec.Deploy.Mode to be 'delta', got '%s'", proto.Spec.Deploy.Mode)
+	}
+	if proto.Spec.Routing.HeaderKey != "x-env" {
+		t.Errorf("expected Spec.Routing.HeaderKey to be 'x-env', got '%s'", proto.Spec.Routing.HeaderKey)
 	}
 }

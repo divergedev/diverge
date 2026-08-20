@@ -167,8 +167,14 @@ func (m *metricsInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc
 		method := sanitizeMethod(req.Spec().Procedure)
 		start := time.Now()
 		defer func() {
-			duration := time.Since(start).Seconds()
 			code := "ok"
+			if r := recover(); r != nil {
+				code = "internal"
+				rpcRequestsTotal.WithLabelValues(method, code).Inc()
+				rpcRequestDuration.WithLabelValues(method).Observe(time.Since(start).Seconds())
+				panic(r)
+			}
+			duration := time.Since(start).Seconds()
 			if err != nil {
 				code = connect.CodeOf(err).String()
 			}
@@ -191,8 +197,14 @@ func (m *metricsInterceptor) WrapStreamingHandler(next connect.StreamingHandlerF
 		start := time.Now()
 		defer func() {
 			rpcActiveStreams.Dec()
-			duration := time.Since(start).Seconds()
 			code := "ok"
+			if r := recover(); r != nil {
+				code = "internal"
+				rpcRequestsTotal.WithLabelValues(method, code).Inc()
+				rpcStreamDuration.WithLabelValues(method).Observe(time.Since(start).Seconds())
+				panic(r)
+			}
+			duration := time.Since(start).Seconds()
 			if err != nil {
 				code = connect.CodeOf(err).String()
 			}
