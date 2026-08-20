@@ -15,7 +15,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -48,31 +47,27 @@ func newDevCmd(app *App) *cobra.Command {
 		endpointFlag  string
 		devspaceFlag  bool
 		previewIdFlag string
-		noTunnelFlag  bool
-		serverFlag    string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "dev",
 		Short: "Route cluster traffic for a service to your local machine",
 		Long: `Start a local development session by creating a PreviewGroup that routes
-traffic for the specified service to your local machine's Tailscale IP or via a tunnel.`,
+traffic for the specified service to your local machine's Tailscale IP.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDev(app, serviceFlag, portFlag, endpointFlag, devspaceFlag, previewIdFlag, args, cmd, noTunnelFlag, serverFlag)
+			return runDev(app, serviceFlag, portFlag, endpointFlag, devspaceFlag, previewIdFlag, args, cmd)
 		},
 	}
 	cmd.Flags().StringVar(&serviceFlag, "service", "", "Service name (default: auto-detect)")
 	cmd.Flags().Int32Var(&portFlag, "port", 0, "Local port (default: 8080)")
-	cmd.Flags().StringVar(&endpointFlag, "endpoint", "", "Local endpoint IP (default: auto-detect or tunnel)")
+	cmd.Flags().StringVar(&endpointFlag, "endpoint", "", "Local endpoint IP (default: tailscale ip -4)")
 	cmd.Flags().BoolVar(&devspaceFlag, "devspace", false, "Generate a devspace.yaml template and show DevSpace instructions")
 	cmd.Flags().StringVar(&previewIdFlag, "preview-id", "", "Preview ID for routing (default: git branch name)")
-	cmd.Flags().BoolVar(&noTunnelFlag, "no-tunnel", false, "Disable ConnectRPC tunnel and use direct routing (e.g., Tailscale)")
-	cmd.Flags().StringVar(&serverFlag, "server", "", "Diverge server address for tunnel (default: auto-detect via port-forward)")
 
 	return cmd
 }
 
-func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, devspaceFlag bool, previewIdFlag string, args []string, cmd *cobra.Command, noTunnelFlag bool, serverFlag string, opts ...DevOption) error {
+func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, devspaceFlag bool, previewIdFlag string, args []string, cmd *cobra.Command, opts ...DevOption) error {
 	ctx := cmd.Context()
 
 	if devspaceFlag {
@@ -186,46 +181,6 @@ dev:
 	groupName = strings.ToLower(groupName)
 	groupName = strings.TrimRight(groupName, "-")
 
-	c, clientset, err := app.KubeClient()
-	if err != nil {
-		return fmt.Errorf("failed to create Kubernetes client: %w", err)
-	}
-
-	ns := app.Namespace
-	if ns == "" {
-		ns = "default"
-	}
-
-	if !noTunnelFlag {
-		fmt.Println("▸ Establishing tunnel...          ")
-		sAddr := serverFlag
-		if sAddr == "" {
-			var dErr error
-			sAddr, dErr = discoverServer(ctx, clientset)
-			if dErr != nil {
-				return fmt.Errorf("failed to discover server: %w", dErr)
-			}
-		}
-
-		if errs := validation.IsDNS1123Label(headerValue); len(errs) > 0 {
-			return fmt.Errorf("preview-id %q is not a valid DNS label: %s", headerValue, strings.Join(errs, "; "))
-		}
-
-		tc := NewTunnelClient(sAddr, int(port), headerValue, serviceName, ns, slog.Default())
-		go tc.ConnectWithRetry(ctx)
-
-		select {
-		case <-tc.Ready:
-		case <-time.After(15 * time.Second):
-			return fmt.Errorf("tunnel connection timed out")
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-
-		// If using tunnel, the PreviewGroup should point to the tunnel's Headless Service.
-		endpoint = fmt.Sprintf("diverge-tunnel-%s.%s.svc.cluster.local:%d", headerValue, ns, port)
-	}
-
 	// 6. Create PreviewGroup CR
 	pg := &divergeiov1alpha1.PreviewGroup{
 		ObjectMeta: metav1.ObjectMeta{
@@ -257,6 +212,16 @@ dev:
 		if svcCfg, ok := cfg.Services[serviceName]; ok && len(svcCfg.AsyncRoutes) > 0 {
 			pg.Spec.Services[0].AsyncRoutes = svcCfg.AsyncRoutes
 		}
+	}
+
+	c, clientset, err := app.KubeClient()
+	if err != nil {
+		return fmt.Errorf("failed to create Kubernetes client: %w", err)
+	}
+
+	ns := app.Namespace
+	if ns == "" {
+		ns = "default"
 	}
 
 	fmt.Printf("Starting dev session for service %q...\n", serviceName)
@@ -346,7 +311,7 @@ dev:
 		}, &envBuf)
 
 		if syncErr == nil && synced > 0 {
-			fmt.Printf("📋 Synced %d env vars from baseline\n", synced)
+			fmt.Printf("📋 Captured %d env vars from baseline (in-memory, no file written)\n", synced)
 		} else if syncErr != nil {
 			fmt.Printf("⚠️  Could not sync env vars: %v\n", syncErr)
 		}
