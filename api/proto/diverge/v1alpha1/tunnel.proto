@@ -1,0 +1,110 @@
+syntax = "proto3";
+
+package diverge.v1alpha1;
+option go_package = "github.com/divergedev/diverge/api/gen/diverge/v1alpha1;divergev1alpha1";
+
+import "google/protobuf/timestamp.proto";
+
+// TunnelService provides reverse tunneling for diverge dev.
+// The CLI establishes a bidirectional stream to the server,
+// registering a local service endpoint. The server then
+// multiplexes incoming HTTP requests down to the CLI.
+service TunnelService {
+  // Tunnel establishes a bidirectional stream for routing
+  // cluster traffic to the developer's local machine.
+  rpc Tunnel(stream TunnelServiceTunnelRequest) returns (stream TunnelServiceTunnelResponse);
+}
+
+// TunnelServiceTunnelRequest is the client-to-server envelope.
+message TunnelServiceTunnelRequest {
+  oneof payload {
+    TunnelRegister register = 1;
+    TunnelHTTPResponse http_response = 4;
+    TunnelPong pong = 6;
+    TunnelClose close = 7;
+    TunnelResponseChunk response_chunk = 9;
+  }
+}
+
+// TunnelServiceTunnelResponse is the server-to-client envelope.
+message TunnelServiceTunnelResponse {
+  oneof payload {
+    TunnelReady ready = 2;
+    TunnelHTTPRequest http_request = 3;
+    TunnelPing ping = 5;
+    TunnelClose close = 7;
+    TunnelRequestChunk request_chunk = 8;
+  }
+}
+
+// Sent by CLI to register a tunnel.
+message TunnelRegister {
+  string service = 1;
+  string namespace = 2;
+  int32 port = 3;
+  string preview_id = 4;
+  int32 protocol_version = 5; // protocol version for forward compat
+}
+
+// Sent by server when tunnel is active.
+message TunnelReady {
+  string tunnel_id = 1;
+  string endpoint = 2;  // cluster-internal endpoint for debugging
+}
+
+// Header entry supporting multi-value headers (Set-Cookie, Accept, etc.)
+message HeaderEntry {
+  string key = 1;
+  repeated string values = 2;
+}
+
+// Sent by server: incoming HTTP request to forward to CLI.
+// For small bodies (< 32KB), body is included inline.
+// For large bodies, followed by TunnelRequestChunk messages.
+message TunnelHTTPRequest {
+  string request_id = 1;
+  string method = 2;
+  string path = 3;
+  repeated HeaderEntry headers = 4;
+  bytes body = 5;           // inline body for small requests
+  bool has_more_chunks = 6; // true if TunnelRequestChunks follow
+}
+
+// Continuation chunk for streaming large request bodies.
+message TunnelRequestChunk {
+  string request_id = 1;
+  bytes data = 2;
+  bool is_last = 3;
+}
+
+// Sent by CLI: HTTP response from local service.
+// For small bodies (< 32KB), body is included inline.
+// For large bodies, followed by TunnelResponseChunk messages.
+message TunnelHTTPResponse {
+  string request_id = 1;
+  int32 status_code = 2;
+  repeated HeaderEntry headers = 3;
+  bytes body = 4;           // inline body for small responses
+  bool has_more_chunks = 5; // true if TunnelResponseChunks follow
+}
+
+// Continuation chunk for streaming large response bodies.
+message TunnelResponseChunk {
+  string request_id = 1;
+  bytes data = 2;
+  bool is_last = 3;
+}
+
+// Heartbeat to keep stream alive through LBs (every 15s).
+message TunnelPing {
+  google.protobuf.Timestamp timestamp = 1;
+}
+
+message TunnelPong {
+  google.protobuf.Timestamp timestamp = 1;
+}
+
+// Close the tunnel.
+message TunnelClose {
+  string reason = 1;
+}
