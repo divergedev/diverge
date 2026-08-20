@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -73,25 +72,6 @@ type syncEnvOptions struct {
 	ServiceName string
 	// Overrides are environment variables that override the baseline.
 	Overrides map[string]string
-}
-
-// syncBaselineEnvToFile writes environment variables from a baseline pod to a file.
-// Deprecated: Use syncBaselineEnv with a buffer or stdout instead to avoid writing secrets to disk.
-func syncBaselineEnvToFile(ctx context.Context, clientset kubernetes.Interface, opts syncEnvOptions, filePath string) (n int, err error) {
-	if filePath == "" {
-		filePath = ".env.diverge"
-	}
-	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
-		if cerr := f.Close(); cerr != nil && err == nil {
-			err = cerr
-		}
-	}()
-	fmt.Fprintf(os.Stderr, "⚠️  Writing secrets to disk is deprecated. Use --env-output inject instead.\n")
-	return syncBaselineEnv(ctx, clientset, opts, f)
 }
 
 // syncBaselineEnv reads environment variables from a running baseline pod
