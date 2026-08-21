@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 )
 
 // App holds shared CLI state including Kubernetes connection details, version
@@ -171,4 +172,21 @@ func (app *App) KubeClient() (client.Client, kubernetes.Interface, error) {
 	}
 
 	return c, clientset, nil
+}
+
+// RestConfig returns the REST config.
+func (app *App) RestConfig() (*rest.Config, error) {
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	if app.Kubeconfig != "" {
+		loadingRules.ExplicitPath = app.Kubeconfig
+	}
+	configOverrides := &clientcmd.ConfigOverrides{
+		CurrentContext: app.Context,
+	}
+	if app.Namespace != "" {
+		configOverrides.Context.Namespace = app.Namespace
+	}
+
+	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
+	return kubeConfig.ClientConfig()
 }
