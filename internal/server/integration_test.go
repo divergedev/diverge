@@ -168,7 +168,7 @@ func TestMain(m *testing.M) {
 		K8sClient: k8sClient,
 		Version:   "test",
 	}
-	testMux = server.NewServeMux(muxCfg)
+	testMux, _ = server.NewServeMux(muxCfg)
 
 	httpServer = httptest.NewServer(authMw(testMux))
 

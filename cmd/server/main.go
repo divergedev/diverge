@@ -127,7 +127,7 @@ func main() {
 	})
 
 	// Build the ConnectRPC mux
-	mux := server.NewServeMux(server.ServeMuxConfig{
+	mux, tunnelMgr := server.NewServeMux(server.ServeMuxConfig{
 		Client:          crClient,
 		K8sClient:       k8sClient,
 		InformerMgr:     informerMgr,
@@ -137,6 +137,13 @@ func main() {
 		AuditLogger:     auditLogger,
 		Version:         version,
 	})
+
+	// Start tunnel proxy server on dedicated port (no auth, cluster-internal)
+	go func() {
+		if err := server.ListenAndServeTunnelProxy(tunnelMgr, server.TunnelProxyPort, logger); err != nil {
+			logger.Error("tunnel proxy server failed", "err", err)
+		}
+	}()
 
 	// Health check (exempt from auth)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {

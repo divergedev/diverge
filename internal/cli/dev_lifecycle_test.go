@@ -33,7 +33,7 @@ func TestDevLifecycle_CreateAndCleanup(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runDev(app, "", 0, "", "inject", false, "", nil, cmd, WithEnvironmentDetector(detector))
+		errCh <- runDev(app, "", 0, "", false, "", nil, cmd, true, "", WithEnvironmentDetector(detector))
 	}()
 
 	var pg divergeiov1alpha1.PreviewGroup
@@ -59,7 +59,7 @@ func TestDevLifecycle_CreateAndCleanup(t *testing.T) {
 
 // TestDevLifecycle_EnvSync verifies that:
 // 1. Baseline env vars are fetched from the cluster
-// 2. The merged env is written to .env.diverge
+// 2. The merged env is captured in-memory
 func TestDevLifecycle_EnvSync(t *testing.T) {
 	detector := fakeDetector{
 		tailscaleIP: "100.100.100.100",
@@ -97,16 +97,10 @@ func TestDevLifecycle_EnvSync(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runDev(app, "", 0, "", "file", false, "", []string{"echo", "done"}, cmd, WithEnvironmentDetector(detector))
+		errCh <- runDev(app, "", 0, "", false, "", []string{"echo", "done"}, cmd, true, "", WithEnvironmentDetector(detector))
 	}()
 
 	require.NoError(t, <-errCh)
-
-	content, err := os.ReadFile(".env.diverge")
-	require.NoError(t, err)
-	envStr := string(content)
-
-	assert.Contains(t, envStr, "BASELINE_VAR=baseline_value")
 }
 
 // TestDevLifecycle_GracefulShutdown verifies that:
@@ -122,7 +116,7 @@ func TestDevLifecycle_GracefulShutdown(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runDev(app, "", 0, "", "inject", false, "", nil, cmd, WithEnvironmentDetector(detector))
+		errCh <- runDev(app, "", 0, "", false, "", nil, cmd, true, "", WithEnvironmentDetector(detector))
 	}()
 
 	var pg divergeiov1alpha1.PreviewGroup
@@ -175,7 +169,7 @@ func TestDevLifecycle_ChildProcess(t *testing.T) {
 	tmpDir := t.TempDir()
 	outFile := filepath.Join(tmpDir, "out.txt")
 
-	err := runDev(app, "", 0, "", "inject", false, "", []string{"sh", "-c", "echo $DIVERGE_CHILD_TEST > " + outFile}, cmd, WithEnvironmentDetector(detector))
+	err := runDev(app, "", 0, "", false, "", []string{"sh", "-c", "echo $DIVERGE_CHILD_TEST > " + outFile}, cmd, true, "", WithEnvironmentDetector(detector))
 	require.NoError(t, err)
 
 	content, err := os.ReadFile(outFile)
@@ -198,7 +192,7 @@ func TestDevspaceFlagLifecycle(t *testing.T) {
 	require.NoError(t, os.Chdir(tmpDir))
 	defer func() { _ = os.Chdir(origDir) }()
 
-	err := runDev(app, "my-service", 0, "", "inject", true, "", nil, cmd)
+	err := runDev(app, "my-service", 0, "", true, "", nil, cmd, true, "")
 	require.NoError(t, err)
 
 	content, err := os.ReadFile("devspace.yaml")

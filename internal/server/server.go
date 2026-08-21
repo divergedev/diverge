@@ -26,7 +26,7 @@ type ServeMuxConfig struct {
 
 // NewServeMux creates the ConnectRPC service mux with all handlers registered.
 // Auth is NOT applied here — it is applied at the net/http middleware layer.
-func NewServeMux(cfg ServeMuxConfig) *http.ServeMux {
+func NewServeMux(cfg ServeMuxConfig) (*http.ServeMux, *TunnelManager) {
 	// Default nil dependencies to prevent panics
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
@@ -60,5 +60,11 @@ func NewServeMux(cfg ServeMuxConfig) *http.ServeMux {
 	authPath, authHandler := divergev1alpha1connect.NewAuthServiceHandler(authService, interceptors)
 	mux.Handle(authPath, authHandler)
 
-	return mux
+	tunnelMgr := NewTunnelManager(cfg.Client, cfg.K8sClient, cfg.Logger, cfg.AuditLogger)
+	tunnelPath, tunnelHandler := divergev1alpha1connect.NewTunnelServiceHandler(tunnelMgr, interceptors)
+	mux.Handle(tunnelPath, tunnelHandler)
+	// NOTE: Tunnel proxy handler is on a SEPARATE port (8081), not this mux.
+	// See NewTunnelProxyServer() for the dedicated proxy listener.
+
+	return mux, tunnelMgr
 }
