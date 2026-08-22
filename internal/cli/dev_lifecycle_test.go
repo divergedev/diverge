@@ -33,7 +33,7 @@ func TestDevLifecycle_CreateAndCleanup(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runDev(runDevParams{App: app, Cmd: cmd, NoTunnel: true, Options: []DevOption{WithEnvironmentDetector(detector)}})
+		errCh <- runDev(runDevParams{App: app, Cmd: cmd, NoTunnel: true, NoProxy: true, Options: []DevOption{WithEnvironmentDetector(detector)}})
 	}()
 
 	var pg divergeiov1alpha1.PreviewGroup
@@ -97,7 +97,7 @@ func TestDevLifecycle_EnvSync(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runDev(runDevParams{App: app, Args: []string{"echo", "done"}, Cmd: cmd, NoTunnel: true, Options: []DevOption{WithEnvironmentDetector(detector)}})
+		errCh <- runDev(runDevParams{App: app, Args: []string{"echo", "done"}, Cmd: cmd, NoTunnel: true, NoProxy: true, Options: []DevOption{WithEnvironmentDetector(detector)}})
 	}()
 
 	require.NoError(t, <-errCh)
@@ -116,7 +116,7 @@ func TestDevLifecycle_GracefulShutdown(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runDev(runDevParams{App: app, Cmd: cmd, NoTunnel: true, Options: []DevOption{WithEnvironmentDetector(detector)}})
+		errCh <- runDev(runDevParams{App: app, Cmd: cmd, NoTunnel: true, NoProxy: true, Options: []DevOption{WithEnvironmentDetector(detector)}})
 	}()
 
 	var pg divergeiov1alpha1.PreviewGroup
@@ -169,7 +169,7 @@ func TestDevLifecycle_ChildProcess(t *testing.T) {
 	tmpDir := t.TempDir()
 	outFile := filepath.Join(tmpDir, "out.txt")
 
-	err := runDev(runDevParams{App: app, Args: []string{"sh", "-c", "echo $DIVERGE_CHILD_TEST > " + outFile}, Cmd: cmd, NoTunnel: true, Options: []DevOption{WithEnvironmentDetector(detector)}})
+	err := runDev(runDevParams{App: app, Args: []string{"sh", "-c", "echo $DIVERGE_CHILD_TEST > " + outFile}, Cmd: cmd, NoTunnel: true, NoProxy: true, Options: []DevOption{WithEnvironmentDetector(detector)}})
 	require.NoError(t, err)
 
 	content, err := os.ReadFile(outFile)
@@ -192,7 +192,7 @@ func TestDevspaceFlagLifecycle(t *testing.T) {
 	require.NoError(t, os.Chdir(tmpDir))
 	defer func() { _ = os.Chdir(origDir) }()
 
-	err := runDev(runDevParams{App: app, Service: "my-service", Devspace: true, Cmd: cmd, NoTunnel: true})
+	err := runDev(runDevParams{App: app, Service: "my-service", Devspace: true, Cmd: cmd, NoTunnel: true, NoProxy: true})
 	require.NoError(t, err)
 
 	content, err := os.ReadFile("devspace.yaml")
