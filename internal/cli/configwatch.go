@@ -15,19 +15,39 @@ import (
 )
 
 type ConfigWatcher struct {
-	crdClient   client.Client
-	pgName      string
-	envFile     string
-	lastEnvHash string
-	mu          sync.Mutex
+	crdClient    client.Client
+	pgName       string
+	envFile      string
+	lastEnvHash  string
+	mu           sync.Mutex
+	onUpdate     func(services []divergev1alpha1.PreviewGroupServiceStatus)
+	proxyAddr    string
+	lastServices string
 }
 
-func NewConfigWatcher(crdClient client.Client, pgName string, envFile string) *ConfigWatcher {
-	return &ConfigWatcher{
+// ConfigWatcherOption configures optional behavior for a ConfigWatcher.
+type ConfigWatcherOption func(*ConfigWatcher)
+
+// WithOnUpdate registers a callback invoked when PreviewGroup service status changes.
+func WithOnUpdate(fn func([]divergev1alpha1.PreviewGroupServiceStatus)) ConfigWatcherOption {
+	return func(cw *ConfigWatcher) { cw.onUpdate = fn }
+}
+
+// WithProxyAddr sets the loopback proxy address for .env.diverge output.
+func WithProxyAddr(addr string) ConfigWatcherOption {
+	return func(cw *ConfigWatcher) { cw.proxyAddr = addr }
+}
+
+func NewConfigWatcher(crdClient client.Client, pgName string, envFile string, opts ...ConfigWatcherOption) *ConfigWatcher {
+	cw := &ConfigWatcher{
 		crdClient: crdClient,
 		pgName:    pgName,
 		envFile:   envFile,
 	}
+	for _, opt := range opts {
+		opt(cw)
+	}
+	return cw
 }
 
 func (cw *ConfigWatcher) Watch(ctx context.Context) error {
@@ -62,6 +82,22 @@ func (cw *ConfigWatcher) syncOnce(ctx context.Context) {
 
 	envMap := cw.buildEnvMap(&pg)
 	cw.writeEnvFile(envMap)
+
+	if cw.onUpdate != nil {
+		svcKey := serializeServices(pg.Status.Services)
+		if svcKey != cw.lastServices {
+			cw.lastServices = svcKey
+			cw.onUpdate(pg.Status.Services)
+		}
+	}
+}
+
+func serializeServices(svcs []divergev1alpha1.PreviewGroupServiceStatus) string {
+	var b strings.Builder
+	for _, s := range svcs {
+		fmt.Fprintf(&b, "%s=%s;", s.Name, s.URL)
+	}
+	return b.String()
 }
 
 func (cw *ConfigWatcher) buildEnvMap(pg *divergev1alpha1.PreviewGroup) map[string]string {
@@ -74,6 +110,11 @@ func (cw *ConfigWatcher) buildEnvMap(pg *divergev1alpha1.PreviewGroup) map[strin
 	}
 	if pg.Spec.Routing.HeaderValue != "" {
 		env["DIVERGE_HEADER_VALUE"] = pg.Spec.Routing.HeaderValue
+	}
+
+	if cw.proxyAddr != "" {
+		env["DIVERGE_PROXY_URL"] = cw.proxyAddr
+		env["DIVERGE_PROXY_MODE"] = "path"
 	}
 
 	// Service endpoints from status
