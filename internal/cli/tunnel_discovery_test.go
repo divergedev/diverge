@@ -134,3 +134,50 @@ func TestResolveRemotePort_NamedPortMultipleContainers(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 9100, port, "should find named port across containers")
 }
+
+func TestResolveRemotePort_ProtocolMismatch(t *testing.T) {
+	svc := corev1.Service{
+		Spec: corev1.ServiceSpec{
+			Ports: []corev1.ServicePort{{
+				Port:       80,
+				TargetPort: intstr.FromString("dns"),
+				Protocol:   corev1.ProtocolUDP,
+			}},
+		},
+	}
+	pod := corev1.Pod{
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{
+				Name: "server",
+				Ports: []corev1.ContainerPort{
+					{Name: "dns", ContainerPort: 53, Protocol: corev1.ProtocolTCP}, // wrong protocol
+				},
+			}},
+		},
+	}
+	_, err := resolveRemotePort(svc, pod)
+	require.ErrorIs(t, err, ErrNamedTargetPortNotFound, "should not match port with wrong protocol")
+}
+
+func TestResolveRemotePort_NamedPortInInitContainer(t *testing.T) {
+	svc := corev1.Service{
+		Spec: corev1.ServiceSpec{
+			Ports: []corev1.ServicePort{{Port: 80, TargetPort: intstr.FromString("admin")}},
+		},
+	}
+	pod := corev1.Pod{
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{
+				Name:  "app",
+				Ports: []corev1.ContainerPort{{Name: "http", ContainerPort: 8080}},
+			}},
+			InitContainers: []corev1.Container{{
+				Name:  "init-proxy",
+				Ports: []corev1.ContainerPort{{Name: "admin", ContainerPort: 9901}},
+			}},
+		},
+	}
+	port, err := resolveRemotePort(svc, pod)
+	require.NoError(t, err)
+	assert.Equal(t, 9901, port, "should find named port in init containers")
+}

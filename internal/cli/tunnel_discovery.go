@@ -117,12 +117,27 @@ func resolveRemotePort(svc corev1.Service, pod corev1.Pod) (int, error) {
 		if sp.TargetPort.IntValue() != 0 {
 			remotePort = sp.TargetPort.IntValue()
 		} else if sp.TargetPort.String() != "" && sp.TargetPort.String() != "0" {
-			// Named port — resolve against pod container ports
+			// Named port — resolve against pod container ports, matching protocol.
+			// Kubernetes defaults Protocol to TCP if unset.
 			portName := sp.TargetPort.String()
+			svcProtocol := sp.Protocol
+			if svcProtocol == "" {
+				svcProtocol = corev1.ProtocolTCP
+			}
+
+			// Search regular containers, then init containers
+			allContainers := make([]corev1.Container, 0, len(pod.Spec.Containers)+len(pod.Spec.InitContainers))
+			allContainers = append(allContainers, pod.Spec.Containers...)
+			allContainers = append(allContainers, pod.Spec.InitContainers...)
+
 			resolved := false
-			for _, c := range pod.Spec.Containers {
+			for _, c := range allContainers {
 				for _, cp := range c.Ports {
-					if cp.Name == portName {
+					cpProto := cp.Protocol
+					if cpProto == "" {
+						cpProto = corev1.ProtocolTCP
+					}
+					if cp.Name == portName && cpProto == svcProtocol {
 						remotePort = int(cp.ContainerPort)
 						resolved = true
 						break
