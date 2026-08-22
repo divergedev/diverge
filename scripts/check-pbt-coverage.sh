@@ -11,7 +11,7 @@ for type_file in api/v1alpha1/*_types.go; do
 
   # Check for dedicated PBT file or shared property_test.go
   if [[ ! -f "${dir}/${base}_property_test.go" ]] && \
-     [[ ! -f "${dir}/property_test.go" ]]; then
+    [[ ! -f "${dir}/property_test.go" ]]; then
     echo "⚠️  No property-based test for ${type_file}"
     echo "    Expected: ${dir}/${base}_property_test.go or ${dir}/property_test.go"
     EXIT_CODE=1

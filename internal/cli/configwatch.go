@@ -23,6 +23,7 @@ type ConfigWatcher struct {
 	onUpdate     func(services []divergev1alpha1.PreviewGroupServiceStatus)
 	proxyAddr    string
 	lastServices string
+	synced       bool
 }
 
 // ConfigWatcherOption configures optional behavior for a ConfigWatcher.
@@ -85,7 +86,8 @@ func (cw *ConfigWatcher) syncOnce(ctx context.Context) {
 
 	if cw.onUpdate != nil {
 		svcKey := serializeServices(pg.Status.Services)
-		if svcKey != cw.lastServices {
+		if !cw.synced || svcKey != cw.lastServices {
+			cw.synced = true
 			cw.lastServices = svcKey
 			cw.onUpdate(pg.Status.Services)
 		}

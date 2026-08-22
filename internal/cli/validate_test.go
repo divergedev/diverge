@@ -13,6 +13,7 @@ import (
 func TestValidateValidConfig(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, ".diverge.yaml")
+	// editorconfig-checker-disable
 	err := os.WriteFile(configPath, []byte(`version: "1"
 services:
   api:
@@ -20,6 +21,7 @@ services:
     image:
       repository: "registry.example.com/api"
 `), 0644)
+	// editorconfig-checker-enable
 	require.NoError(t, err)
 
 	// Change to temp dir so validate finds .diverge.yaml

@@ -58,6 +58,21 @@ jobs:
       - name: Lint Helm Chart
         run: helm lint charts/diverge
 
+  file-hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Install editorconfig-checker
+        run: go install github.com/editorconfig-checker/editorconfig-checker/v3/cmd/editorconfig-checker@v3.8.0
+      - name: Run editorconfig-checker
+        run: editorconfig-checker
+
   check-generated:
     runs-on: ubuntu-latest
     steps:

@@ -8,6 +8,7 @@ import (
 )
 
 func TestParseDotDivergeConfig(t *testing.T) {
+	// editorconfig-checker-disable
 	tests := []struct {
 		name     string
 		input    string
@@ -93,6 +94,7 @@ spec:
 			wantErr: true,
 		},
 	}
+	// editorconfig-checker-enable
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -109,6 +111,7 @@ spec:
 }
 
 func TestToServicePreviewConfig(t *testing.T) {
+	// editorconfig-checker-disable
 	cfg, err := ParseDotDivergeConfig([]byte(`
 apiVersion: diverge.io/v1alpha1
 kind: ServicePreview
@@ -126,6 +129,7 @@ spec:
       - name: DB_URL
         value: postgres://localhost/preview
 `))
+	// editorconfig-checker-enable
 	require.NoError(t, err)
 
 	spc := cfg.ToServicePreviewConfig("registry/payments-api:mr-42")
@@ -140,6 +144,7 @@ spec:
 }
 
 func TestToServicePreviewConfig_WebSocket(t *testing.T) {
+	// editorconfig-checker-disable
 	cfg, err := ParseDotDivergeConfig([]byte(`
 apiVersion: diverge.io/v1alpha1
 kind: ServicePreview
@@ -154,6 +159,7 @@ spec:
     path: /ws
     timeout: 3600s
 `))
+	// editorconfig-checker-enable
 	require.NoError(t, err)
 
 	spc := cfg.ToServicePreviewConfig("registry/payments-api:mr-42")

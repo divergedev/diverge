@@ -25,6 +25,7 @@ func newPreviewCmd(app *App) *cobra.Command {
 		Use:     "preview",
 		Aliases: []string{"pg"},
 		Short:   "Manage preview groups (multi-service preview environments)",
+		// editorconfig-checker-disable
 		Long: `Preview groups orchestrate multiple services into a single preview
 environment. Each service can run a preview image, intercept locally,
 or use the baseline (production) version.
@@ -34,6 +35,7 @@ Examples:
   diverge preview status mr-42
   diverge preview delete mr-42
   diverge preview watch mr-42`,
+		// editorconfig-checker-enable
 	}
 
 	cmd.AddCommand(newPreviewCreateCmd(app))
@@ -61,6 +63,7 @@ func newPreviewCreateCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a preview group from the current branch",
+		// editorconfig-checker-disable
 		Long: `Create a PreviewGroup CR that orchestrates multiple services
 into a single header-routed preview environment.
 
@@ -77,6 +80,7 @@ Examples:
 
   # Dry-run to inspect the generated YAML
   diverge preview create --service payments-api=img:8080 --dry-run`,
+		// editorconfig-checker-enable
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runPreviewCreate(cmd, app, name, services, headerKey, headerValue, ttl, mrNumber, dryRun)
 		},

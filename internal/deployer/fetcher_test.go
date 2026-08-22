@@ -17,6 +17,7 @@ import (
 )
 
 func TestConfigMapFetcher_ParsesMultiDocYAML(t *testing.T) {
+	// editorconfig-checker-disable
 	yamlData := `
 apiVersion: v1
 kind: Service
@@ -28,6 +29,7 @@ kind: Deployment
 metadata:
   name: my-deployment
 `
+	// editorconfig-checker-enable
 
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
