@@ -14,8 +14,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func newH2CTestServer(handler http.Handler) *httptest.Server {
+	srv := httptest.NewUnstartedServer(handler)
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	protocols.SetUnencryptedHTTP2(true)
+	srv.Config.Protocols = protocols
+	srv.Start()
+	return srv
+}
+
 func TestLoopbackProxy_RoutesToUpstream(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream := newH2CTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "test-branch", r.Header.Get("x-diverge-env"))
 		assert.Equal(t, "/api/items", r.URL.Path)
 		w.WriteHeader(http.StatusOK)
@@ -23,7 +33,7 @@ func TestLoopbackProxy_RoutesToUpstream(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	proxy := NewLoopbackProxy("x-diverge-env", "test-branch", 0)
+	proxy := NewLoopbackProxy("x-diverge-env", "test-branch", 0, ModePath)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -43,7 +53,7 @@ func TestLoopbackProxy_RoutesToUpstream(t *testing.T) {
 }
 
 func TestLoopbackProxy_ServiceNotFound(t *testing.T) {
-	proxy := NewLoopbackProxy("x-diverge-env", "test", 0)
+	proxy := NewLoopbackProxy("x-diverge-env", "test", 0, ModePath)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -66,17 +76,17 @@ func TestLoopbackProxy_ServiceNotFound(t *testing.T) {
 }
 
 func TestLoopbackProxy_RouteTableUpdate(t *testing.T) {
-	upstream1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream1 := newH2CTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("v1"))
 	}))
 	defer upstream1.Close()
 
-	upstream2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream2 := newH2CTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("v2"))
 	}))
 	defer upstream2.Close()
 
-	proxy := NewLoopbackProxy("x-diverge-env", "test", 0)
+	proxy := NewLoopbackProxy("x-diverge-env", "test", 0, ModePath)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -101,7 +111,7 @@ func TestLoopbackProxy_RouteTableUpdate(t *testing.T) {
 }
 
 func TestLoopbackProxy_HealthCheck(t *testing.T) {
-	proxy := NewLoopbackProxy("x-diverge-env", "test", 0)
+	proxy := NewLoopbackProxy("x-diverge-env", "test", 0, ModePath)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -115,7 +125,7 @@ func TestLoopbackProxy_HealthCheck(t *testing.T) {
 }
 
 func TestLoopbackProxy_ReadyzBeforeSync(t *testing.T) {
-	proxy := NewLoopbackProxy("x-diverge-env", "test", 0)
+	proxy := NewLoopbackProxy("x-diverge-env", "test", 0, ModePath)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -137,14 +147,14 @@ func TestLoopbackProxy_ReadyzBeforeSync(t *testing.T) {
 }
 
 func TestLoopbackProxy_HeaderPreservation(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream := newH2CTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "custom-value", r.Header.Get("X-Custom"))
 		assert.Equal(t, "test-branch", r.Header.Get("x-diverge-env"))
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer upstream.Close()
 
-	proxy := NewLoopbackProxy("x-diverge-env", "test-branch", 0)
+	proxy := NewLoopbackProxy("x-diverge-env", "test-branch", 0, ModePath)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -161,7 +171,7 @@ func TestLoopbackProxy_HeaderPreservation(t *testing.T) {
 }
 
 func TestLoopbackProxy_GRPCRejection(t *testing.T) {
-	proxy := NewLoopbackProxy("x-diverge-env", "test", 0)
+	proxy := NewLoopbackProxy("x-diverge-env", "test", 0, ModePath)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -177,17 +187,17 @@ func TestLoopbackProxy_GRPCRejection(t *testing.T) {
 
 	body, _ := io.ReadAll(resp.Body)
 	assert.Equal(t, http.StatusNotImplemented, resp.StatusCode)
-	assert.Contains(t, string(body), "gRPC proxying is not yet supported")
+	assert.Contains(t, string(body), "Raw gRPC wire protocol is not supported")
 }
 
 func TestLoopbackProxy_EmptyPath(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream := newH2CTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// When calling /svc with no trailing path, the upstream gets empty or /
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer upstream.Close()
 
-	proxy := NewLoopbackProxy("x-diverge-env", "test", 0)
+	proxy := NewLoopbackProxy("x-diverge-env", "test", 0, ModePath)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -202,7 +212,7 @@ func TestLoopbackProxy_EmptyPath(t *testing.T) {
 }
 
 func TestLoopbackProxy_InvalidPath(t *testing.T) {
-	proxy := NewLoopbackProxy("x-diverge-env", "test", 0)
+	proxy := NewLoopbackProxy("x-diverge-env", "test", 0, ModePath)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -216,7 +226,7 @@ func TestLoopbackProxy_InvalidPath(t *testing.T) {
 }
 
 func TestLoopbackProxy_GracefulShutdown(t *testing.T) {
-	proxy := NewLoopbackProxy("x-diverge-env", "test", 0)
+	proxy := NewLoopbackProxy("x-diverge-env", "test", 0, ModePath)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	errCh := make(chan error, 1)
@@ -315,4 +325,103 @@ func TestRouteTable_Deterministic(t *testing.T) {
 
 	err := quick.Check(f, &quick.Config{MaxCount: 100})
 	require.NoError(t, err)
+}
+
+func TestHostBasedRouting(t *testing.T) {
+	upstream := newH2CTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "test-branch", r.Header.Get("x-diverge-env"))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("HOST OK"))
+	}))
+	defer upstream.Close()
+
+	proxy := NewLoopbackProxy("x-diverge-env", "test-branch", 0, ModeHost)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- proxy.Start(ctx) }()
+	<-proxy.Ready()
+
+	proxy.UpdateRoutes([]ServiceRoute{{Name: "test-svc", URL: upstream.URL}})
+
+	req, _ := http.NewRequest("GET", proxy.Addr()+"/some/path", nil)
+	req.Host = "test-svc.localhost:" + strings.Split(proxy.Addr(), ":")[2]
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "HOST OK", string(body))
+}
+
+func TestHostBasedRouting_NoSubdomain(t *testing.T) {
+	proxy := NewLoopbackProxy("x-diverge-env", "test-branch", 0, ModeHost)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go proxy.Start(ctx) //nolint:errcheck
+	<-proxy.Ready()
+
+	proxy.UpdateRoutes([]ServiceRoute{{Name: "test-svc", URL: "http://localhost:1234"}})
+
+	req, _ := http.NewRequest("GET", proxy.Addr()+"/some/path", nil)
+	// No subdomain in Host
+	req.Host = "localhost:" + strings.Split(proxy.Addr(), ":")[2]
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+
+	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
+}
+
+func TestGRPCContentTypeBlocked(t *testing.T) {
+	proxy := NewLoopbackProxy("x-diverge-env", "test-branch", 0, ModePath)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go proxy.Start(ctx) //nolint:errcheck
+	<-proxy.Ready()
+
+	proxy.UpdateRoutes([]ServiceRoute{{Name: "test-svc", URL: "http://localhost:1234"}})
+
+	req, _ := http.NewRequest("POST", proxy.Addr()+"/test-svc/Method", nil)
+	if !strings.HasPrefix(req.URL.String(), "http://") {
+		req.URL.Scheme = "http"
+		req.URL.Host = proxy.Addr()
+	}
+	req.Header.Set("Content-Type", "application/grpc")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, http.StatusNotImplemented, resp.StatusCode)
+	assert.Contains(t, string(body), "Raw gRPC wire protocol is not supported")
+	assert.Contains(t, string(body), "Connect")
+}
+
+func TestFlushSupport(t *testing.T) {
+	rec := httptest.NewRecorder()
+	rw := &responseWriter{ResponseWriter: rec, statusCode: http.StatusOK}
+	// Should not panic
+	rw.Flush()
+}
+
+func TestCheckLocalhostDNS(t *testing.T) {
+	// Should not panic, return boolean
+	res := CheckLocalhostDNS()
+	_ = res
+}
+
+func TestModeAccessor(t *testing.T) {
+	p1 := NewLoopbackProxy("x-diverge-env", "test-branch", 0, ModeHost)
+	assert.Equal(t, ModeHost, p1.Mode())
+
+	p2 := NewLoopbackProxy("x-diverge-env", "test-branch", 0, ModePath)
+	assert.Equal(t, ModePath, p2.Mode())
 }

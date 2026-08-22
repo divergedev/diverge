@@ -17,6 +17,21 @@ import (
 	"time"
 )
 
+// ProxyMode defines the routing mode for the proxy.
+type ProxyMode string
+
+const (
+	ModeHost ProxyMode = "host"
+	ModePath ProxyMode = "path"
+)
+
+type ctxKey int
+
+const (
+	ctxKeyServiceName ctxKey = iota
+	ctxKeyRemainingPath
+)
+
 // ServiceRoute represents a mapping from a service name to its upstream URL.
 type ServiceRoute struct {
 	Name string
@@ -71,10 +86,12 @@ func (rt *RouteTable) Available() []string {
 // LoopbackProxy implements a local proxy that routes requests to upstream services.
 type LoopbackProxy struct {
 	server      *http.Server
+	proxy       *httputil.ReverseProxy
 	routeTable  *RouteTable
 	headerKey   string
 	headerValue string
 	port        int
+	mode        ProxyMode
 	addr        string
 	listener    net.Listener
 	ready       chan struct{}
@@ -83,13 +100,14 @@ type LoopbackProxy struct {
 }
 
 // NewLoopbackProxy creates a new LoopbackProxy that routes requests to upstream
-// services based on the first path segment, injecting the specified routing header.
-func NewLoopbackProxy(headerKey, headerValue string, port int) *LoopbackProxy {
+// services based on the specified mode (host or path), injecting the specified routing header.
+func NewLoopbackProxy(headerKey, headerValue string, port int, mode ProxyMode) *LoopbackProxy {
 	return &LoopbackProxy{
 		routeTable:  NewRouteTable(),
 		headerKey:   headerKey,
 		headerValue: headerValue,
 		port:        port,
+		mode:        mode,
 		ready:       make(chan struct{}),
 		logger:      log.New(os.Stdout, "[diverge proxy] ", log.LstdFlags),
 	}
@@ -113,6 +131,28 @@ func (p *LoopbackProxy) Start(ctx context.Context) error {
 	p.listener = listener
 	p.addr = fmt.Sprintf("http://%s", listener.Addr().String())
 
+	p.proxy = &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			serviceName, _ := pr.Out.Context().Value(ctxKeyServiceName).(string)
+			remainingPath, _ := pr.Out.Context().Value(ctxKeyRemainingPath).(string)
+			upstreamURL, ok := p.routeTable.Lookup(serviceName)
+			if !ok {
+				return
+			}
+			pr.SetURL(upstreamURL)
+			pr.Out.URL.Path = singleJoiningSlash(upstreamURL.Path, remainingPath)
+			pr.Out.Header.Set(p.headerKey, p.headerValue)
+		},
+		FlushInterval: -1,
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			serviceName, _ := r.Context().Value(ctxKeyServiceName).(string)
+			p.logger.Printf("proxy error for svc=%s: %v", serviceName, err)
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte("Bad Gateway"))
+		},
+		Transport: newH2CTransport(),
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/-/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -131,8 +171,13 @@ func (p *LoopbackProxy) Start(ctx context.Context) error {
 
 	mux.HandleFunc("/", p.handleRequest)
 
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	protocols.SetUnencryptedHTTP2(true)
+
 	p.server = &http.Server{
 		Handler:           mux,
+		Protocols:         protocols,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       120 * time.Second,
@@ -158,20 +203,35 @@ func (p *LoopbackProxy) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	if strings.Contains(r.Header.Get("Content-Type"), "application/grpc") {
 		w.WriteHeader(http.StatusNotImplemented)
-		_, _ = w.Write([]byte("gRPC proxying is not yet supported. Track: https://github.com/divergedev/diverge/issues/181"))
+		_, _ = w.Write([]byte("Raw gRPC wire protocol is not supported by the diverge proxy. Use the Connect wire format (HTTP/1.1 compatible, default for ConnectRPC clients) for full streaming support including bidi. See: https://connectrpc.com/docs/protocol"))
 		return
 	}
 
-	pathParts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/"), "/", 2)
-	if len(pathParts) == 0 || pathParts[0] == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte("invalid path"))
-		return
+	var serviceName, remainingPath string
+
+	if p.mode == ModeHost {
+		host := r.Host
+		if host == "" {
+			host = r.URL.Host
+		}
+		serviceName = strings.SplitN(host, ".", 2)[0]
+		remainingPath = r.URL.Path
+	} else {
+		pathParts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/"), "/", 2)
+		if len(pathParts) == 0 || pathParts[0] == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte("invalid path"))
+			return
+		}
+		serviceName = pathParts[0]
+		if len(pathParts) > 1 {
+			remainingPath = "/" + pathParts[1]
+		} else if strings.HasSuffix(r.URL.Path, "/") {
+			remainingPath = "/"
+		}
 	}
 
-	serviceName := pathParts[0]
-
-	upstreamURL, ok := p.routeTable.Lookup(serviceName)
+	_, ok := p.routeTable.Lookup(serviceName)
 	if !ok {
 		w.WriteHeader(http.StatusBadGateway)
 		available := strings.Join(p.routeTable.Available(), ", ")
@@ -180,29 +240,11 @@ func (p *LoopbackProxy) handleRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	remainingPath := ""
-	if len(pathParts) > 1 {
-		remainingPath = "/" + pathParts[1]
-	} else if strings.HasSuffix(r.URL.Path, "/") {
-		remainingPath = "/"
-	}
-
-	proxy := &httputil.ReverseProxy{
-		Rewrite: func(pr *httputil.ProxyRequest) {
-			pr.SetURL(upstreamURL)
-			pr.Out.URL.Path = singleJoiningSlash(upstreamURL.Path, remainingPath)
-			pr.Out.Header.Set(p.headerKey, p.headerValue)
-		},
-		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			p.logger.Printf("proxy error for svc=%s: %v", serviceName, err)
-			w.WriteHeader(http.StatusBadGateway)
-			_, _ = w.Write([]byte("Bad Gateway"))
-		},
-	}
+	ctx := context.WithValue(r.Context(), ctxKeyServiceName, serviceName)
+	ctx = context.WithValue(ctx, ctxKeyRemainingPath, remainingPath)
 
 	rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
-
-	proxy.ServeHTTP(rw, r)
+	p.proxy.ServeHTTP(rw, r.WithContext(ctx))
 
 	duration := time.Since(start)
 	p.logger.Printf("svc=%s status=%d latency=%s", serviceName, rw.statusCode, duration)
@@ -232,6 +274,27 @@ func (rw *responseWriter) Unwrap() http.ResponseWriter {
 	return rw.ResponseWriter
 }
 
+func (rw *responseWriter) Flush() {
+	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func newH2CTransport() *http.Transport {
+	protocols := new(http.Protocols)
+	protocols.SetUnencryptedHTTP2(true)
+	protocols.SetHTTP1(true)
+	return &http.Transport{
+		Protocols: protocols,
+	}
+}
+
+// CheckLocalhostDNS tests if the localhost DNS zone is resolvable.
+func CheckLocalhostDNS() bool {
+	_, err := net.LookupHost("diverge-dns-check.localhost")
+	return err == nil
+}
+
 // Ready returns a channel that is closed when the proxy is listening.
 func (p *LoopbackProxy) Ready() <-chan struct{} {
 	return p.ready
@@ -240,6 +303,11 @@ func (p *LoopbackProxy) Ready() <-chan struct{} {
 // Addr returns the actual bound address.
 func (p *LoopbackProxy) Addr() string {
 	return p.addr
+}
+
+// Mode returns the proxy's configured routing mode.
+func (p *LoopbackProxy) Mode() ProxyMode {
+	return p.mode
 }
 
 // UpdateRoutes updates the route table and marks the proxy as ready.
