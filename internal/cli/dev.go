@@ -58,7 +58,12 @@ func newDevCmd(app *App) *cobra.Command {
 		Long: `Start a local development session by creating a PreviewGroup that routes
 traffic for the specified service to your local machine's Tailscale IP or via a tunnel.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDev(app, serviceFlag, portFlag, endpointFlag, devspaceFlag, previewIdFlag, args, cmd, noTunnelFlag, serverFlag)
+			return runDev(runDevParams{
+				App: app, Service: serviceFlag, Port: portFlag,
+				Endpoint: endpointFlag, Devspace: devspaceFlag,
+				PreviewID: previewIdFlag, Args: args, Cmd: cmd,
+				NoTunnel: noTunnelFlag, Server: serverFlag,
+			})
 		},
 	}
 	cmd.Flags().StringVar(&serviceFlag, "service", "", "Service name (default: auto-detect)")
@@ -72,13 +77,27 @@ traffic for the specified service to your local machine's Tailscale IP or via a 
 	return cmd
 }
 
-func runDev(app *App, serviceFlag string, portFlag int32, endpointFlag string, devspaceFlag bool, previewIdFlag string, args []string, cmd *cobra.Command, noTunnelFlag bool, serverFlag string, opts ...DevOption) error {
-	ctx := cmd.Context()
+type runDevParams struct {
+	App       *App
+	Service   string
+	Port      int32
+	Endpoint  string
+	Devspace  bool
+	PreviewID string
+	Args      []string
+	Cmd       *cobra.Command
+	NoTunnel  bool
+	Server    string
+	Options   []DevOption
+}
 
-	if devspaceFlag {
+func runDev(p runDevParams) error {
+	ctx := p.Cmd.Context()
+
+	if p.Devspace {
 		defaultService := "my-service"
-		if serviceFlag != "" {
-			defaultService = serviceFlag
+		if p.Service != "" {
+			defaultService = p.Service
 		}
 
 		devspaceTemplate := fmt.Sprintf(`version: v2beta1
@@ -129,13 +148,13 @@ dev:
 	devOpts := &DevOptions{
 		Detector: &DefaultEnvironmentDetector{},
 	}
-	for _, opt := range opts {
+	for _, opt := range p.Options {
 		opt(devOpts)
 	}
 	detector := devOpts.Detector
 
 	// 1. Auto-detect service name
-	serviceName := serviceFlag
+	serviceName := p.Service
 	if serviceName == "" {
 		s, err := detector.DetectServiceName(ctx)
 		if err != nil {
@@ -148,7 +167,7 @@ dev:
 	}
 
 	// 2. Auto-detect endpoint
-	endpointIP := endpointFlag
+	endpointIP := p.Endpoint
 	if endpointIP == "" {
 		ip, err := detector.DetectLocalIP(ctx)
 		if err != nil {
@@ -158,7 +177,7 @@ dev:
 	}
 
 	// 3. Auto-detect port
-	port := portFlag
+	port := p.Port
 	if port == 0 {
 		port = 8080
 	}
@@ -166,8 +185,8 @@ dev:
 
 	// 4. Construct header value
 	headerValue := "local-dev"
-	if previewIdFlag != "" {
-		headerValue = previewIdFlag
+	if p.PreviewID != "" {
+		headerValue = p.PreviewID
 	} else {
 		branch, err := detector.DetectGitBranch(ctx)
 		if err == nil && branch != "" {
@@ -186,24 +205,33 @@ dev:
 	groupName = strings.ToLower(groupName)
 	groupName = strings.TrimRight(groupName, "-")
 
-	c, clientset, err := app.KubeClient()
+	c, clientset, err := p.App.KubeClient()
 	if err != nil {
 		return fmt.Errorf("failed to create Kubernetes client: %w", err)
 	}
 
-	ns := app.Namespace
+	ns := p.App.Namespace
 	if ns == "" {
 		ns = "default"
 	}
 
-	if !noTunnelFlag {
+	if !p.NoTunnel {
 		fmt.Println("▸ Establishing tunnel...          ")
-		sAddr := serverFlag
+		sAddr := p.Server
 		if sAddr == "" {
+			restCfg, cfgErr := p.App.RestConfig()
+			if cfgErr != nil {
+				return fmt.Errorf("failed to get rest config: %w", cfgErr)
+			}
+
+			var stopCh chan struct{}
 			var dErr error
-			sAddr, dErr = discoverServer(ctx, clientset)
+			sAddr, stopCh, dErr = discoverServer(ctx, clientset, restCfg)
 			if dErr != nil {
 				return fmt.Errorf("failed to discover server: %w", dErr)
+			}
+			if stopCh != nil {
+				defer close(stopCh)
 			}
 		}
 
@@ -236,7 +264,7 @@ dev:
 			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
 				{
 					Name:      serviceName,
-					Namespace: app.Namespace,
+					Namespace: p.App.Namespace,
 					Mode:      divergeiov1alpha1.ServiceModeLocal,
 					Endpoint:  endpoint,
 				},
@@ -285,6 +313,10 @@ dev:
 		}
 	}
 
+	// Start config watcher for .env.diverge file sync
+	cw := NewConfigWatcher(c, groupName, ".env.diverge")
+	go func() { _ = cw.Watch(ctx) }()
+
 	// Start lease heartbeat
 	heartbeatTicker := time.NewTicker(20 * time.Second)
 	hbCtx, hbCancel := context.WithCancel(ctx)
@@ -327,7 +359,7 @@ dev:
 	}()
 
 	// 7. Print status
-	_ = runPreviewStatus(ctx, app, groupName, cmd.OutOrStdout())
+	_ = runPreviewStatus(ctx, p.App, groupName, p.Cmd.OutOrStdout())
 
 	asyncVars, err := waitForAsyncRoutes(ctx, c, groupName, serviceName, ns)
 	if err != nil {
@@ -337,7 +369,7 @@ dev:
 		return fmt.Errorf("failed waiting for async routes: %w", err)
 	}
 
-	if len(args) == 0 {
+	if len(p.Args) == 0 {
 		var envBuf bytes.Buffer
 		synced, syncErr := syncBaselineEnv(ctx, clientset, syncEnvOptions{
 			Namespace:   ns,
@@ -366,9 +398,9 @@ dev:
 		devOpts.resolvedEnvMap = resolvedEnv
 	}
 
-	if len(args) > 0 {
-		fmt.Printf("🚀 Starting child process: %v\n", args)
-		childCmd, err := runChildProcess(ctx, args, devOpts.resolvedEnvMap)
+	if len(p.Args) > 0 {
+		fmt.Printf("🚀 Starting child process: %v\n", p.Args)
+		childCmd, err := runChildProcess(ctx, p.Args, devOpts.resolvedEnvMap)
 		if err != nil {
 			return fmt.Errorf("failed to start child process: %w", err)
 		}
