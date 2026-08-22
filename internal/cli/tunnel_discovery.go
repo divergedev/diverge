@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -44,33 +45,9 @@ func discoverServer(ctx context.Context, k8sClient kubernetes.Interface, restCon
 	pod := pods.Items[0]
 
 	// Resolve remote port from service spec, handling named TargetPort
-	remotePort := 8080
-	if len(svc.Spec.Ports) > 0 {
-		sp := svc.Spec.Ports[0]
-		if sp.TargetPort.IntValue() != 0 {
-			remotePort = sp.TargetPort.IntValue()
-		} else if sp.TargetPort.String() != "" && sp.TargetPort.String() != "0" {
-			// Named port — resolve against pod container ports
-			portName := sp.TargetPort.String()
-			resolved := false
-			for _, c := range pod.Spec.Containers {
-				for _, cp := range c.Ports {
-					if cp.Name == portName {
-						remotePort = int(cp.ContainerPort)
-						resolved = true
-						break
-					}
-				}
-				if resolved {
-					break
-				}
-			}
-			if !resolved {
-				return "", nil, fmt.Errorf("named port %q not found in pod containers", portName)
-			}
-		} else if sp.Port != 0 {
-			remotePort = int(sp.Port)
-		}
+	remotePort, err := resolveRemotePort(svc, pod)
+	if err != nil {
+		return "", nil, err
 	}
 
 	// Set up SPDY port-forward with timeout
@@ -127,4 +104,39 @@ func discoverServer(ctx context.Context, k8sClient kubernetes.Interface, restCon
 	}
 
 	return fmt.Sprintf("http://localhost:%d", ports[0].Local), stopCh, nil
+}
+
+// resolveRemotePort determines the remote port to forward to from the service
+// spec and pod container ports. Handles numeric TargetPort, named TargetPort
+// (resolved against pod containers), and fallback to Service.Port.
+func resolveRemotePort(svc corev1.Service, pod corev1.Pod) (int, error) {
+	remotePort := 8080
+	if len(svc.Spec.Ports) > 0 {
+		sp := svc.Spec.Ports[0]
+		if sp.TargetPort.IntValue() != 0 {
+			remotePort = sp.TargetPort.IntValue()
+		} else if sp.TargetPort.String() != "" && sp.TargetPort.String() != "0" {
+			// Named port — resolve against pod container ports
+			portName := sp.TargetPort.String()
+			resolved := false
+			for _, c := range pod.Spec.Containers {
+				for _, cp := range c.Ports {
+					if cp.Name == portName {
+						remotePort = int(cp.ContainerPort)
+						resolved = true
+						break
+					}
+				}
+				if resolved {
+					break
+				}
+			}
+			if !resolved {
+				return 0, fmt.Errorf("named port %q not found in pod containers", portName)
+			}
+		} else if sp.Port != 0 {
+			remotePort = int(sp.Port)
+		}
+	}
+	return remotePort, nil
 }
