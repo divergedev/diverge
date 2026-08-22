@@ -32,6 +32,7 @@ const (
 	envDivergeProxyURL  = "DIVERGE_PROXY_URL"
 	envDivergeProxyMode = "DIVERGE_PROXY_MODE"
 	proxyModePath       = "path"
+	proxyModeHost       = "host"
 )
 
 // DevOptions holds optional configuration for the dev command.
@@ -59,6 +60,7 @@ func newDevCmd(app *App) *cobra.Command {
 		serverFlag    string
 		proxyPortFlag int
 		noProxyFlag   bool
+		proxyModeFlag string
 	)
 
 	cmd := &cobra.Command{
@@ -70,12 +72,16 @@ traffic for the specified service to your local machine's Tailscale IP or via a 
 			if proxyPortFlag < 0 || proxyPortFlag > 65535 {
 				return fmt.Errorf("--proxy-port must be between 0 and 65535, got %d", proxyPortFlag)
 			}
+			if proxyModeFlag != proxyModePath && proxyModeFlag != proxyModeHost {
+				return fmt.Errorf("--proxy-mode must be %q or %q, got %q", proxyModePath, proxyModeHost, proxyModeFlag)
+			}
 			return runDev(runDevParams{
 				App: app, Service: serviceFlag, Port: portFlag,
 				Endpoint: endpointFlag, Devspace: devspaceFlag,
 				PreviewID: previewIdFlag, Args: args, Cmd: cmd,
 				NoTunnel: noTunnelFlag, Server: serverFlag,
 				ProxyPort: proxyPortFlag, NoProxy: noProxyFlag,
+				ProxyMode: proxyModeFlag,
 			})
 		},
 	}
@@ -88,6 +94,7 @@ traffic for the specified service to your local machine's Tailscale IP or via a 
 	cmd.Flags().StringVar(&serverFlag, "server", "", "Diverge server address for tunnel (default: auto-detect via port-forward)")
 	cmd.Flags().IntVar(&proxyPortFlag, "proxy-port", 19001, "Local loopback proxy port for outbound service routing")
 	cmd.Flags().BoolVar(&noProxyFlag, "no-proxy", false, "Disable local loopback proxy")
+	cmd.Flags().StringVar(&proxyModeFlag, "proxy-mode", proxyModePath, "Proxy routing mode: 'path' (default) or 'host' (requires *.localhost DNS)")
 
 	return cmd
 }
@@ -106,6 +113,7 @@ type runDevParams struct {
 	Options   []DevOption
 	ProxyPort int
 	NoProxy   bool
+	ProxyMode string
 }
 
 func runDev(p runDevParams) error {
@@ -337,7 +345,13 @@ dev:
 	var loopbackProxy *proxy.LoopbackProxy
 
 	if !p.NoProxy {
-		loopbackProxy = proxy.NewLoopbackProxy("x-diverge-env", headerValue, p.ProxyPort)
+		proxyMode := proxy.ProxyMode(p.ProxyMode)
+		if proxyMode == proxy.ModeHost && !proxy.CheckLocalhostDNS() {
+			slog.Warn("*.localhost DNS not available on this system, falling back to path mode")
+			proxyMode = proxy.ModePath
+		}
+
+		loopbackProxy = proxy.NewLoopbackProxy("x-diverge-env", headerValue, p.ProxyPort, proxyMode)
 
 		proxyErrCh := make(chan error, 1)
 		go func() {
@@ -348,8 +362,12 @@ dev:
 		// Wait for proxy to be ready or fail
 		select {
 		case <-loopbackProxy.Ready():
-			fmt.Printf("▸ Local proxy listening on %s\n", loopbackProxy.Addr())
-			fmt.Printf("  Use %s to route through preview services\n", envDivergeProxyURL)
+			fmt.Printf("▸ Local proxy listening on %s (%s mode)\n", loopbackProxy.Addr(), loopbackProxy.Mode())
+			if loopbackProxy.Mode() == proxy.ModeHost {
+				fmt.Println("  Try: curl http://<service>.localhost:19001/health")
+			} else {
+				fmt.Println("  Try: curl http://127.0.0.1:19001/<service>/health")
+			}
 		case err := <-proxyErrCh:
 			if err == nil {
 				return fmt.Errorf("loopback proxy stopped unexpectedly")
@@ -462,7 +480,7 @@ dev:
 		}
 		if loopbackProxy != nil {
 			resolvedEnv[envDivergeProxyURL] = loopbackProxy.Addr()
-			resolvedEnv[envDivergeProxyMode] = proxyModePath
+			resolvedEnv[envDivergeProxyMode] = string(loopbackProxy.Mode())
 		}
 		fmt.Printf("📋 Resolved %d env vars from baseline (in-memory, no file written)\n", len(resolvedEnv))
 		devOpts.resolvedEnvMap = resolvedEnv
