@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -15,6 +16,7 @@ import (
 )
 
 var ErrServerNotFound = fmt.Errorf("diverge server not found in cluster")
+var ErrNamedTargetPortNotFound = fmt.Errorf("named target port not found in pod containers")
 
 func discoverServer(ctx context.Context, k8sClient kubernetes.Interface, restConfig *rest.Config) (serverAddr string, stopChan chan struct{}, err error) {
 	listCtx, listCancel := context.WithTimeout(ctx, 10*time.Second)
@@ -44,33 +46,9 @@ func discoverServer(ctx context.Context, k8sClient kubernetes.Interface, restCon
 	pod := pods.Items[0]
 
 	// Resolve remote port from service spec, handling named TargetPort
-	remotePort := 8080
-	if len(svc.Spec.Ports) > 0 {
-		sp := svc.Spec.Ports[0]
-		if sp.TargetPort.IntValue() != 0 {
-			remotePort = sp.TargetPort.IntValue()
-		} else if sp.TargetPort.String() != "" && sp.TargetPort.String() != "0" {
-			// Named port — resolve against pod container ports
-			portName := sp.TargetPort.String()
-			resolved := false
-			for _, c := range pod.Spec.Containers {
-				for _, cp := range c.Ports {
-					if cp.Name == portName {
-						remotePort = int(cp.ContainerPort)
-						resolved = true
-						break
-					}
-				}
-				if resolved {
-					break
-				}
-			}
-			if !resolved {
-				return "", nil, fmt.Errorf("named port %q not found in pod containers", portName)
-			}
-		} else if sp.Port != 0 {
-			remotePort = int(sp.Port)
-		}
+	remotePort, err := resolveRemotePort(svc, pod)
+	if err != nil {
+		return "", nil, err
 	}
 
 	// Set up SPDY port-forward with timeout
@@ -127,4 +105,59 @@ func discoverServer(ctx context.Context, k8sClient kubernetes.Interface, restCon
 	}
 
 	return fmt.Sprintf("http://localhost:%d", ports[0].Local), stopCh, nil
+}
+
+// resolveRemotePort determines the remote port to forward to from the service
+// spec and pod container ports. Handles numeric TargetPort, named TargetPort
+// (resolved against pod containers), and fallback to Service.Port.
+func resolveRemotePort(svc corev1.Service, pod corev1.Pod) (int, error) {
+	remotePort := 8080
+	if len(svc.Spec.Ports) > 0 {
+		sp := svc.Spec.Ports[0]
+		if sp.TargetPort.IntValue() != 0 {
+			remotePort = sp.TargetPort.IntValue()
+		} else if sp.TargetPort.String() != "" && sp.TargetPort.String() != "0" {
+			// Named port — resolve against pod container ports, matching protocol.
+			// Kubernetes defaults Protocol to TCP if unset.
+			portName := sp.TargetPort.String()
+			svcProtocol := sp.Protocol
+			if svcProtocol == "" {
+				svcProtocol = corev1.ProtocolTCP
+			}
+
+			// Search regular containers, then restartable init containers (native sidecars).
+			// Regular init containers are excluded — they exit before the pod is Running.
+			allContainers := make([]corev1.Container, 0, len(pod.Spec.Containers)+len(pod.Spec.InitContainers))
+			allContainers = append(allContainers, pod.Spec.Containers...)
+			for _, ic := range pod.Spec.InitContainers {
+				if ic.RestartPolicy != nil && *ic.RestartPolicy == corev1.ContainerRestartPolicyAlways {
+					allContainers = append(allContainers, ic)
+				}
+			}
+
+			resolved := false
+			for _, c := range allContainers {
+				for _, cp := range c.Ports {
+					cpProto := cp.Protocol
+					if cpProto == "" {
+						cpProto = corev1.ProtocolTCP
+					}
+					if cp.Name == portName && cpProto == svcProtocol {
+						remotePort = int(cp.ContainerPort)
+						resolved = true
+						break
+					}
+				}
+				if resolved {
+					break
+				}
+			}
+			if !resolved {
+				return 0, fmt.Errorf("named port %q: %w", portName, ErrNamedTargetPortNotFound)
+			}
+		} else if sp.Port != 0 {
+			remotePort = int(sp.Port)
+		}
+	}
+	return remotePort, nil
 }

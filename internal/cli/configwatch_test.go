@@ -3,7 +3,9 @@ package cli
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
+	"testing/quick"
 
 	divergev1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/stretchr/testify/assert"
@@ -73,6 +75,37 @@ B_KEY=val-b
 	assert.Equal(t, expected, string(content))
 }
 
+func TestConfigWatcher_writeEnvFile_Idempotent(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", ".env.diverge.*")
+	require.NoError(t, err)
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
+
+	cw := NewConfigWatcher(nil, "my-pg", tmpFile.Name())
+	envMap := map[string]string{"KEY": "val"}
+
+	// First write
+	cw.writeEnvFile(envMap)
+	stat1, err := os.Stat(tmpFile.Name())
+	require.NoError(t, err)
+
+	// Second write with same content — should be a no-op (cache hit)
+	cw.writeEnvFile(envMap)
+	stat2, err := os.Stat(tmpFile.Name())
+	require.NoError(t, err)
+
+	assert.Equal(t, stat1.ModTime(), stat2.ModTime(), "file should not be rewritten when content unchanged")
+}
+
+func TestConfigWatcher_writeEnvFile_CacheNotUpdatedOnFailure(t *testing.T) {
+	// Write to a non-existent directory to trigger temp file creation failure
+	cw := NewConfigWatcher(nil, "my-pg", "/nonexistent-dir-12345/env.diverge")
+	envMap := map[string]string{"KEY": "val"}
+
+	// Should not panic or update cache
+	cw.writeEnvFile(envMap)
+	assert.Empty(t, cw.lastEnvHash, "cache should not be updated when write fails")
+}
+
 func TestConfigWatcher_syncOnce(t *testing.T) {
 	scheme := runtime.NewScheme()
 	err := divergev1alpha1.AddToScheme(scheme)
@@ -118,4 +151,156 @@ DIVERGE_PREVIEW_ID=my-pg
 DIVERGE_SVC_USER_SVC_URL=http://user-svc:8080
 `
 	assert.Equal(t, expected, string(content))
+}
+
+func TestConfigWatcher_syncOnce_MissingPreviewGroup(t *testing.T) {
+	scheme := runtime.NewScheme()
+	err := divergev1alpha1.AddToScheme(scheme)
+	require.NoError(t, err)
+
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	tmpFile, err := os.CreateTemp("", ".env.diverge.*")
+	require.NoError(t, err)
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
+
+	cw := NewConfigWatcher(fakeClient, "nonexistent-pg", tmpFile.Name())
+	cw.syncOnce(context.Background())
+
+	// File should remain empty — no PreviewGroup found
+	content, err := os.ReadFile(tmpFile.Name())
+	require.NoError(t, err)
+	assert.Empty(t, string(content), "env file should not be written when PreviewGroup is missing")
+}
+
+// Property-based tests for buildEnvMap
+
+func TestConfigWatcher_buildEnvMap_Properties(t *testing.T) {
+	f := func(pgName string, headerKey string, svcNames []string) bool {
+		if pgName == "" {
+			return true
+		}
+
+		svcs := make([]divergev1alpha1.PreviewGroupServiceStatus, 0, len(svcNames))
+		for _, name := range svcNames {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			svcs = append(svcs, divergev1alpha1.PreviewGroupServiceStatus{
+				Name: name,
+				URL:  "http://" + name + ":8080",
+			})
+		}
+
+		pg := &divergev1alpha1.PreviewGroup{
+			ObjectMeta: metav1.ObjectMeta{Name: pgName},
+			Spec: divergev1alpha1.PreviewGroupSpec{
+				Routing: divergev1alpha1.PreviewGroupRouting{
+					HeaderKey: headerKey,
+				},
+			},
+			Status: divergev1alpha1.PreviewGroupStatus{Services: svcs},
+		}
+
+		cw := NewConfigWatcher(nil, pgName, "")
+		envMap := cw.buildEnvMap(pg)
+
+		// Property 1: DIVERGE_PREVIEW_ID always equals pg.Name
+		if envMap["DIVERGE_PREVIEW_ID"] != pgName {
+			return false
+		}
+
+		// Property 2: All keys start with DIVERGE_
+		for k := range envMap {
+			if !strings.HasPrefix(k, "DIVERGE_") {
+				return false
+			}
+		}
+
+		// Property 3: Service names are uppercased with dashes replaced by underscores
+		for _, svc := range svcs {
+			expectedKey := "DIVERGE_SVC_" + strings.ToUpper(strings.ReplaceAll(svc.Name, "-", "_")) + "_URL"
+			if envMap[expectedKey] != svc.URL {
+				return false
+			}
+		}
+
+		// Property 4: HeaderKey present iff non-empty
+		if headerKey != "" {
+			if envMap["DIVERGE_HEADER_KEY"] != headerKey {
+				return false
+			}
+		} else {
+			if _, ok := envMap["DIVERGE_HEADER_KEY"]; ok {
+				return false
+			}
+		}
+
+		// Property 5: Deterministic — same input produces same output
+		envMap2 := cw.buildEnvMap(pg)
+		if len(envMap) != len(envMap2) {
+			return false
+		}
+		for k, v := range envMap {
+			if envMap2[k] != v {
+				return false
+			}
+		}
+
+		return true
+	}
+
+	err := quick.Check(f, &quick.Config{MaxCount: 200})
+	require.NoError(t, err)
+}
+
+func TestConfigWatcher_writeEnvFile_Deterministic(t *testing.T) {
+	f := func(keys []string) bool {
+		envMap := make(map[string]string)
+		for _, k := range keys {
+			k = strings.TrimSpace(k)
+			if k == "" || strings.ContainsAny(k, "\n\r=") {
+				continue
+			}
+			envMap[k] = "value"
+		}
+
+		if len(envMap) == 0 {
+			return true
+		}
+
+		tmpFile1, err := os.CreateTemp("", ".env.diverge.pbt1.*")
+		if err != nil {
+			return true // skip on OS error
+		}
+		defer func() { _ = os.Remove(tmpFile1.Name()) }()
+
+		tmpFile2, err := os.CreateTemp("", ".env.diverge.pbt2.*")
+		if err != nil {
+			return true
+		}
+		defer func() { _ = os.Remove(tmpFile2.Name()) }()
+
+		cw1 := NewConfigWatcher(nil, "pg", tmpFile1.Name())
+		cw2 := NewConfigWatcher(nil, "pg", tmpFile2.Name())
+
+		cw1.writeEnvFile(envMap)
+		cw2.writeEnvFile(envMap)
+
+		content1, err := os.ReadFile(tmpFile1.Name())
+		if err != nil {
+			return true
+		}
+		content2, err := os.ReadFile(tmpFile2.Name())
+		if err != nil {
+			return true
+		}
+
+		// Property: same map produces identical file content
+		return string(content1) == string(content2)
+	}
+
+	err := quick.Check(f, &quick.Config{MaxCount: 100})
+	require.NoError(t, err)
 }
