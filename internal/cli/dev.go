@@ -22,10 +22,17 @@ import (
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/config"
 	"github.com/divergedev/diverge/internal/git"
+	"github.com/divergedev/diverge/internal/proxy"
 )
 
 // ErrCollision indicates that a preview group with the same name already exists but belongs to a different owner.
 var ErrCollision = errors.New("preview group collision")
+
+const (
+	envDivergeProxyURL  = "DIVERGE_PROXY_URL"
+	envDivergeProxyMode = "DIVERGE_PROXY_MODE"
+	proxyModePath       = "path"
+)
 
 // DevOptions holds optional configuration for the dev command.
 type DevOptions struct {
@@ -50,6 +57,8 @@ func newDevCmd(app *App) *cobra.Command {
 		previewIdFlag string
 		noTunnelFlag  bool
 		serverFlag    string
+		proxyPortFlag int
+		noProxyFlag   bool
 	)
 
 	cmd := &cobra.Command{
@@ -58,11 +67,15 @@ func newDevCmd(app *App) *cobra.Command {
 		Long: `Start a local development session by creating a PreviewGroup that routes
 traffic for the specified service to your local machine's Tailscale IP or via a tunnel.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if proxyPortFlag < 0 || proxyPortFlag > 65535 {
+				return fmt.Errorf("--proxy-port must be between 0 and 65535, got %d", proxyPortFlag)
+			}
 			return runDev(runDevParams{
 				App: app, Service: serviceFlag, Port: portFlag,
 				Endpoint: endpointFlag, Devspace: devspaceFlag,
 				PreviewID: previewIdFlag, Args: args, Cmd: cmd,
 				NoTunnel: noTunnelFlag, Server: serverFlag,
+				ProxyPort: proxyPortFlag, NoProxy: noProxyFlag,
 			})
 		},
 	}
@@ -73,6 +86,8 @@ traffic for the specified service to your local machine's Tailscale IP or via a 
 	cmd.Flags().StringVar(&previewIdFlag, "preview-id", "", "Preview ID for routing (default: git branch name)")
 	cmd.Flags().BoolVar(&noTunnelFlag, "no-tunnel", false, "Disable ConnectRPC tunnel and use direct routing (e.g., Tailscale)")
 	cmd.Flags().StringVar(&serverFlag, "server", "", "Diverge server address for tunnel (default: auto-detect via port-forward)")
+	cmd.Flags().IntVar(&proxyPortFlag, "proxy-port", 19001, "Local loopback proxy port for outbound service routing")
+	cmd.Flags().BoolVar(&noProxyFlag, "no-proxy", false, "Disable local loopback proxy")
 
 	return cmd
 }
@@ -89,6 +104,8 @@ type runDevParams struct {
 	NoTunnel  bool
 	Server    string
 	Options   []DevOption
+	ProxyPort int
+	NoProxy   bool
 }
 
 func runDev(p runDevParams) error {
@@ -100,6 +117,7 @@ func runDev(p runDevParams) error {
 			defaultService = p.Service
 		}
 
+		// editorconfig-checker-disable
 		devspaceTemplate := fmt.Sprintf(`version: v2beta1
 name: diverge-dev
 
@@ -127,6 +145,7 @@ dev:
     ports:
       - port: "8080:8080"
 `, defaultService)
+		// editorconfig-checker-enable
 
 		if _, err := os.Stat("devspace.yaml"); err == nil {
 			fmt.Println("ℹ️  devspace.yaml already exists, skipping creation.")
@@ -313,8 +332,52 @@ dev:
 		}
 	}
 
-	// Start config watcher for .env.diverge file sync
-	cw := NewConfigWatcher(c, groupName, ".env.diverge")
+	// Start loopback proxy and config watcher
+	var cwOpts []ConfigWatcherOption
+	var loopbackProxy *proxy.LoopbackProxy
+
+	if !p.NoProxy {
+		loopbackProxy = proxy.NewLoopbackProxy("x-diverge-env", headerValue, p.ProxyPort)
+
+		proxyErrCh := make(chan error, 1)
+		go func() {
+			proxyErrCh <- loopbackProxy.Start(ctx)
+		}()
+		defer func() { _ = loopbackProxy.Shutdown(context.Background()) }()
+
+		// Wait for proxy to be ready or fail
+		select {
+		case <-loopbackProxy.Ready():
+			fmt.Printf("▸ Local proxy listening on %s\n", loopbackProxy.Addr())
+			fmt.Printf("  Use %s to route through preview services\n", envDivergeProxyURL)
+		case err := <-proxyErrCh:
+			return fmt.Errorf("failed to start loopback proxy: %w", err)
+		case <-time.After(5 * time.Second):
+			return fmt.Errorf("loopback proxy startup timed out")
+		}
+
+		// Monitor for late serve errors
+		go func() {
+			if err := <-proxyErrCh; err != nil {
+				slog.Error("loopback proxy error", "error", err)
+			}
+		}()
+
+		cwOpts = append(cwOpts,
+			WithProxyAddr(loopbackProxy.Addr()),
+			WithOnUpdate(func(services []divergeiov1alpha1.PreviewGroupServiceStatus) {
+				routes := make([]proxy.ServiceRoute, 0, len(services))
+				for _, svc := range services {
+					if svc.URL != "" {
+						routes = append(routes, proxy.ServiceRoute{Name: svc.Name, URL: svc.URL})
+					}
+				}
+				loopbackProxy.UpdateRoutes(routes)
+			}),
+		)
+	}
+
+	cw := NewConfigWatcher(c, groupName, ".env.diverge", cwOpts...)
 	go func() { _ = cw.Watch(ctx) }()
 
 	// Start lease heartbeat
@@ -393,6 +456,10 @@ dev:
 		}
 		for k, v := range asyncVars {
 			resolvedEnv[k] = v
+		}
+		if loopbackProxy != nil {
+			resolvedEnv[envDivergeProxyURL] = loopbackProxy.Addr()
+			resolvedEnv[envDivergeProxyMode] = proxyModePath
 		}
 		fmt.Printf("📋 Resolved %d env vars from baseline (in-memory, no file written)\n", len(resolvedEnv))
 		devOpts.resolvedEnvMap = resolvedEnv

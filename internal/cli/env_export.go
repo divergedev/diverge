@@ -33,9 +33,11 @@ func newEnvExportCmd(app *App) *cobra.Command {
 		Short: "Export environment variables for a service",
 		Long: `Export environment variables from a baseline pod.
 Supports multiple formats: dotenv, json, shell.`,
+		// editorconfig-checker-disable
 		Example: `  diverge env export --service payments --format dotenv > .env.preview
   diverge env export --group mr-42 --format json
   diverge env export --group mr-42 --service payments --format shell`,
+		// editorconfig-checker-enable
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if service == "" && groupName == "" {
 				return fmt.Errorf("either --service or --group flag is required")

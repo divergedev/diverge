@@ -41,21 +41,21 @@ func TestInterceptorRoundtripPBT(t *testing.T) {
 			}
 			return
 		}
-		
+
 		if headers == nil {
 			t.Fatalf("Expected headers")
 		}
-		
+
 		payload, ok := headers[sdk.GetHeaderKey()]
 		if !ok {
 			t.Fatalf("Expected header %s", sdk.GetHeaderKey())
 		}
-		
+
 		var extracted string
 		if err := converter.GetDefaultDataConverter().FromPayload(payload, &extracted); err != nil {
 			t.Fatalf("Failed to decode payload: %v", err)
 		}
-		
+
 		if extracted != env {
 			t.Fatalf("Expected extracted env %q, got %q", env, extracted)
 		}
@@ -74,7 +74,7 @@ func (m *mockWorkflowInterceptor) ExecuteWorkflow(ctx workflow.Context, in *inte
 func TestWorkflowInterceptorInitialization(t *testing.T) {
 	workerInt := temporal.NewWorkerInterceptor()
 	nextWf := &mockWorkflowInterceptor{}
-	
+
 	// Just ensure it doesn't panic on initialization
 	wfInt := workerInt.InterceptWorkflow(nil, nextWf)
 	if wfInt == nil {

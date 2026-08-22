@@ -11,22 +11,37 @@ pre-commit:
     go-vet:
       glob: "*.go"
       run: go vet ./...
-    trailing-whitespace:
-      run: |
-        if grep -rn ' $' {staged_files} 2>/dev/null; then
-          echo "Trailing whitespace found"
-          exit 1
-        fi
-    check-yaml:
+    editorconfig:
+      run: editorconfig-checker {staged_files}
+    yaml-lint:
       glob: "*.{yaml,yml}"
       exclude: "charts/*/templates/**"
-      run: |
-        for f in {staged_files}; do
-          yq '.' "$f" > /dev/null 2>&1 || { echo "Invalid YAML: $f"; exit 1; }
-        done
+      run: yamllint {staged_files}
     helm-lint:
       glob: "charts/**"
       run: helm lint charts/diverge
+    buf-lint:
+      glob: "*.proto"
+      run: buf lint
+    buf-format-check:
+      glob: "*.proto"
+      run: buf format --diff --exit-code
+    no-merge-conflicts:
+      run: |
+        if [ $# -eq 0 ]; then exit 0; fi
+        bad=$(grep -Hn '^<<<<<<<\|^=======$\|^>>>>>>>\|^|||||||' {staged_files} || true)
+        if [ -n "$bad" ]; then echo "merge conflicts:"; echo "$bad"; exit 1; fi
+    no-large-files:
+      run: |
+        max=$((1024 * 1024))
+        for f in {staged_files}; do
+          size=$(wc -c < "$f" | tr -d ' ')
+          if [ "$size" -gt "$max" ]; then
+            echo "too large ($((size/1024))KB): $f"; exit 1
+          fi
+        done
+    gitleaks:
+      run: gitleaks protect --staged --no-banner
 
 pre-push:
   parallel: true
@@ -36,9 +51,7 @@ pre-push:
       run: golangci-lint run
     go-test:
       glob: "*.go"
-      run: go test ./... -count=1 -short
-    go-build:
-      run: go build ./...
+      run: go test ./... -short
     check-generated-stale:
       glob: "*.{proto,go}"
       run: ./scripts/check-gen.sh
@@ -48,3 +61,21 @@ pre-push:
     check-test-files:
       glob: "{internal,pkg}/**/*.go"
       run: ./scripts/check-test-coverage.sh
+    buf-breaking:
+      glob: "*.proto"
+      run: |
+        git fetch origin main --quiet 2>/dev/null || true
+        buf breaking --against '.git#branch=origin/main'
+
+commit-msg:
+  commands:
+    conventional-commit:
+      run: |
+        msg=$(head -1 {1})
+        if ! echo "$msg" | grep -qE '^(feat|fix|docs|ci|test|refactor|chore|build|perf|style|revert)(\([a-z0-9/-]+\))?!?: .+'; then
+          echo "ERROR: commit message must follow Conventional Commits"
+          echo "  format:  type(scope)?: description"
+          echo "  types:   feat fix docs ci test refactor chore build perf style revert"
+          echo "  got:     $msg"
+          exit 1
+        fi

@@ -51,6 +51,7 @@ func (p *SchemaDatabaseProvider) Provision(ctx context.Context, env *v1alpha1.En
 	}
 	schema := fmt.Sprintf("preview_%s", envName)
 
+	// editorconfig-checker-disable
 	setupSQL := fmt.Sprintf(`DO $$
 DECLARE
     row record;
@@ -86,6 +87,7 @@ BEGIN
     END LOOP;
 END
 $$;`, schema)
+	// editorconfig-checker-enable
 
 	dsn := p.AdminDSN
 	if strings.Contains(dsn, "?") {

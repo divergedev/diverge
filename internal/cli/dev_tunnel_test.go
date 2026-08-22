@@ -113,6 +113,7 @@ func TestRunDev_TunnelServerDiscoveryFailure(t *testing.T) {
 	tmpKubeconfig, err := os.CreateTemp("", "kubeconfig-*")
 	require.NoError(t, err)
 	defer func() { _ = os.Remove(tmpKubeconfig.Name()) }()
+	// editorconfig-checker-disable
 	_, err = tmpKubeconfig.WriteString(`apiVersion: v1
 kind: Config
 clusters:
@@ -129,6 +130,7 @@ users:
 - name: test
   user: {}
 `)
+	// editorconfig-checker-enable
 	require.NoError(t, err)
 	require.NoError(t, tmpKubeconfig.Close())
 	app.Kubeconfig = tmpKubeconfig.Name()

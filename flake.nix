@@ -35,6 +35,9 @@
             protoc-gen-go
             protoc-gen-connect-go
             air
+            editorconfig-checker
+            gitleaks
+            yamllint
 
             # Container
             docker-client

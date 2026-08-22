@@ -90,6 +90,7 @@ func TestGitLabPreviewGroupWebhookHandler_ServeHTTP(t *testing.T) {
 				},
 			},
 			configData: map[string][]byte{
+				// editorconfig-checker-disable
 				"gitlab:org/repo:feature-branch": []byte(`
 version: "1"
 defaults:
@@ -106,6 +107,7 @@ services:
     image:
       repository: registry/api
 `),
+				// editorconfig-checker-enable
 			},
 			expectedStatus: http.StatusOK,
 			verifyState: func(t *testing.T, c client.Client) {

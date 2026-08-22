@@ -1,0 +1,16 @@
+{
+  "Exclude": [
+    "\\.git/",
+    "vendor/",
+    "gen/",
+    "api/gen/",
+    "config/crd/bases/",
+    "charts/.*/templates/",
+    "charts/.*/dashboards/",
+    "\\.md$",
+    "LICENSE",
+    "\\.html$",
+    "scratch_modify\\.py",
+    "config/grafana/"
+  ]
+}
