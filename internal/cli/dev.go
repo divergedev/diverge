@@ -351,6 +351,9 @@ dev:
 			fmt.Printf("▸ Local proxy listening on %s\n", loopbackProxy.Addr())
 			fmt.Printf("  Use %s to route through preview services\n", envDivergeProxyURL)
 		case err := <-proxyErrCh:
+			if err == nil {
+				return fmt.Errorf("loopback proxy stopped unexpectedly")
+			}
 			return fmt.Errorf("failed to start loopback proxy: %w", err)
 		case <-time.After(5 * time.Second):
 			return fmt.Errorf("loopback proxy startup timed out")
