@@ -16,6 +16,7 @@ import (
 )
 
 var ErrServerNotFound = fmt.Errorf("diverge server not found in cluster")
+var ErrNamedTargetPortNotFound = fmt.Errorf("named target port not found in pod containers")
 
 func discoverServer(ctx context.Context, k8sClient kubernetes.Interface, restConfig *rest.Config) (serverAddr string, stopChan chan struct{}, err error) {
 	listCtx, listCancel := context.WithTimeout(ctx, 10*time.Second)
@@ -132,7 +133,7 @@ func resolveRemotePort(svc corev1.Service, pod corev1.Pod) (int, error) {
 				}
 			}
 			if !resolved {
-				return 0, fmt.Errorf("named port %q not found in pod containers", portName)
+				return 0, fmt.Errorf("named port %q: %w", portName, ErrNamedTargetPortNotFound)
 			}
 		} else if sp.Port != 0 {
 			remotePort = int(sp.Port)

@@ -86,8 +86,8 @@ func TestResolveRemotePort_NamedTargetPortNotFound(t *testing.T) {
 		},
 	}
 	_, err := resolveRemotePort(svc, pod)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), `named port "missing-port" not found`)
+	require.ErrorIs(t, err, ErrNamedTargetPortNotFound)
+	assert.Contains(t, err.Error(), `"missing-port"`)
 }
 
 func TestResolveRemotePort_FallbackToServicePort(t *testing.T) {
