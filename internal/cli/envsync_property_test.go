@@ -2,9 +2,8 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -94,18 +93,16 @@ func TestProperty_EnvDivergeRoundTrip(t *testing.T) {
 		}
 
 		clientset := fake.NewSimpleClientset(pod)
-		tmpDir := t.TempDir()
-		outPath := filepath.Join(tmpDir, ".env.diverge")
 
-		_, err := syncBaselineEnvToFile(context.Background(), clientset, syncEnvOptions{
+		var envBuf bytes.Buffer
+		_, err := syncBaselineEnv(context.Background(), clientset, syncEnvOptions{
 			Namespace:   "default",
 			ServiceName: svcName,
-		}, outPath)
+		}, &envBuf)
 		require.NoError(ht, err)
 
 		// Parse the written file and verify round-trip
-		content, err := os.ReadFile(outPath)
-		require.NoError(ht, err)
+		content := envBuf.Bytes()
 
 		parsed := make(map[string]string)
 		scanner := bufio.NewScanner(strings.NewReader(string(content)))
@@ -148,18 +145,16 @@ func TestProperty_EnvDivergeFileAlwaysCreated(t *testing.T) {
 		}
 
 		clientset := fake.NewSimpleClientset(pod)
-		tmpDir := t.TempDir()
-		outPath := filepath.Join(tmpDir, ".env.diverge")
 
-		_, err := syncBaselineEnvToFile(context.Background(), clientset, syncEnvOptions{
+		var envBuf bytes.Buffer
+		_, err := syncBaselineEnv(context.Background(), clientset, syncEnvOptions{
 			Namespace:   "default",
 			ServiceName: svcName,
-		}, outPath)
+		}, &envBuf)
 		require.NoError(ht, err)
 
-		// File must always exist after sync (even if pod has no env vars)
-		_, err = os.Stat(outPath)
-		require.NoError(ht, err)
+		// Buffer must have content after sync (even if pod has no env vars)
+		_ = envBuf.Len()
 	})
 }
 
@@ -183,17 +178,16 @@ func TestEnvSync_NewlineValues(t *testing.T) {
 	}
 
 	clientset := fake.NewSimpleClientset(pod)
-	tmpDir := t.TempDir()
-	outPath := filepath.Join(tmpDir, ".env.diverge")
 
-	_, err := syncBaselineEnvToFile(context.Background(), clientset, syncEnvOptions{
+	var envBuf bytes.Buffer
+	_, err := syncBaselineEnv(context.Background(), clientset, syncEnvOptions{
 		Namespace:   "default",
 		ServiceName: svcName,
-	}, outPath)
+	}, &envBuf)
 	require.NoError(t, err)
 
-	content, err := os.ReadFile(outPath)
-	require.NoError(t, err)
+	content := envBuf.Bytes()
+
 	require.Contains(t, string(content), "MULTILINE=\"line1\\nline2\"\n")
 	require.Contains(t, string(content), "HAS_HASH=# sourced from application\n")
 }
