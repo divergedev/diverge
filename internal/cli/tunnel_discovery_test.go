@@ -159,7 +159,8 @@ func TestResolveRemotePort_ProtocolMismatch(t *testing.T) {
 	require.ErrorIs(t, err, ErrNamedTargetPortNotFound, "should not match port with wrong protocol")
 }
 
-func TestResolveRemotePort_NamedPortInInitContainer(t *testing.T) {
+func TestResolveRemotePort_NamedPortInNativeSidecar(t *testing.T) {
+	restartAlways := corev1.ContainerRestartPolicyAlways
 	svc := corev1.Service{
 		Spec: corev1.ServiceSpec{
 			Ports: []corev1.ServicePort{{Port: 80, TargetPort: intstr.FromString("admin")}},
@@ -172,12 +173,35 @@ func TestResolveRemotePort_NamedPortInInitContainer(t *testing.T) {
 				Ports: []corev1.ContainerPort{{Name: "http", ContainerPort: 8080}},
 			}},
 			InitContainers: []corev1.Container{{
-				Name:  "init-proxy",
-				Ports: []corev1.ContainerPort{{Name: "admin", ContainerPort: 9901}},
+				Name:          "sidecar-proxy",
+				RestartPolicy: &restartAlways,
+				Ports:         []corev1.ContainerPort{{Name: "admin", ContainerPort: 9901}},
 			}},
 		},
 	}
 	port, err := resolveRemotePort(svc, pod)
 	require.NoError(t, err)
-	assert.Equal(t, 9901, port, "should find named port in init containers")
+	assert.Equal(t, 9901, port, "should find named port in native sidecar init container")
+}
+
+func TestResolveRemotePort_RegularInitContainerExcluded(t *testing.T) {
+	svc := corev1.Service{
+		Spec: corev1.ServiceSpec{
+			Ports: []corev1.ServicePort{{Port: 80, TargetPort: intstr.FromString("admin")}},
+		},
+	}
+	pod := corev1.Pod{
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{
+				Name:  "app",
+				Ports: []corev1.ContainerPort{{Name: "http", ContainerPort: 8080}},
+			}},
+			InitContainers: []corev1.Container{{
+				Name:  "init-setup", // no RestartPolicy — regular init, exits before Running
+				Ports: []corev1.ContainerPort{{Name: "admin", ContainerPort: 9901}},
+			}},
+		},
+	}
+	_, err := resolveRemotePort(svc, pod)
+	require.ErrorIs(t, err, ErrNamedTargetPortNotFound, "regular init containers should be excluded")
 }

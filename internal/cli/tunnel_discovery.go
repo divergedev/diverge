@@ -125,10 +125,15 @@ func resolveRemotePort(svc corev1.Service, pod corev1.Pod) (int, error) {
 				svcProtocol = corev1.ProtocolTCP
 			}
 
-			// Search regular containers, then init containers
+			// Search regular containers, then restartable init containers (native sidecars).
+			// Regular init containers are excluded — they exit before the pod is Running.
 			allContainers := make([]corev1.Container, 0, len(pod.Spec.Containers)+len(pod.Spec.InitContainers))
 			allContainers = append(allContainers, pod.Spec.Containers...)
-			allContainers = append(allContainers, pod.Spec.InitContainers...)
+			for _, ic := range pod.Spec.InitContainers {
+				if ic.RestartPolicy != nil && *ic.RestartPolicy == corev1.ContainerRestartPolicyAlways {
+					allContainers = append(allContainers, ic)
+				}
+			}
 
 			resolved := false
 			for _, c := range allContainers {
