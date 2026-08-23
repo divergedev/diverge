@@ -61,6 +61,7 @@ func newDevCmd(app *App) *cobra.Command {
 		proxyPortFlag int
 		noProxyFlag   bool
 		proxyModeFlag string
+		watchEnvFlag  bool
 	)
 
 	cmd := &cobra.Command{
@@ -81,7 +82,7 @@ traffic for the specified service to your local machine's Tailscale IP or via a 
 				PreviewID: previewIdFlag, Args: args, Cmd: cmd,
 				NoTunnel: noTunnelFlag, Server: serverFlag,
 				ProxyPort: proxyPortFlag, NoProxy: noProxyFlag,
-				ProxyMode: proxyModeFlag,
+				ProxyMode: proxyModeFlag, WatchEnv: watchEnvFlag,
 			})
 		},
 	}
@@ -95,6 +96,7 @@ traffic for the specified service to your local machine's Tailscale IP or via a 
 	cmd.Flags().IntVar(&proxyPortFlag, "proxy-port", 19001, "Local loopback proxy port for outbound service routing")
 	cmd.Flags().BoolVar(&noProxyFlag, "no-proxy", false, "Disable local loopback proxy")
 	cmd.Flags().StringVar(&proxyModeFlag, "proxy-mode", proxyModePath, "Proxy routing mode: 'path' (default) or 'host' (requires *.localhost DNS)")
+	cmd.Flags().BoolVar(&watchEnvFlag, "watch-env", false, "Auto-restart child process when environment configuration changes")
 
 	return cmd
 }
@@ -114,6 +116,7 @@ type runDevParams struct {
 	ProxyPort int
 	NoProxy   bool
 	ProxyMode string
+	WatchEnv  bool
 }
 
 func runDev(p runDevParams) error {
@@ -399,7 +402,37 @@ dev:
 		)
 	}
 
+	// Create ConfigWatcher first — supervisor needs it for fresh env reads.
 	cw := NewConfigWatcher(c, groupName, ".env.diverge", cwOpts...)
+
+	// Set up supervisor for --watch-env, wiring it to the ConfigWatcher.
+	var supervisor *Supervisor
+	if p.WatchEnv && len(p.Args) > 0 {
+		envBuilder := func() map[string]string {
+			// Rebuild env from scratch each restart — no stale accumulation.
+			// Start with the static baseline env.
+			env := make(map[string]string)
+			for k, v := range devOpts.resolvedEnvMap {
+				env[k] = v
+			}
+			// Merge latest watcher env (DIVERGE_SVC_*_URL etc.) — overrides baseline.
+			if latest := cw.LatestEnvMap(); latest != nil {
+				for k, v := range latest {
+					env[k] = v
+				}
+			}
+			if loopbackProxy != nil {
+				env[envDivergeProxyURL] = loopbackProxy.Addr()
+				env[envDivergeProxyMode] = string(loopbackProxy.Mode())
+			}
+			return env
+		}
+		supervisor = NewSupervisor(p.Args, envBuilder)
+		cw.SetOnEnvChange(func(diff map[string]string) {
+			supervisor.RequestRestart("service config changed", diff)
+		})
+	}
+
 	go func() { _ = cw.Watch(ctx) }()
 
 	// Start lease heartbeat
@@ -488,6 +521,13 @@ dev:
 	}
 
 	if len(p.Args) > 0 {
+		if supervisor != nil {
+			// Supervised mode: Supervisor handles restarts on env change.
+			fmt.Println("🚀 Starting child process with --watch-env (auto-restart on config change)")
+			return supervisor.Run(ctx)
+		}
+
+		// Legacy non-supervised mode.
 		fmt.Printf("🚀 Starting child process: %v\n", p.Args)
 		childCmd, err := runChildProcess(ctx, p.Args, devOpts.resolvedEnvMap)
 		if err != nil {
