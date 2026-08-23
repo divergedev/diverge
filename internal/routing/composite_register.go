@@ -9,9 +9,7 @@ func init() {
 				Routers: map[string]Router{
 					"gateway": &GatewayRouter{Client: deps.Client},
 					"async": &AsyncRouter{
-						Providers: []AsyncProvider{
-							&TemporalProvider{Client: deps.Client},
-						},
+						Providers: []AsyncProvider{},
 					},
 				},
 			}, nil

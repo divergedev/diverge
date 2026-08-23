@@ -3,7 +3,7 @@ package temporal
 import (
 	"context"
 
-	commonpb "go.temporal.io/api/common/v1"
+
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/workflow"
@@ -16,12 +16,19 @@ type InterceptorOption func(*interceptorOptions)
 
 type interceptorOptions struct {
 	headerKey string
+	envName   string
 }
 
 // WithHeaderKey configures a custom header key to use for preview environments.
 func WithHeaderKey(key string) InterceptorOption {
 	return func(o *interceptorOptions) {
 		o.headerKey = key
+	}
+}
+
+func WithEnvName(name string) InterceptorOption {
+	return func(o *interceptorOptions) {
+		o.envName = name
 	}
 }
 
@@ -41,7 +48,7 @@ func (p HeadersProvider) getHeaderKey() string {
 	return sdk.GetHeaderKey()
 }
 
-func (p HeadersProvider) GetHeaders(ctx context.Context) (map[string]*commonpb.Payload, error) {
+func (p HeadersProvider) GetHeaders(ctx context.Context) (map[string]string, error) {
 	env := p.EnvName
 	if env == "" {
 		env = sdk.EnvironmentFromContext(ctx)
@@ -49,12 +56,8 @@ func (p HeadersProvider) GetHeaders(ctx context.Context) (map[string]*commonpb.P
 	if env == "" {
 		return nil, nil
 	}
-	payload, err := converter.GetDefaultDataConverter().ToPayload(env)
-	if err != nil {
-		return nil, err
-	}
-	return map[string]*commonpb.Payload{
-		p.getHeaderKey(): payload,
+	return map[string]string{
+		p.getHeaderKey(): env,
 	}, nil
 }
 
@@ -62,6 +65,7 @@ func (p HeadersProvider) GetHeaders(ctx context.Context) (map[string]*commonpb.P
 type WorkerInterceptor struct {
 	interceptor.WorkerInterceptorBase
 	headerKey string
+	envName   string
 }
 
 func NewWorkerInterceptor(opts ...InterceptorOption) interceptor.WorkerInterceptor {
@@ -69,7 +73,7 @@ func NewWorkerInterceptor(opts ...InterceptorOption) interceptor.WorkerIntercept
 	for _, opt := range opts {
 		opt(options)
 	}
-	return &WorkerInterceptor{headerKey: options.headerKey}
+	return &WorkerInterceptor{headerKey: options.headerKey, envName: options.envName}
 }
 
 func (w *WorkerInterceptor) InterceptActivity(ctx context.Context, next interceptor.ActivityInboundInterceptor) interceptor.ActivityInboundInterceptor {
@@ -84,6 +88,12 @@ type activityInboundInterceptor struct {
 }
 
 func (a *activityInboundInterceptor) ExecuteActivity(ctx context.Context, in *interceptor.ExecuteActivityInput) (interface{}, error) {
+	// Security: if envName is configured, always use it (prevents sandbox escape)
+	if a.root.envName != "" {
+		ctx = context.WithValue(ctx, sdk.EnvContextKey, a.root.envName)
+		return a.Next.ExecuteActivity(ctx, in)
+	}
+	// Otherwise extract from header
 	headers := interceptor.Header(ctx)
 	if headers != nil {
 		if payload, ok := headers[a.root.headerKey]; ok {
@@ -108,6 +118,12 @@ type workflowInboundInterceptor struct {
 }
 
 func (w *workflowInboundInterceptor) ExecuteWorkflow(ctx workflow.Context, in *interceptor.ExecuteWorkflowInput) (interface{}, error) {
+	// Security: if envName is configured, always use it (prevents sandbox escape)
+	if w.root.envName != "" {
+		ctx = workflow.WithValue(ctx, sdk.EnvContextKey, w.root.envName)
+		return w.Next.ExecuteWorkflow(ctx, in)
+	}
+	// Otherwise extract from header
 	headers := interceptor.WorkflowHeader(ctx)
 	if headers != nil {
 		if payload, ok := headers[w.root.headerKey]; ok {
