@@ -38,6 +38,9 @@ Route cluster traffic for a service to your local machine.
 - `--endpoint` — Local endpoint IP (default: tailscale ip -4)
 - `--env-output` — How to handle env vars: `inject` (in-memory) or `file` (.env.diverge)
 - `--devspace` — Generate a devspace.yaml template
+- `--proxy-port` — Port for the local proxy (default: 19001)
+- `--no-proxy` — Disables the local proxy
+- `--proxy-mode` — Proxy mode, either `path` or `host` (default: path)
 
 ### `diverge logs`
 

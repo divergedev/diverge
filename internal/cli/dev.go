@@ -386,6 +386,7 @@ dev:
 
 		cwOpts = append(cwOpts,
 			WithProxyAddr(loopbackProxy.Addr()),
+			WithProxyMode(string(loopbackProxy.Mode())),
 			WithOnUpdate(func(services []divergeiov1alpha1.PreviewGroupServiceStatus) {
 				routes := make([]proxy.ServiceRoute, 0, len(services))
 				for _, svc := range services {
