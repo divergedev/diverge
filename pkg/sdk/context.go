@@ -11,7 +11,7 @@ type envContextKey struct{}
 var EnvContextKey = envContextKey{}
 
 // DefaultHeaderKey is used to extract the preview environment name from the HTTP header.
-const DefaultHeaderKey = "x-preview-env"
+const DefaultHeaderKey = "x-diverge-env"
 
 // GetHeaderKey returns the header key from DIVERGE_HEADER_KEY or DefaultHeaderKey.
 func GetHeaderKey() string {

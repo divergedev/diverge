@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.temporal.io/sdk/converter"
+
 	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/workflow"
 	"pgregory.net/rapid"
@@ -51,14 +51,7 @@ func TestInterceptorRoundtripPBT(t *testing.T) {
 			t.Fatalf("Expected header %s", sdk.GetHeaderKey())
 		}
 
-		var extracted string
-		if err := converter.GetDefaultDataConverter().FromPayload(payload, &extracted); err != nil {
-			t.Fatalf("Failed to decode payload: %v", err)
-		}
-
-		if extracted != env {
-			t.Fatalf("Expected extracted env %q, got %q", env, extracted)
-		}
+		require.Equal(t, env, payload, "Expected extracted env to match")
 	})
 }
 
@@ -92,7 +85,5 @@ func TestHeadersProvider_SecurityOverwrite(t *testing.T) {
 	require.NoError(t, err)
 
 	payload := headers[sdk.GetHeaderKey()]
-	var extracted string
-	require.NoError(t, converter.GetDefaultDataConverter().FromPayload(payload, &extracted))
-	assert.Equal(t, "trusted-env", extracted) // EnvName MUST win
+	assert.Equal(t, "trusted-env", payload) // EnvName MUST win
 }

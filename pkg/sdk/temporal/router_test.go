@@ -14,6 +14,7 @@ func TestTaskQueue(t *testing.T) {
 		base     string
 		env      string
 		expected string
+		opts     []TaskQueueOption
 	}{
 		{
 			name:     "empty env",
@@ -26,13 +27,21 @@ func TestTaskQueue(t *testing.T) {
 			base:     "my-queue",
 			env:      "pr-123",
 			expected: "my-queue-pr-123",
+			opts:     nil,
+		},
+		{
+			name:     "global with env",
+			base:     "my-queue",
+			env:      "pr-123",
+			expected: "my-queue",
+			opts:     []TaskQueueOption{Global()},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("DIVERGE_ENV", tt.env)
-			assert.Equal(t, tt.expected, TaskQueue(tt.base))
+			assert.Equal(t, tt.expected, TaskQueue(tt.base, tt.opts...))
 		})
 	}
 }
