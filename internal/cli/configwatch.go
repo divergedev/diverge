@@ -21,9 +21,11 @@ type ConfigWatcher struct {
 	lastEnvHash  string
 	mu           sync.Mutex
 	onUpdate     func(services []divergev1alpha1.PreviewGroupServiceStatus)
+	onEnvChange  func(diff map[string]string) // called when env vars change (for --watch-env)
 	proxyAddr    string
 	proxyMode    string
 	lastServices string
+	lastEnvMap   map[string]string // tracks previous env for diff
 	synced       bool
 }
 
@@ -43,6 +45,34 @@ func WithProxyAddr(addr string) ConfigWatcherOption {
 // WithProxyMode sets the loopback proxy mode for .env.diverge output.
 func WithProxyMode(mode string) ConfigWatcherOption {
 	return func(cw *ConfigWatcher) { cw.proxyMode = mode }
+}
+
+// WithOnEnvChange registers a callback invoked when env vars change.
+// The diff map contains changed keys with "old → new" descriptions.
+func WithOnEnvChange(fn func(diff map[string]string)) ConfigWatcherOption {
+	return func(cw *ConfigWatcher) { cw.onEnvChange = fn }
+}
+
+// LatestEnvMap returns a copy of the most recently computed env map.
+// Thread-safe — called by Supervisor's envBuilder on each restart.
+func (cw *ConfigWatcher) LatestEnvMap() map[string]string {
+	cw.mu.Lock()
+	defer cw.mu.Unlock()
+
+	if cw.lastEnvMap == nil {
+		return nil
+	}
+	cp := make(map[string]string, len(cw.lastEnvMap))
+	for k, v := range cw.lastEnvMap {
+		cp[k] = v
+	}
+	return cp
+}
+
+// SetOnEnvChange registers an env change callback after construction.
+// Must be called before Watch() starts.
+func (cw *ConfigWatcher) SetOnEnvChange(fn func(diff map[string]string)) {
+	cw.onEnvChange = fn
 }
 
 func NewConfigWatcher(crdClient client.Client, pgName string, envFile string, opts ...ConfigWatcherOption) *ConfigWatcher {
@@ -97,6 +127,26 @@ func (cw *ConfigWatcher) syncOnce(ctx context.Context) {
 			cw.lastServices = svcKey
 			cw.onUpdate(pg.Status.Services)
 		}
+	}
+
+	// Env change detection for --watch-env (phase-gated).
+	// Only trigger restart when PreviewGroup is Running — avoids restart storms
+	// during rolling deployments when services come online gradually.
+	if cw.onEnvChange != nil && pg.Status.Phase == divergev1alpha1.PreviewGroupPhaseRunning {
+		diff := cw.computeEnvDiff(envMap)
+		if len(diff) > 0 {
+			cw.mu.Lock()
+			cw.lastEnvMap = envMap
+			cw.mu.Unlock()
+			cw.onEnvChange(diff)
+		}
+	}
+
+	// Track env map for diff on first sync.
+	if cw.lastEnvMap == nil {
+		cw.mu.Lock()
+		cw.lastEnvMap = envMap
+		cw.mu.Unlock()
 	}
 }
 
@@ -184,6 +234,8 @@ func (cw *ConfigWatcher) writeEnvFile(envMap map[string]string) {
 		_ = os.Remove(tmpName)
 		return
 	}
+	// Restrict permissions — .env.diverge may contain service URLs and routing headers.
+	_ = os.Chmod(cw.envFile, 0600)
 
 	old := cw.lastEnvHash
 	cw.lastEnvHash = content
@@ -191,4 +243,31 @@ func (cw *ConfigWatcher) writeEnvFile(envMap map[string]string) {
 	if old != "" {
 		fmt.Printf("[diverge] 🔄 Routing config updated, wrote %s\n", cw.envFile)
 	}
+}
+
+// computeEnvDiff returns a map of changed env vars between lastEnvMap and current.
+// Keys map to "old_value → new_value" for changes, or just "new_value" for additions.
+func (cw *ConfigWatcher) computeEnvDiff(current map[string]string) map[string]string {
+	cw.mu.Lock()
+	prev := cw.lastEnvMap
+	cw.mu.Unlock()
+
+	if prev == nil {
+		return nil // first sync, no diff
+	}
+
+	diff := make(map[string]string)
+	for k, v := range current {
+		if oldV, ok := prev[k]; !ok {
+			diff[k] = v + " (added)"
+		} else if oldV != v {
+			diff[k] = oldV + " → " + v
+		}
+	}
+	for k := range prev {
+		if _, ok := current[k]; !ok {
+			diff[k] = prev[k] + " (removed)"
+		}
+	}
+	return diff
 }
