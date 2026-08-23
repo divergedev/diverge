@@ -48,6 +48,34 @@ func TestConfigWatcher_buildEnvMap(t *testing.T) {
 	assert.Equal(t, "test", envMap["DIVERGE_HEADER_VALUE"])
 	assert.Equal(t, "http://user-svc:8080", envMap["DIVERGE_SVC_USER_SVC_URL"])
 	assert.Equal(t, "http://cart-svc:8081", envMap["DIVERGE_SVC_CART_SVC_URL"])
+	// No proxy configured — no proxy vars
+	assert.Empty(t, envMap["DIVERGE_PROXY_URL"])
+	assert.Empty(t, envMap["DIVERGE_PROXY_MODE"])
+}
+
+func TestConfigWatcher_buildEnvMap_ProxyModeHost(t *testing.T) {
+	pg := &divergev1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "pg"},
+	}
+
+	cw := NewConfigWatcher(nil, "pg", "", WithProxyAddr("http://127.0.0.1:19001"), WithProxyMode("host"))
+	envMap := cw.buildEnvMap(pg)
+
+	assert.Equal(t, "http://127.0.0.1:19001", envMap["DIVERGE_PROXY_URL"])
+	assert.Equal(t, "host", envMap["DIVERGE_PROXY_MODE"])
+}
+
+func TestConfigWatcher_buildEnvMap_ProxyModeDefaultsToPath(t *testing.T) {
+	pg := &divergev1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "pg"},
+	}
+
+	// WithProxyAddr but no WithProxyMode — should default to "path"
+	cw := NewConfigWatcher(nil, "pg", "", WithProxyAddr("http://127.0.0.1:19001"))
+	envMap := cw.buildEnvMap(pg)
+
+	assert.Equal(t, "http://127.0.0.1:19001", envMap["DIVERGE_PROXY_URL"])
+	assert.Equal(t, "path", envMap["DIVERGE_PROXY_MODE"])
 }
 
 func TestConfigWatcher_writeEnvFile(t *testing.T) {

@@ -22,6 +22,7 @@ type ConfigWatcher struct {
 	mu           sync.Mutex
 	onUpdate     func(services []divergev1alpha1.PreviewGroupServiceStatus)
 	proxyAddr    string
+	proxyMode    string
 	lastServices string
 	synced       bool
 }
@@ -37,6 +38,11 @@ func WithOnUpdate(fn func([]divergev1alpha1.PreviewGroupServiceStatus)) ConfigWa
 // WithProxyAddr sets the loopback proxy address for .env.diverge output.
 func WithProxyAddr(addr string) ConfigWatcherOption {
 	return func(cw *ConfigWatcher) { cw.proxyAddr = addr }
+}
+
+// WithProxyMode sets the loopback proxy mode for .env.diverge output.
+func WithProxyMode(mode string) ConfigWatcherOption {
+	return func(cw *ConfigWatcher) { cw.proxyMode = mode }
 }
 
 func NewConfigWatcher(crdClient client.Client, pgName string, envFile string, opts ...ConfigWatcherOption) *ConfigWatcher {
@@ -116,7 +122,11 @@ func (cw *ConfigWatcher) buildEnvMap(pg *divergev1alpha1.PreviewGroup) map[strin
 
 	if cw.proxyAddr != "" {
 		env["DIVERGE_PROXY_URL"] = cw.proxyAddr
-		env["DIVERGE_PROXY_MODE"] = "path"
+		mode := cw.proxyMode
+		if mode == "" {
+			mode = "path"
+		}
+		env["DIVERGE_PROXY_MODE"] = mode
 	}
 
 	// Service endpoints from status
