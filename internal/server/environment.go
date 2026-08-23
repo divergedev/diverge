@@ -524,6 +524,15 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 	errCh := make(chan error, len(targetPods))
 
 	var wg sync.WaitGroup
+
+	// Child context: cancelled on any exit path to unblock all worker goroutines.
+	streamCtx, streamCancel := context.WithCancel(ctx)
+	// LIFO defer order: streamCancel+wg.Wait runs BEFORE semaphore release (L463).
+	defer func() {
+		streamCancel()
+		wg.Wait()
+	}()
+
 	for _, pod := range targetPods {
 		wg.Add(1)
 		go func(p corev1.Pod) {
@@ -537,9 +546,12 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 				since = &t
 			}
 
-			logsStream, err := s.logStreamer.StreamPodLogs(ctx, p.Namespace, p.Name, containerName, msg.Follow, msg.TailLines, since)
+			logsStream, err := s.logStreamer.StreamPodLogs(streamCtx, p.Namespace, p.Name, containerName, msg.Follow, msg.TailLines, since)
 			if err != nil {
-				errCh <- fmt.Errorf("failed to open stream for pod %s: %w", p.Name, err)
+				select {
+				case errCh <- fmt.Errorf("failed to open stream for pod %s: %w", p.Name, err):
+				default:
+				}
 				return
 			}
 			defer func() {
@@ -567,7 +579,7 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 				}
 
 				select {
-				case <-ctx.Done():
+				case <-streamCtx.Done():
 					return
 				case logCh <- logMessage{
 					pod:       p.Name,
@@ -578,7 +590,10 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 				}
 			}
 			if err := scanner.Err(); err != nil && !errors.Is(err, context.Canceled) {
-				errCh <- fmt.Errorf("log scan error: %w", err)
+				select {
+				case errCh <- fmt.Errorf("log scan error: %w", err):
+				default:
+				}
 			}
 		}(pod)
 	}

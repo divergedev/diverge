@@ -21,7 +21,7 @@ manifests: ## Generate CRD, webhook, and RBAC manifests
 .PHONY: proto
 proto: ## Generate protobuf code
 	buf lint api/proto
-	buf breaking api/proto --against '.git#branch=main' || true
+	buf breaking api/proto --against '.git#branch=origin/main'
 	buf generate
 
 .PHONY: generate
