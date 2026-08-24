@@ -1,9 +1,17 @@
+# Proto generation stage for web TypeScript types
+FROM bufbuild/buf:latest AS proto-gen
+WORKDIR /workspace
+COPY buf.yaml buf.gen.web.yaml ./
+COPY api/ api/
+RUN buf generate --template buf.gen.web.yaml
+
 # Web dashboard build stage
 FROM node:22-alpine AS web-builder
 WORKDIR /web
 COPY web/package*.json ./
 RUN npm ci --ignore-scripts
 COPY web/ ./
+COPY --from=proto-gen /workspace/web/src/api/gen ./src/api/gen
 RUN npm run build
 
 # Go build stage

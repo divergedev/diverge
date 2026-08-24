@@ -66,7 +66,7 @@ export default function ClusterInfo() {
           <CardContent>
             {perms?.permissions?.length ? (
               <div className="space-y-1">
-                {perms.permissions.map((p, i) => (
+                {perms.permissions.map((p: { resource: string; verbs?: string[] }, i: number) => (
                   <div key={i} className="text-sm flex justify-between">
                     <span>{p.resource}</span>
                     <span className="text-muted-foreground">{p.verbs?.join(', ')}</span>
@@ -83,7 +83,7 @@ export default function ClusterInfo() {
           <CardHeader><CardTitle className="text-base">Namespaces</CardTitle></CardHeader>
           <CardContent>
             <div className="flex flex-wrap gap-2">
-              {cluster.namespaces.map((ns) => (
+              {cluster.namespaces.map((ns: string) => (
                 <span key={ns} className="px-2 py-1 rounded bg-muted text-sm">{ns}</span>
               ))}
             </div>

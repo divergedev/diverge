@@ -92,7 +92,7 @@ export default function EnvironmentDetail() {
               <CardContent>
                 {env.status?.conditions?.length ? (
                   <div className="space-y-2">
-                    {env.status.conditions.map((c, i) => (
+                    {env.status.conditions.map((c: { type: string; status: string }, i: number) => (
                       <div key={i} className="flex items-center justify-between text-sm">
                         <span>{c.type}</span>
                         <StatusBadge phase={c.status === 'True' ? 'Ready' : 'Pending'} />

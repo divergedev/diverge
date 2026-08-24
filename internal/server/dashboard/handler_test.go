@@ -1,7 +1,6 @@
 package dashboard
 
 import (
-	"embed"
 	"io"
 	"io/fs"
 	"net/http"
@@ -12,17 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// testFS creates an embed.FS-like structure for testing.
-// Since we can't create embed.FS at runtime, we build an http.Handler
-// from a real fs.FS and test against it.
-func testAssets(t *testing.T) embed.FS {
-	t.Helper()
-	// Use the actual embedded assets from the build.
-	// This validates the real embed directive works.
-	return Assets
-}
-
-// testHandlerWithFS creates an SPA handler backed by the real embedded assets.
+// testHandler creates an SPA handler backed by the real embedded assets.
 func testHandler(t *testing.T) http.Handler {
 	t.Helper()
 	return SPAHandler(Assets)
