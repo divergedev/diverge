@@ -36,11 +36,24 @@ spec:
             - --metrics-addr=:9090
             - --token-cache-ttl={{ .Values.server.auth.tokenCacheTTL }}
             - --max-streams={{ .Values.server.auth.maxStreams }}
+            - --max-streams-per-user={{ .Values.server.auth.maxStreamsPerUser }}
             - "--cors-allowed-origins={{ .Values.server.cors.allowedOrigins }}"
             - --cors-max-age={{ .Values.server.cors.maxAge }}
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
           ports:
             - name: grpc
               containerPort: {{ .Values.server.service.port }}
+              protocol: TCP
+            - name: http-tunnel
+              containerPort: 8081
               protocol: TCP
             - name: metrics
               containerPort: 9090

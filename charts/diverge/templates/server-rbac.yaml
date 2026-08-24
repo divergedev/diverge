@@ -135,4 +135,82 @@ subjects:
     namespace: {{ $.Release.Namespace }}
 {{- end }}
 {{- end }}
+---
+# Tunnel resources (leases, services, endpointslices) for diverge dev tunnel proxy
+{{- if .Values.server.rbac.clusterWidePodAccess }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "diverge.fullname" . }}-server-tunnels
+  labels:
+    {{- include "diverge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "update", "delete", "list"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "create", "update", "delete", "list"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "create", "update", "delete", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "diverge.fullname" . }}-server-tunnels
+  labels:
+    {{- include "diverge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "diverge.fullname" . }}-server-tunnels
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "diverge.fullname" . }}-server
+    namespace: {{ .Release.Namespace }}
+{{- else if .Values.server.rbac.targetNamespaces }}
+{{- range $index, $namespace := .Values.server.rbac.targetNamespaces }}
+{{- if $index }}
+---
+{{- end }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "diverge.fullname" $ }}-server-tunnels
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "diverge.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: server
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "update", "delete", "list"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "create", "update", "delete", "list"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "create", "update", "delete", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "diverge.fullname" $ }}-server-tunnels
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "diverge.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: server
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "diverge.fullname" $ }}-server-tunnels
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "diverge.fullname" $ }}-server
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}
 {{- end }}

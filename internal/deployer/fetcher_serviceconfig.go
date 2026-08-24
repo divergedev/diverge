@@ -119,6 +119,7 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 						},
 					},
 					"spec": map[string]interface{}{
+						"automountServiceAccountToken": false,
 						"containers": []interface{}{
 							map[string]interface{}{
 								"name":            cfg.ServiceName,
