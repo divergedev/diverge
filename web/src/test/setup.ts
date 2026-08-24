@@ -13,3 +13,10 @@ afterAll(() => server.close())
 
 HTMLDialogElement.prototype.showModal = vi.fn();
 HTMLDialogElement.prototype.close = vi.fn();
+
+// ResizeObserver mock for topology SVG overlay tests (jsdom doesn't implement it)
+globalThis.ResizeObserver = class ResizeObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+} as unknown as typeof ResizeObserver;

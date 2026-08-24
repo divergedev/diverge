@@ -9,6 +9,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { ArrowLeft, ExternalLink, Copy, Trash2, Clock, AlertCircle } from 'lucide-react'
 import { useState } from 'react'
 import { stringify as yamlStringify } from 'yaml'
+import { TopologyView } from '@/components/topology/TopologyView'
 
 export default function EnvironmentDetail() {
   const { namespace = '', name = '' } = useParams()
@@ -115,9 +116,18 @@ export default function EnvironmentDetail() {
       <Tabs defaultValue="overview">
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="topology">Topology</TabsTrigger>
           <TabsTrigger value="logs">Logs</TabsTrigger>
           <TabsTrigger value="yaml">YAML</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="topology">
+          <Card>
+            <CardContent className="p-0">
+              <TopologyView environment={env} />
+            </CardContent>
+          </Card>
+        </TabsContent>
 
         <TabsContent value="overview">
           <div className="grid gap-4 md:grid-cols-2">
