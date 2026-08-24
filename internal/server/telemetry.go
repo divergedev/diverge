@@ -43,7 +43,8 @@ func detectProtocol(contentType string) string {
 	switch ct {
 	case "application/grpc", "application/grpc+proto":
 		return "grpc"
-	case "application/grpc-web", "application/grpc-web+proto", "application/grpc-web+json":
+	case "application/grpc-web", "application/grpc-web+proto", "application/grpc-web+json",
+		"application/grpc-web-text", "application/grpc-web-text+proto":
 		return "grpc-web"
 	case "application/json":
 		return "connect-json"
@@ -68,7 +69,8 @@ func detectClient(ua string) string {
 		return "ts-sdk"
 	case strings.HasPrefix(ua, "grpc-go/"):
 		return "grpc-go"
-	case strings.HasPrefix(ua, "grpc-web/"):
+	case strings.HasPrefix(ua, "grpc-web/"),
+		strings.HasPrefix(ua, "grpc-web-javascript/"):
 		return "grpc-web"
 	case strings.HasPrefix(ua, "curl/"):
 		return "curl"
@@ -92,7 +94,12 @@ func ProtocolTelemetryMiddleware(next http.Handler) http.Handler {
 		protocol := detectProtocol(r.Header.Get("Content-Type"))
 		requestsByProtocol.WithLabelValues(protocol).Inc()
 
-		client := detectClient(r.Header.Get("User-Agent"))
+		// Prefer X-User-Agent (gRPC-Web browser clients) over User-Agent.
+		ua := r.Header.Get("X-User-Agent")
+		if ua == "" {
+			ua = r.Header.Get("User-Agent")
+		}
+		client := detectClient(ua)
 		requestsByClient.WithLabelValues(client).Inc()
 
 		next.ServeHTTP(w, r)
