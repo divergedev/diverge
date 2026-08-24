@@ -49,7 +49,7 @@ func buildEnvTestSetup() (*runtime.Scheme, client.Client, kubernetes.Interface, 
 func TestUpdateEnvironment_ResourceVersion(t *testing.T) {
 	_, c, k8s, logger := buildEnvTestSetup()
 	audit := NewAuditLogger(logger)
-	svc := NewEnvironmentService(c, k8s, nil, nil, NewStreamLimiter(1000, 50), logger, audit)
+	svc := NewEnvironmentService(c, k8s, nil, nil, NewStreamLimiter(250, 20), logger, audit)
 
 	ctx := context.Background()
 	ctx = auth.ContextWithUserInfo(ctx, &auth.UserInfo{Username: "test"})
@@ -101,7 +101,7 @@ func TestUpdateEnvironment_ResourceVersion(t *testing.T) {
 func TestUpdateEnvironment_FieldMask(t *testing.T) {
 	_, c, k8s, logger := buildEnvTestSetup()
 	audit := NewAuditLogger(logger)
-	svc := NewEnvironmentService(c, k8s, nil, nil, NewStreamLimiter(1000, 50), logger, audit)
+	svc := NewEnvironmentService(c, k8s, nil, nil, NewStreamLimiter(250, 20), logger, audit)
 
 	ctx := context.Background()
 	ctx = auth.ContextWithUserInfo(ctx, &auth.UserInfo{Username: "test"})
@@ -177,7 +177,7 @@ func TestUpdateEnvironment_PBT(t *testing.T) {
 
 		_, c, k8s, logger := buildEnvTestSetup()
 		audit := NewAuditLogger(logger)
-		svc := NewEnvironmentService(c, k8s, nil, nil, NewStreamLimiter(1000, 50), logger, audit)
+		svc := NewEnvironmentService(c, k8s, nil, nil, NewStreamLimiter(250, 20), logger, audit)
 
 		ctx := context.Background()
 		ctx = auth.ContextWithUserInfo(ctx, &auth.UserInfo{Username: "test"})

@@ -119,6 +119,27 @@ var (
 		Name:      "broadcaster_drops_total",
 		Help:      "Total events dropped due to slow consumers",
 	})
+
+	streamLimiterActive = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "diverge",
+		Subsystem: "server",
+		Name:      "stream_limiter_active",
+		Help:      "Current active streams admitted by the stream limiter",
+	})
+
+	streamLimiterMax = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "diverge",
+		Subsystem: "server",
+		Name:      "stream_limiter_max",
+		Help:      "Configured maximum global stream capacity",
+	})
+
+	streamLimiterRejectionsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "diverge",
+		Subsystem: "server",
+		Name:      "stream_limiter_rejections_total",
+		Help:      "Total stream limit rejections by reason",
+	}, []string{"reason"})
 )
 
 func init() {
@@ -134,6 +155,9 @@ func init() {
 		broadcasterSubscribers,
 		broadcasterEventsTotal,
 		broadcasterDropsTotal,
+		streamLimiterActive,
+		streamLimiterMax,
+		streamLimiterRejectionsTotal,
 	)
 }
 
@@ -156,6 +180,20 @@ func GetBroadcasterMetrics() streaming.BroadcasterMetrics {
 		IncEvents:      func() { broadcasterEventsTotal.Inc() },
 		IncDrops:       func() { broadcasterDropsTotal.Inc() },
 	}
+}
+
+// GetStreamLimiterMetrics returns callbacks wired to Prometheus collectors.
+func GetStreamLimiterMetrics() StreamLimiterMetrics {
+	return StreamLimiterMetrics{
+		IncActive: func() { streamLimiterActive.Inc() },
+		DecActive: func() { streamLimiterActive.Dec() },
+		Rejected:  func(reason string) { streamLimiterRejectionsTotal.WithLabelValues(reason).Inc() },
+	}
+}
+
+// SetStreamLimiterMax sets the static capacity gauge (called once at startup).
+func SetStreamLimiterMax(max int) {
+	streamLimiterMax.Set(float64(max))
 }
 
 func NewMetricsInterceptor() connect.Interceptor {

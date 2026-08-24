@@ -11,6 +11,14 @@ import (
 	"github.com/divergedev/diverge/internal/server/auth"
 )
 
+// StreamLimiterMetrics provides decoupled metric callbacks.
+// Matches the BroadcasterMetrics pattern to avoid coupling to Prometheus.
+type StreamLimiterMetrics struct {
+	IncActive func()
+	DecActive func()
+	Rejected  func(reason string) // "per_user" or "global"
+}
+
 // StreamLimiter enforces per-user and global stream concurrency limits.
 // It replaces the previous global channel semaphore to prevent a single
 // user from exhausting all stream slots (noisy-neighbor DoS).
@@ -20,11 +28,12 @@ type StreamLimiter struct {
 	maxPerUser int
 	global     int
 	perUser    map[string]int
+	metrics    StreamLimiterMetrics
 }
 
 // NewStreamLimiter creates a limiter with the given global and per-user caps.
 // Panics if maxGlobal <= 0 or maxPerUser <= 0 or maxPerUser > maxGlobal.
-func NewStreamLimiter(maxGlobal, maxPerUser int) *StreamLimiter {
+func NewStreamLimiter(maxGlobal, maxPerUser int, metrics ...StreamLimiterMetrics) *StreamLimiter {
 	if maxGlobal <= 0 {
 		panic("maxGlobal must be > 0")
 	}
@@ -34,10 +43,15 @@ func NewStreamLimiter(maxGlobal, maxPerUser int) *StreamLimiter {
 	if maxPerUser > maxGlobal {
 		panic("maxPerUser must be <= maxGlobal")
 	}
+	var m StreamLimiterMetrics
+	if len(metrics) > 0 {
+		m = metrics[0]
+	}
 	return &StreamLimiter{
 		maxGlobal:  maxGlobal,
 		maxPerUser: maxPerUser,
 		perUser:    make(map[string]int),
+		metrics:    m,
 	}
 }
 
@@ -62,17 +76,26 @@ func (l *StreamLimiter) Acquire(ctx context.Context) (func(), error) {
 	defer l.mu.Unlock()
 
 	if l.perUser[username] >= l.maxPerUser {
+		if l.metrics.Rejected != nil {
+			l.metrics.Rejected("per_user")
+		}
 		return noop, connect.NewError(connect.CodeResourceExhausted,
 			fmt.Errorf("stream limit of %d reached for user %q; close idle watch/log streams", l.maxPerUser, username))
 	}
 
 	if l.global >= l.maxGlobal {
+		if l.metrics.Rejected != nil {
+			l.metrics.Rejected("global")
+		}
 		return noop, connect.NewError(connect.CodeResourceExhausted,
 			errors.New("server stream capacity reached; try again later"))
 	}
 
 	l.global++
 	l.perUser[username]++
+	if l.metrics.IncActive != nil {
+		l.metrics.IncActive()
+	}
 
 	var once sync.Once
 	return func() {
@@ -83,6 +106,9 @@ func (l *StreamLimiter) Acquire(ctx context.Context) (func(), error) {
 			l.perUser[username]--
 			if l.perUser[username] == 0 {
 				delete(l.perUser, username)
+			}
+			if l.metrics.DecActive != nil {
+				l.metrics.DecActive()
 			}
 		})
 	}, nil

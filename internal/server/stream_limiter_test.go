@@ -280,3 +280,56 @@ func BenchmarkStreamLimiter_AcquireRelease(b *testing.B) {
 		}
 	})
 }
+
+func TestStreamLimiter_MetricsCallbacks(t *testing.T) {
+	var mu sync.Mutex
+	var incCount, decCount int
+	rejections := make(map[string]int)
+
+	metrics := StreamLimiterMetrics{
+		IncActive: func() { mu.Lock(); incCount++; mu.Unlock() },
+		DecActive: func() { mu.Lock(); decCount++; mu.Unlock() },
+		Rejected:  func(reason string) { mu.Lock(); rejections[reason]++; mu.Unlock() },
+	}
+
+	l := NewStreamLimiter(2, 1, metrics)
+
+	// Acquire 2 streams (different users, global cap 2, per-user cap 1)
+	r1, err := l.Acquire(ctxWithUser("alice"))
+	require.NoError(t, err)
+	r2, err := l.Acquire(ctxWithUser("bob"))
+	require.NoError(t, err)
+
+	mu.Lock()
+	assert.Equal(t, 2, incCount, "IncActive should fire twice")
+	assert.Equal(t, 0, decCount, "DecActive should not fire yet")
+	mu.Unlock()
+
+	// Per-user rejection
+	_, err = l.Acquire(ctxWithUser("alice"))
+	assert.Error(t, err)
+	assert.Equal(t, connect.CodeResourceExhausted, connect.CodeOf(err))
+	mu.Lock()
+	assert.Equal(t, 1, rejections["per_user"])
+	mu.Unlock()
+
+	// Global rejection
+	_, err = l.Acquire(ctxWithUser("charlie"))
+	assert.Error(t, err)
+	mu.Lock()
+	assert.Equal(t, 1, rejections["global"])
+	mu.Unlock()
+
+	// Release
+	r1()
+	r2()
+	mu.Lock()
+	assert.Equal(t, 2, decCount, "DecActive should fire on release")
+	mu.Unlock()
+
+	// Double release should not double-decrement
+	r1()
+	mu.Lock()
+	assert.Equal(t, 2, decCount, "DecActive should not fire on double release")
+	mu.Unlock()
+}

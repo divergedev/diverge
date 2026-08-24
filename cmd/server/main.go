@@ -60,8 +60,8 @@ func main() {
 	flag.StringVar(&tlsCertFile, "tls-cert-file", "", "TLS certificate file (optional)")
 	flag.StringVar(&tlsKeyFile, "tls-key-file", "", "TLS private key file (optional)")
 	flag.DurationVar(&tokenCacheTTL, "token-cache-ttl", 5*time.Second, "TokenReview cache TTL")
-	flag.IntVar(&maxStreams, "max-streams", 1000, "Maximum concurrent streams (global)")
-	flag.IntVar(&maxStreamsPerUser, "max-streams-per-user", 50, "Maximum concurrent streams per user")
+	flag.IntVar(&maxStreams, "max-streams", 250, "Maximum concurrent streams (global)")
+	flag.IntVar(&maxStreamsPerUser, "max-streams-per-user", 20, "Maximum concurrent streams per user")
 	flag.StringVar(&audiences, "audiences", "diverge-server", "Comma-separated list of valid token audiences")
 	// WARNING: Default "*" allows all origins. In production, set this to your
 	// specific domain(s) to prevent unauthorized cross-origin access.
@@ -117,7 +117,8 @@ func main() {
 	logStreamer := streaming.NewLogStreamer(k8sClient)
 
 	// Create stream limiter (per-user + global quotas)
-	streamLimiter := server.NewStreamLimiter(maxStreams, maxStreamsPerUser)
+	streamLimiter := server.NewStreamLimiter(maxStreams, maxStreamsPerUser, server.GetStreamLimiterMetrics())
+	server.SetStreamLimiterMax(maxStreams)
 
 	// Auth setup
 	tokenCache := auth.NewTokenCache(1024, tokenCacheTTL)
