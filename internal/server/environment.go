@@ -356,7 +356,10 @@ func (s *EnvironmentService) WatchEnvironments(ctx context.Context, req *connect
 	}
 
 	// Subscribe FIRST to prevent race condition (Subscribe → List → deduplicate)
-	sub := s.informerMgr.EnvBroadcaster.Subscribe(ctx)
+	sub, err := s.informerMgr.EnvBroadcaster.Subscribe(ctx)
+	if err != nil {
+		return connect.NewError(connect.CodeUnavailable, errors.New("server is shutting down"))
+	}
 	defer s.informerMgr.EnvBroadcaster.Unsubscribe(sub.ID())
 
 	// List current state
@@ -399,6 +402,9 @@ func (s *EnvironmentService) WatchEnvironments(ctx context.Context, req *connect
 			return nil
 		case event, ok := <-sub.Events():
 			if !ok {
+				if s.informerMgr.EnvBroadcaster.IsClosed() {
+					return connect.NewError(connect.CodeUnavailable, errors.New("server shutting down"))
+				}
 				return connect.NewError(connect.CodeResourceExhausted, errors.New("event buffer overflow, please reconnect"))
 			}
 

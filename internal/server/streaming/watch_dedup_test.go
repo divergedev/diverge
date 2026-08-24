@@ -13,12 +13,13 @@ import (
 // TestSubscribeBeforeList_DeduplicatesConcurrentEvents proves the Subscribe→List→Deduplicate
 // pattern eliminates the race window where events could be missed between List and Subscribe.
 func TestSubscribeBeforeList_DeduplicatesConcurrentEvents(t *testing.T) {
-	b := NewBroadcaster[string]()
+	b := NewBroadcaster[string](BroadcasterMetrics{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// Step 1: Subscribe FIRST (before List)
-	sub := b.Subscribe(ctx)
+	sub, err := b.Subscribe(ctx)
+	require.NoError(t, err)
 	defer b.Unsubscribe(sub.ID())
 
 	// Step 2: Simulate an event arriving DURING the List call.
@@ -52,12 +53,13 @@ done:
 // TestSubscribeBeforeList_DeliversNewEvents proves that events with NEW
 // resource versions (not in the List snapshot) are delivered to the client.
 func TestSubscribeBeforeList_DeliversNewEvents(t *testing.T) {
-	b := NewBroadcaster[string]()
+	b := NewBroadcaster[string](BroadcasterMetrics{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// Subscribe first
-	sub := b.Subscribe(ctx)
+	sub, err := b.Subscribe(ctx)
+	require.NoError(t, err)
 	defer b.Unsubscribe(sub.ID())
 
 	// Simulate List result
@@ -84,12 +86,13 @@ func TestSubscribeBeforeList_DeliversNewEvents(t *testing.T) {
 // TestSubscribeBeforeList_ConcurrentPublishDuringList proves that rapid concurrent
 // publishes during the List phase are correctly captured by the subscriber channel.
 func TestSubscribeBeforeList_ConcurrentPublishDuringList(t *testing.T) {
-	b := NewBroadcaster[string]()
+	b := NewBroadcaster[string](BroadcasterMetrics{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// Subscribe first
-	sub := b.Subscribe(ctx)
+	sub, err := b.Subscribe(ctx)
+	require.NoError(t, err)
 	defer b.Unsubscribe(sub.ID())
 
 	// Simulate concurrent events arriving during List
@@ -125,10 +128,11 @@ done:
 // TestSubscribeBeforeList_UnsubscribeOnContextCancel verifies that
 // context cancellation cleans up the subscriber from the broadcaster.
 func TestSubscribeBeforeList_UnsubscribeOnContextCancel(t *testing.T) {
-	b := NewBroadcaster[string]()
+	b := NewBroadcaster[string](BroadcasterMetrics{})
 	ctx, cancel := context.WithCancel(context.Background())
 
-	sub := b.Subscribe(ctx)
+	sub, err := b.Subscribe(ctx)
+	require.NoError(t, err)
 	require.Equal(t, 1, b.SubscriberCount())
 
 	// Cancel context — should auto-unsubscribe
@@ -147,7 +151,7 @@ func TestSubscribeBeforeList_UnsubscribeOnContextCancel(t *testing.T) {
 // TestSubscribeBeforeList_EventBeforeSubscribe proves that events published
 // BEFORE Subscribe are NOT received — confirming Subscribe-first ordering matters.
 func TestSubscribeBeforeList_EventBeforeSubscribe(t *testing.T) {
-	b := NewBroadcaster[string]()
+	b := NewBroadcaster[string](BroadcasterMetrics{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -155,7 +159,8 @@ func TestSubscribeBeforeList_EventBeforeSubscribe(t *testing.T) {
 	b.Publish(Event[string]{Type: "ADDED", Object: "env-missed", Version: "rv-1"})
 
 	// Subscribe after the event
-	sub := b.Subscribe(ctx)
+	sub, err := b.Subscribe(ctx)
+	require.NoError(t, err)
 	defer b.Unsubscribe(sub.ID())
 
 	// Should NOT receive the event — proves Subscribe-first is necessary

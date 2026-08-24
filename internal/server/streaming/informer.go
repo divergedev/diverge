@@ -15,12 +15,18 @@ type InformerManager struct {
 }
 
 // NewInformerManager creates informer event handlers and connects them to broadcasters.
-func NewInformerManager(logger *slog.Logger, metrics ...BroadcasterMetrics) *InformerManager {
+func NewInformerManager(logger *slog.Logger, metrics BroadcasterMetrics) *InformerManager {
 	return &InformerManager{
-		EnvBroadcaster: NewBroadcaster[*divergev1alpha1.Environment](metrics...),
-		PgBroadcaster:  NewBroadcaster[*divergev1alpha1.PreviewGroup](metrics...),
+		EnvBroadcaster: NewBroadcaster[*divergev1alpha1.Environment](metrics),
+		PgBroadcaster:  NewBroadcaster[*divergev1alpha1.PreviewGroup](metrics),
 		logger:         logger,
 	}
+}
+
+// Close cleanly shuts down all broadcasters, unblocking active watch streams.
+func (m *InformerManager) Close() {
+	m.EnvBroadcaster.Close()
+	m.PgBroadcaster.Close()
 }
 
 // HandleEnvironmentEvent handles an environment event from an informer.
