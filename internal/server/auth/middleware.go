@@ -24,13 +24,13 @@ type AuditLogger interface {
 
 // MiddlewareConfig configures the auth middleware.
 type MiddlewareConfig struct {
-	Provider    AuthProvider
-	Cache       *TokenCache
-	Logger      *slog.Logger
-	AuditLogger AuditLogger
-	Metrics     *AuthMetrics
-	// ExemptPaths are paths that bypass authentication (e.g., /healthz)
-	ExemptPaths []string
+	Provider       AuthProvider
+	Cache          *TokenCache
+	Logger         *slog.Logger
+	AuditLogger    AuditLogger
+	Metrics        *AuthMetrics
+	ExemptPaths    []string
+	ExemptPrefixes []string
 }
 
 // NewMiddleware creates net/http middleware that authenticates requests via
@@ -38,9 +38,16 @@ type MiddlewareConfig struct {
 func NewMiddleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Check exempt paths
+			// Check exempt paths (exact match)
 			for _, path := range cfg.ExemptPaths {
 				if r.URL.Path == path {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+			// Check exempt prefixes (prefix match)
+			for _, prefix := range cfg.ExemptPrefixes {
+				if strings.HasPrefix(r.URL.Path, prefix) {
 					next.ServeHTTP(w, r)
 					return
 				}

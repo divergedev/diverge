@@ -9,19 +9,21 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
+	"github.com/divergedev/diverge/internal/server/dashboard"
 	"github.com/divergedev/diverge/internal/server/streaming"
 )
 
 // ServeMuxConfig holds all dependencies for the ConnectRPC server mux.
 type ServeMuxConfig struct {
-	Client        client.Client
-	K8sClient     kubernetes.Interface
-	InformerMgr   *streaming.InformerManager
-	LogStreamer   *streaming.LogStreamer
-	StreamLimiter *StreamLimiter
-	Logger        *slog.Logger
-	AuditLogger   *AuditLogger
-	Version       string
+	Client           client.Client
+	K8sClient        kubernetes.Interface
+	InformerMgr      *streaming.InformerManager
+	LogStreamer      *streaming.LogStreamer
+	StreamLimiter    *StreamLimiter
+	Logger           *slog.Logger
+	AuditLogger      *AuditLogger
+	Version          string
+	DashboardEnabled bool
 }
 
 // NewServeMux creates the ConnectRPC service mux with all handlers registered.
@@ -65,6 +67,15 @@ func NewServeMux(cfg ServeMuxConfig) (*http.ServeMux, *TunnelManager) {
 	mux.Handle(tunnelPath, tunnelHandler)
 	// NOTE: Tunnel proxy handler is on a SEPARATE port (8081), not this mux.
 	// See NewTunnelProxyServer() for the dedicated proxy listener.
+
+	// Serve the embedded web dashboard at root when enabled.
+	// Go 1.22+ ServeMux uses most-specific-match routing, so the ConnectRPC
+	// service paths (e.g., /diverge.v1alpha1.EnvironmentService/) registered
+	// above always take priority over this catch-all "/" handler.
+	if cfg.DashboardEnabled {
+		cfg.Logger.Info("dashboard enabled, serving web UI at /")
+		mux.Handle("/", dashboard.SPAHandler(dashboard.Assets))
+	}
 
 	return mux, tunnelMgr
 }

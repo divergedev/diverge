@@ -24,6 +24,10 @@ proto: ## Generate protobuf code
 	buf breaking api/proto --against '.git#branch=origin/main'
 	buf generate
 
+.PHONY: proto-web
+proto-web: ## Generate TypeScript protobuf clients for the web dashboard
+	buf generate --template buf.gen.web.yaml api/proto
+
 .PHONY: generate
 generate: proto ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
 	$(CONTROLLER_GEN) object paths="./api/..."
@@ -93,7 +97,7 @@ build-slim: ## Build slim manager binary without heavy providers
 	go build -tags=no_knative,no_schema -o /tmp/diverge-controller-slim ./cmd/controller/
 
 .PHONY: build-all
-build-all: build build-cli build-proxy ## Build all binaries.
+build-all: build build-cli build-proxy build-server ## Build all binaries.
 
 .PHONY: build-cli
 build-cli: fmt vet ## Build diverge CLI binary.
@@ -102,6 +106,20 @@ build-cli: fmt vet ## Build diverge CLI binary.
 .PHONY: build-proxy
 build-proxy: fmt vet ## Build diverge proxy binary.
 	go build -ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT)" -o bin/diverge-proxy cmd/proxy/main.go
+
+.PHONY: web-install
+web-install: ## Install web dashboard dependencies.
+	cd web && npm ci
+
+.PHONY: web-build
+web-build: proto-web web-install ## Build web dashboard assets.
+	cd web && npm run build
+	rm -rf internal/server/dashboard/dist/assets
+	cp -r web/dist/* internal/server/dashboard/dist/
+
+.PHONY: build-server
+build-server: web-build fmt vet ## Build diverge server binary with embedded dashboard.
+	go build -ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT)" -o bin/diverge-server ./cmd/server
 
 .PHONY: install-cli
 install-cli: ## Install diverge CLI to GOPATH.

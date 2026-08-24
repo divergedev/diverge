@@ -41,6 +41,9 @@
 
             # Container
             docker-client
+
+            # Web dashboard
+            nodejs_22
           ];
 
           shellHook = ''
