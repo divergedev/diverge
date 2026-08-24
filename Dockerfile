@@ -1,5 +1,5 @@
 # Proto generation stage for web TypeScript types
-FROM bufbuild/buf:latest AS proto-gen
+FROM bufbuild/buf:1.50.0 AS proto-gen
 WORKDIR /workspace
 COPY buf.yaml buf.gen.web.yaml ./
 COPY api/ api/
