@@ -68,6 +68,74 @@ func TestMiddleware_ExemptPaths(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Result().StatusCode)
 }
 
+func TestMiddleware_ExemptPrefixes(t *testing.T) {
+	cfg := MiddlewareConfig{
+		Provider:       &mockProvider{},
+		Cache:          NewTokenCache(10, time.Minute),
+		Logger:         testLogger(),
+		ExemptPrefixes: []string{"/assets/"},
+	}
+	mw := NewMiddleware(cfg)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	tests := []struct {
+		name       string
+		path       string
+		wantStatus int
+	}{
+		{"asset JS bypasses auth", "/assets/main.abc123.js", http.StatusOK},
+		{"asset CSS bypasses auth", "/assets/index.def456.css", http.StatusOK},
+		{"nested asset bypasses auth", "/assets/chunks/vendor.js", http.StatusOK},
+		{"non-asset requires auth", "/api/v1/environments", http.StatusUnauthorized},
+		{"root requires auth", "/", http.StatusUnauthorized},
+		{"similar prefix requires auth", "/asset-not-assets/file.js", http.StatusUnauthorized},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", tc.path, nil)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			assert.Equal(t, tc.wantStatus, w.Result().StatusCode)
+		})
+	}
+}
+
+func TestMiddleware_ExemptPrefixes_PBT(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		prefix := "/" + rapid.StringMatching(`^[a-z]{2,10}/$`).Draw(t, "prefix")
+		filename := rapid.StringMatching(`^[a-z0-9._-]{1,30}$`).Draw(t, "filename")
+
+		cfg := MiddlewareConfig{
+			Provider:       &mockProvider{},
+			Cache:          NewTokenCache(100, time.Minute),
+			Logger:         testLogger(),
+			ExemptPrefixes: []string{prefix},
+		}
+		mw := NewMiddleware(cfg)
+		handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+
+		// Path WITH the prefix should bypass auth
+		req := httptest.NewRequest("GET", prefix+filename, nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Code,
+			"path %q should bypass auth with prefix %q", prefix+filename, prefix)
+
+		// Path WITHOUT the prefix should require auth
+		otherPath := "/other/" + filename
+		req2 := httptest.NewRequest("GET", otherPath, nil)
+		w2 := httptest.NewRecorder()
+		handler.ServeHTTP(w2, req2)
+		assert.Equal(t, http.StatusUnauthorized, w2.Code,
+			"path %q should require auth (prefix is %q)", otherPath, prefix)
+	})
+}
+
 func TestMiddleware_MissingToken(t *testing.T) {
 	cfg := MiddlewareConfig{
 		Provider: &mockProvider{},

@@ -53,6 +53,7 @@ func main() {
 		corsAllowedOrigins string
 		corsMaxAge         int
 		shutdownTimeout    time.Duration
+		dashboardEnabled   bool
 	)
 
 	flag.StringVar(&addr, "addr", ":8443", "Main server listen address")
@@ -68,6 +69,7 @@ func main() {
 	flag.StringVar(&corsAllowedOrigins, "cors-allowed-origins", "*", "Comma-separated list of allowed CORS origins")
 	flag.IntVar(&corsMaxAge, "cors-max-age", 86400, "CORS max age in seconds")
 	flag.DurationVar(&shutdownTimeout, "shutdown-timeout", 25*time.Second, "Graceful shutdown timeout (should be < K8s terminationGracePeriodSeconds)")
+	flag.BoolVar(&dashboardEnabled, "dashboard", true, "Enable the embedded web dashboard at /")
 	flag.Parse()
 
 	// Structured logger
@@ -138,18 +140,25 @@ func main() {
 			Attempts:    authMetrics.Attempts,
 		},
 		ExemptPaths: []string{"/healthz", "/readyz"},
+		ExemptPrefixes: func() []string {
+			if dashboardEnabled {
+				return []string{"/assets/"}
+			}
+			return nil
+		}(),
 	})
 
 	// Build the ConnectRPC mux
 	mux, tunnelMgr := server.NewServeMux(server.ServeMuxConfig{
-		Client:        crClient,
-		K8sClient:     k8sClient,
-		InformerMgr:   informerMgr,
-		LogStreamer:   logStreamer,
-		StreamLimiter: streamLimiter,
-		Logger:        logger,
-		AuditLogger:   auditLogger,
-		Version:       version,
+		Client:           crClient,
+		K8sClient:        k8sClient,
+		InformerMgr:      informerMgr,
+		LogStreamer:      logStreamer,
+		StreamLimiter:    streamLimiter,
+		Logger:           logger,
+		AuditLogger:      auditLogger,
+		Version:          version,
+		DashboardEnabled: dashboardEnabled,
 	})
 
 	// Health check (exempt from auth)

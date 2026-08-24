@@ -135,6 +135,9 @@ server:
     # specific domain(s) to prevent unauthorized cross-origin access.
     allowedOrigins: "*"
     maxAge: 86400
+  dashboard:
+    # -- Enable the embedded web dashboard at /
+    enabled: true
   rbac:
     # -- If true, grants cluster-wide pods/log access via ClusterRole.
     # If false, restricts pods/log access to targetNamespaces only.

@@ -34,3 +34,9 @@ coverage/
 .env.diverge
 # PBT test artifacts
 .hegel/
+
+# Web dashboard
+web/node_modules/
+web/dist/
+web/src/api/gen/
+internal/server/dashboard/dist/assets/
