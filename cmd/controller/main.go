@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -39,6 +40,11 @@ import (
 var (
 	scheme   = runtime.NewScheme()
 	setupLog = ctrl.Log.WithName("setup")
+
+	// Set via ldflags: -X main.version=... -X main.commit=... -X main.date=...
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
 )
 
 func init() {
@@ -103,6 +109,14 @@ func main() {
 		setupLog.Error(fmt.Errorf("--keda-cooldown must be >= 0, got %d", kedaCooldown), "invalid flag")
 		os.Exit(1)
 	}
+
+	// Version fallback for go install users
+	if version == "dev" {
+		if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" {
+			version = bi.Main.Version
+		}
+	}
+	setupLog.Info("starting diverge-controller", "version", version, "commit", commit, "date", date)
 
 	// C2: Read secrets from environment variables (take precedence over flags)
 	notifierToken := os.Getenv("DIVERGE_NOTIFIER_TOKEN")

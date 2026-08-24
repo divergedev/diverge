@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -19,7 +20,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
-var scheme = runtime.NewScheme()
+var (
+	scheme = runtime.NewScheme()
+
+	// Set via ldflags: -X main.version=... -X main.commit=... -X main.date=...
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
@@ -29,6 +37,14 @@ func init() {
 func main() {
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 	logger := ctrl.Log.WithName("proxy")
+
+	// Version fallback for go install users
+	if version == "dev" {
+		if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" {
+			version = bi.Main.Version
+		}
+	}
+	logger.Info("starting diverge-proxy", "version", version, "commit", commit, "date", date)
 
 	var (
 		port          int
