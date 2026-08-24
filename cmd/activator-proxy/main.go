@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -16,9 +17,24 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
+// Set via ldflags: -X main.version=... -X main.commit=... -X main.date=...
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 	logger := ctrl.Log.WithName("activator-proxy")
+
+	// Version fallback for go install users
+	if version == "dev" {
+		if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" {
+			version = bi.Main.Version
+		}
+	}
+	logger.Info("starting diverge-activator-proxy", "version", version, "commit", commit, "date", date)
 
 	var (
 		port            int

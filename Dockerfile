@@ -17,11 +17,13 @@ COPY config/ config/
 
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -a -o /out/diverge-controller cmd/controller/main.go
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -a -o /out/diverge-proxy cmd/proxy/main.go
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -a -o /out/diverge-server ./cmd/server
 
 # Runtime stage
 # Using gcr.io/distroless/static:nonroot
 FROM gcr.io/distroless/static:nonroot
 COPY --from=builder /out/diverge-controller /diverge-controller
 COPY --from=builder /out/diverge-proxy /diverge-proxy
+COPY --from=builder /out/diverge-server /diverge-server
 USER 65532:65532
 ENTRYPOINT ["/diverge-controller"]
