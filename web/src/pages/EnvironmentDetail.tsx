@@ -24,7 +24,7 @@ export default function EnvironmentDetail() {
 
   if (error) {
     return (
-      <div className="text-center py-16 space-y-4">
+      <div className="text-center py-16 space-y-4" role="alert">
         <AlertCircle className="h-10 w-10 text-destructive mx-auto" />
         <h2 className="text-xl font-semibold">Failed to load environment</h2>
         <p className="text-muted-foreground">{error.message}</p>
@@ -70,14 +70,14 @@ export default function EnvironmentDetail() {
   return (
     <div className="space-y-6">
       {mutationError && (
-        <div className="bg-destructive/10 border border-destructive/20 text-destructive px-4 py-3 rounded-md flex items-center gap-2 text-sm">
+        <div className="bg-destructive/10 border border-destructive/20 text-destructive px-4 py-3 rounded-md flex items-center gap-2 text-sm" role="alert">
           <AlertCircle className="h-4 w-4 flex-shrink-0" />
           {mutationError}
         </div>
       )}
 
       <div className="flex items-center gap-4">
-        <Link to="/" aria-label="Back to environments"><Button variant="ghost" size="icon" aria-label="Back to environments"><ArrowLeft className="h-4 w-4" /></Button></Link>
+        <Button variant="ghost" size="icon" aria-label="Back to environments" asChild><Link to="/"><ArrowLeft className="h-4 w-4" /></Link></Button>
         <div className="flex-1">
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-bold">{env.name}</h1>
