@@ -24,7 +24,7 @@ export default function ClusterInfo() {
             <CardTitle className="text-sm font-medium">Version</CardTitle>
             <Server className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
-          <CardContent><div className="text-2xl font-bold">{cluster?.version ?? '—'}</div></CardContent>
+          <CardContent><div className="text-2xl font-bold">{cluster?.controllerVersion ?? '—'}</div></CardContent>
         </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -45,7 +45,7 @@ export default function ClusterInfo() {
             <CardTitle className="text-sm font-medium">Health</CardTitle>
             <Activity className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
-          <CardContent><div className="text-2xl font-bold text-green-400">{cluster?.healthy ? 'Healthy' : 'Unhealthy'}</div></CardContent>
+          <CardContent><div className="text-2xl font-bold text-green-400">{cluster?.controllerHealthy ? 'Healthy' : 'Unhealthy'}</div></CardContent>
         </Card>
       </div>
 
@@ -55,7 +55,7 @@ export default function ClusterInfo() {
             <div className="flex items-center gap-2"><User className="h-4 w-4" /><CardTitle className="text-base">Current User</CardTitle></div>
           </CardHeader>
           <CardContent className="space-y-2">
-            <div className="flex justify-between text-sm"><span className="text-muted-foreground">Username</span><span>{user?.username ?? '—'}</span></div>
+            <div className="flex justify-between text-sm"><span className="text-muted-foreground">Username</span><span>{user?.userId ?? '—'}</span></div>
             <div className="flex justify-between text-sm"><span className="text-muted-foreground">Groups</span><span>{user?.groups?.join(', ') ?? '—'}</span></div>
           </CardContent>
         </Card>

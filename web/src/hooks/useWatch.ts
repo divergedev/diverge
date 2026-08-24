@@ -6,6 +6,7 @@ import type { Environment } from '@/api/gen/diverge/v1alpha1/environment_pb'
 import type { PreviewGroup } from '@/api/gen/diverge/v1alpha1/previewgroup_pb'
 import type { ListEnvironmentsResponse } from '@/api/gen/diverge/v1alpha1/environment_pb'
 import type { ListPreviewGroupsResponse } from '@/api/gen/diverge/v1alpha1/previewgroup_pb'
+import { WatchEventType } from '@/api/gen/diverge/v1alpha1/types_pb'
 
 function backoff(attempt: number): number {
   const base = Math.min(1000 * Math.pow(2, attempt), 30000)
@@ -41,7 +42,7 @@ export function useWatchEnvironments(namespace?: string) {
                 const idx = list.findIndex(
                   (e: Environment) => e.name === env.name && e.namespace === env.namespace,
                 )
-                if (msg.type === 'DELETED') {
+                if (msg.type === WatchEventType.DELETED) {
                   if (idx >= 0) list.splice(idx, 1)
                 } else {
                   if (idx >= 0) list[idx] = env
@@ -94,7 +95,7 @@ export function useWatchPreviewGroups(namespace?: string) {
                 const idx = list.findIndex(
                   (p: PreviewGroup) => p.name === pg.name && p.namespace === pg.namespace,
                 )
-                if (msg.type === 'DELETED') {
+                if (msg.type === WatchEventType.DELETED) {
                   if (idx >= 0) list.splice(idx, 1)
                 } else {
                   if (idx >= 0) list[idx] = pg

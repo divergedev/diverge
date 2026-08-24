@@ -50,7 +50,7 @@ export function Layout() {
             {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             {theme === 'dark' ? 'Light mode' : 'Dark mode'}
           </Button>
-          {user && <div className="text-xs text-muted-foreground truncate px-2">{user.username}</div>}
+          {user && <div className="text-xs text-muted-foreground truncate px-2">{user.userId}</div>}
           <Button variant="ghost" size="sm" className="w-full justify-start gap-2 text-destructive" onClick={logout}>
             <LogOut className="h-4 w-4" />Logout
           </Button>

@@ -49,7 +49,7 @@ export default function PreviewGroupDetail() {
                 {pg.spec.services.map((svc, i) => (
                   <div key={i} className="flex items-center justify-between p-2 rounded border">
                     <span className="font-medium text-sm">{svc.name}</span>
-                    <StatusBadge phase={pg.status?.serviceStatuses?.[i]?.phase ?? 'Unknown'} />
+                    <StatusBadge phase={pg.status?.services?.[i]?.phase ?? 'Unknown'} />
                   </div>
                 ))}
               </div>

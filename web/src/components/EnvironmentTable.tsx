@@ -38,7 +38,7 @@ export function EnvironmentTable({ environments, isLoading }: { environments: En
             <TableCell className="text-sm">{env.spec?.source?.branch ?? '—'}</TableCell>
             <TableCell><TTLCountdown expiresAt={env.status?.expiresAt?.toDate?.()?.toISOString?.()} /></TableCell>
             <TableCell className="text-muted-foreground text-sm">
-              {env.metadata?.creationTimestamp ? formatDistanceToNow(env.metadata.creationTimestamp.toDate(), { addSuffix: true }) : '—'}
+              {env.createdAt ? formatDistanceToNow(env.createdAt.toDate(), { addSuffix: true }) : '—'}
             </TableCell>
             <TableCell>
               {env.status?.url ? (

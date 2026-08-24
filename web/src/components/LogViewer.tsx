@@ -17,11 +17,12 @@ export function LogViewer({ namespace, environmentName, className }: { namespace
     async function stream() {
       try {
         for await (const msg of environmentClient.streamLogs(
-          { namespace, name: environmentName, follow: true, tailLines: 200 },
+          { namespace, environmentName, follow: true, tailLines: BigInt(200) },
           { signal: ac.signal },
         )) {
           setLines((prev) => {
-            const next = [...prev, { pod: msg.podName, timestamp: msg.timestamp ?? '', message: msg.line }]
+            const ts = msg.timestamp ? msg.timestamp.toDate().toISOString() : ''
+            const next = [...prev, { pod: msg.podName, timestamp: ts, message: msg.content }]
             return next.length > 10000 ? next.slice(-10000) : next
           })
         }
