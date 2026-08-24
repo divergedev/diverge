@@ -25,24 +25,24 @@ import (
 )
 
 type EnvironmentService struct {
-	client          client.Client
-	k8sClient       kubernetes.Interface
-	informerMgr     *streaming.InformerManager
-	logStreamer     *streaming.LogStreamer
-	streamSemaphore chan struct{}
-	logger          *slog.Logger
-	auditLogger     *AuditLogger
+	client      client.Client
+	k8sClient   kubernetes.Interface
+	informerMgr *streaming.InformerManager
+	logStreamer *streaming.LogStreamer
+	limiter     *StreamLimiter
+	logger      *slog.Logger
+	auditLogger *AuditLogger
 }
 
-func NewEnvironmentService(c client.Client, k8s kubernetes.Interface, informerMgr *streaming.InformerManager, logStreamer *streaming.LogStreamer, sem chan struct{}, logger *slog.Logger, audit *AuditLogger) divergev1alpha1connect.EnvironmentServiceHandler {
+func NewEnvironmentService(c client.Client, k8s kubernetes.Interface, informerMgr *streaming.InformerManager, logStreamer *streaming.LogStreamer, limiter *StreamLimiter, logger *slog.Logger, audit *AuditLogger) divergev1alpha1connect.EnvironmentServiceHandler {
 	return &EnvironmentService{
-		client:          c,
-		k8sClient:       k8s,
-		informerMgr:     informerMgr,
-		logStreamer:     logStreamer,
-		streamSemaphore: sem,
-		logger:          logger,
-		auditLogger:     audit,
+		client:      c,
+		k8sClient:   k8s,
+		informerMgr: informerMgr,
+		logStreamer: logStreamer,
+		limiter:     limiter,
+		logger:      logger,
+		auditLogger: audit,
 	}
 }
 
@@ -329,12 +329,11 @@ func (s *EnvironmentService) WatchEnvironments(ctx context.Context, req *connect
 		return connect.NewError(connect.CodeUnimplemented, errors.New("informer manager is not configured"))
 	}
 
-	select {
-	case s.streamSemaphore <- struct{}{}:
-		defer func() { <-s.streamSemaphore }()
-	default:
-		return connect.NewError(connect.CodeResourceExhausted, errors.New("too many concurrent streams"))
+	release, err := s.limiter.Acquire(ctx)
+	if err != nil {
+		return err
 	}
+	defer release()
 
 	namespace := req.Msg.Namespace
 	if namespace != "" {
@@ -464,12 +463,11 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 		return connect.NewError(connect.CodeUnimplemented, errors.New("log streamer is not configured"))
 	}
 
-	select {
-	case s.streamSemaphore <- struct{}{}:
-		defer func() { <-s.streamSemaphore }()
-	default:
-		return connect.NewError(connect.CodeResourceExhausted, errors.New("too many concurrent streams"))
+	release, err := s.limiter.Acquire(ctx)
+	if err != nil {
+		return err
 	}
+	defer release()
 
 	msg := req.Msg
 	if msg.EnvironmentName == "" || msg.Namespace == "" {

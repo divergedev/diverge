@@ -48,6 +48,7 @@ func main() {
 		tlsKeyFile         string
 		tokenCacheTTL      time.Duration
 		maxStreams         int
+		maxStreamsPerUser  int
 		audiences          string
 		corsAllowedOrigins string
 		corsMaxAge         int
@@ -59,7 +60,8 @@ func main() {
 	flag.StringVar(&tlsCertFile, "tls-cert-file", "", "TLS certificate file (optional)")
 	flag.StringVar(&tlsKeyFile, "tls-key-file", "", "TLS private key file (optional)")
 	flag.DurationVar(&tokenCacheTTL, "token-cache-ttl", 5*time.Second, "TokenReview cache TTL")
-	flag.IntVar(&maxStreams, "max-streams", 1000, "Maximum concurrent streams")
+	flag.IntVar(&maxStreams, "max-streams", 1000, "Maximum concurrent streams (global)")
+	flag.IntVar(&maxStreamsPerUser, "max-streams-per-user", 50, "Maximum concurrent streams per user")
 	flag.StringVar(&audiences, "audiences", "diverge-server", "Comma-separated list of valid token audiences")
 	// WARNING: Default "*" allows all origins. In production, set this to your
 	// specific domain(s) to prevent unauthorized cross-origin access.
@@ -79,7 +81,15 @@ func main() {
 		"metrics_addr", metricsAddr,
 		"token_cache_ttl", tokenCacheTTL,
 		"max_streams", maxStreams,
+		"max_streams_per_user", maxStreamsPerUser,
 	)
+
+	// Validate stream limits
+	if maxStreamsPerUser <= 0 || maxStreamsPerUser > maxStreams {
+		logger.Error("invalid stream limits: max-streams-per-user must be in (0, max-streams]",
+			"max-streams", maxStreams, "max-streams-per-user", maxStreamsPerUser)
+		os.Exit(1)
+	}
 
 	// Build in-cluster K8s config
 	cfg := ctrl.GetConfigOrDie()
@@ -106,8 +116,8 @@ func main() {
 	informerMgr := streaming.NewInformerManager(logger, broadcasterMetrics)
 	logStreamer := streaming.NewLogStreamer(k8sClient)
 
-	// Create stream semaphore (injected, not global)
-	streamSemaphore := make(chan struct{}, maxStreams)
+	// Create stream limiter (per-user + global quotas)
+	streamLimiter := server.NewStreamLimiter(maxStreams, maxStreamsPerUser)
 
 	// Auth setup
 	tokenCache := auth.NewTokenCache(1024, tokenCacheTTL)
@@ -131,14 +141,14 @@ func main() {
 
 	// Build the ConnectRPC mux
 	mux, tunnelMgr := server.NewServeMux(server.ServeMuxConfig{
-		Client:          crClient,
-		K8sClient:       k8sClient,
-		InformerMgr:     informerMgr,
-		LogStreamer:     logStreamer,
-		StreamSemaphore: streamSemaphore,
-		Logger:          logger,
-		AuditLogger:     auditLogger,
-		Version:         version,
+		Client:        crClient,
+		K8sClient:     k8sClient,
+		InformerMgr:   informerMgr,
+		LogStreamer:   logStreamer,
+		StreamLimiter: streamLimiter,
+		Logger:        logger,
+		AuditLogger:   auditLogger,
+		Version:       version,
 	})
 
 	// Health check (exempt from auth)
