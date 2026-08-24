@@ -77,7 +77,7 @@ export default function EnvironmentDetail() {
       )}
 
       <div className="flex items-center gap-4">
-        <Button variant="ghost" size="icon" aria-label="Back to environments" asChild><Link to="/"><ArrowLeft className="h-4 w-4" /></Link></Button>
+        <Link to="/" aria-label="Back to environments" className="inline-flex items-center justify-center h-9 w-9 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground"><ArrowLeft className="h-4 w-4" /></Link>
         <div className="flex-1">
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-bold">{env.name}</h1>
