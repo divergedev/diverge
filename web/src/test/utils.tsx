@@ -4,6 +4,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ThemeProvider } from '@/components/ThemeProvider'
 import { AuthProvider } from '@/hooks/useAuth'
 
+import { MemoryRouter } from 'react-router-dom'
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -14,13 +16,15 @@ const queryClient = new QueryClient({
 
 export const AllTheProviders = ({ children }: { children: React.ReactNode }) => {
   return (
-    <QueryClientProvider client={queryClient}>
-      <ThemeProvider defaultTheme="dark">
-        <AuthProvider>
-          {children}
-        </AuthProvider>
-      </ThemeProvider>
-    </QueryClientProvider>
+    <MemoryRouter>
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider defaultTheme="dark">
+          <AuthProvider>
+            {children}
+          </AuthProvider>
+        </ThemeProvider>
+      </QueryClientProvider>
+    </MemoryRouter>
   )
 }
 

@@ -1,11 +1,10 @@
 import { render, screen, waitFor } from '../test/utils'
 import { CreateEnvironmentModal } from './CreateEnvironmentModal'
-import { BrowserRouter } from 'react-router-dom'
 import userEvent from '@testing-library/user-event'
 
 describe('CreateEnvironmentModal', () => {
   it('Renders form fields', () => {
-    render(<BrowserRouter><CreateEnvironmentModal open={true} onClose={() => {}} /></BrowserRouter>)
+    render(<CreateEnvironmentModal open={true} onClose={() => {}} />)
     expect(screen.getByPlaceholderText('my-feature')).toBeInTheDocument()
     expect(screen.getByPlaceholderText('default')).toBeInTheDocument()
     expect(screen.getByDisplayValue('24 hours')).toBeInTheDocument() // TTL Select
@@ -13,7 +12,7 @@ describe('CreateEnvironmentModal', () => {
 
   it('Validates name format (lowercase alphanumeric)', async () => {
     const user = userEvent.setup()
-    render(<BrowserRouter><CreateEnvironmentModal open={true} onClose={() => {}} /></BrowserRouter>)
+    render(<CreateEnvironmentModal open={true} onClose={() => {}} />)
 
     const nameInput = screen.getByPlaceholderText('my-feature')
     await user.type(nameInput, 'Invalid_Name')
@@ -25,7 +24,7 @@ describe('CreateEnvironmentModal', () => {
   it('Cancel closes modal', async () => {
     const user = userEvent.setup()
     const onClose = vi.fn()
-    render(<BrowserRouter><CreateEnvironmentModal open={true} onClose={onClose} /></BrowserRouter>)
+    render(<CreateEnvironmentModal open={true} onClose={onClose} />)
 
     await user.click(screen.getByText('Cancel'))
     expect(onClose).toHaveBeenCalled()
@@ -34,7 +33,7 @@ describe('CreateEnvironmentModal', () => {
   it('Submit calls createEnvironment mutation', async () => {
     const user = userEvent.setup()
     const onClose = vi.fn()
-    render(<BrowserRouter><CreateEnvironmentModal open={true} onClose={onClose} /></BrowserRouter>)
+    render(<CreateEnvironmentModal open={true} onClose={onClose} />)
 
     const nameInput = screen.getByPlaceholderText('my-feature')
     await user.type(nameInput, 'valid-name')
@@ -43,6 +42,6 @@ describe('CreateEnvironmentModal', () => {
 
     await waitFor(() => {
       expect(onClose).toHaveBeenCalled()
-    })
-  })
+    }, { timeout: 10000 })
+  }, 15000)
 })

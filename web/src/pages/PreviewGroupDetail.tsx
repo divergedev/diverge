@@ -3,6 +3,7 @@ import { useGetPreviewGroup, useDeletePreviewGroup } from '@/api/queries'
 import { StatusBadge } from '@/components/StatusBadge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { TopologyView } from '@/components/topology/TopologyView'
 import { ArrowLeft, Trash2 } from 'lucide-react'
 
 export default function PreviewGroupDetail() {
@@ -40,29 +41,22 @@ export default function PreviewGroupDetail() {
         <Button variant="destructive" size="sm" onClick={handleDelete}><Trash2 className="h-4 w-4 mr-2" />Delete</Button>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card>
-          <CardHeader><CardTitle className="text-base">Services</CardTitle></CardHeader>
-          <CardContent>
-            {pg.spec?.services?.length ? (
-              <div className="space-y-3">
-                {pg.spec.services.map((svc, i) => (
-                  <div key={i} className="flex items-center justify-between p-2 rounded border">
-                    <span className="font-medium text-sm">{svc.name}</span>
-                    <StatusBadge phase={pg.status?.services?.[i]?.phase ?? 'Unknown'} />
-                  </div>
-                ))}
-              </div>
-            ) : <p className="text-sm text-muted-foreground">No services defined</p>}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader><CardTitle className="text-base">Spec</CardTitle></CardHeader>
-          <CardContent>
-            <pre className="text-xs bg-muted p-3 rounded overflow-auto max-h-64">{JSON.stringify(pg.spec?.toJson?.() ?? pg.spec, null, 2)}</pre>
-          </CardContent>
-        </Card>
-      </div>
+      {/* Service Topology */}
+      <Card>
+        <CardHeader><CardTitle className="text-base">Service Topology</CardTitle></CardHeader>
+        <CardContent className="p-0">
+          <TopologyView previewGroup={pg} />
+        </CardContent>
+      </Card>
+
+      {/* Spec */}
+      <Card>
+        <CardHeader><CardTitle className="text-base">Spec</CardTitle></CardHeader>
+        <CardContent>
+          <pre className="text-xs bg-muted p-3 rounded overflow-auto max-h-64">{JSON.stringify(pg.spec?.toJson?.() ?? pg.spec, null, 2)}</pre>
+        </CardContent>
+      </Card>
     </div>
   )
 }
+
