@@ -19,22 +19,22 @@ import (
 )
 
 type PreviewGroupService struct {
-	client          client.Client
-	k8sClient       kubernetes.Interface
-	informerMgr     *streaming.InformerManager
-	streamSemaphore chan struct{}
-	logger          *slog.Logger
-	auditLogger     *AuditLogger
+	client      client.Client
+	k8sClient   kubernetes.Interface
+	informerMgr *streaming.InformerManager
+	limiter     *StreamLimiter
+	logger      *slog.Logger
+	auditLogger *AuditLogger
 }
 
-func NewPreviewGroupService(c client.Client, k8s kubernetes.Interface, informerMgr *streaming.InformerManager, sem chan struct{}, logger *slog.Logger, audit *AuditLogger) divergev1alpha1connect.PreviewGroupServiceHandler {
+func NewPreviewGroupService(c client.Client, k8s kubernetes.Interface, informerMgr *streaming.InformerManager, limiter *StreamLimiter, logger *slog.Logger, audit *AuditLogger) divergev1alpha1connect.PreviewGroupServiceHandler {
 	return &PreviewGroupService{
-		client:          c,
-		k8sClient:       k8s,
-		informerMgr:     informerMgr,
-		streamSemaphore: sem,
-		logger:          logger,
-		auditLogger:     audit,
+		client:      c,
+		k8sClient:   k8s,
+		informerMgr: informerMgr,
+		limiter:     limiter,
+		logger:      logger,
+		auditLogger: audit,
 	}
 }
 
@@ -315,12 +315,11 @@ func (s *PreviewGroupService) WatchPreviewGroups(ctx context.Context, req *conne
 		return connect.NewError(connect.CodeUnimplemented, errors.New("informer manager is not configured"))
 	}
 
-	select {
-	case s.streamSemaphore <- struct{}{}:
-		defer func() { <-s.streamSemaphore }()
-	default:
-		return connect.NewError(connect.CodeResourceExhausted, errors.New("too many concurrent streams"))
+	release, err := s.limiter.Acquire(ctx)
+	if err != nil {
+		return err
 	}
+	defer release()
 
 	namespace := req.Msg.Namespace
 	if namespace != "" {
