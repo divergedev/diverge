@@ -1,93 +1,335 @@
-# ConnectRPC API Server
+# Diverge ConnectRPC API Server Guide
 
-Diverge v0.6.0 introduces an optional ConnectRPC API server, which acts as a stateless Kubernetes CRD facade. It allows programmatic interaction with Diverge custom resources (`Environment`, `PreviewGroup`, etc.) via HTTP/1.1 and HTTP/2, enabling browser-native client support and simple curl commands.
+The Diverge API server ([`cmd/server/main.go`](file:///Users/ab/code/divergedev/diverge/cmd/server/main.go)) provides a high-performance, Kubernetes-native ConnectRPC API for managing Diverge custom resources (`Environment`, `PreviewGroup`). Built with [ConnectRPC](https://connectrpc.com/), it delivers seamless interoperability across HTTP/1.1 JSON, HTTP/2, gRPC, and gRPC-Web without requiring an external proxy or transcoder.
 
-## Architecture
+---
 
-The Diverge server does not use its own database. It serves as a stateless proxy over the Kubernetes API, meaning all state is stored directly in Kubernetes Custom Resources. The server translates ConnectRPC/gRPC requests into Kubernetes API operations using the `controller-runtime` client, respecting native Kubernetes paradigms.
+## 5-Minute Quickstart
 
-## Helm Installation
+Get a local Diverge API server up and running on a [Kind](https://kind.sigs.k8s.io/) cluster in under five minutes.
 
-The API server is disabled by default. To enable it during deployment, set `server.enabled: true` in your `values.yaml` or via the Helm CLI:
+### 1. Create a Kind Cluster
 
 ```bash
-helm upgrade --install diverge diverge/diverge \
+kind create cluster --name diverge-dev
+```
+
+### 2. Install CRDs and Deploy Diverge with Server Enabled
+
+Apply the CustomResourceDefinitions and install the Diverge Helm chart with the API server activated:
+
+```bash
+# Apply Diverge CRDs
+kubectl apply -f https://raw.githubusercontent.com/divergedev/diverge/main/config/crd/bases/diverge.dev_environments.yaml
+kubectl apply -f https://raw.githubusercontent.com/divergedev/diverge/main/config/crd/bases/diverge.dev_previewgroups.yaml
+
+# Install Diverge with the API server enabled
+helm upgrade --install diverge charts/diverge \
   --namespace diverge-system \
   --create-namespace \
   --set server.enabled=true
+
+# Wait for the server deployment to become ready
+kubectl rollout status deployment/diverge-server -n diverge-system --timeout=60s
 ```
 
-## Security Features
+### 3. Create a ServiceAccount and Generate an Auth Token
 
-### Authentication
+The API server authenticates requests via Kubernetes `TokenReview` against the `diverge-server` audience:
 
-The API server uses Kubernetes `TokenReview` for authentication.
-It supports standard OIDC JWTs (JSON Web Tokens) or Kubernetes ServiceAccount tokens.
+```bash
+# Create a test ServiceAccount with cluster permissions for local testing
+kubectl create serviceaccount diverge-admin -n default
+kubectl create clusterrolebinding diverge-admin-binding \
+  --clusterrole=cluster-admin \
+  --serviceaccount=default:diverge-admin
 
-To authenticate requests, pass your token in the `Authorization` header as a Bearer token:
-```http
-Authorization: Bearer <your-jwt-or-sa-token>
+# Mint a 1-hour ServiceAccount token scoped to the diverge-server audience
+export TOKEN=$(kubectl create token diverge-admin -n default --duration=1h --audience=diverge-server)
 ```
 
-Tokens are cached via an LRU cache to reduce load on the Kubernetes API server (configurable via `server.auth.tokenCacheTTL`).
+### 4. Port-Forward the API Server
 
-### Authorization
+Forward local port `8443` to the [`diverge-server`](file:///Users/ab/code/divergedev/diverge/charts/diverge/templates/server-service.yaml) service:
 
-Authorization is implemented using Kubernetes `SubjectAccessReview` (SAR) to enforce Namespace-scoped RBAC. When a user attempts to interact with an `Environment` or stream logs, the API server verifies that the authenticated user has the necessary RBAC permissions for the target namespace and resource in the cluster.
+```bash
+kubectl port-forward -n diverge-system svc/diverge-server 8443:8443 &
+export SERVER_URL="http://localhost:8443"
+```
 
-You can configure the server to allow cluster-wide pod access for logs or restrict it to specific target namespaces via the `server.rbac.clusterWidePodAccess` and `server.rbac.targetNamespaces` Helm values.
+### 5. Make Your First API Call (`ListEnvironments`)
 
-### CORS Configuration
+Call the unary [`ListEnvironments`](file:///Users/ab/code/divergedev/diverge/api/proto/diverge/v1alpha1/environment.proto#L204) endpoint via `curl`:
 
-For browser and SPA clients, the server supports Cross-Origin Resource Sharing (CORS). By default, it allows all origins (`*`). In production, this should be restricted to your domain:
+```bash
+curl -s -X POST "$SERVER_URL/diverge.v1alpha1.EnvironmentService/ListEnvironments" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"namespace": "default", "page_size": 10}' | jq .
+```
+
+### 6. Start a Real-Time Watch Stream (`WatchEnvironments`)
+
+Stream live environment lifecycle events using HTTP/1.1 chunked transfer:
+
+```bash
+curl -N -X POST "$SERVER_URL/diverge.v1alpha1.EnvironmentService/WatchEnvironments" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"namespace": "default"}'
+```
+
+---
+
+## Architecture Overview
+
+```
+                      +------------------------------------------+
+                      |         Clients (curl, JS, Go)           |
+                      +------------------------------------------+
+                                           |  HTTP/1.1, HTTP/2, gRPC
+                                           v
++-----------------------------------------------------------------------------------+
+| diverge-server                                                                    |
+|                                                                                   |
+|  +-------------------------+  TokenReview   +----------------------------------+  |
+|  | Auth Middleware (LRU)   | -------------> | Kubernetes TokenReview API       |  |
+|  +-------------------------+                +----------------------------------+  |
+|               | (Authenticated User)                                              |
+|  +-------------------------+  SAR Check     +----------------------------------+  |
+|  | SubjectAccessReview     | -------------> | Kubernetes SAR API               |  |
+|  +-------------------------+                +----------------------------------+  |
+|               | (Authorized)                                                      |
+|  +-------------------------+  Direct Read   +----------------------------------+  |
+|  | Uncached CRD Client     | -------------> | Kubernetes API Server (etcd)     |  |
+|  +-------------------------+  Direct Write  +----------------------------------+  |
+|               ^                                                                   |
+|  +-------------------------+  Informers     +----------------------------------+  |
+|  | Informer Broadcaster    | <------------- | Environment / CRD Watch Events   |  |
+|  +-------------------------+                +----------------------------------+  |
++-----------------------------------------------------------------------------------+
+```
+
+### Stateless CRD Facade Pattern
+
+The Diverge server ([`internal/server/server.go`](file:///Users/ab/code/divergedev/diverge/internal/server/server.go)) maintains no external database. It operates as a stateless facade over Kubernetes Custom Resources:
+- **Direct Uncached Client**: Uses an uncached `controller-runtime` [`client.New`](file:///Users/ab/code/divergedev/diverge/cmd/server/main.go#L108) client to guarantee read-your-writes consistency and eliminate cache lag.
+- **Single Source of Truth**: All state resides directly in `Environment` and `PreviewGroup` Custom Resources in etcd.
+- **Informer Broadcasters**: Multiplexes watch events ([`WatchEnvironments`](file:///Users/ab/code/divergedev/diverge/internal/server/environment.go#L327)) across active streams via lock-free broadcasters ([`streaming.InformerManager`](file:///Users/ab/code/divergedev/diverge/internal/server/streaming/informer.go)).
+
+### Multi-Protocol Support
+
+A single server port (`8443`) supports:
+- **HTTP/1.1 + JSON**: REST-like JSON POST endpoints for `curl` and simple HTTP clients.
+- **HTTP/2**: High-throughput multiplexed RPCs with bidirectional streaming.
+- **gRPC & gRPC-Web**: Standard Protocol Buffers for backend services and browser SPAs without sidecar proxies.
+
+### Security Model
+
+1. **Authentication**: Handled by [`auth.Middleware`](file:///Users/ab/code/divergedev/diverge/internal/server/auth/middleware.go) using Kubernetes `TokenReview` ([`auth.TokenReviewProvider`](file:///Users/ab/code/divergedev/diverge/internal/server/auth/provider.go)) with LRU caching.
+2. **Authorization**: Evaluates Namespace-scoped RBAC via Kubernetes `SubjectAccessReview` ([`AuthorizeAction`](file:///Users/ab/code/divergedev/diverge/internal/server/authz.go)).
+3. **CORS Support**: Configurable origin whitelist and preflight cache duration for browser apps.
+4. **Stream Quotas**: [`StreamLimiter`](file:///Users/ab/code/divergedev/diverge/internal/server/stream_limiter.go) enforces global and per-user active stream limits.
+5. **Error Sanitization & Auditing**: Internal cluster errors are sanitized via [`SanitizeK8sError`](file:///Users/ab/code/divergedev/diverge/internal/server/errors.go), and events are recorded by [`AuditLogger`](file:///Users/ab/code/divergedev/diverge/internal/server/audit.go).
+
+---
+
+## Configuration Reference
+
+### Command-Line Flags
+
+The server binary ([`cmd/server/main.go`](file:///Users/ab/code/divergedev/diverge/cmd/server/main.go)) supports the following startup flags:
+
+| Flag | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `--addr` | `string` | `:8443` | Main ConnectRPC listen address. |
+| `--metrics-addr` | `string` | `:9090` | Prometheus `/metrics` and `/healthz` listen address. |
+| `--token-cache-ttl` | `duration` | `5s` | LRU cache TTL for `TokenReview` authentications. |
+| `--max-streams` | `int` | `1000` | Maximum concurrent active streams globally. |
+| `--max-streams-per-user` | `int` | `50` | Maximum concurrent active streams per authenticated user. |
+| `--shutdown-timeout` | `duration` | `25s` | Graceful shutdown timeout for draining connections. |
+| `--audiences` | `string` | `diverge-server` | Comma-separated list of valid token audiences. |
+| `--cors-allowed-origins` | `string` | `*` | Comma-separated list of allowed CORS origins. |
+| `--cors-max-age` | `int` | `86400` | CORS preflight cache duration in seconds. |
+| `--tls-cert-file` | `string` | `""` | Optional path to TLS certificate file. |
+| `--tls-key-file` | `string` | `""` | Optional path to TLS private key file. |
+
+### Helm Values Mapping
+
+Configure the server in [`charts/diverge/values.yaml`](file:///Users/ab/code/divergedev/diverge/charts/diverge/values.yaml):
 
 ```yaml
 server:
+  enabled: true
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 8443
+  auth:
+    tokenCacheTTL: 5s
+    audiences:
+      - diverge-server
+    maxStreams: 1000
   cors:
-    allowedOrigins: "https://your-dashboard.com,https://admin.your-dashboard.com"
+    allowedOrigins: "https://dashboard.example.com"
     maxAge: 86400
+  rbac:
+    clusterWidePodAccess: true # Grants cluster-wide pods/log access for log streaming
+    targetNamespaces: []       # Restrict pods/log access when clusterWidePodAccess is false
+  metrics:
+    serviceMonitor:
+      enabled: false
+      interval: 30s
 ```
 
-### Error Sanitization
+---
 
-The server ensures that sensitive Kubernetes API error details are sanitized before returning them to clients. Raw errors are logged server-side for debugging, but clients receive safe, standardized ConnectRPC error codes (e.g., `CodeNotFound`, `CodeAlreadyExists`, `CodePermissionDenied`).
+## Client Examples
 
-### Audit Logging
+### 1. curl
 
-All authentication attempts (successes/failures), authorization denials, and resource mutations are recorded via structured audit logging. These JSON-formatted events are sent to standard output by the `audit` component and can be ingested by log aggregation tools for security monitoring. See the [Observability Guide](observability.md) for details.
-
-## API Patterns
-
-### Pagination
-
-List endpoints support cursor-based pagination using `page_size` and `page_token`.
-
-When listing resources, specify `page_size` to limit the number of results. If more results exist, the response will include a `next_page_token`. Pass this token in subsequent requests to retrieve the next page of results. Note that pagination tokens can expire; if a `CodeAborted` error is returned due to token expiration, restart the listing from the beginning.
-
-### Optimistic Concurrency
-
-To prevent race conditions during updates or deletes, the API server supports Kubernetes-style optimistic concurrency via the `resource_version` field.
-
-When fetching a resource, its `resource_version` is included. When updating, provide the same `resource_version`. If the resource has been modified by another client in the meantime, the API server will return a `CodeAborted` error, indicating a conflict. You should then re-fetch the latest resource and try again.
-
-## Usage Examples
-
-Because the server speaks ConnectRPC, you can interact with it using standard tools like `curl`, native browser `fetch`, or any gRPC client.
-
-### Listing Environments with curl
+#### Unary RPCs
 
 ```bash
-curl -X POST https://diverge.yourdomain.com/diverge.v1alpha1.EnvironmentService/ListEnvironments \
+# List environments with pagination
+curl -s -X POST "$SERVER_URL/diverge.v1alpha1.EnvironmentService/ListEnvironments" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $YOUR_TOKEN" \
-  -d '{"namespace": "default", "page_size": 10}'
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"namespace": "default", "page_size": 5}' | jq .
+
+# Get a single environment
+curl -s -X POST "$SERVER_URL/diverge.v1alpha1.EnvironmentService/GetEnvironment" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"namespace": "default", "name": "preview-mr-42"}' | jq .
 ```
 
-### Fetching a Specific Environment
+#### Streaming RPCs
 
 ```bash
-curl -X POST https://diverge.yourdomain.com/diverge.v1alpha1.EnvironmentService/GetEnvironment \
+# Watch environment lifecycle events
+curl -N -X POST "$SERVER_URL/diverge.v1alpha1.EnvironmentService/WatchEnvironments" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $YOUR_TOKEN" \
-  -d '{"namespace": "default", "name": "preview-mr-1"}'
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"namespace": "default"}'
+
+# Stream live container logs for a preview service
+curl -N -X POST "$SERVER_URL/diverge.v1alpha1.EnvironmentService/StreamLogs" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"namespace": "default", "environment_name": "preview-mr-42", "service_name": "api", "follow": true, "tail_lines": 100}'
+```
+
+### 2. TypeScript (`@connectrpc/connect-web`)
+
+```typescript
+import { createPromiseClient } from "@connectrpc/connect";
+import { createConnectTransport } from "@connectrpc/connect-web";
+import { EnvironmentService } from "./gen/diverge/v1alpha1/environment_connect";
+
+const token = process.env.DIVERGE_TOKEN ?? "";
+
+// Create transport with auth interceptor
+const transport = createConnectTransport({
+  baseUrl: "https://diverge.example.com",
+  interceptors: [
+    (next) => async (req) => {
+      req.header.set("Authorization", `Bearer ${token}`);
+      return await next(req);
+    },
+  ],
+});
+
+const client = createPromiseClient(EnvironmentService, transport);
+
+async function main() {
+  // Unary call: List environments
+  const response = await client.listEnvironments({ namespace: "default", pageSize: 10 });
+  for (const env of response.environments) {
+    console.log(`Env: ${env.name} | Status: ${env.status?.phase}`);
+  }
+
+  // Server streaming: Watch real-time changes
+  for await (const event of client.watchEnvironments({ namespace: "default" })) {
+    console.log(`[Event ${event.type}] Env: ${event.environment?.name} (RV: ${event.resourceVersion})`);
+  }
+}
+
+main().catch(console.error);
+```
+
+### 3. Go (`connectrpc.com/connect`)
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net/http"
+
+	"connectrpc.com/connect"
+	pb "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
+	"github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
+)
+
+type bearerAuthInterceptor struct{ token string }
+
+func (i *bearerAuthInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
+	return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+		req.Header().Set("Authorization", "Bearer "+i.token)
+		return next(ctx, req)
+	}
+}
+
+func (i *bearerAuthInterceptor) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
+	return func(ctx context.Context, spec connect.Spec) connect.StreamingClientConn {
+		conn := next(ctx, spec)
+		conn.RequestHeader().Set("Authorization", "Bearer "+i.token)
+		return conn
+	}
+}
+
+func (i *bearerAuthInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
+	return next
+}
+
+func main() {
+	token := "YOUR_BEARER_TOKEN"
+	client := divergev1alpha1connect.NewEnvironmentServiceClient(
+		http.DefaultClient,
+		"http://localhost:8443",
+		connect.WithInterceptors(&bearerAuthInterceptor{token: token}),
+	)
+
+	ctx := context.Background()
+
+	// 1. Unary RPC: List Environments
+	listResp, err := client.ListEnvironments(ctx, connect.NewRequest(&pb.ListEnvironmentsRequest{
+		Namespace: "default",
+		PageSize:  10,
+	}))
+	if err != nil {
+		log.Fatalf("ListEnvironments failed: %v", err)
+	}
+	for _, env := range listResp.Msg.Environments {
+		fmt.Printf("Env: %s | Phase: %s | RV: %s\n", env.Name, env.Status.Phase, env.ResourceVersion)
+	}
+
+	// 2. Server Streaming RPC: Watch Environments
+	stream, err := client.WatchEnvironments(ctx, connect.NewRequest(&pb.WatchEnvironmentsRequest{
+		Namespace: "default",
+	}))
+	if err != nil {
+		log.Fatalf("WatchEnvironments failed: %v", err)
+	}
+	for stream.Receive() {
+		msg := stream.Msg()
+		fmt.Printf("Watch Event [%v]: %s (RV: %s)\n", msg.Type, msg.Environment.Name, msg.ResourceVersion)
+	}
+	if err := stream.Err(); err != nil {
+		log.Fatalf("Watch stream terminated: %v", err)
+	}
+}
 ```
