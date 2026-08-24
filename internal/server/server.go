@@ -35,7 +35,7 @@ func NewServeMux(cfg ServeMuxConfig) (*http.ServeMux, *TunnelManager) {
 		cfg.AuditLogger = NewAuditLogger(cfg.Logger)
 	}
 	if cfg.StreamLimiter == nil {
-		cfg.StreamLimiter = NewStreamLimiter(1000, 50) // Sensible defaults
+		cfg.StreamLimiter = NewStreamLimiter(250, 20) // Sensible defaults for medium teams
 	}
 
 	mux := http.NewServeMux()
