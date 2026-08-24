@@ -82,6 +82,10 @@ export function SvgOverlay({
     })
     resizeObserver.observe(container)
 
+    // Also observe individual topology nodes for size changes (e.g. log snippet expand)
+    const nodes = container.querySelectorAll('[data-topology-id]')
+    nodes.forEach((node) => resizeObserver.observe(node))
+
     // Also recalculate on window resize
     window.addEventListener('resize', calculatePaths)
 

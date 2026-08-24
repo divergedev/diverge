@@ -30,11 +30,15 @@ describe('Layout', () => {
   })
 
   it('Logout button calls logout', async () => {
+    localStorage.setItem('diverge:token', 'test-token')
     const user = userEvent.setup()
     render(<Layout />)
 
     const logoutBtn = screen.getByText('Logout')
     expect(logoutBtn).toBeInTheDocument()
     await user.click(logoutBtn)
+
+    // Token should be cleared from localStorage after logout
+    expect(localStorage.getItem('diverge:token')).toBeNull()
   })
 })

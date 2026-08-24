@@ -31,7 +31,8 @@ export function IngressNode({ data }: { data: IngressNodeData }) {
               size="icon"
               variant="ghost"
               className="h-6 w-6 shrink-0"
-              onClick={() => navigator.clipboard.writeText(data.externalUrl)}
+              aria-label="Copy preview URL"
+              onClick={() => navigator.clipboard?.writeText(data.externalUrl).catch(() => {})}
             >
               <Copy className="h-3 w-3" />
             </Button>

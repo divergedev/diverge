@@ -103,7 +103,7 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
         )}
 
         {/* Error section */}
-        {hasError && data.reason && (
+        {(hasError || data.reason || data.message || data.lastLogSnippet) && (data.reason || data.message || data.lastLogSnippet) && (
           <div className="space-y-1">
             <div className="text-xs text-destructive font-medium">{data.reason}</div>
             {data.message && (
