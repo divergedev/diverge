@@ -41,12 +41,12 @@ export function EnvironmentTable({ environments, isLoading }: { environments: En
               {env.metadata?.creationTimestamp ? formatDistanceToNow(env.metadata.creationTimestamp.toDate(), { addSuffix: true }) : '—'}
             </TableCell>
             <TableCell>
-              {env.status?.previewUrl ? (
+              {env.status?.url ? (
                 <div className="flex items-center gap-1">
-                  <a href={env.status.previewUrl} target="_blank" rel="noreferrer" className="text-primary hover:underline">
+                  <a href={env.status.url} target="_blank" rel="noreferrer" className="text-primary hover:underline">
                     <ExternalLink className="h-4 w-4" />
                   </a>
-                  <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => navigator.clipboard.writeText(env.status?.previewUrl ?? '')}>
+                  <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => navigator.clipboard.writeText(env.status?.url ?? '')}>
                     <Copy className="h-3 w-3" />
                   </Button>
                 </div>

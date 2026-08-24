@@ -46,12 +46,12 @@ export default function EnvironmentDetail() {
           <p className="text-muted-foreground">{env.namespace}</p>
         </div>
         <div className="flex items-center gap-2">
-          {env.status?.previewUrl && (
+          {env.status?.url && (
             <>
-              <a href={env.status.previewUrl} target="_blank" rel="noreferrer">
+              <a href={env.status.url} target="_blank" rel="noreferrer">
                 <Button variant="outline" size="sm"><ExternalLink className="h-4 w-4 mr-2" />Open Preview</Button>
               </a>
-              <Button variant="ghost" size="icon" onClick={() => navigator.clipboard.writeText(env.status?.previewUrl ?? '')}>
+              <Button variant="ghost" size="icon" onClick={() => navigator.clipboard.writeText(env.status?.url ?? '')}>
                 <Copy className="h-4 w-4" />
               </Button>
             </>

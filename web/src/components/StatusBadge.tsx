@@ -12,7 +12,8 @@ const phaseStyles: Record<string, string> = {
 }
 
 export function StatusBadge({ phase, className }: { phase: string; className?: string }) {
-  const style = phaseStyles[phase] ?? 'bg-gray-500/20 text-gray-400 border-gray-500/30'
+  const isKnown = Object.prototype.hasOwnProperty.call(phaseStyles, phase)
+  const style = isKnown ? phaseStyles[phase] : 'bg-gray-500/20 text-gray-400 border-gray-500/30'
   return (
     <span className={cn('inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold', style, className)}>
       {phase || 'Unknown'}

@@ -3,6 +3,7 @@ pkg/sdk/temporal/propagation.go
 pkg/sdk/temporal/router.go
 pkg/sdk/temporal/context.go
 pkg/sdk/temporal/context.go
+internal/server/dashboard/embed.go
 internal/argocd/types.go
 internal/async/kafka_register.go
 internal/async/noop.go
