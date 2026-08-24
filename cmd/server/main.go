@@ -162,11 +162,11 @@ func main() {
 		_, _ = w.Write([]byte("ok\n"))
 	})
 
-	// Wrap with auth middleware
-	handler := authMiddleware(mux)
+	// Protocol telemetry (records wire protocol + client SDK after auth)
+	handler := server.ProtocolTelemetryMiddleware(mux)
 
-	// Protocol telemetry (records wire protocol + client SDK)
-	handler = server.ProtocolTelemetryMiddleware(handler)
+	// Wrap with auth middleware (runs before telemetry)
+	handler = authMiddleware(handler)
 
 	rawOrigins := strings.Split(corsAllowedOrigins, ",")
 	origins := make([]string, 0, len(rawOrigins))

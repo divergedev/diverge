@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -66,12 +67,19 @@ func TestProtocolTelemetryMiddleware_SkipsHealthChecks(t *testing.T) {
 
 	handler := ProtocolTelemetryMiddleware(inner)
 
+	// Capture counter before
+	protocolBefore := promtestutil.ToFloat64(requestsByProtocol.WithLabelValues("connect-json"))
+
 	// Health check should pass through without recording
 	req := httptest.NewRequest("GET", "/healthz", nil)
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	assert.True(t, called)
 	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// Counter should not have changed
+	assert.Equal(t, protocolBefore, promtestutil.ToFloat64(requestsByProtocol.WithLabelValues("connect-json")))
 }
 
 func TestProtocolTelemetryMiddleware_RecordsProtocol(t *testing.T) {
@@ -83,6 +91,10 @@ func TestProtocolTelemetryMiddleware_RecordsProtocol(t *testing.T) {
 
 	handler := ProtocolTelemetryMiddleware(inner)
 
+	// Capture counters before
+	protocolBefore := promtestutil.ToFloat64(requestsByProtocol.WithLabelValues("connect-json"))
+	clientBefore := promtestutil.ToFloat64(requestsByClient.WithLabelValues("go-sdk"))
+
 	req := httptest.NewRequest("POST", "/diverge.v1alpha1.EnvironmentService/ListEnvironments", nil)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "connect-go/1.16.0")
@@ -91,4 +103,8 @@ func TestProtocolTelemetryMiddleware_RecordsProtocol(t *testing.T) {
 
 	assert.True(t, called)
 	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// Counters should have incremented by 1
+	assert.Equal(t, protocolBefore+1, promtestutil.ToFloat64(requestsByProtocol.WithLabelValues("connect-json")))
+	assert.Equal(t, clientBefore+1, promtestutil.ToFloat64(requestsByClient.WithLabelValues("go-sdk")))
 }

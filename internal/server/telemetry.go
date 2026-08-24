@@ -92,10 +92,8 @@ func ProtocolTelemetryMiddleware(next http.Handler) http.Handler {
 		protocol := detectProtocol(r.Header.Get("Content-Type"))
 		requestsByProtocol.WithLabelValues(protocol).Inc()
 
-		if ua := r.Header.Get("User-Agent"); ua != "" {
-			client := detectClient(ua)
-			requestsByClient.WithLabelValues(client).Inc()
-		}
+		client := detectClient(r.Header.Get("User-Agent"))
+		requestsByClient.WithLabelValues(client).Inc()
 
 		next.ServeHTTP(w, r)
 	})
