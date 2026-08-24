@@ -128,7 +128,8 @@ server:
     tokenCacheTTL: 5s
     audiences:
       - diverge-server
-    maxStreams: 1000
+    maxStreams: 250
+    maxStreamsPerUser: 20
   cors:
     # WARNING: Default "*" allows all origins. In production, set this to your
     # specific domain(s) to prevent unauthorized cross-origin access.
