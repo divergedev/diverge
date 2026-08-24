@@ -165,6 +165,9 @@ func main() {
 	// Wrap with auth middleware
 	handler := authMiddleware(mux)
 
+	// Protocol telemetry (records wire protocol + client SDK)
+	handler = server.ProtocolTelemetryMiddleware(handler)
+
 	rawOrigins := strings.Split(corsAllowedOrigins, ",")
 	origins := make([]string, 0, len(rawOrigins))
 	for _, o := range rawOrigins {
