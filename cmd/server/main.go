@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -47,9 +48,11 @@ func main() {
 		tlsKeyFile         string
 		tokenCacheTTL      time.Duration
 		maxStreams         int
+		maxStreamsPerUser  int
 		audiences          string
 		corsAllowedOrigins string
 		corsMaxAge         int
+		shutdownTimeout    time.Duration
 	)
 
 	flag.StringVar(&addr, "addr", ":8443", "Main server listen address")
@@ -57,12 +60,14 @@ func main() {
 	flag.StringVar(&tlsCertFile, "tls-cert-file", "", "TLS certificate file (optional)")
 	flag.StringVar(&tlsKeyFile, "tls-key-file", "", "TLS private key file (optional)")
 	flag.DurationVar(&tokenCacheTTL, "token-cache-ttl", 5*time.Second, "TokenReview cache TTL")
-	flag.IntVar(&maxStreams, "max-streams", 1000, "Maximum concurrent streams")
+	flag.IntVar(&maxStreams, "max-streams", 1000, "Maximum concurrent streams (global)")
+	flag.IntVar(&maxStreamsPerUser, "max-streams-per-user", 50, "Maximum concurrent streams per user")
 	flag.StringVar(&audiences, "audiences", "diverge-server", "Comma-separated list of valid token audiences")
 	// WARNING: Default "*" allows all origins. In production, set this to your
 	// specific domain(s) to prevent unauthorized cross-origin access.
 	flag.StringVar(&corsAllowedOrigins, "cors-allowed-origins", "*", "Comma-separated list of allowed CORS origins")
 	flag.IntVar(&corsMaxAge, "cors-max-age", 86400, "CORS max age in seconds")
+	flag.DurationVar(&shutdownTimeout, "shutdown-timeout", 25*time.Second, "Graceful shutdown timeout (should be < K8s terminationGracePeriodSeconds)")
 	flag.Parse()
 
 	// Structured logger
@@ -76,7 +81,15 @@ func main() {
 		"metrics_addr", metricsAddr,
 		"token_cache_ttl", tokenCacheTTL,
 		"max_streams", maxStreams,
+		"max_streams_per_user", maxStreamsPerUser,
 	)
+
+	// Validate stream limits
+	if maxStreamsPerUser <= 0 || maxStreamsPerUser > maxStreams {
+		logger.Error("invalid stream limits: max-streams-per-user must be in (0, max-streams]",
+			"max-streams", maxStreams, "max-streams-per-user", maxStreamsPerUser)
+		os.Exit(1)
+	}
 
 	// Build in-cluster K8s config
 	cfg := ctrl.GetConfigOrDie()
@@ -103,8 +116,8 @@ func main() {
 	informerMgr := streaming.NewInformerManager(logger, broadcasterMetrics)
 	logStreamer := streaming.NewLogStreamer(k8sClient)
 
-	// Create stream semaphore (injected, not global)
-	streamSemaphore := make(chan struct{}, maxStreams)
+	// Create stream limiter (per-user + global quotas)
+	streamLimiter := server.NewStreamLimiter(maxStreams, maxStreamsPerUser)
 
 	// Auth setup
 	tokenCache := auth.NewTokenCache(1024, tokenCacheTTL)
@@ -128,22 +141,15 @@ func main() {
 
 	// Build the ConnectRPC mux
 	mux, tunnelMgr := server.NewServeMux(server.ServeMuxConfig{
-		Client:          crClient,
-		K8sClient:       k8sClient,
-		InformerMgr:     informerMgr,
-		LogStreamer:     logStreamer,
-		StreamSemaphore: streamSemaphore,
-		Logger:          logger,
-		AuditLogger:     auditLogger,
-		Version:         version,
+		Client:        crClient,
+		K8sClient:     k8sClient,
+		InformerMgr:   informerMgr,
+		LogStreamer:   logStreamer,
+		StreamLimiter: streamLimiter,
+		Logger:        logger,
+		AuditLogger:   auditLogger,
+		Version:       version,
 	})
-
-	// Start tunnel proxy server on dedicated port (no auth, cluster-internal)
-	go func() {
-		if err := server.ListenAndServeTunnelProxy(tunnelMgr, server.TunnelProxyPort, logger); err != nil {
-			logger.Error("tunnel proxy server failed", "err", err)
-		}
-	}()
 
 	// Health check (exempt from auth)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -213,6 +219,9 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
+	// Start tunnel proxy server on dedicated port (no auth, cluster-internal)
+	tunnelProxySrv := server.NewTunnelProxyServer(tunnelMgr, server.TunnelProxyPort, logger)
+
 	// Use errgroup to tie server lifecycles together
 	g, gCtx := errgroup.WithContext(ctx)
 
@@ -240,22 +249,44 @@ func main() {
 		return nil
 	})
 
+	// Start tunnel proxy server
+	g.Go(func() error {
+		logger.Info("tunnel proxy listening", "port", server.TunnelProxyPort)
+		if err := tunnelProxySrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			return fmt.Errorf("tunnel proxy listen failed: %w", err)
+		}
+		return nil
+	})
+
 	// Graceful shutdown goroutine
 	g.Go(func() error {
 		<-gCtx.Done()
 		logger.Info("shutdown signal received, draining connections")
 
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer shutdownCancel()
 
-		// Shutdown main server (drains in-flight requests)
-		if err := mainSrv.Shutdown(shutdownCtx); err != nil {
-			logger.Error("server shutdown error", "error", err)
+		// 1. Close broadcasters FIRST to unblock watch handlers.
+		// http.Server.Shutdown() waits for active handlers but does NOT
+		// cancel their request contexts. Watch handlers block on
+		// <-sub.Events(), so we must close the channels first to let
+		// them return, otherwise Shutdown() hangs for the full timeout.
+		informerMgr.Close()
+
+		// 2. Drain HTTP servers concurrently (sends GOAWAY, waits for handlers)
+		var shutdownWg sync.WaitGroup
+		servers := []*http.Server{mainSrv, metricsSrv, tunnelProxySrv}
+		for _, srv := range servers {
+			shutdownWg.Add(1)
+			go func(s *http.Server) {
+				defer shutdownWg.Done()
+				if err := s.Shutdown(shutdownCtx); err != nil {
+					logger.Error("server shutdown error", "addr", s.Addr, "error", err)
+				}
+			}(srv)
 		}
-		// Shutdown metrics server
-		if err := metricsSrv.Shutdown(shutdownCtx); err != nil {
-			logger.Error("metrics server shutdown error", "error", err)
-		}
+		shutdownWg.Wait()
+
 		logger.Info("shutdown complete")
 		return nil
 	})

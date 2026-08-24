@@ -14,14 +14,14 @@ import (
 
 // ServeMuxConfig holds all dependencies for the ConnectRPC server mux.
 type ServeMuxConfig struct {
-	Client          client.Client
-	K8sClient       kubernetes.Interface
-	InformerMgr     *streaming.InformerManager
-	LogStreamer     *streaming.LogStreamer
-	StreamSemaphore chan struct{}
-	Logger          *slog.Logger
-	AuditLogger     *AuditLogger
-	Version         string
+	Client        client.Client
+	K8sClient     kubernetes.Interface
+	InformerMgr   *streaming.InformerManager
+	LogStreamer   *streaming.LogStreamer
+	StreamLimiter *StreamLimiter
+	Logger        *slog.Logger
+	AuditLogger   *AuditLogger
+	Version       string
 }
 
 // NewServeMux creates the ConnectRPC service mux with all handlers registered.
@@ -34,8 +34,8 @@ func NewServeMux(cfg ServeMuxConfig) (*http.ServeMux, *TunnelManager) {
 	if cfg.AuditLogger == nil {
 		cfg.AuditLogger = NewAuditLogger(cfg.Logger)
 	}
-	if cfg.StreamSemaphore == nil {
-		cfg.StreamSemaphore = make(chan struct{}, 1000) // Default max streams
+	if cfg.StreamLimiter == nil {
+		cfg.StreamLimiter = NewStreamLimiter(1000, 50) // Sensible defaults
 	}
 
 	mux := http.NewServeMux()
@@ -44,11 +44,11 @@ func NewServeMux(cfg ServeMuxConfig) (*http.ServeMux, *TunnelManager) {
 		NewMetricsInterceptor(),
 	)
 
-	envService := NewEnvironmentService(cfg.Client, cfg.K8sClient, cfg.InformerMgr, cfg.LogStreamer, cfg.StreamSemaphore, cfg.Logger, cfg.AuditLogger)
+	envService := NewEnvironmentService(cfg.Client, cfg.K8sClient, cfg.InformerMgr, cfg.LogStreamer, cfg.StreamLimiter, cfg.Logger, cfg.AuditLogger)
 	envPath, envHandler := divergev1alpha1connect.NewEnvironmentServiceHandler(envService, interceptors)
 	mux.Handle(envPath, envHandler)
 
-	pgService := NewPreviewGroupService(cfg.Client, cfg.K8sClient, cfg.InformerMgr, cfg.StreamSemaphore, cfg.Logger, cfg.AuditLogger)
+	pgService := NewPreviewGroupService(cfg.Client, cfg.K8sClient, cfg.InformerMgr, cfg.StreamLimiter, cfg.Logger, cfg.AuditLogger)
 	pgPath, pgHandler := divergev1alpha1connect.NewPreviewGroupServiceHandler(pgService, interceptors)
 	mux.Handle(pgPath, pgHandler)
 

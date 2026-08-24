@@ -19,22 +19,22 @@ import (
 )
 
 type PreviewGroupService struct {
-	client          client.Client
-	k8sClient       kubernetes.Interface
-	informerMgr     *streaming.InformerManager
-	streamSemaphore chan struct{}
-	logger          *slog.Logger
-	auditLogger     *AuditLogger
+	client      client.Client
+	k8sClient   kubernetes.Interface
+	informerMgr *streaming.InformerManager
+	limiter     *StreamLimiter
+	logger      *slog.Logger
+	auditLogger *AuditLogger
 }
 
-func NewPreviewGroupService(c client.Client, k8s kubernetes.Interface, informerMgr *streaming.InformerManager, sem chan struct{}, logger *slog.Logger, audit *AuditLogger) divergev1alpha1connect.PreviewGroupServiceHandler {
+func NewPreviewGroupService(c client.Client, k8s kubernetes.Interface, informerMgr *streaming.InformerManager, limiter *StreamLimiter, logger *slog.Logger, audit *AuditLogger) divergev1alpha1connect.PreviewGroupServiceHandler {
 	return &PreviewGroupService{
-		client:          c,
-		k8sClient:       k8s,
-		informerMgr:     informerMgr,
-		streamSemaphore: sem,
-		logger:          logger,
-		auditLogger:     audit,
+		client:      c,
+		k8sClient:   k8s,
+		informerMgr: informerMgr,
+		limiter:     limiter,
+		logger:      logger,
+		auditLogger: audit,
 	}
 }
 
@@ -315,12 +315,11 @@ func (s *PreviewGroupService) WatchPreviewGroups(ctx context.Context, req *conne
 		return connect.NewError(connect.CodeUnimplemented, errors.New("informer manager is not configured"))
 	}
 
-	select {
-	case s.streamSemaphore <- struct{}{}:
-		defer func() { <-s.streamSemaphore }()
-	default:
-		return connect.NewError(connect.CodeResourceExhausted, errors.New("too many concurrent streams"))
+	release, err := s.limiter.Acquire(ctx)
+	if err != nil {
+		return err
 	}
+	defer release()
 
 	namespace := req.Msg.Namespace
 	if namespace != "" {
@@ -342,7 +341,10 @@ func (s *PreviewGroupService) WatchPreviewGroups(ctx context.Context, req *conne
 	}
 
 	// Subscribe FIRST to prevent race condition (Subscribe → List → deduplicate)
-	sub := s.informerMgr.PgBroadcaster.Subscribe(ctx)
+	sub, err := s.informerMgr.PgBroadcaster.Subscribe(ctx)
+	if err != nil {
+		return connect.NewError(connect.CodeUnavailable, errors.New("server is shutting down"))
+	}
 	defer s.informerMgr.PgBroadcaster.Unsubscribe(sub.ID())
 
 	// List current state
@@ -383,6 +385,9 @@ func (s *PreviewGroupService) WatchPreviewGroups(ctx context.Context, req *conne
 			return nil
 		case event, ok := <-sub.Events():
 			if !ok {
+				if s.informerMgr.PgBroadcaster.IsClosed() {
+					return connect.NewError(connect.CodeUnavailable, errors.New("server shutting down"))
+				}
 				return connect.NewError(connect.CodeResourceExhausted, errors.New("event buffer overflow, please reconnect"))
 			}
 
