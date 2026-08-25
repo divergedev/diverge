@@ -34,3 +34,44 @@ test('Logout redirects to /login', async ({ page }) => {
     await expect(page).toHaveURL(/.*\/login/)
   }
 })
+
+test('SSO button shows provider name when configured', async ({ page }) => {
+  await page.route('/auth/config', async (route) => {
+    await route.fulfill({
+      json: { oidcEnabled: true, providerName: 'Google', loginUrl: '/auth/login' }
+    })
+  })
+  await page.goto('/login')
+  await expect(page.locator('button', { hasText: 'Sign in with Google' })).toBeVisible()
+})
+
+test('SSO button is disabled when not configured', async ({ page }) => {
+  await page.route('/auth/config', async (route) => {
+    await route.fulfill({
+      json: { oidcEnabled: false }
+    })
+  })
+  await page.goto('/login')
+  const btn = page.locator('button', { hasText: 'SSO Login (Not Configured)' })
+  await expect(btn).toBeVisible()
+  await expect(btn).toBeDisabled()
+})
+
+test('Token login still works alongside SSO', async ({ page }) => {
+  await page.route('/auth/config', async (route) => {
+    await route.fulfill({
+      json: { oidcEnabled: true, providerName: 'Google', loginUrl: '/auth/login' }
+    })
+  })
+  await page.route('**/diverge.v1alpha1.AuthService/GetCurrentUser', async (route) => {
+    await route.fulfill({
+      json: { userId: '123', username: 'test', email: 'test@example.com' }
+    })
+  })
+
+  await page.goto('/login')
+  await page.fill('textarea[placeholder*="token"]', 'valid-token')
+  await page.click('button:has-text("Connect with Token")')
+
+  await expect(page).not.toHaveURL(/.*\/login/)
+})

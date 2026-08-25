@@ -51,6 +51,7 @@ func TestContextWithUserInfo(t *testing.T) {
 func TestUserInfo_DeepCopy_PBT(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		uid := rapid.String().Draw(t, "uid")
+		email := rapid.String().Draw(t, "email")
 		groups := rapid.SliceOf(rapid.String()).Draw(t, "groups")
 
 		keys := rapid.SliceOf(rapid.String()).Draw(t, "keys")
@@ -63,6 +64,7 @@ func TestUserInfo_DeepCopy_PBT(t *testing.T) {
 		orig := &UserInfo{
 			Username: "test-user",
 			UID:      uid,
+			Email:    email,
 			Groups:   groups,
 			Extra:    extra,
 		}
@@ -71,6 +73,9 @@ func TestUserInfo_DeepCopy_PBT(t *testing.T) {
 
 		if copied.UID != orig.UID {
 			t.Fatalf("UID mismatch")
+		}
+		if copied.Email != orig.Email {
+			t.Fatalf("Email mismatch")
 		}
 		if len(copied.Groups) != len(orig.Groups) {
 			t.Fatalf("Groups length mismatch")
@@ -88,4 +93,20 @@ func TestUserInfo_DeepCopy_PBT(t *testing.T) {
 			t.Fatalf("Copy was affected by mutation")
 		}
 	})
+}
+
+func TestUserInfo_DeepCopy_Email(t *testing.T) {
+	orig := &UserInfo{Email: "test@example.com"}
+	copied := orig.DeepCopy()
+	if copied.Email != "test@example.com" {
+		t.Errorf("expected Email test@example.com, got %q", copied.Email)
+	}
+}
+
+func TestUserInfo_DeepCopy_Nil(t *testing.T) {
+	var orig *UserInfo
+	copied := orig.DeepCopy()
+	if copied != nil {
+		t.Errorf("expected nil, got %v", copied)
+	}
 }

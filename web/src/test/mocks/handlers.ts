@@ -31,7 +31,18 @@ export const handlers = [
     if (auth === 'Bearer invalid-token') {
       return new HttpResponse(null, { status: 401 })
     }
+    // Require a Bearer token or return 401 (no cookie auth in tests)
+    if (!auth || !auth.startsWith('Bearer ')) {
+      return new HttpResponse(null, { status: 401 })
+    }
     return HttpResponse.json(mockUser)
+  }),
+  // OIDC auth endpoints
+  http.post('*/auth/logout', () => {
+    return new HttpResponse(null, { status: 302, headers: { Location: '/login' } })
+  }),
+  http.get('*/auth/config', () => {
+    return HttpResponse.json({ oidcEnabled: false, providerName: '', loginUrl: '' })
   }),
   http.post('*/diverge.v1alpha1.EnvironmentService/ListEnvironments', () => {
     return HttpResponse.json({

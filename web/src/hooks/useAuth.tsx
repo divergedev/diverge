@@ -17,7 +17,7 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setTokenState] = useState<string | null>(getToken)
   const [user, setUser] = useState<GetCurrentUserResponse | null>(null)
-  const [isLoading, setIsLoading] = useState(!!getToken())
+  const [isLoading, setIsLoading] = useState(true) // Always check on mount
 
   const validate = useCallback(async (t: string): Promise<GetCurrentUserResponse | null> => {
     try {
@@ -30,14 +30,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  // Try cookie-based auth first (OIDC), then localStorage token
   useEffect(() => {
-    const t = getToken()
-    if (!t) { setIsLoading(false); return }
-    validate(t).then((u) => {
+    const tryAuth = async () => {
+      // First try cookie-based auth (no token needed — cookie sent automatically)
+      try {
+        const resp = await authClient.getCurrentUser({})
+        if (resp) {
+          setUser(resp)
+          setIsLoading(false)
+          return
+        }
+      } catch {
+        // Cookie auth failed — try localStorage token
+      }
+
+      // Fall back to localStorage token
+      const t = getToken()
+      if (!t) { setIsLoading(false); return }
+      const u = await validate(t)
       if (u) { setTokenState(t); setUser(u) }
       else { setTokenState(null); setUser(null) }
       setIsLoading(false)
-    })
+    }
+    tryAuth()
   }, [validate])
 
   const login = useCallback(async (t: string): Promise<boolean> => {
@@ -47,12 +63,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setTokenState(null); setUser(null); setIsLoading(false); return false
   }, [validate])
 
-  const logout = useCallback(() => {
-    clearToken(); setTokenState(null); setUser(null)
+  const logout = useCallback(async () => {
+    // Clear server-side session cookie
+    try {
+      await fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' })
+    } catch {
+      // Best effort — clear local state regardless
+    }
+    clearToken()
+    setTokenState(null)
+    setUser(null)
   }, [])
 
+  const isAuthenticated = !!user
+
   return (
-    <AuthContext.Provider value={{ token, user, isAuthenticated: !!token && !!user, isLoading, login, logout }}>
+    <AuthContext.Provider value={{ token, user, isAuthenticated, isLoading, login, logout }}>
       {children}
     </AuthContext.Provider>
   )
