@@ -31,6 +31,8 @@ const authInterceptor: Interceptor = (next) => async (req) => {
 const transport = createConnectTransport({
   baseUrl: window.location.origin,
   interceptors: [authInterceptor],
+  // Send cookies with requests (needed for OIDC session auth)
+  credentials: 'same-origin',
 })
 
 export const environmentClient = createPromiseClient(EnvironmentService, transport)

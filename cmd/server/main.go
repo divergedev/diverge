@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -54,6 +55,19 @@ func main() {
 		corsMaxAge         int
 		shutdownTimeout    time.Duration
 		dashboardEnabled   bool
+		// OIDC SSO flags
+		oidcIssuerURL     string
+		oidcClientID      string
+		oidcClientSecret  string
+		oidcRedirectURL   string
+		oidcScopes        string
+		oidcProviderName  string
+		oidcUsernameClaim string
+		oidcGroupsClaim   string
+		oidcAllowedGroups string
+		// Session flags
+		sessionSecret string
+		sessionMaxAge time.Duration
 	)
 
 	flag.StringVar(&addr, "addr", ":8443", "Main server listen address")
@@ -70,6 +84,19 @@ func main() {
 	flag.IntVar(&corsMaxAge, "cors-max-age", 86400, "CORS max age in seconds")
 	flag.DurationVar(&shutdownTimeout, "shutdown-timeout", 25*time.Second, "Graceful shutdown timeout (should be < K8s terminationGracePeriodSeconds)")
 	flag.BoolVar(&dashboardEnabled, "dashboard", true, "Enable the embedded web dashboard at /")
+	// OIDC SSO
+	flag.StringVar(&oidcIssuerURL, "oidc-issuer-url", "", "OIDC provider issuer URL (empty = SSO disabled)")
+	flag.StringVar(&oidcClientID, "oidc-client-id", "", "OIDC client ID")
+	flag.StringVar(&oidcClientSecret, "oidc-client-secret", "", "OIDC client secret (or set DIVERGE_OIDC_CLIENT_SECRET env)")
+	flag.StringVar(&oidcRedirectURL, "oidc-redirect-url", "", "OIDC callback URL (e.g. https://diverge.example.com/auth/callback)")
+	flag.StringVar(&oidcScopes, "oidc-scopes", "openid,profile,email,groups", "Comma-separated OIDC scopes")
+	flag.StringVar(&oidcProviderName, "oidc-provider-name", "SSO", "Display name for the SSO button (e.g. Okta, Google)")
+	flag.StringVar(&oidcUsernameClaim, "oidc-username-claim", "preferred_username", "OIDC JWT claim for username")
+	flag.StringVar(&oidcGroupsClaim, "oidc-groups-claim", "groups", "OIDC JWT claim for groups")
+	flag.StringVar(&oidcAllowedGroups, "oidc-allowed-groups", "", "Comma-separated list of allowed OIDC groups (empty = all)")
+	// Session
+	flag.StringVar(&sessionSecret, "session-secret", "", "HMAC signing key for session JWTs (base64-encoded, or set DIVERGE_SESSION_SECRET env)")
+	flag.DurationVar(&sessionMaxAge, "session-max-age", 24*time.Hour, "Session cookie max age")
 	flag.Parse()
 
 	// Structured logger
@@ -124,10 +151,114 @@ func main() {
 
 	// Auth setup
 	tokenCache := auth.NewTokenCache(1024, tokenCacheTTL)
-	authProvider := auth.NewTokenReviewProvider(k8sClient, []string{audiences})
+	tokenReviewProvider := auth.NewTokenReviewProvider(k8sClient, []string{audiences})
 
 	authMetrics := server.NewAuthMetrics()
 	auditLogger := server.NewAuditLogger(logger)
+
+	// Session manager (for OIDC session JWTs)
+	var signingKey []byte
+	if sessionSecret != "" {
+		var err error
+		signingKey, err = base64.StdEncoding.DecodeString(sessionSecret)
+		if err != nil {
+			logger.Error("failed to decode session secret (must be base64)", "error", err)
+			os.Exit(1)
+		}
+	} else if envSecret := os.Getenv("DIVERGE_SESSION_SECRET"); envSecret != "" {
+		var err error
+		signingKey, err = base64.StdEncoding.DecodeString(envSecret)
+		if err != nil {
+			logger.Error("failed to decode DIVERGE_SESSION_SECRET (must be base64)", "error", err)
+			os.Exit(1)
+		}
+	}
+	// If no key provided, SessionManager will auto-generate (ephemeral)
+	sessionMgr, err := auth.NewSessionManager(auth.SessionConfig{
+		SigningKey: signingKey,
+		MaxAge:     sessionMaxAge,
+	})
+	if err != nil {
+		logger.Error("failed to create session manager", "error", err)
+		os.Exit(1)
+	}
+
+	// Build composite auth provider
+	var authProvider auth.AuthProvider
+	exemptPrefixes := func() []string {
+		prefixes := []string{}
+		if dashboardEnabled {
+			prefixes = append(prefixes, "/assets/")
+		}
+		return prefixes
+	}()
+
+	// Resolve OIDC client secret from env if not set via flag
+	if oidcClientSecret == "" {
+		oidcClientSecret = os.Getenv("DIVERGE_OIDC_CLIENT_SECRET")
+	}
+
+	// OIDC SSO setup
+	var oidcHandler *server.OIDCHandler
+	if oidcIssuerURL != "" {
+		logger.Info("OIDC SSO enabled", "issuer", oidcIssuerURL, "provider", oidcProviderName)
+
+		var allowedGroups []string
+		if oidcAllowedGroups != "" {
+			for _, g := range strings.Split(oidcAllowedGroups, ",") {
+				if trimmed := strings.TrimSpace(g); trimmed != "" {
+					allowedGroups = append(allowedGroups, trimmed)
+				}
+			}
+		}
+
+		scopes := strings.Split(oidcScopes, ",")
+
+		// Create OIDC auth provider for JWT verification
+		oidcProvider, err := auth.NewOIDCProvider(context.Background(), auth.OIDCProviderConfig{
+			IssuerURL:     oidcIssuerURL,
+			ClientID:      oidcClientID,
+			UsernameClaim: oidcUsernameClaim,
+			GroupsClaim:   oidcGroupsClaim,
+			AllowedGroups: allowedGroups,
+		}, sessionMgr, logger)
+		if err != nil {
+			logger.Error("failed to create OIDC provider", "error", err)
+			os.Exit(1)
+		}
+
+		// Composite: OIDC/session first, then TokenReview
+		composite := auth.NewCompositeProvider(logger)
+		composite.Add("oidc", oidcProvider)
+		composite.Add("tokenreview", tokenReviewProvider)
+		authProvider = composite
+
+		// Create OIDC HTTP handler
+		secureCookies := tlsCertFile != "" // Enable Secure flag when TLS is configured
+		oidcHandler, err = server.NewOIDCHandler(server.OIDCHandlerConfig{
+			IssuerURL:      oidcIssuerURL,
+			ClientID:       oidcClientID,
+			ClientSecret:   oidcClientSecret,
+			RedirectURL:    oidcRedirectURL,
+			Scopes:         scopes,
+			ProviderName:   oidcProviderName,
+			SessionManager: sessionMgr,
+			SessionMaxAge:  sessionMaxAge,
+			SecureCookies:  secureCookies,
+			UsernameClaim:  oidcUsernameClaim,
+			GroupsClaim:    oidcGroupsClaim,
+			Logger:         logger,
+		})
+		if err != nil {
+			logger.Error("failed to create OIDC handler", "error", err)
+			os.Exit(1)
+		}
+
+		exemptPrefixes = append(exemptPrefixes, "/auth/")
+	} else {
+		authProvider = tokenReviewProvider
+		logger.Info("OIDC SSO disabled (no --oidc-issuer-url), using TokenReview only")
+	}
 
 	authMiddleware := auth.NewMiddleware(auth.MiddlewareConfig{
 		Provider: authProvider,
@@ -139,13 +270,8 @@ func main() {
 			CacheMisses: authMetrics.CacheMisses,
 			Attempts:    authMetrics.Attempts,
 		},
-		ExemptPaths: []string{"/healthz", "/readyz"},
-		ExemptPrefixes: func() []string {
-			if dashboardEnabled {
-				return []string{"/assets/"}
-			}
-			return nil
-		}(),
+		ExemptPaths:    []string{"/healthz", "/readyz"},
+		ExemptPrefixes: exemptPrefixes,
 	})
 
 	// Build the ConnectRPC mux
@@ -160,6 +286,11 @@ func main() {
 		Version:          version,
 		DashboardEnabled: dashboardEnabled,
 	})
+
+	// Register OIDC auth routes (exempt from auth middleware)
+	if oidcHandler != nil {
+		oidcHandler.RegisterRoutes(mux)
+	}
 
 	// Health check (exempt from auth)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {

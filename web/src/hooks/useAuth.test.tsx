@@ -44,8 +44,8 @@ describe('useAuth and AuthProvider', () => {
       await result.current.login('valid-token')
     })
 
-    act(() => {
-      result.current.logout()
+    await act(async () => {
+      await result.current.logout()
     })
 
     expect(result.current.isAuthenticated).toBe(false)

@@ -39,6 +39,19 @@ spec:
             - --max-streams-per-user={{ .Values.server.auth.maxStreamsPerUser }}
             - "--cors-allowed-origins={{ .Values.server.cors.allowedOrigins }}"
             - --cors-max-age={{ .Values.server.cors.maxAge }}
+            {{- if .Values.server.auth.oidc.enabled }}
+            - --oidc-issuer-url={{ .Values.server.auth.oidc.issuerUrl }}
+            - --oidc-client-id={{ .Values.server.auth.oidc.clientId }}
+            - --oidc-redirect-url={{ .Values.server.auth.oidc.redirectUrl }}
+            - "--oidc-provider-name={{ .Values.server.auth.oidc.providerName }}"
+            - --oidc-scopes={{ .Values.server.auth.oidc.scopes }}
+            - --oidc-username-claim={{ .Values.server.auth.oidc.usernameClaim }}
+            - --oidc-groups-claim={{ .Values.server.auth.oidc.groupsClaim }}
+            {{- if .Values.server.auth.oidc.allowedGroups }}
+            - "--oidc-allowed-groups={{ .Values.server.auth.oidc.allowedGroups }}"
+            {{- end }}
+            - --session-max-age={{ .Values.server.auth.session.maxAge }}s
+            {{- end }}
           env:
             - name: POD_IP
               valueFrom:
@@ -48,6 +61,20 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            {{- if and .Values.server.auth.oidc.enabled .Values.server.auth.oidc.clientSecretSecretRef.name }}
+            - name: DIVERGE_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.server.auth.oidc.clientSecretSecretRef.name }}
+                  key: {{ .Values.server.auth.oidc.clientSecretSecretRef.key }}
+            {{- end }}
+            {{- if and .Values.server.auth.oidc.enabled .Values.server.auth.session.secretRef.name }}
+            - name: DIVERGE_SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.server.auth.session.secretRef.name }}
+                  key: {{ .Values.server.auth.session.secretRef.key }}
+            {{- end }}
           ports:
             - name: grpc
               containerPort: {{ .Values.server.service.port }}

@@ -92,11 +92,16 @@ func (s *AuthService) GetCurrentUser(ctx context.Context, req *connect.Request[p
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("not authenticated"))
 	}
 
+	issuer := "kubernetes"
+	if user.Email != "" {
+		issuer = "oidc" // OIDC-authenticated users have email populated
+	}
+
 	return connect.NewResponse(&pb.GetCurrentUserResponse{
 		UserId: user.Username,
-		Email:  "", // Not available from TokenReview
+		Email:  user.Email,
 		Groups: user.Groups,
-		Issuer: "kubernetes",
+		Issuer: issuer,
 	}), nil
 }
 

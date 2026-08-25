@@ -54,6 +54,12 @@ func NewMiddleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 			}
 
 			token := extractBearerToken(r.Header.Get("Authorization"))
+			// Fall back to session cookie if no Authorization header
+			if token == "" {
+				if cookie, err := r.Cookie("diverge_token"); err == nil {
+					token = cookie.Value
+				}
+			}
 			if token == "" {
 				if cfg.Metrics != nil && cfg.Metrics.Attempts != nil {
 					cfg.Metrics.Attempts.WithLabelValues("none", "failure").Inc()

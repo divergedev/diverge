@@ -1,7 +1,5 @@
 replicaCount: 1
 
-
-
 image:
   repository: ghcr.io/divergedev/diverge
   tag: "v0.4.0"
@@ -130,6 +128,41 @@ server:
       - diverge-server
     maxStreams: 250
     maxStreamsPerUser: 20
+    # -- OIDC SSO configuration. When enabled, users can log in via an
+    # OpenID Connect provider (Okta, Google, Auth0, Keycloak, etc.)
+    oidc:
+      enabled: false
+      # -- OIDC provider issuer URL (e.g. https://accounts.google.com)
+      issuerUrl: ""
+      # -- OIDC client ID registered with your provider
+      clientId: ""
+      # -- Kubernetes Secret containing the OIDC client secret
+      clientSecretSecretRef:
+        name: ""
+        key: "clientSecret"
+      # -- Public callback URL (must match your OIDC provider config)
+      # e.g. https://diverge.example.com/auth/callback
+      redirectUrl: ""
+      # -- Display name for the SSO button (e.g. "Google", "Okta")
+      providerName: "SSO"
+      # -- OIDC scopes to request
+      scopes: "openid,profile,email,groups"
+      # -- JWT claim used for username
+      usernameClaim: "preferred_username"
+      # -- JWT claim used for group membership
+      groupsClaim: "groups"
+      # -- Restrict access to users in these groups (comma-separated, empty = all)
+      allowedGroups: ""
+    # -- Session JWT configuration (used for OIDC sessions)
+    session:
+      # -- Session cookie max age in seconds
+      maxAge: 86400
+      # -- Kubernetes Secret containing HMAC signing key (base64).
+      # If not set, a random key is generated on startup (sessions
+      # won't survive restarts).
+      secretRef:
+        name: ""
+        key: "session-secret"
   cors:
     # WARNING: Default "*" allows all origins. In production, set this to your
     # specific domain(s) to prevent unauthorized cross-origin access.
