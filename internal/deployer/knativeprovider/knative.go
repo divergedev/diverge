@@ -5,6 +5,7 @@ package knativeprovider
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -62,9 +63,16 @@ func (d *KNativeDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment)
 		image = env.Spec.ServiceConfig.Image
 	}
 
-	err := unstructured.SetNestedStringMap(ksvc.Object, map[string]string{
+	annotations := map[string]string{
 		"autoscaling.knative.dev/minScale": "0",
-	}, "spec", "template", "metadata", "annotations")
+	}
+	for k, v := range env.Annotations {
+		if strings.HasPrefix(k, "instrumentation.opentelemetry.io/") {
+			annotations[k] = v
+		}
+	}
+
+	err := unstructured.SetNestedStringMap(ksvc.Object, annotations, "spec", "template", "metadata", "annotations")
 	if err != nil {
 		return fmt.Errorf("failed to set minScale annotation: %w", err)
 	}

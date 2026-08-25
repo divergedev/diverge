@@ -3,9 +3,11 @@ package deployer
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -62,6 +64,22 @@ func (d *DirectDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) 
 		existingLabels["diverge.io/environment"] = env.Name
 		existingLabels["diverge.io/managed-by"] = "diverge"
 		obj.SetLabels(existingLabels)
+
+		// Inject OTel annotations if present
+		for k, v := range env.Annotations {
+			if strings.HasPrefix(k, "instrumentation.opentelemetry.io/") {
+				// Inject into Pod template if applicable
+				kind := obj.GetKind()
+				if kind == "Deployment" || kind == "StatefulSet" || kind == "DaemonSet" || kind == "Job" {
+					annos, found, _ := unstructured.NestedStringMap(obj.Object, "spec", "template", "metadata", "annotations")
+					if !found || annos == nil {
+						annos = make(map[string]string)
+					}
+					annos[k] = v
+					_ = unstructured.SetNestedStringMap(obj.Object, annos, "spec", "template", "metadata", "annotations")
+				}
+			}
+		}
 
 		// Set OwnerReference for 'same' namespace mode only.
 		// CR2: Only set OwnerReferences when the object is in the same

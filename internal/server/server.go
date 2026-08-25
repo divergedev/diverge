@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"connectrpc.com/connect"
+	"connectrpc.com/otelconnect"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -42,9 +43,16 @@ func NewServeMux(cfg ServeMuxConfig) (*http.ServeMux, *TunnelManager) {
 
 	mux := http.NewServeMux()
 
-	interceptors := connect.WithInterceptors(
-		NewMetricsInterceptor(),
-	)
+	otelInterceptor, err := otelconnect.NewInterceptor()
+	if err != nil {
+		cfg.Logger.Warn("failed to create otel interceptor, continuing without tracing", "error", err)
+	}
+
+	interceptorList := []connect.Interceptor{NewMetricsInterceptor()}
+	if otelInterceptor != nil {
+		interceptorList = append([]connect.Interceptor{otelInterceptor}, interceptorList...)
+	}
+	interceptors := connect.WithInterceptors(interceptorList...)
 
 	envService := NewEnvironmentService(cfg.Client, cfg.K8sClient, cfg.InformerMgr, cfg.LogStreamer, cfg.StreamLimiter, cfg.Logger, cfg.AuditLogger)
 	envPath, envHandler := divergev1alpha1connect.NewEnvironmentServiceHandler(envService, interceptors)

@@ -26,6 +26,7 @@ import (
 	crmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	divergev1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/observability"
 	"github.com/divergedev/diverge/internal/server"
 	"github.com/divergedev/diverge/internal/server/auth"
 	"github.com/divergedev/diverge/internal/server/streaming"
@@ -104,6 +105,16 @@ func main() {
 		Level: slog.LevelInfo,
 	}))
 	slog.SetDefault(logger)
+
+	// Signal-driven graceful shutdown (moved up for tracing)
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer cancel()
+
+	shutdownTracing, err := observability.Setup(ctx, "diverge-server")
+	if err != nil {
+		logger.Error("failed to setup tracing", "error", err)
+		os.Exit(1)
+	}
 
 	logger.Info("starting diverge-server",
 		"addr", addr,
@@ -334,10 +345,6 @@ func main() {
 
 	handler = corsHandler.Handler(handler)
 
-	// Signal-driven graceful shutdown
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
-	defer cancel()
-
 	// Main server — do NOT bind signal context to BaseContext
 	// as it would cancel in-flight requests immediately on SIGTERM,
 	// bypassing graceful shutdown. Let Shutdown() handle draining.
@@ -430,6 +437,10 @@ func main() {
 			}(srv)
 		}
 		shutdownWg.Wait()
+
+		if err := shutdownTracing(shutdownCtx); err != nil {
+			logger.Error("tracing shutdown error", "error", err)
+		}
 
 		logger.Info("shutdown complete")
 		return nil

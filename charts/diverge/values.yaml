@@ -24,6 +24,17 @@ metrics:
   cloudMonitoringDashboard:
     enabled: false
 
+observability:
+  otel:
+    enabled: false
+    endpoint: ""
+    serviceName: ""
+  autoInstrumentation:
+    enabled: false
+    endpoint: "otel-collector.observability:4317"
+    go:
+      enabled: false  # eBPF needs CAP_SYS_PTRACE, disabled by default
+
 grafana:
   dashboards:
     enabled: true

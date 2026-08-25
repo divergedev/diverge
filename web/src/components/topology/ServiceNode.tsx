@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Server, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react'
+import { Server, ChevronDown, ChevronRight, ExternalLink, Activity, SignalZero } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { StatusBadge } from '@/components/StatusBadge'
 import type { ServiceNodeData } from './types'
@@ -25,6 +25,7 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
         'border-border/60 bg-card transition-colors',
         data.isChanged && 'border-primary/50 ring-1 ring-primary/20',
         hasError && 'border-destructive/50',
+        data.isInstrumented === false && 'border-t-dashed border-t-2 bg-muted/20 border-dashed'
       )}
       data-topology-id={data.id}
     >
@@ -100,6 +101,29 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
             <ExternalLink className="h-3 w-3" />
             Open preview
           </a>
+        )}
+
+        {/* Traces and Telemetry */}
+        {(data.traceExplorerUrl || data.isInstrumented === false) && (
+          <div className="flex items-center gap-2 pt-1">
+            {data.traceExplorerUrl && (
+              <a
+                href={data.traceExplorerUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors border border-border rounded px-2 py-1"
+              >
+                <Activity className="h-3 w-3" />
+                Traces
+              </a>
+            )}
+            {data.isInstrumented === false && (
+              <div className="flex items-center gap-1 text-xs text-muted-foreground" title="No Telemetry">
+                <SignalZero className="h-3 w-3" />
+                No Telemetry
+              </div>
+            )}
+          </div>
         )}
 
         {/* Error section */}

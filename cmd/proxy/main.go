@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/observability"
 	"github.com/divergedev/diverge/internal/proxy"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -78,6 +80,12 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	shutdownTracing, err := observability.Setup(ctx, "diverge-proxy")
+	if err != nil {
+		logger.Error(err, "failed to setup tracing")
+		os.Exit(1)
+	}
+
 	lister, err := proxy.NewK8sEnvironmentLister(ctx, kubeconfig, namespace, scheme)
 	if err != nil {
 		logger.Error(err, "Failed to initialize K8s client")
@@ -91,6 +99,9 @@ func main() {
 	}
 
 	handler := proxy.LoggingMiddleware(proxy.CORSMiddleware(previewDomain, server))
+	handler = proxy.BaggageExtractorMiddleware(handler)
+	handler = otelhttp.NewHandler(handler, "diverge-proxy")
+
 	addr := fmt.Sprintf(":%d", port)
 
 	srv := &http.Server{
@@ -119,5 +130,10 @@ func main() {
 		logger.Error(err, "forced shutdown")
 		os.Exit(1)
 	}
+
+	if err := shutdownTracing(shutdownCtx); err != nil {
+		logger.Error(err, "tracing shutdown error")
+	}
+
 	logger.Info("proxy stopped")
 }

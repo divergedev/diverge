@@ -78,6 +78,24 @@ export default function ClusterInfo() {
         </Card>
       </div>
 
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Activity className="h-4 w-4" />
+            <CardTitle className="text-base">OpenTelemetry Auto-Instrumentation</CardTitle>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="flex justify-between items-center text-sm">
+            <span className="text-muted-foreground">Status</span>
+            <span className="text-muted-foreground">Inactive</span>
+          </div>
+          <p className="text-xs text-muted-foreground mt-2">
+            Install the OTel Operator to enable auto-instrumentation
+          </p>
+        </CardContent>
+      </Card>
+
       {cluster?.namespaces?.length ? (
         <Card>
           <CardHeader><CardTitle className="text-base">Namespaces</CardTitle></CardHeader>

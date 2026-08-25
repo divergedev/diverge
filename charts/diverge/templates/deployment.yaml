@@ -48,8 +48,8 @@ spec:
         securityContext:
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
-        {{- if and .Values.database (ne .Values.database.provider "noop") }}
         env:
+        {{- if and .Values.database (ne .Values.database.provider "noop") }}
         - name: DIVERGE_DB_HOST
           value: {{ .Values.database.host | quote }}
         - name: DIVERGE_DB_PORT
@@ -66,6 +66,14 @@ spec:
             secretKeyRef:
               name: {{ .Values.database.passwordSecretName }}
               key: {{ .Values.database.passwordSecretKey | default "password" }}
+        {{- end }}
+        {{- end }}
+        {{- if .Values.observability.otel.enabled }}
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: {{ .Values.observability.otel.endpoint | quote }}
+        {{- if .Values.observability.otel.serviceName }}
+        - name: OTEL_SERVICE_NAME
+          value: {{ .Values.observability.otel.serviceName | quote }}
         {{- end }}
         {{- end }}
         ports:

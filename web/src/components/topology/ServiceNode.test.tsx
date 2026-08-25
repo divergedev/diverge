@@ -84,4 +84,29 @@ describe('ServiceNode', () => {
     const link = screen.getByText('test-service').closest('a')
     expect(link).toHaveAttribute('href', '/environments/default/child-env')
   })
+
+  it('renders View Traces link when traceExplorerUrl is set', () => {
+    render(<ServiceNode data={makeServiceData({ traceExplorerUrl: 'https://jaeger' })} />)
+    expect(screen.getByText('Traces')).toBeInTheDocument()
+    expect(screen.getByText('Traces').closest('a')).toHaveAttribute('href', 'https://jaeger')
+  })
+
+  it('does not render View Traces when traceExplorerUrl is undefined', () => {
+    render(<ServiceNode data={makeServiceData({ traceExplorerUrl: undefined })} />)
+    expect(screen.queryByText('Traces')).not.toBeInTheDocument()
+  })
+
+  it('shows No Telemetry for uninstrumented services', () => {
+    render(<ServiceNode data={makeServiceData({ isInstrumented: false })} />)
+    expect(screen.getByText('No Telemetry')).toBeInTheDocument()
+    const card = screen.getByText('test-service').closest('.border-dashed')
+    expect(card).toBeInTheDocument()
+  })
+
+  it('shows instrumented styling by default', () => {
+    render(<ServiceNode data={makeServiceData()} />)
+    expect(screen.queryByText('No Telemetry')).not.toBeInTheDocument()
+    const card = screen.getByText('test-service').closest('.border-dashed')
+    expect(card).not.toBeInTheDocument()
+  })
 })
