@@ -47,17 +47,19 @@ function buildIngressNode(
 
 export function buildGraphFromPreviewGroup(pg: PreviewGroup): TopologyGraph {
   const ingress = buildIngressNode(pg.spec?.routing as Parameters<typeof buildIngressNode>[0])
-  // TODO: changedServices lives on child Environment.spec.deploy.changedServices,
-  // not on PreviewGroup.spec. Need to surface this via the PreviewGroup API
-  // (e.g. add changed_services to PreviewGroupServiceStatus) to populate isChanged.
-  const changedServices = new Set<string>()
+  const specServices = pg.spec?.services ?? []
+  const statusServices = pg.status?.services ?? []
+
+  // Build a set of changed service names from the per-service status.
+  // Each service's changedServices comes from its child Environment's deploy spec.
+  const changedServices = new Set<string>(
+    statusServices.flatMap((s) => s.changedServices ?? [])
+  )
   const services: ServiceNodeData[] = []
   const dependencies: DependencyNodeData[] = []
   const connections: TopologyConnection[] = []
 
   // Build service nodes
-  const specServices = pg.spec?.services ?? []
-  const statusServices = pg.status?.services ?? []
 
   for (const svc of specServices) {
     const statusMatch = statusServices.find((s) => s.name === svc.name)

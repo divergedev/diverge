@@ -1,12 +1,13 @@
 syntax = "proto3";
 
 package diverge.v1alpha1;
-option go_package = "github.com/divergedev/diverge/api/gen/diverge/v1alpha1;divergev1alpha1";
 
-import "google/protobuf/timestamp.proto";
+import "diverge/v1alpha1/types.proto";
 import "google/protobuf/duration.proto";
 import "google/protobuf/field_mask.proto";
-import "diverge/v1alpha1/types.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/divergedev/diverge/api/gen/diverge/v1alpha1;divergev1alpha1";
 
 message SecretRef {
   string namespace = 1;

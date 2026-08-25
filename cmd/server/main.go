@@ -438,16 +438,20 @@ func main() {
 		}
 		shutdownWg.Wait()
 
-		if err := shutdownTracing(shutdownCtx); err != nil {
-			logger.Error("tracing shutdown error", "error", err)
-		}
-
 		logger.Info("shutdown complete")
 		return nil
 	})
 
-	if err := g.Wait(); err != nil {
-		logger.Error("server exited with error", "error", err)
+	errWait := g.Wait()
+
+	tracingCtx, tracingCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer tracingCancel()
+	if err := shutdownTracing(tracingCtx); err != nil {
+		logger.Error("tracing shutdown error", "error", err)
+	}
+
+	if errWait != nil {
+		logger.Error("server exited with error", "error", errWait)
 		os.Exit(1)
 	}
 }

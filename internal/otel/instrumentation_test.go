@@ -51,12 +51,21 @@ func TestEnsureInstrumentation_ResourceAttributes(t *testing.T) {
 		t.Fatalf("failed to get CR: %v", err)
 	}
 
-	envAttrs, found, _ := unstructured.NestedSlice(instr.Object, "spec", "env")
+	resAttrs, found, _ := unstructured.NestedStringMap(instr.Object, "spec", "resource", "resourceAttributes")
 	if !found {
-		t.Fatal("expected env attributes in spec")
+		t.Fatal("expected resource attributes in spec.resource.resourceAttributes")
 	}
-	if len(envAttrs) != 3 {
-		t.Fatalf("expected 3 env attributes, got %d", len(envAttrs))
+	if len(resAttrs) != 3 {
+		t.Fatalf("expected 3 resource attributes, got %d", len(resAttrs))
+	}
+	if resAttrs["diverge.environment.name"] != "test-env" {
+		t.Fatalf("expected diverge.environment.name=test-env, got %q", resAttrs["diverge.environment.name"])
+	}
+	if resAttrs["diverge.preview_group.name"] != "test-group" {
+		t.Fatalf("expected diverge.preview_group.name=test-group, got %q", resAttrs["diverge.preview_group.name"])
+	}
+	if resAttrs["diverge.baseline.version"] != "v1" {
+		t.Fatalf("expected diverge.baseline.version=v1, got %q", resAttrs["diverge.baseline.version"])
 	}
 }
 
@@ -140,24 +149,13 @@ func TestEnsureInstrumentation_AnyEnvName_PBT(t *testing.T) {
 			t.Fatalf("failed to get CR: %v", err)
 		}
 
-		envAttrs, _, _ := unstructured.NestedSlice(instr.Object, "spec", "env")
-		foundEnv := false
-		foundGroup := false
-		for _, attr := range envAttrs {
-			m := attr.(map[string]interface{})
-			if m["name"] == "diverge.environment.name" && m["value"] == envName {
-				foundEnv = true
-			}
-			if m["name"] == "diverge.preview_group.name" && m["value"] == previewGroup {
-				foundGroup = true
-			}
-		}
+		resAttrs, _, _ := unstructured.NestedStringMap(instr.Object, "spec", "resource", "resourceAttributes")
 
-		if !foundEnv {
-			t.Fatalf("expected diverge.environment.name to be %q", envName)
+		if resAttrs["diverge.environment.name"] != envName {
+			t.Fatalf("expected diverge.environment.name=%q, got %q", envName, resAttrs["diverge.environment.name"])
 		}
-		if previewGroup != "" && !foundGroup {
-			t.Fatalf("expected diverge.preview_group.name to be %q", previewGroup)
+		if previewGroup != "" && resAttrs["diverge.preview_group.name"] != previewGroup {
+			t.Fatalf("expected diverge.preview_group.name=%q, got %q", previewGroup, resAttrs["diverge.preview_group.name"])
 		}
 	})
 }

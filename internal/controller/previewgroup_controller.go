@@ -221,6 +221,7 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			}
 			svcStatus.Phase = divergeiov1alpha1.PhasePending
 			svcStatus.Message = "Environment created"
+			svcStatus.ChangedServices = desiredEnv.Spec.Deploy.ChangedServices
 
 			// Provision database if configured
 			if desiredEnv.Spec.Database.Mode != "" && r.DatabaseProvider != nil {
@@ -259,6 +260,7 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			// Copy status from child
 			svcStatus.Phase = existingEnv.Status.Phase
 			svcStatus.URL = existingEnv.Status.URL
+			svcStatus.ChangedServices = existingEnv.Spec.Deploy.ChangedServices
 			if existingEnv.Status.Phase == divergeiov1alpha1.PhaseFailed {
 				for _, cond := range existingEnv.Status.Conditions {
 					if cond.Status == metav1.ConditionFalse {

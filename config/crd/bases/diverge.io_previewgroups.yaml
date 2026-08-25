@@ -505,6 +505,13 @@ spec:
                     PreviewGroupServiceStatus reports the current state of a single service
                     within a PreviewGroup.
                   properties:
+                    changedServices:
+                      description: |-
+                        ChangedServices lists the services that were modified in this preview,
+                        sourced from the child Environment's spec.deploy.changedServices.
+                      items:
+                        type: string
+                      type: array
                     environmentName:
                       description: EnvironmentName is the name of the child Environment
                         CR created for this service.

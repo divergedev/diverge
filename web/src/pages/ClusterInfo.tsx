@@ -88,10 +88,14 @@ export default function ClusterInfo() {
         <CardContent>
           <div className="flex justify-between items-center text-sm">
             <span className="text-muted-foreground">Status</span>
-            <span className="text-muted-foreground">Inactive</span>
+            <span className="text-muted-foreground">
+              {/* @ts-ignore - optional field that may be added to cluster info */}
+              {cluster?.otelOperatorStatus ?? 'Setup Guide'}
+            </span>
           </div>
           <p className="text-xs text-muted-foreground mt-2">
-            Install the OTel Operator to enable auto-instrumentation
+            {/* @ts-ignore */}
+            {cluster?.otelOperatorStatus ? 'Install the OTel Operator to enable auto-instrumentation' : <span>View the <a href="/docs/guides/otel-setup" className="text-primary hover:underline">setup guide</a> to enable auto-instrumentation.</span>}
           </p>
         </CardContent>
       </Card>

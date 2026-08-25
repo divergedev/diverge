@@ -1,13 +1,14 @@
 syntax = "proto3";
 
 package diverge.v1alpha1;
-option go_package = "github.com/divergedev/diverge/api/gen/diverge/v1alpha1;divergev1alpha1";
 
-import "google/protobuf/timestamp.proto";
+import "diverge/v1alpha1/environment.proto";
+import "diverge/v1alpha1/types.proto";
 import "google/protobuf/duration.proto";
 import "google/protobuf/field_mask.proto";
-import "diverge/v1alpha1/types.proto";
-import "diverge/v1alpha1/environment.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/divergedev/diverge/api/gen/diverge/v1alpha1;divergev1alpha1";
 
 message PreviewGroupServiceSpec {
   string name = 1;
@@ -57,6 +58,9 @@ message PreviewGroupServiceStatus {
   string message = 6;
   string reason = 7;
   string last_log_snippet = 8;
+  // changed_services lists the services that were modified in this preview,
+  // sourced from the child Environment's spec.deploy.changedServices.
+  repeated string changed_services = 9;
 }
 
 message PreviewGroupStatus {

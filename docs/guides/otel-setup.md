@@ -42,8 +42,7 @@ You should see OTel init containers injected into the pod.
 
 ## 5. Per-Language Customization
 
-Auto-instrumentation supports Java, Node.js, Python, and .NET out of the box. The OTel Operator will automatically inject the appropriate agent based on the language.
-
+Auto-instrumentation supports Java, Node.js, Python, and .NET out of the box. The OTel Operator relies on language-specific opt-in annotations (e.g., `instrumentation.opentelemetry.io/inject-java`, `instrumentation.opentelemetry.io/inject-nodejs`) to know which agent to inject. Diverge's deployer automatically adds these annotations to preview workload pod templates based on language detection, so you do not need to manually annotate them.
 ## 6. Go Services
 
 Go auto-instrumentation requires eBPF, which needs elevated privileges (`CAP_SYS_PTRACE`). For this reason, it is disabled by default. We recommend using manual instrumentation (OTel Go SDK) for Go services, or enabling eBPF if you accept the security implications.

@@ -2610,7 +2610,7 @@ var File_diverge_v1alpha1_environment_proto protoreflect.FileDescriptor
 
 const file_diverge_v1alpha1_environment_proto_rawDesc = "" +
 	"\n" +
-	"\"diverge/v1alpha1/environment.proto\x12\x10diverge.v1alpha1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1egoogle/protobuf/duration.proto\x1a google/protobuf/field_mask.proto\x1a\x1cdiverge/v1alpha1/types.proto\"O\n" +
+	"\"diverge/v1alpha1/environment.proto\x12\x10diverge.v1alpha1\x1a\x1cdiverge/v1alpha1/types.proto\x1a\x1egoogle/protobuf/duration.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"O\n" +
 	"\tSecretRef\x12\x1c\n" +
 	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x10\n" +

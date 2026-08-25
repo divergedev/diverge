@@ -119,6 +119,80 @@ func TestPreviewGroupReconcile_CreateChildEnvironments(t *testing.T) {
 	assert.Error(t, err, "child Environment should NOT be created for baseline service")
 }
 
+func TestPreviewGroupReconcile_ChangedServicesPropagated(t *testing.T) {
+	pg := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "mr-55",
+			Finalizers: []string{previewGroupFinalizer},
+		},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Source: divergeiov1alpha1.EnvironmentSource{
+				Provider: "gitlab",
+				Project:  "azra/platform",
+				Branch:   "feat/orders",
+			},
+			Routing: divergeiov1alpha1.PreviewGroupRouting{
+				HeaderKey:   "x-preview-env",
+				HeaderValue: "55",
+			},
+			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{
+					Name:      "orders-api",
+					Image:     "registry.azra-ai.com/orders:mr-55",
+					Mode:      divergeiov1alpha1.ServiceModeImage,
+					Namespace: "product-rad",
+					Port:      8080,
+				},
+				{
+					Name:      "auth-svc",
+					Mode:      divergeiov1alpha1.ServiceModeBaseline,
+					Namespace: "platform-core",
+				},
+			},
+		},
+	}
+
+	r, c := newTestPreviewGroupReconciler(pg)
+
+	// First reconcile: creates child Environments
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "mr-55"},
+	})
+	require.NoError(t, err)
+
+	// Verify child Environment gets changedServices in deploy spec
+	envName := childEnvironmentName("mr-55", "orders-api")
+	var childEnv divergeiov1alpha1.Environment
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{
+		Name:      envName,
+		Namespace: "product-rad",
+	}, &childEnv))
+	assert.Equal(t, []string{"orders-api"}, childEnv.Spec.Deploy.ChangedServices)
+
+	// Verify PreviewGroup status has changedServices on create path
+	var updated divergeiov1alpha1.PreviewGroup
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "mr-55"}, &updated))
+
+	var ordersStatus *divergeiov1alpha1.PreviewGroupServiceStatus
+	var authStatus *divergeiov1alpha1.PreviewGroupServiceStatus
+	for i := range updated.Status.Services {
+		switch updated.Status.Services[i].Name {
+		case "orders-api":
+			ordersStatus = &updated.Status.Services[i]
+		case "auth-svc":
+			authStatus = &updated.Status.Services[i]
+		}
+	}
+
+	require.NotNil(t, ordersStatus, "orders-api should be in status")
+	assert.Equal(t, []string{"orders-api"}, ordersStatus.ChangedServices,
+		"changedServices should propagate from child Environment deploy spec")
+
+	require.NotNil(t, authStatus, "auth-svc should be in status")
+	assert.Empty(t, authStatus.ChangedServices,
+		"baseline service should have empty changedServices")
+}
+
 func TestPreviewGroupReconcile_BaselinePhaseIsRunning(t *testing.T) {
 	pg := &divergeiov1alpha1.PreviewGroup{
 		ObjectMeta: metav1.ObjectMeta{

@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"go.opentelemetry.io/otel/baggage"
-	"pgregory.net/rapid"
+	"hegel.dev/go/hegel"
 )
 
 func TestBaggageExtractor_PreviewHeaders(t *testing.T) {
@@ -67,9 +67,19 @@ func TestBaggageExtractor_PassesThrough(t *testing.T) {
 }
 
 func TestBaggageExtractor_AnyHeader_PBT(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		val := rapid.StringMatching(`[a-zA-Z0-9]+`).Draw(t, "val")
-		headerKey := "x-preview-" + rapid.StringMatching(`[a-zA-Z0-9]+`).Draw(t, "key")
+	hegel.Test(t, func(ht *hegel.T) {
+		genAlphaNum := func() string {
+			length := hegel.Draw(ht, hegel.Integers(1, 15))
+			const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+			var sb strings.Builder
+			for i := 0; i < length; i++ {
+				sb.WriteByte(charset[hegel.Draw(ht, hegel.Integers(0, len(charset)-1))])
+			}
+			return sb.String()
+		}
+
+		val := genAlphaNum()
+		headerKey := "x-preview-" + genAlphaNum()
 
 		var captured *http.Request
 		handler := BaggageExtractorMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

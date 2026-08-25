@@ -37,14 +37,14 @@ func EnsureInstrumentation(ctx context.Context, c client.Client, namespace strin
 	instr.SetNamespace(namespace)
 
 	// Resource attributes
-	envAttributes := []interface{}{
-		map[string]interface{}{"name": "diverge.environment.name", "value": cfg.EnvName},
+	resourceAttributes := map[string]interface{}{
+		"diverge.environment.name": cfg.EnvName,
 	}
 	if cfg.PreviewGroup != "" {
-		envAttributes = append(envAttributes, map[string]interface{}{"name": "diverge.preview_group.name", "value": cfg.PreviewGroup})
+		resourceAttributes["diverge.preview_group.name"] = cfg.PreviewGroup
 	}
 	if cfg.BaselineVersion != "" {
-		envAttributes = append(envAttributes, map[string]interface{}{"name": "diverge.baseline.version", "value": cfg.BaselineVersion})
+		resourceAttributes["diverge.baseline.version"] = cfg.BaselineVersion
 	}
 
 	spec := map[string]interface{}{
@@ -52,11 +52,13 @@ func EnsureInstrumentation(ctx context.Context, c client.Client, namespace strin
 			"endpoint": cfg.OTLPEndpoint,
 		},
 		"propagators": []interface{}{"tracecontext", "baggage"},
-		"env":         envAttributes,
-		"java":        map[string]interface{}{},
-		"nodejs":      map[string]interface{}{},
-		"python":      map[string]interface{}{},
-		"dotnet":      map[string]interface{}{},
+		"resource": map[string]interface{}{
+			"resourceAttributes": resourceAttributes,
+		},
+		"java":   map[string]interface{}{},
+		"nodejs": map[string]interface{}{},
+		"python": map[string]interface{}{},
+		"dotnet": map[string]interface{}{},
 	}
 
 	if cfg.GoEnabled {
