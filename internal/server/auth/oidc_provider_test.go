@@ -1,7 +1,10 @@
 package auth
 
 import (
+	"context"
 	"testing"
+
+	"pgregory.net/rapid"
 )
 
 func TestClaimString(t *testing.T) {
@@ -109,4 +112,106 @@ func TestCheckAllowedGroups(t *testing.T) {
 	if err := p.checkAllowedGroups(nil); err == nil {
 		t.Error("user with no groups should fail when allowedGroups is set")
 	}
+}
+
+func TestOIDCProvider_SessionJWT_Roundtrip(t *testing.T) {
+	sm, _ := NewSessionManager(SessionConfig{})
+	provider := &OIDCProvider{
+		session:       sm,
+		allowedGroups: map[string]bool{},
+	}
+	token, _ := sm.Mint("alice", "alice@example.com", "oidc", []string{"dev"})
+
+	user, err := provider.Authenticate(context.Background(), token)
+	if err != nil {
+		t.Fatalf("Authenticate failed: %v", err)
+	}
+	if user.Username != "alice" {
+		t.Errorf("Username = %q, want alice", user.Username)
+	}
+	if user.Email != "alice@example.com" {
+		t.Errorf("Email = %q, want alice@example.com", user.Email)
+	}
+	if len(user.Groups) != 1 || user.Groups[0] != "dev" {
+		t.Errorf("Groups = %v, want [dev]", user.Groups)
+	}
+}
+
+func TestOIDCProvider_SessionJWT_EmailPreserved(t *testing.T) {
+	sm, _ := NewSessionManager(SessionConfig{})
+	provider := &OIDCProvider{session: sm}
+
+	token, _ := sm.Mint("bob", "bob@example.com", "oidc", nil)
+	user, err := provider.Authenticate(context.Background(), token)
+	if err != nil {
+		t.Fatalf("Authenticate failed: %v", err)
+	}
+	if user.Email != "bob@example.com" {
+		t.Errorf("Email not preserved, got %q", user.Email)
+	}
+}
+
+func TestClaimStringSlice_NativeStringSlice(t *testing.T) {
+	claims := map[string]interface{}{
+		"groups": []string{"a", "b"},
+	}
+	got := ClaimStringSlice(claims, "groups")
+	if len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Errorf("got %v, want [a b]", got)
+	}
+}
+
+func TestCheckAllowedGroups_PBT(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		allowed := rapid.SliceOf(rapid.String()).Draw(t, "allowed")
+		userGroups := rapid.SliceOf(rapid.String()).Draw(t, "userGroups")
+
+		allowedMap := make(map[string]bool)
+		for _, g := range allowed {
+			allowedMap[g] = true
+		}
+
+		p := &OIDCProvider{allowedGroups: allowedMap}
+		err := p.checkAllowedGroups(userGroups)
+
+		intersect := false
+		if len(allowedMap) == 0 {
+			intersect = true
+		} else {
+			for _, g := range userGroups {
+				if allowedMap[g] {
+					intersect = true
+					break
+				}
+			}
+		}
+
+		if intersect && err != nil {
+			t.Fatalf("expected pass, got err: %v", err)
+		}
+		if !intersect && err == nil {
+			t.Fatalf("expected fail, got nil")
+		}
+	})
+}
+
+func TestClaimString_PBT(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		key := rapid.String().Draw(t, "key")
+		valGen := rapid.Custom(func(t *rapid.T) interface{} {
+			switch rapid.IntRange(0, 2).Draw(t, "type") {
+			case 0:
+				return rapid.String().Draw(t, "s")
+			case 1:
+				return rapid.Int().Draw(t, "i")
+			default:
+				return rapid.Bool().Draw(t, "b")
+			}
+		})
+		claimsGen := rapid.MapOf(rapid.String(), valGen)
+		claims := claimsGen.Draw(t, "claims")
+
+		// Ensure this doesn't panic
+		_ = ClaimString(claims, key)
+	})
 }

@@ -77,6 +77,7 @@ func (p *OIDCProvider) Authenticate(ctx context.Context, token string) (*UserInf
 	if claims, err := p.session.Verify(token); err == nil {
 		user := &UserInfo{
 			Username: claims.Subject,
+			Email:    claims.Email,
 			Groups:   claims.Groups,
 		}
 		if err := p.checkAllowedGroups(user.Groups); err != nil {

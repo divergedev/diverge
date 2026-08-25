@@ -355,3 +355,73 @@ func TestMiddleware_PBT(t *testing.T) {
 		}
 	})
 }
+
+func TestMiddleware_CookieFallback(t *testing.T) {
+	user := &UserInfo{Username: "cookie-user", UID: "uid-123", Extra: map[string]authorizationv1.ExtraValue{"k1": {"v1"}}}
+	cfg := MiddlewareConfig{
+		Provider: &mockProvider{user: user},
+		Cache:    NewTokenCache(10, time.Minute),
+		Logger:   testLogger(),
+	}
+	mw := NewMiddleware(cfg)
+
+	var ctxUser *UserInfo
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctxUser, _ = UserInfoFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/api", nil)
+	req.AddCookie(&http.Cookie{Name: "diverge_token", Value: "valid-cookie-token"})
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+	require.NotNil(t, ctxUser)
+	assert.Equal(t, user.Username, ctxUser.Username)
+}
+
+func TestMiddleware_HeaderPrecedenceOverCookie(t *testing.T) {
+	cfg := MiddlewareConfig{
+		Provider: &mockProvider{},
+		Cache:    NewTokenCache(10, time.Minute),
+		Logger:   testLogger(),
+	}
+	mw := NewMiddleware(cfg)
+
+	var ctxUser *UserInfo
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctxUser, _ = UserInfoFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/api", nil)
+	req.Header.Set("Authorization", "Bearer header-token")
+	req.AddCookie(&http.Cookie{Name: "diverge_token", Value: "cookie-token"})
+
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+	require.NotNil(t, ctxUser)
+	assert.Equal(t, "header-token", ctxUser.Username)
+}
+
+func TestMiddleware_CookieInvalid(t *testing.T) {
+	cfg := MiddlewareConfig{
+		Provider: &mockProvider{err: errors.New("invalid")},
+		Cache:    NewTokenCache(10, time.Minute),
+		Logger:   testLogger(),
+	}
+	mw := NewMiddleware(cfg)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/api", nil)
+	req.AddCookie(&http.Cookie{Name: "diverge_token", Value: "invalid-cookie"})
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Result().StatusCode)
+}

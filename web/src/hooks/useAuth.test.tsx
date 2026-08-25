@@ -63,6 +63,18 @@ describe('useAuth and AuthProvider', () => {
       expect(result.current.isLoading).toBe(false)
     })
   })
+
+  it('Logout calls POST /auth/logout', async () => {
+    const fetchSpy = vi.spyOn(window, 'fetch')
+    const { result } = renderHook(() => useAuth())
+
+    await act(async () => {
+      await result.current.logout()
+    })
+
+    expect(fetchSpy).toHaveBeenCalledWith('/auth/logout', expect.objectContaining({ method: 'POST' }))
+    fetchSpy.mockRestore()
+  })
 })
 
 describe('ProtectedRoute', () => {
@@ -104,6 +116,23 @@ describe('ProtectedRoute', () => {
     )
 
     expect(await screen.findByText('Protected Content')).toBeInTheDocument()
+  })
+
+  it('Shows spinner while loading', () => {
+    // By not setting a token, it will start loading initially
+    const { container } = renderWithProviders(
+      <MemoryRouter initialEntries={['/protected']}>
+        <Routes>
+          <Route path="/protected" element={
+            <ProtectedRoute>
+              <div>Protected Content</div>
+            </ProtectedRoute>
+          } />
+        </Routes>
+      </MemoryRouter>
+    )
+
+    expect(container.querySelector('.animate-spin')).toBeInTheDocument()
   })
 })
 

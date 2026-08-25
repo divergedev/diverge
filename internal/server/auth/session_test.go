@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"pgregory.net/rapid"
 )
 
 func TestSessionManager_MintAndVerify(t *testing.T) {
@@ -190,4 +192,99 @@ func TestGenerateKey(t *testing.T) {
 	if len(decoded) != 32 {
 		t.Errorf("key length = %d, want 32", len(decoded))
 	}
+}
+
+func TestSessionManager_IssuerMismatch(t *testing.T) {
+	key := make([]byte, 32)
+	sm1, _ := NewSessionManager(SessionConfig{SigningKey: key, Issuer: "issuer1"})
+	sm2, _ := NewSessionManager(SessionConfig{SigningKey: key, Issuer: "issuer2"})
+
+	token, _ := sm1.Mint("alice", "a@example.com", "oidc", nil)
+
+	_, err := sm2.Verify(token)
+	if err == nil {
+		t.Fatal("expected error for issuer mismatch, got nil")
+	}
+	if !strings.Contains(err.Error(), "issuer") {
+		t.Errorf("expected error to mention issuer, got %v", err)
+	}
+}
+
+func TestSessionManager_DefaultValues(t *testing.T) {
+	sm, _ := NewSessionManager(SessionConfig{})
+	if sm.config.Issuer != "diverge-server" {
+		t.Errorf("expected default issuer diverge-server, got %q", sm.config.Issuer)
+	}
+	if sm.config.MaxAge != 24*time.Hour {
+		t.Errorf("expected default max age 24h, got %v", sm.config.MaxAge)
+	}
+}
+
+func TestSessionManager_MintVerify_PBT(t *testing.T) {
+	key := make([]byte, 32)
+	sm, _ := NewSessionManager(SessionConfig{SigningKey: key, MaxAge: time.Hour})
+
+	rapid.Check(t, func(t *rapid.T) {
+		subject := rapid.String().Draw(t, "subject")
+		email := rapid.String().Draw(t, "email")
+		provider := rapid.String().Draw(t, "provider")
+		groups := rapid.SliceOf(rapid.String()).Draw(t, "groups")
+
+		token, err := sm.Mint(subject, email, provider, groups)
+		if err != nil {
+			t.Fatalf("Mint error: %v", err)
+		}
+
+		claims, err := sm.Verify(token)
+		if err != nil {
+			t.Fatalf("Verify error: %v", err)
+		}
+
+		if claims.Subject != subject {
+			t.Errorf("subject mismatch")
+		}
+		if claims.Email != email {
+			t.Errorf("email mismatch")
+		}
+		if claims.Provider != provider {
+			t.Errorf("provider mismatch")
+		}
+
+		if len(groups) == 0 {
+			if len(claims.Groups) != 0 {
+				t.Errorf("groups mismatch")
+			}
+		} else {
+			if len(claims.Groups) != len(groups) {
+				t.Fatalf("groups length mismatch")
+			}
+			for i, g := range groups {
+				if claims.Groups[i] != g {
+					t.Errorf("groups mismatch at %d", i)
+				}
+			}
+		}
+	})
+}
+
+func TestSessionManager_TamperProof_PBT(t *testing.T) {
+	key := make([]byte, 32)
+	sm, _ := NewSessionManager(SessionConfig{SigningKey: key, MaxAge: time.Hour})
+
+	rapid.Check(t, func(t *rapid.T) {
+		subject := rapid.String().Draw(t, "subject")
+		token, _ := sm.Mint(subject, "", "test", nil)
+
+		tokenBytes := []byte(token)
+		idx := rapid.IntRange(0, len(tokenBytes)-1).Draw(t, "idx")
+
+		// Flip a bit
+		tokenBytes[idx] ^= 1
+
+		tampered := string(tokenBytes)
+		_, err := sm.Verify(tampered)
+		if err == nil {
+			t.Fatalf("expected tampered token to fail verification")
+		}
+	})
 }
