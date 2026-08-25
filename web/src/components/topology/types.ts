@@ -37,6 +37,8 @@ export interface ServiceNodeData {
   environmentName: string // child Environment CR for drill-down
   url: string
   isChanged: boolean // highlighted if in deploy.changedServices
+  traceExplorerUrl?: string // deep-link to external trace viewer (Jaeger/Tempo)
+  isInstrumented?: boolean  // whether OTel auto-instrumentation is active
 }
 
 export interface DependencyNodeData {
@@ -53,6 +55,12 @@ export interface DependencyNodeData {
 
 export type ConnectionStatus = 'active' | 'deploying' | 'error' | 'inactive'
 
+export interface TraceEdgeData {
+  requestRate: number    // req/s
+  errorRate: number      // 0-1 percentage
+  p99Latency: number     // milliseconds
+}
+
 export interface TopologyConnection {
   id: string
   from: string // node id
@@ -61,6 +69,7 @@ export interface TopologyConnection {
   toPort: 'left' // always left side of target
   status: ConnectionStatus
   label?: string // optional path prefix or protocol label
+  traceData?: TraceEdgeData  // populated when trace metrics available
 }
 
 // --- Mode metadata for tooltips ---

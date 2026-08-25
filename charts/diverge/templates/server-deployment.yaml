@@ -53,6 +53,14 @@ spec:
             - --session-max-age={{ .Values.server.auth.session.maxAge }}s
             {{- end }}
           env:
+            {{- if .Values.observability.otel.enabled }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.observability.otel.endpoint | quote }}
+            {{- if .Values.observability.otel.serviceName }}
+            - name: OTEL_SERVICE_NAME
+              value: {{ .Values.observability.otel.serviceName | quote }}
+            {{- end }}
+            {{- end }}
             - name: POD_IP
               valueFrom:
                 fieldRef:

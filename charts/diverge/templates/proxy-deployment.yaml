@@ -32,6 +32,15 @@ spec:
             - --upstream={{ .Values.proxy.upstream }}
             - --header-key={{ .Values.proxy.headerKey }}
             - --namespace={{ .Release.Namespace }}
+          env:
+            {{- if .Values.observability.otel.enabled }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.observability.otel.endpoint | quote }}
+            {{- if .Values.observability.otel.serviceName }}
+            - name: OTEL_SERVICE_NAME
+              value: {{ .Values.observability.otel.serviceName | quote }}
+            {{- end }}
+            {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.proxy.port }}
