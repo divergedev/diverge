@@ -3,6 +3,7 @@ package deployer
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -25,9 +26,9 @@ var hsoListGVK = schema.GroupVersionKind{
 	Kind:    "HTTPScaledObjectList",
 }
 
-// KEDAConfig represents the configuration or state for this type.
+// KEDAConfig holds controller-level CLI defaults for KEDA autoscaling.
+// Per-service CRD config (KEDASpec) overrides these when set.
 type KEDAConfig struct {
-	// TODO: move to CRD PreviewGroupServiceSpec in v2.0
 	MinReplicas int64
 	MaxReplicas int64
 	Cooldown    int64
@@ -43,6 +44,13 @@ type KEDADeployer struct {
 // Deploy performs its designated operation.
 func (d *KEDADeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) error {
 	logger := log.FromContext(ctx).WithName("keda-deployer")
+
+	// Validate KEDA configuration before deploying the workload to avoid
+	// partial deployments with invalid autoscaling settings.
+	minRepl, maxRepl, cooldown := d.resolveKEDAConfig(env)
+	if minRepl > maxRepl {
+		return fmt.Errorf("invalid KEDA config: minReplicas (%d) > maxReplicas (%d)", minRepl, maxRepl)
+	}
 
 	if err := d.Inner.Deploy(ctx, env); err != nil {
 		return err
@@ -75,6 +83,16 @@ func (d *KEDADeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) er
 		}
 	}
 
+	// S1: Check if KEDA is explicitly disabled via CRD
+	if env.Spec.ServiceConfig != nil && env.Spec.ServiceConfig.KEDA != nil {
+		k := env.Spec.ServiceConfig.KEDA
+		if k.Enabled != nil && !*k.Enabled {
+			logger.Info("KEDA explicitly disabled for service, cleaning up any existing HSO",
+				"name", targetName, "namespace", targetNS)
+			return d.deleteHSOIfExists(ctx, targetName, targetNS)
+		}
+	}
+
 	hso := &unstructured.Unstructured{}
 	hso.SetGroupVersionKind(hsoGVK)
 	hso.SetName(targetName)
@@ -93,15 +111,13 @@ func (d *KEDADeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) er
 	if err := unstructured.SetNestedField(hso.Object, targetPort, "spec", "scaleTargetRef", "port"); err != nil {
 		return fmt.Errorf("failed to set scaleTargetRef.port: %w", err)
 	}
-	minRepl := d.Config.MinReplicas
-	maxRepl := d.Config.MaxReplicas
-	if maxRepl == 0 {
-		maxRepl = 3
+
+	// Use pre-validated values from resolveKEDAConfig
+	if env.Spec.ServiceConfig != nil && env.Spec.ServiceConfig.KEDA != nil {
+		logger.Info("CRD KEDA config overrides applied",
+			"minReplicas", minRepl, "maxReplicas", maxRepl, "cooldown", cooldown)
 	}
-	cooldown := d.Config.Cooldown
-	if cooldown == 0 {
-		cooldown = 300
-	}
+
 	if err := unstructured.SetNestedField(hso.Object, minRepl, "spec", "replicas", "min"); err != nil {
 		return fmt.Errorf("failed to set replicas.min: %w", err)
 	}
@@ -137,6 +153,56 @@ func (d *KEDADeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) er
 
 	logger.Info("Successfully deployed HTTPScaledObject", "name", targetName, "namespace", targetNS)
 	return nil
+}
+
+// deleteHSOIfExists removes an HTTPScaledObject if it exists, used when KEDA is explicitly disabled.
+func (d *KEDADeployer) deleteHSOIfExists(ctx context.Context, name, namespace string) error {
+	deleteCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	hso := &unstructured.Unstructured{}
+	hso.SetGroupVersionKind(hsoGVK)
+	hso.SetName(name)
+	hso.SetNamespace(namespace)
+
+	if err := d.Client.Delete(deleteCtx, hso); err != nil {
+		if !meta.IsNoMatchError(err) && client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete HTTPScaledObject for disabled KEDA: %w", err)
+		}
+	}
+	return nil
+}
+
+// resolveKEDAConfig resolves KEDA configuration using precedence: CRD > CLI > built-in defaults.
+func (d *KEDADeployer) resolveKEDAConfig(env *v1alpha1.Environment) (minRepl, maxRepl, cooldown int64) {
+	minRepl = d.Config.MinReplicas
+	maxRepl = d.Config.MaxReplicas
+	cooldown = d.Config.Cooldown
+	maxReplOverridden := false
+	cooldownOverridden := false
+
+	if env.Spec.ServiceConfig != nil && env.Spec.ServiceConfig.KEDA != nil {
+		k := env.Spec.ServiceConfig.KEDA
+		if k.MinReplicas != nil && *k.MinReplicas >= 0 {
+			minRepl = int64(*k.MinReplicas)
+		}
+		if k.MaxReplicas != nil && *k.MaxReplicas >= 1 {
+			maxRepl = int64(*k.MaxReplicas)
+			maxReplOverridden = true
+		}
+		if k.CooldownPeriod != nil && *k.CooldownPeriod >= 0 {
+			cooldown = int64(*k.CooldownPeriod)
+			cooldownOverridden = true
+		}
+	}
+
+	if maxRepl == 0 && !maxReplOverridden {
+		maxRepl = 3
+	}
+	if cooldown == 0 && !cooldownOverridden {
+		cooldown = 300
+	}
+	return
 }
 
 // Teardown performs its designated operation.

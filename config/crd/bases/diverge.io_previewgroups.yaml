@@ -385,6 +385,48 @@ spec:
                       - Never
                       - IfNotPresent
                       type: string
+                    keda:
+                      description: |-
+                        KEDA configures per-service autoscaling and scale-to-zero settings.
+                        Overrides controller-level CLI flags when set.
+                      properties:
+                        cooldownPeriod:
+                          description: |-
+                            CooldownPeriod is the cooldown period in seconds before scaling down.
+                            When nil, falls back to the controller CLI flag (--keda-cooldown).
+                          format: int32
+                          minimum: 0
+                          type: integer
+                        enabled:
+                          description: Enabled enables KEDA autoscaling for this service.
+                          type: boolean
+                        maxReplicas:
+                          description: |-
+                            MaxReplicas is the maximum number of replicas.
+                            When nil, falls back to the controller CLI flag (--keda-max-replicas).
+                          format: int32
+                          maximum: 100
+                          minimum: 1
+                          type: integer
+                        minReplicas:
+                          description: |-
+                            MinReplicas is the minimum number of replicas. Set to 0 for scale-to-zero.
+                            When nil, falls back to the controller CLI flag (--keda-min-replicas).
+                          format: int32
+                          minimum: 0
+                          type: integer
+                        pollingInterval:
+                          description: 'PollingInterval is the interval in seconds
+                            KEDA checks metrics. Default: 30.'
+                          format: int32
+                          minimum: 1
+                          type: integer
+                        targetQueueSize:
+                          description: 'TargetQueueSize is the target backlog per
+                            replica for queue-based scaling. Default: 5.'
+                          format: int32
+                          type: integer
+                      type: object
                     mode:
                       default: image
                       description: Mode defines how this service participates in the

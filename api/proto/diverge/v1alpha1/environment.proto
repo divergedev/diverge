@@ -100,6 +100,15 @@ message PostDeploySpec {
   bool blocking = 5;
 }
 
+message KEDASpec {
+  optional bool enabled = 1;
+  optional int32 min_replicas = 2;
+  optional int32 max_replicas = 3;
+  optional int32 cooldown_period = 4;
+  optional int32 polling_interval = 5;
+  optional int32 target_queue_size = 6;
+}
+
 message EnvironmentLifecycle {
   google.protobuf.Duration ttl = 1;
   bool cleanup_on_merge = 2;
@@ -156,6 +165,7 @@ message ServicePreviewConfig {
   string protocol = 11;
   string endpoint = 12;
   ResourceOverride resources = 13;
+  KEDASpec keda = 14;
 }
 
 message EnvironmentSpec {
