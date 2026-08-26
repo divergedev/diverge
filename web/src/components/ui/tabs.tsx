@@ -4,9 +4,11 @@ import { cn } from '@/lib/utils'
 interface TabsContextValue { value: string; onChange: (v: string) => void }
 const TabsContext = createContext<TabsContextValue>({ value: '', onChange: () => {} })
 
-export function Tabs({ defaultValue, children, className }: { defaultValue: string; children: ReactNode; className?: string }) {
-  const [value, setValue] = useState(defaultValue)
-  return <TabsContext.Provider value={{ value, onChange: setValue }}><div className={className}>{children}</div></TabsContext.Provider>
+export function Tabs({ defaultValue, value: controlledValue, onValueChange, children, className }: { defaultValue?: string; value?: string; onValueChange?: (v: string) => void; children: ReactNode; className?: string }) {
+  const [internalValue, setInternalValue] = useState(defaultValue ?? controlledValue ?? '')
+  const value = controlledValue ?? internalValue
+  const onChange = onValueChange ?? setInternalValue
+  return <TabsContext.Provider value={{ value, onChange }}><div className={className}>{children}</div></TabsContext.Provider>
 }
 
 export function TabsList({ children, className }: { children: ReactNode; className?: string }) {

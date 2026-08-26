@@ -1,8 +1,9 @@
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { useGetEnvironment, useDeleteEnvironment, useExtendTTL } from '@/api/queries'
+import { useGetEnvironment, useDeleteEnvironment, useExtendTTL, useListHookJobs } from '@/api/queries'
 import { StatusBadge } from '@/components/StatusBadge'
 import { TTLCountdown } from '@/components/TTLCountdown'
 import { LogViewer } from '@/components/LogViewer'
+import { HooksTab } from '@/components/HooksTab'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
@@ -17,7 +18,10 @@ export default function EnvironmentDetail() {
   const { data, isLoading, error, refetch } = useGetEnvironment(namespace, name)
   const deleteEnv = useDeleteEnvironment()
   const extendTtl = useExtendTTL()
+  const hookJobs = useListHookJobs(namespace, name)
+  const failedHookCount = (hookJobs.data?.jobs ?? []).filter(j => j.phase === 'Failed').length
   const [mutationError, setMutationError] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState('overview')
 
   if (isLoading) {
     return <div className="flex justify-center py-16"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" /></div>
@@ -113,10 +117,18 @@ export default function EnvironmentDetail() {
         <TTLCountdown expiresAt={env.status?.expiresAt?.toDate?.()?.toISOString?.()} />
       </div>
 
-      <Tabs defaultValue="overview">
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="topology">Topology</TabsTrigger>
+          <TabsTrigger value="hooks">
+            Hooks
+            {failedHookCount > 0 && (
+              <span className="ml-1.5 inline-flex items-center justify-center h-5 min-w-5 px-1 rounded-full bg-destructive text-destructive-foreground text-xs font-medium">
+                {failedHookCount}
+              </span>
+            )}
+          </TabsTrigger>
           <TabsTrigger value="logs">Logs</TabsTrigger>
           <TabsTrigger value="yaml">YAML</TabsTrigger>
         </TabsList>
@@ -130,6 +142,18 @@ export default function EnvironmentDetail() {
         </TabsContent>
 
         <TabsContent value="overview">
+          {failedHookCount > 0 && (
+            <div className="bg-destructive/10 border border-destructive/20 text-destructive px-4 py-3 rounded-md flex items-center gap-2 text-sm mb-4" role="alert">
+              <AlertCircle className="h-4 w-4 flex-shrink-0" />
+              <span>{failedHookCount} hook{failedHookCount > 1 ? 's' : ''} failed.</span>
+              <button
+                className="underline hover:no-underline font-medium"
+                onClick={() => setActiveTab('hooks')}
+              >
+                View Hooks tab →
+              </button>
+            </div>
+          )}
           <div className="grid gap-4 md:grid-cols-2">
             <Card>
               <CardHeader><CardTitle className="text-base">Spec</CardTitle></CardHeader>
@@ -153,6 +177,10 @@ export default function EnvironmentDetail() {
               </CardContent>
             </Card>
           </div>
+        </TabsContent>
+
+        <TabsContent value="hooks">
+          <HooksTab namespace={namespace} environmentName={name} />
         </TabsContent>
 
         <TabsContent value="logs">

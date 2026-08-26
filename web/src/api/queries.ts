@@ -6,6 +6,7 @@ export const queryKeys = {
   environment: (ns: string, name: string) => ['environment', ns, name] as const,
   previewGroups: (ns?: string) => ['previewGroups', ns ?? 'all'] as const,
   previewGroup: (ns: string, name: string) => ['previewGroup', ns, name] as const,
+  hookJobs: (ns: string, envName: string) => ['hookJobs', ns, envName] as const,
   clusterInfo: ['clusterInfo'] as const,
   currentUser: ['currentUser'] as const,
   permissions: (ns?: string) => ['permissions', ns ?? 'all'] as const,
@@ -112,5 +113,25 @@ export function useDeletePreviewGroup() {
     mutationFn: (req: { namespace: string; name: string }) =>
       previewGroupClient.deletePreviewGroup(req),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['previewGroups'] }) },
+  })
+}
+
+export function useListHookJobs(namespace: string, environmentName: string) {
+  return useQuery({
+    queryKey: queryKeys.hookJobs(namespace, environmentName),
+    queryFn: () => environmentClient.listHookJobs({ namespace, environmentName }),
+    enabled: !!namespace && !!environmentName,
+    refetchInterval: 5000,
+  })
+}
+
+export function useRetryHook() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (req: { namespace: string; environmentName: string; hookType: string }) =>
+      environmentClient.retryHook(req),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: queryKeys.hookJobs(vars.namespace, vars.environmentName) })
+    },
   })
 }
