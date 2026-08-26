@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.21.0
+    controller-gen.kubebuilder.io/version: v0.17.3
   name: previewgroups.diverge.io
 spec:
   group: diverge.io
@@ -66,6 +66,43 @@ spec:
                   Database provides group-level database configuration.
                   Individual services can override this in their own database field.
                 properties:
+                  atlas:
+                    description: AtlasSpec configures Atlas Operator integration for
+                      database schema management.
+                    properties:
+                      blocking:
+                        default: true
+                        description: Blocking controls whether the Environment waits
+                          for Atlas to report Ready.
+                        type: boolean
+                      migrationConfigMap:
+                        description: MigrationConfigMap references a ConfigMap containing
+                          versioned .sql migration files and atlas.sum.
+                        type: string
+                      mode:
+                        description: Mode selects the Atlas migration paradigm.
+                        enum:
+                        - versioned
+                        - declarative
+                        type: string
+                      policy:
+                        description: Policy configures Atlas safety policies.
+                        properties:
+                          destructive:
+                            default: error
+                            description: Destructive controls how destructive schema
+                              changes are handled.
+                            enum:
+                            - error
+                            - warn
+                            - allow
+                            type: string
+                        type: object
+                      schemaConfigMap:
+                        description: SchemaConfigMap references a ConfigMap containing
+                          the desired schema (SQL or HCL).
+                        type: string
+                    type: object
                   connectionRef:
                     type: string
                   migrationJob:
@@ -78,6 +115,11 @@ spec:
                         items:
                           type: string
                         type: array
+                      blocking:
+                        default: true
+                        description: Blocking controls whether the Environment waits
+                          for the migration to complete.
+                        type: boolean
                       envFrom:
                         description: EnvFrom specifies environment variables to inject
                           from Secrets.
@@ -214,6 +256,43 @@ spec:
                       description: Database overrides the group-level database configuration
                         for this service.
                       properties:
+                        atlas:
+                          description: AtlasSpec configures Atlas Operator integration
+                            for database schema management.
+                          properties:
+                            blocking:
+                              default: true
+                              description: Blocking controls whether the Environment
+                                waits for Atlas to report Ready.
+                              type: boolean
+                            migrationConfigMap:
+                              description: MigrationConfigMap references a ConfigMap
+                                containing versioned .sql migration files and atlas.sum.
+                              type: string
+                            mode:
+                              description: Mode selects the Atlas migration paradigm.
+                              enum:
+                              - versioned
+                              - declarative
+                              type: string
+                            policy:
+                              description: Policy configures Atlas safety policies.
+                              properties:
+                                destructive:
+                                  default: error
+                                  description: Destructive controls how destructive
+                                    schema changes are handled.
+                                  enum:
+                                  - error
+                                  - warn
+                                  - allow
+                                  type: string
+                              type: object
+                            schemaConfigMap:
+                              description: SchemaConfigMap references a ConfigMap
+                                containing the desired schema (SQL or HCL).
+                              type: string
+                          type: object
                         connectionRef:
                           type: string
                         migrationJob:
@@ -226,6 +305,11 @@ spec:
                               items:
                                 type: string
                               type: array
+                            blocking:
+                              default: true
+                              description: Blocking controls whether the Environment
+                                waits for the migration to complete.
+                              type: boolean
                             envFrom:
                               description: EnvFrom specifies environment variables
                                 to inject from Secrets.
@@ -337,6 +421,50 @@ spec:
                         existing Service if 0.
                       format: int32
                       type: integer
+                    postDeploy:
+                      description: PostDeploy configures a generic post-deployment
+                        Job hook for this service.
+                      properties:
+                        args:
+                          description: Args specifies the arguments to pass to the
+                            post-deploy container.
+                          items:
+                            type: string
+                          type: array
+                        blocking:
+                          default: false
+                          description: Blocking controls whether the Environment waits
+                            for the post-deploy job.
+                          type: boolean
+                        envFrom:
+                          description: EnvFrom specifies environment variables to
+                            inject from Secrets.
+                          items:
+                            description: SecretRef references a specific key within
+                              a Kubernetes Secret.
+                            properties:
+                              key:
+                                description: Key is the specific key in the Secret
+                                  to reference.
+                                type: string
+                              name:
+                                description: Name is the name of the Secret.
+                                type: string
+                              namespace:
+                                description: Namespace is the namespace of the Secret.
+                                type: string
+                            type: object
+                          type: array
+                        image:
+                          description: Image is the container image to use for the
+                            post-deploy job.
+                          type: string
+                        timeoutSeconds:
+                          description: TimeoutSeconds is the maximum duration before
+                            the job is terminated.
+                          format: int32
+                          type: integer
+                      type: object
                     protocol:
                       default: http
                       description: Protocol determines whether to generate an HTTPRoute

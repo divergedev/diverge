@@ -17,7 +17,6 @@
             # Go
             go
             gopls
-            golangci-lint
             delve
 
             # Kubernetes

@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -197,6 +198,7 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 		// Create or update
 		var existingEnv divergeiov1alpha1.Environment
+		isNew := false
 		err := r.Get(ctx, types.NamespacedName{Name: envName, Namespace: targetNS}, &existingEnv)
 		if err != nil {
 			if !apierrors.IsNotFound(err) {
@@ -222,30 +224,8 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			svcStatus.Phase = divergeiov1alpha1.PhasePending
 			svcStatus.Message = "Environment created"
 			svcStatus.ChangedServices = desiredEnv.Spec.Deploy.ChangedServices
-
-			// Provision database if configured
-			if desiredEnv.Spec.Database.Mode != "" && r.DatabaseProvider != nil {
-				dbCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-				res, err := r.DatabaseProvider.Provision(dbCtx, desiredEnv)
-				cancel()
-				if err != nil {
-					logger.Error(err, "failed to provision database for child Environment")
-				} else if res != nil && len(res.EnvVars) > 0 {
-					// Inject database env vars into child environment
-					for k, v := range res.EnvVars {
-						desiredEnv.Spec.ServiceConfig.Env = append(desiredEnv.Spec.ServiceConfig.Env, divergeiov1alpha1.EnvVar{
-							Name:  k,
-							Value: v,
-						})
-					}
-					// TODO(v1.1): Execute res.SetupSQL here via a Job or direct DB connection
-
-					// Update the child environment with the new env vars
-					if err := r.Update(ctx, desiredEnv); err != nil {
-						logger.Error(err, "failed to update child Environment with database env vars")
-					}
-				}
-			}
+			existingEnv = *desiredEnv
+			isNew = true
 		} else {
 			// Update — sync spec if changed
 			if r.needsUpdate(&existingEnv, desiredEnv) {
@@ -271,6 +251,73 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 				}
 			}
 		}
+
+		// Provision database if configured
+		var dbRes *database.DatabaseResult
+		if existingEnv.Spec.Database.Mode != "" && r.DatabaseProvider != nil {
+			dbCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			res, err := r.DatabaseProvider.Provision(dbCtx, &existingEnv)
+			cancel()
+			if err != nil {
+				logger.Error(err, "failed to provision database for child Environment")
+			} else {
+				dbRes = res
+				if isNew && res != nil && len(res.EnvVars) > 0 {
+					for k, v := range res.EnvVars {
+						existingEnv.Spec.ServiceConfig.Env = append(existingEnv.Spec.ServiceConfig.Env, divergeiov1alpha1.EnvVar{
+							Name:  k,
+							Value: v,
+						})
+					}
+					if err := r.Update(ctx, &existingEnv); err != nil {
+						logger.Error(err, "failed to update child Environment with database env vars")
+					}
+				}
+			}
+		}
+
+		// Run database migrations
+		if dbRes != nil {
+			if err := r.runMigrations(ctx, &existingEnv, dbRes); err != nil {
+				if errors.Is(err, ErrHookInProgress) {
+					requeue = true
+					svcStatus.Phase = divergeiov1alpha1.PhaseDeploying
+					svcStatus.Reason = "MigrationRunning"
+					svcStatus.Message = "Migration is currently running"
+				} else {
+					logger.Error(err, "migration failed for child Environment")
+					svcStatus.Phase = divergeiov1alpha1.PhaseFailed
+					svcStatus.Reason = "MigrationFailed"
+					svcStatus.Message = fmt.Sprintf("Migration failed: %v", err)
+				}
+				serviceStatuses = append(serviceStatuses, svcStatus)
+				continue
+			}
+		}
+
+		// Run post-deploy hooks
+		if svc.PostDeploy != nil && svcStatus.Phase == divergeiov1alpha1.PhaseRunning {
+			if err := r.runPostDeployJob(ctx, &existingEnv, svc.PostDeploy); err != nil {
+				if errors.Is(err, ErrHookInProgress) {
+					blocking := svc.PostDeploy.Blocking != nil && *svc.PostDeploy.Blocking
+					if blocking {
+						requeue = true
+						svcStatus.Phase = divergeiov1alpha1.PhaseDeploying
+						svcStatus.Reason = "PostDeployRunning"
+						svcStatus.Message = "Post-deploy hook is currently running"
+					}
+				} else {
+					logger.Error(err, "post-deploy hook failed for child Environment")
+					blocking := svc.PostDeploy.Blocking != nil && *svc.PostDeploy.Blocking
+					if blocking {
+						svcStatus.Phase = divergeiov1alpha1.PhaseFailed
+						svcStatus.Reason = "PostDeployFailed"
+						svcStatus.Message = fmt.Sprintf("Post-deploy hook failed: %v", err)
+					}
+				}
+			}
+		}
+
 		serviceStatuses = append(serviceStatuses, svcStatus)
 	}
 

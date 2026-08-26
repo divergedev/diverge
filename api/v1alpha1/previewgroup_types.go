@@ -123,6 +123,10 @@ type PreviewGroupServiceSpec struct {
 	// Database overrides the group-level database configuration for this service.
 	// +optional
 	Database *EnvironmentDatabase `json:"database,omitempty"`
+
+	// PostDeploy configures a generic post-deployment Job hook for this service.
+	// +optional
+	PostDeploy *PostDeploySpec `json:"postDeploy,omitempty"`
 }
 
 // ResourceOverride allows preview pods to use fewer resources than baseline.

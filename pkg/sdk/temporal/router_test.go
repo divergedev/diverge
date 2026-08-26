@@ -4,8 +4,8 @@ import (
 	"os"
 	"testing"
 
-	"pgregory.net/rapid"
 	"github.com/stretchr/testify/assert"
+	"pgregory.net/rapid"
 )
 
 func TestTaskQueue(t *testing.T) {

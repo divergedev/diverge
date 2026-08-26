@@ -20,6 +20,7 @@ message MigrationJobSpec {
   repeated string args = 2;
   repeated SecretRef env_from = 3;
   int32 timeout_seconds = 4;
+  bool blocking = 5;
 }
 
 message EnvironmentSource {
@@ -76,6 +77,27 @@ message EnvironmentDatabase {
   string connection_ref = 2;
   string seed_source = 3;
   MigrationJobSpec migration_job = 4;
+  AtlasSpec atlas = 5;
+}
+
+message AtlasPolicySpec {
+  string destructive = 1;
+}
+
+message AtlasSpec {
+  string mode = 1;
+  string migration_config_map = 2;
+  string schema_config_map = 3;
+  bool blocking = 4;
+  AtlasPolicySpec policy = 5;
+}
+
+message PostDeploySpec {
+  string image = 1;
+  repeated string args = 2;
+  repeated SecretRef env_from = 3;
+  int32 timeout_seconds = 4;
+  bool blocking = 5;
 }
 
 message EnvironmentLifecycle {
@@ -185,6 +207,9 @@ message EnvironmentStatus {
   int32 comment_id = 10;
   string commit_status_url = 11;
   TestStatus test_status = 12;
+  string migration_status = 13;
+  string migration_message = 14;
+  string post_deploy_status = 15;
 }
 
 message Environment {

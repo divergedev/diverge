@@ -25,6 +25,7 @@ message PreviewGroupServiceSpec {
   repeated EnvVar env = 12;
   ResourceOverride resources = 13;
   EnvironmentDatabase database = 14;
+  PostDeploySpec post_deploy = 15;
 }
 
 message PreviewGroupRouting {
