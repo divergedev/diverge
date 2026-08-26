@@ -883,13 +883,15 @@ func (x *PostDeploySpec) GetBlocking() bool {
 }
 
 type KEDASpec struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	Enabled        *bool                  `protobuf:"varint,1,opt,name=enabled,proto3,oneof" json:"enabled,omitempty"`
-	MinReplicas    *int32                 `protobuf:"varint,2,opt,name=min_replicas,json=minReplicas,proto3,oneof" json:"min_replicas,omitempty"`
-	MaxReplicas    *int32                 `protobuf:"varint,3,opt,name=max_replicas,json=maxReplicas,proto3,oneof" json:"max_replicas,omitempty"`
-	CooldownPeriod *int32                 `protobuf:"varint,4,opt,name=cooldown_period,json=cooldownPeriod,proto3,oneof" json:"cooldown_period,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Enabled         *bool                  `protobuf:"varint,1,opt,name=enabled,proto3,oneof" json:"enabled,omitempty"`
+	MinReplicas     *int32                 `protobuf:"varint,2,opt,name=min_replicas,json=minReplicas,proto3,oneof" json:"min_replicas,omitempty"`
+	MaxReplicas     *int32                 `protobuf:"varint,3,opt,name=max_replicas,json=maxReplicas,proto3,oneof" json:"max_replicas,omitempty"`
+	CooldownPeriod  *int32                 `protobuf:"varint,4,opt,name=cooldown_period,json=cooldownPeriod,proto3,oneof" json:"cooldown_period,omitempty"`
+	PollingInterval *int32                 `protobuf:"varint,5,opt,name=polling_interval,json=pollingInterval,proto3,oneof" json:"polling_interval,omitempty"`
+	TargetQueueSize *int32                 `protobuf:"varint,6,opt,name=target_queue_size,json=targetQueueSize,proto3,oneof" json:"target_queue_size,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *KEDASpec) Reset() {
@@ -946,6 +948,20 @@ func (x *KEDASpec) GetMaxReplicas() int32 {
 func (x *KEDASpec) GetCooldownPeriod() int32 {
 	if x != nil && x.CooldownPeriod != nil {
 		return *x.CooldownPeriod
+	}
+	return 0
+}
+
+func (x *KEDASpec) GetPollingInterval() int32 {
+	if x != nil && x.PollingInterval != nil {
+		return *x.PollingInterval
+	}
+	return 0
+}
+
+func (x *KEDASpec) GetTargetQueueSize() int32 {
+	if x != nil && x.TargetQueueSize != nil {
+		return *x.TargetQueueSize
 	}
 	return 0
 }
@@ -3290,17 +3306,21 @@ const file_diverge_v1alpha1_environment_proto_rawDesc = "" +
 	"\x04args\x18\x02 \x03(\tR\x04args\x126\n" +
 	"\benv_from\x18\x03 \x03(\v2\x1b.diverge.v1alpha1.SecretRefR\aenvFrom\x12'\n" +
 	"\x0ftimeout_seconds\x18\x04 \x01(\x05R\x0etimeoutSeconds\x12\x1a\n" +
-	"\bblocking\x18\x05 \x01(\bR\bblocking\"\xe9\x01\n" +
+	"\bblocking\x18\x05 \x01(\bR\bblocking\"\xf5\x02\n" +
 	"\bKEDASpec\x12\x1d\n" +
 	"\aenabled\x18\x01 \x01(\bH\x00R\aenabled\x88\x01\x01\x12&\n" +
 	"\fmin_replicas\x18\x02 \x01(\x05H\x01R\vminReplicas\x88\x01\x01\x12&\n" +
 	"\fmax_replicas\x18\x03 \x01(\x05H\x02R\vmaxReplicas\x88\x01\x01\x12,\n" +
-	"\x0fcooldown_period\x18\x04 \x01(\x05H\x03R\x0ecooldownPeriod\x88\x01\x01B\n" +
+	"\x0fcooldown_period\x18\x04 \x01(\x05H\x03R\x0ecooldownPeriod\x88\x01\x01\x12.\n" +
+	"\x10polling_interval\x18\x05 \x01(\x05H\x04R\x0fpollingInterval\x88\x01\x01\x12/\n" +
+	"\x11target_queue_size\x18\x06 \x01(\x05H\x05R\x0ftargetQueueSize\x88\x01\x01B\n" +
 	"\n" +
 	"\b_enabledB\x0f\n" +
 	"\r_min_replicasB\x0f\n" +
 	"\r_max_replicasB\x12\n" +
-	"\x10_cooldown_period\"m\n" +
+	"\x10_cooldown_periodB\x13\n" +
+	"\x11_polling_intervalB\x14\n" +
+	"\x12_target_queue_size\"m\n" +
 	"\x14EnvironmentLifecycle\x12+\n" +
 	"\x03ttl\x18\x01 \x01(\v2\x19.google.protobuf.DurationR\x03ttl\x12(\n" +
 	"\x10cleanup_on_merge\x18\x02 \x01(\bR\x0ecleanupOnMerge\"\xb0\x01\n" +

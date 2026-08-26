@@ -155,6 +155,13 @@ type KEDASpec struct {
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	CooldownPeriod *int32 `json:"cooldownPeriod,omitempty"`
+	// PollingInterval is the interval in seconds KEDA checks metrics. Default: 30.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	PollingInterval *int32 `json:"pollingInterval,omitempty"`
+	// TargetQueueSize is the target backlog per replica for queue-based scaling. Default: 5.
+	// +optional
+	TargetQueueSize *int32 `json:"targetQueueSize,omitempty"`
 }
 
 // ResourceOverride allows preview pods to use fewer resources than baseline.

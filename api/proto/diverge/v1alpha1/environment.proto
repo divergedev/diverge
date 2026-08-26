@@ -105,6 +105,8 @@ message KEDASpec {
   optional int32 min_replicas = 2;
   optional int32 max_replicas = 3;
   optional int32 cooldown_period = 4;
+  optional int32 polling_interval = 5;
+  optional int32 target_queue_size = 6;
 }
 
 message EnvironmentLifecycle {
