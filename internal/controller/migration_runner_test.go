@@ -168,7 +168,7 @@ func TestRunMigrationJob_BlockingTrue_Failed(t *testing.T) {
 		DSN: "postgres://user:pass@host/db",
 	}
 
-	r.runMigrationJob(ctx, env, dbResult)
+	_ = r.runMigrationJob(ctx, env, dbResult)
 
 	// Set Job to failed
 	hashInput := "alpine"

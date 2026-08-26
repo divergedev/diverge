@@ -40,8 +40,8 @@ type HookJobConfig struct {
 
 // buildJob creates a K8s Job spec from HookJobConfig.
 func buildJob(cfg HookJobConfig) *batchv1.Job {
-	var backoffLimit int32 = 0
-	var ttl int32 = jobTTLAfterFinished
+	var backoffLimit int32
+	ttl := jobTTLAfterFinished
 	var activeDeadline *int64
 	if cfg.Timeout > 0 {
 		t := int64(cfg.Timeout)

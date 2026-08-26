@@ -48,7 +48,7 @@ pre-push:
   commands:
     golangci-lint:
       glob: "*.go"
-      run: golangci-lint run
+      run: go tool golangci-lint run
     go-test:
       glob: "*.go"
       run: go test ./... -short
