@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"time"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -16,7 +17,16 @@ import (
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
 
+// k8sCallTimeout bounds all Kubernetes API calls made by hook RPCs
+// to prevent indefinite blocking when the API server is unresponsive.
+const k8sCallTimeout = 30 * time.Second
+
+// ListHookJobs returns hook Jobs for an environment, sorted newest-first,
+// with each Job's K8s status mapped to a proto phase (Pending/Running/Succeeded/Failed).
 func (s *EnvironmentService) ListHookJobs(ctx context.Context, req *connect.Request[pb.ListHookJobsRequest]) (*connect.Response[pb.ListHookJobsResponse], error) {
+	ctx, cancel := context.WithTimeout(ctx, k8sCallTimeout)
+	defer cancel()
+
 	namespace := req.Msg.Namespace
 	if namespace == "" {
 		namespace = "default"
@@ -83,7 +93,13 @@ func (s *EnvironmentService) ListHookJobs(ctx context.Context, req *connect.Requ
 	return connect.NewResponse(&pb.ListHookJobsResponse{Jobs: jobs}), nil
 }
 
+// RetryHook deletes the newest failed Job matching the hook type, then annotates
+// the Environment CR with a retry marker so the controller reconciles a new run.
+// It does NOT accept arbitrary image/command — only re-triggers from CRD spec.
 func (s *EnvironmentService) RetryHook(ctx context.Context, req *connect.Request[pb.RetryHookRequest]) (*connect.Response[pb.RetryHookResponse], error) {
+	ctx, cancel := context.WithTimeout(ctx, k8sCallTimeout)
+	defer cancel()
+
 	namespace := req.Msg.Namespace
 	if namespace == "" {
 		namespace = "default"
@@ -98,7 +114,11 @@ func (s *EnvironmentService) RetryHook(ctx context.Context, req *connect.Request
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("hook_type must be migration or postdeploy"))
 	}
 
+	// Authorize both the job deletion and the environment annotation mutation.
 	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "create", namespace, "jobs"); err != nil {
+		return nil, err
+	}
+	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "update", namespace, "environments"); err != nil {
 		return nil, err
 	}
 
@@ -131,22 +151,26 @@ func (s *EnvironmentService) RetryHook(ctx context.Context, req *connect.Request
 		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("no failed job found to retry"))
 	}
 
-	if err := s.client.Delete(ctx, failedJob, client.PropagationPolicy(metav1.DeletePropagationBackground)); err != nil {
-
-		return nil, SanitizeK8sError(s.logger, err)
-	}
-
+	// Validate the Environment exists BEFORE deleting the Job to avoid
+	// orphaned side-effects when the Environment has already been removed.
 	var env v1alpha1.Environment
 	if err := s.client.Get(ctx, client.ObjectKey{Name: req.Msg.EnvironmentName, Namespace: namespace}, &env); err != nil {
 		return nil, SanitizeK8sError(s.logger, err)
 	}
 
+	if err := s.client.Delete(ctx, failedJob, client.PropagationPolicy(metav1.DeletePropagationBackground)); err != nil {
+		return nil, SanitizeK8sError(s.logger, err)
+	}
+
+	// Use Patch (merge) instead of read-modify-write to avoid 409 Conflict
+	// races with the controller reconciling the same Environment concurrently.
+	patch := client.MergeFrom(env.DeepCopy())
 	if env.Annotations == nil {
 		env.Annotations = make(map[string]string)
 	}
 	env.Annotations["diverge.io/retry-hook"] = req.Msg.HookType
 
-	if err := s.client.Update(ctx, &env); err != nil {
+	if err := s.client.Patch(ctx, &env, patch); err != nil {
 		return nil, SanitizeK8sError(s.logger, err)
 	}
 

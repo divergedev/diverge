@@ -67,9 +67,11 @@ func TestBuildJob(t *testing.T) {
 	require.NotNil(t, c.SecurityContext.ReadOnlyRootFilesystem)
 	assert.True(t, *c.SecurityContext.ReadOnlyRootFilesystem)
 
-	// PSS: emptyDir /tmp volume
+	// PSS: emptyDir /tmp volume with size limit
 	require.Len(t, job.Spec.Template.Spec.Volumes, 1)
 	assert.Equal(t, "tmp", job.Spec.Template.Spec.Volumes[0].Name)
+	require.NotNil(t, job.Spec.Template.Spec.Volumes[0].EmptyDir.SizeLimit)
+	assert.Equal(t, int64(64*1024*1024), job.Spec.Template.Spec.Volumes[0].EmptyDir.SizeLimit.Value())
 	require.Len(t, c.VolumeMounts, 1)
 	assert.Equal(t, "/tmp", c.VolumeMounts[0].MountPath)
 

@@ -99,16 +99,11 @@ func TestListHookJobs(t *testing.T) {
 		},
 	}
 
-	for _, j := range jobs {
-		err := c.Create(ctx, &j)
+	for i := range jobs {
+		err := c.Create(ctx, &jobs[i])
 		require.NoError(t, err)
-
-		// For the fake client, status subresource must be updated separately or it is updated when we use Create/Update on the Job itself in some versions.
-		// Controller runtime fake client handles Status if we pass it, but sometimes we need to do Status().Update().
-		// We'll update status just in case.
-		j.Status = jobs[0].Status // wait, need to use correct status
 	}
-	// Redo with direct status patch:
+	// The fake client requires status subresource updates separately.
 	for _, j := range jobs {
 		var created batchv1.Job
 		require.NoError(t, c.Get(ctx, client.ObjectKey{Name: j.Name, Namespace: j.Namespace}, &created))
@@ -206,12 +201,12 @@ func TestRetryHook(t *testing.T) {
 		},
 	}
 
-	for _, j := range jobs {
-		err := c.Create(ctx, &j)
+	for i := range jobs {
+		err := c.Create(ctx, &jobs[i])
 		require.NoError(t, err)
 		var created batchv1.Job
-		require.NoError(t, c.Get(ctx, client.ObjectKey{Name: j.Name, Namespace: j.Namespace}, &created))
-		created.Status = j.Status
+		require.NoError(t, c.Get(ctx, client.ObjectKey{Name: jobs[i].Name, Namespace: jobs[i].Namespace}, &created))
+		created.Status = jobs[i].Status
 		require.NoError(t, c.Status().Update(ctx, &created))
 	}
 
@@ -239,6 +234,46 @@ func TestRetryHook(t *testing.T) {
 		var cErr *connect.Error
 		require.ErrorAs(t, err, &cErr)
 		assert.Equal(t, connect.CodeFailedPrecondition, cErr.Code())
+	})
+
+	t.Run("environment not found returns error without deleting job", func(t *testing.T) {
+		// Create a standalone failed job for a non-existent environment.
+		orphanJob := &batchv1.Job{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "job-orphan",
+				Namespace: "default",
+				Labels: map[string]string{
+					"diverge.io/environment": "gone-env",
+					"diverge.io/hook-type":   "migration",
+				},
+				CreationTimestamp: metav1.Time{Time: time.Now().Add(-1 * time.Minute)},
+			},
+			Status: batchv1.JobStatus{
+				Conditions: []batchv1.JobCondition{
+					{Type: batchv1.JobFailed, Status: corev1.ConditionTrue},
+				},
+			},
+		}
+		require.NoError(t, c.Create(ctx, orphanJob))
+		var created batchv1.Job
+		require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "job-orphan", Namespace: "default"}, &created))
+		created.Status = orphanJob.Status
+		require.NoError(t, c.Status().Update(ctx, &created))
+
+		req := &pb.RetryHookRequest{
+			Namespace:       "default",
+			EnvironmentName: "gone-env",
+			HookType:        "migration",
+		}
+		_, err := svc.RetryHook(ctx, connect.NewRequest(req))
+		require.Error(t, err)
+		var cErr *connect.Error
+		require.ErrorAs(t, err, &cErr)
+		assert.Equal(t, connect.CodeNotFound, cErr.Code())
+
+		// Job should NOT have been deleted.
+		var stillExists batchv1.Job
+		assert.NoError(t, c.Get(ctx, client.ObjectKey{Name: "job-orphan", Namespace: "default"}, &stillExists))
 	})
 
 	t.Run("successful retry deletes newest failed job and annotates env", func(t *testing.T) {
