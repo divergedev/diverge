@@ -261,6 +261,7 @@ func TestKEDADeployer_Status_NoHSO(t *testing.T) {
 }
 
 func int32Ptr(i int32) *int32 { return &i }
+func boolPtr(b bool) *bool    { return &b }
 
 func TestKEDADeployer_CRDConfigOverridesCLI(t *testing.T) {
 	inner := &mockDeployer{}
@@ -383,4 +384,205 @@ func TestKEDADeployer_PartialCRDOverride(t *testing.T) {
 
 	cooldown, _, _ := unstructured.NestedInt64(hso.Object, "spec", "scaledownPeriod")
 	assert.Equal(t, int64(300), cooldown, "CLI cooldown used as fallback")
+}
+
+func TestKEDADeployer_EnabledFalse_SkipsHSO(t *testing.T) {
+	inner := &mockDeployer{}
+	c := fake.NewClientBuilder().Build()
+
+	d := &KEDADeployer{
+		Inner:  inner,
+		Client: c,
+		Config: KEDAConfig{
+			MinReplicas: 1,
+			MaxReplicas: 5,
+			Cooldown:    300,
+		},
+	}
+	env := &v1alpha1.Environment{}
+	env.Name = "test-env"
+	env.Namespace = "test-ns"
+	env.Spec.Deploy.Namespace = "same"
+	env.Spec.ServiceConfig = &v1alpha1.ServicePreviewConfig{
+		KEDA: &v1alpha1.KEDASpec{
+			Enabled: boolPtr(false),
+		},
+	}
+
+	err := d.Deploy(context.Background(), env)
+	require.NoError(t, err)
+	assert.True(t, inner.deployCalled, "inner deployer should still be called")
+
+	// HSO should NOT be created
+	hso := &unstructured.Unstructured{}
+	hso.SetGroupVersionKind(hsoGVK)
+	err = c.Get(context.Background(), client.ObjectKey{Name: "test-env", Namespace: "test-ns"}, hso)
+	assert.Error(t, err, "HSO should not exist when KEDA is disabled")
+}
+
+func TestKEDADeployer_EnabledFalse_DeletesExistingHSO(t *testing.T) {
+	inner := &mockDeployer{}
+
+	// Pre-create an HSO that should be cleaned up
+	existingHSO := &unstructured.Unstructured{}
+	existingHSO.SetGroupVersionKind(hsoGVK)
+	existingHSO.SetName("test-env")
+	existingHSO.SetNamespace("test-ns")
+	_ = unstructured.SetNestedField(existingHSO.Object, "test-env", "spec", "scaleTargetRef", "name")
+
+	c := fake.NewClientBuilder().WithRuntimeObjects(existingHSO).Build()
+
+	d := &KEDADeployer{
+		Inner:  inner,
+		Client: c,
+		Config: KEDAConfig{MinReplicas: 1, MaxReplicas: 5, Cooldown: 300},
+	}
+	env := &v1alpha1.Environment{}
+	env.Name = "test-env"
+	env.Namespace = "test-ns"
+	env.Spec.Deploy.Namespace = "same"
+	env.Spec.ServiceConfig = &v1alpha1.ServicePreviewConfig{
+		KEDA: &v1alpha1.KEDASpec{
+			Enabled: boolPtr(false),
+		},
+	}
+
+	err := d.Deploy(context.Background(), env)
+	require.NoError(t, err)
+
+	// HSO should be deleted
+	hso := &unstructured.Unstructured{}
+	hso.SetGroupVersionKind(hsoGVK)
+	err = c.Get(context.Background(), client.ObjectKey{Name: "test-env", Namespace: "test-ns"}, hso)
+	assert.Error(t, err, "existing HSO should be deleted when KEDA is disabled")
+}
+
+func TestKEDADeployer_CooldownZero_Respected(t *testing.T) {
+	inner := &mockDeployer{}
+	c := fake.NewClientBuilder().Build()
+
+	d := &KEDADeployer{
+		Inner:  inner,
+		Client: c,
+		Config: KEDAConfig{
+			MinReplicas: 1,
+			MaxReplicas: 5,
+			Cooldown:    300,
+		},
+	}
+	env := &v1alpha1.Environment{}
+	env.Name = "test-env"
+	env.Namespace = "test-ns"
+	env.Spec.Deploy.Namespace = "same"
+	env.Spec.ServiceConfig = &v1alpha1.ServicePreviewConfig{
+		KEDA: &v1alpha1.KEDASpec{
+			CooldownPeriod: int32Ptr(0), // explicit zero — want immediate scale-down
+		},
+	}
+
+	err := d.Deploy(context.Background(), env)
+	require.NoError(t, err)
+
+	hso := &unstructured.Unstructured{}
+	hso.SetGroupVersionKind(hsoGVK)
+	err = c.Get(context.Background(), client.ObjectKey{Name: "test-env", Namespace: "test-ns"}, hso)
+	require.NoError(t, err)
+
+	cooldown, _, _ := unstructured.NestedInt64(hso.Object, "spec", "scaledownPeriod")
+	assert.Equal(t, int64(0), cooldown, "explicit CRD cooldownPeriod=0 must not be overridden to 300")
+}
+
+func TestKEDADeployer_MinGreaterThanMax_Error(t *testing.T) {
+	inner := &mockDeployer{}
+	c := fake.NewClientBuilder().Build()
+
+	d := &KEDADeployer{
+		Inner:  inner,
+		Client: c,
+		Config: KEDAConfig{
+			MinReplicas: 10, // CLI sets min > max
+			MaxReplicas: 2,
+			Cooldown:    300,
+		},
+	}
+	env := &v1alpha1.Environment{}
+	env.Name = "test-env"
+	env.Namespace = "test-ns"
+	env.Spec.Deploy.Namespace = "same"
+
+	err := d.Deploy(context.Background(), env)
+	require.Error(t, err, "should fail when minReplicas > maxReplicas")
+	assert.Contains(t, err.Error(), "minReplicas")
+	assert.Contains(t, err.Error(), "maxReplicas")
+}
+
+func TestKEDADeployer_MinGreaterThanMax_CRDOverride_Error(t *testing.T) {
+	inner := &mockDeployer{}
+	c := fake.NewClientBuilder().Build()
+
+	d := &KEDADeployer{
+		Inner:  inner,
+		Client: c,
+		Config: KEDAConfig{
+			MinReplicas: 1,
+			MaxReplicas: 5,
+			Cooldown:    300,
+		},
+	}
+	env := &v1alpha1.Environment{}
+	env.Name = "test-env"
+	env.Namespace = "test-ns"
+	env.Spec.Deploy.Namespace = "same"
+	env.Spec.ServiceConfig = &v1alpha1.ServicePreviewConfig{
+		KEDA: &v1alpha1.KEDASpec{
+			MinReplicas: int32Ptr(10),
+			MaxReplicas: int32Ptr(2),
+		},
+	}
+
+	err := d.Deploy(context.Background(), env)
+	require.Error(t, err, "should fail when CRD minReplicas > CRD maxReplicas")
+	assert.Contains(t, err.Error(), "minReplicas")
+}
+
+func TestKEDADeployer_EnabledTrue_UsesDefaults(t *testing.T) {
+	inner := &mockDeployer{}
+	c := fake.NewClientBuilder().Build()
+
+	d := &KEDADeployer{
+		Inner:  inner,
+		Client: c,
+		Config: KEDAConfig{
+			MinReplicas: 1,
+			MaxReplicas: 5,
+			Cooldown:    600,
+		},
+	}
+	env := &v1alpha1.Environment{}
+	env.Name = "test-env"
+	env.Namespace = "test-ns"
+	env.Spec.Deploy.Namespace = "same"
+	// Enabled=true with no replica fields — should use CLI defaults
+	env.Spec.ServiceConfig = &v1alpha1.ServicePreviewConfig{
+		KEDA: &v1alpha1.KEDASpec{
+			Enabled: boolPtr(true),
+		},
+	}
+
+	err := d.Deploy(context.Background(), env)
+	require.NoError(t, err)
+
+	hso := &unstructured.Unstructured{}
+	hso.SetGroupVersionKind(hsoGVK)
+	err = c.Get(context.Background(), client.ObjectKey{Name: "test-env", Namespace: "test-ns"}, hso)
+	require.NoError(t, err)
+
+	min, _, _ := unstructured.NestedInt64(hso.Object, "spec", "replicas", "min")
+	assert.Equal(t, int64(1), min, "should use CLI MinReplicas when only Enabled=true is set")
+
+	max, _, _ := unstructured.NestedInt64(hso.Object, "spec", "replicas", "max")
+	assert.Equal(t, int64(5), max, "should use CLI MaxReplicas when only Enabled=true is set")
+
+	cooldown, _, _ := unstructured.NestedInt64(hso.Object, "spec", "scaledownPeriod")
+	assert.Equal(t, int64(600), cooldown, "should use CLI Cooldown when only Enabled=true is set")
 }

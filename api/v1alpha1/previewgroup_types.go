@@ -147,6 +147,7 @@ type KEDASpec struct {
 	// MaxReplicas is the maximum number of replicas.
 	// When nil, falls back to the controller CLI flag (--keda-max-replicas).
 	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
 	// +optional
 	MaxReplicas *int32 `json:"maxReplicas,omitempty"`
 	// CooldownPeriod is the cooldown period in seconds before scaling down.
