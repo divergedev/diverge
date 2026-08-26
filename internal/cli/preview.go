@@ -51,13 +51,16 @@ Examples:
 
 func newPreviewCreateCmd(app *App) *cobra.Command {
 	var (
-		name        string
-		services    []string
-		headerKey   string
-		headerValue string
-		ttl         string
-		dryRun      bool
-		mrNumber    int
+		name           string
+		services       []string
+		headerKey      string
+		headerValue    string
+		ttl            string
+		dryRun         bool
+		mrNumber       int
+		migrationImage string
+		migrationArgs  []string
+		migrationBlock bool
 	)
 
 	cmd := &cobra.Command{
@@ -71,6 +74,11 @@ Each --service flag takes the format:
   name=image[:tag][:port]   (image mode — deploy this container)
   name                      (baseline mode — use existing service as-is)
 
+Migration hooks:
+  --migration-image IMAGE   Run a database migration Job before deployment
+  --migration-args  ARGS    Arguments to pass to the migration container
+  --migration-blocking=false  Don't block deployment on migration success
+
 Examples:
   # Preview payments-api with a new image, baseline everything else
   diverge preview create \
@@ -78,11 +86,17 @@ Examples:
     --service consent-mgr \
     --mr 42
 
+  # With a migration hook
+  diverge preview create \
+    --service payments-api=img:8080 \
+    --migration-image myregistry.io/migrate:latest \
+    --migration-args="--url,\$(DATABASE_URL)"
+
   # Dry-run to inspect the generated YAML
   diverge preview create --service payments-api=img:8080 --dry-run`,
 		// editorconfig-checker-enable
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPreviewCreate(cmd, app, name, services, headerKey, headerValue, ttl, mrNumber, dryRun)
+			return runPreviewCreate(cmd, app, name, services, headerKey, headerValue, ttl, mrNumber, dryRun, migrationImage, migrationArgs, migrationBlock)
 		},
 	}
 
@@ -93,12 +107,15 @@ Examples:
 	cmd.Flags().StringVar(&ttl, "ttl", "", "auto-delete after duration (e.g. 72h)")
 	cmd.Flags().IntVar(&mrNumber, "mr", 0, "MR/PR number")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print PreviewGroup YAML without creating")
+	cmd.Flags().StringVar(&migrationImage, "migration-image", "", "container image for database migration Job")
+	cmd.Flags().StringSliceVar(&migrationArgs, "migration-args", nil, "arguments for the migration container")
+	cmd.Flags().BoolVar(&migrationBlock, "migration-blocking", true, "block deployment until migration completes")
 	_ = cmd.MarkFlagRequired("service")
 
 	return cmd
 }
 
-func runPreviewCreate(cmd *cobra.Command, app *App, name string, services []string, headerKey, headerValue, ttl string, mrNumber int, dryRun bool) error {
+func runPreviewCreate(cmd *cobra.Command, app *App, name string, services []string, headerKey, headerValue, ttl string, mrNumber int, dryRun bool, migrationImage string, migrationArgs []string, migrationBlock bool) error {
 	// Detect git context
 	gitCtx, err := git.Detect()
 	if err != nil {
@@ -148,6 +165,22 @@ func runPreviewCreate(cmd *cobra.Command, app *App, name string, services []stri
 		}
 		pg.Spec.Lifecycle = &divergeiov1alpha1.PreviewGroupLifecycle{
 			TTL: &metav1.Duration{Duration: d},
+		}
+	}
+
+	// Migration hook
+	if migrationImage == "" {
+		if cmd.Flags().Changed("migration-args") || cmd.Flags().Changed("migration-blocking") {
+			return fmt.Errorf("--migration-args and --migration-blocking require --migration-image")
+		}
+	} else {
+		if pg.Spec.Database == nil {
+			pg.Spec.Database = &divergeiov1alpha1.EnvironmentDatabase{}
+		}
+		pg.Spec.Database.MigrationJob = &divergeiov1alpha1.MigrationJobSpec{
+			Image:    migrationImage,
+			Args:     migrationArgs,
+			Blocking: &migrationBlock,
 		}
 	}
 
