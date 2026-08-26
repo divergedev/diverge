@@ -2842,6 +2842,298 @@ func (x *StreamLogsResponse) GetTimestamp() *timestamppb.Timestamp {
 	return nil
 }
 
+type HookJob struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Name            string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Type            string                 `protobuf:"bytes,2,opt,name=type,proto3" json:"type,omitempty"`
+	Phase           string                 `protobuf:"bytes,3,opt,name=phase,proto3" json:"phase,omitempty"`
+	Message         string                 `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
+	CreatedAt       *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	CompletedAt     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=completed_at,json=completedAt,proto3" json:"completed_at,omitempty"`
+	DurationSeconds int32                  `protobuf:"varint,7,opt,name=duration_seconds,json=durationSeconds,proto3" json:"duration_seconds,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *HookJob) Reset() {
+	*x = HookJob{}
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[40]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HookJob) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HookJob) ProtoMessage() {}
+
+func (x *HookJob) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[40]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HookJob.ProtoReflect.Descriptor instead.
+func (*HookJob) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{40}
+}
+
+func (x *HookJob) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *HookJob) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *HookJob) GetPhase() string {
+	if x != nil {
+		return x.Phase
+	}
+	return ""
+}
+
+func (x *HookJob) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *HookJob) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *HookJob) GetCompletedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CompletedAt
+	}
+	return nil
+}
+
+func (x *HookJob) GetDurationSeconds() int32 {
+	if x != nil {
+		return x.DurationSeconds
+	}
+	return 0
+}
+
+type ListHookJobsRequest struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Namespace       string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	EnvironmentName string                 `protobuf:"bytes,2,opt,name=environment_name,json=environmentName,proto3" json:"environment_name,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ListHookJobsRequest) Reset() {
+	*x = ListHookJobsRequest{}
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[41]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListHookJobsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListHookJobsRequest) ProtoMessage() {}
+
+func (x *ListHookJobsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[41]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListHookJobsRequest.ProtoReflect.Descriptor instead.
+func (*ListHookJobsRequest) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{41}
+}
+
+func (x *ListHookJobsRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *ListHookJobsRequest) GetEnvironmentName() string {
+	if x != nil {
+		return x.EnvironmentName
+	}
+	return ""
+}
+
+type ListHookJobsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Jobs          []*HookJob             `protobuf:"bytes,1,rep,name=jobs,proto3" json:"jobs,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListHookJobsResponse) Reset() {
+	*x = ListHookJobsResponse{}
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[42]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListHookJobsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListHookJobsResponse) ProtoMessage() {}
+
+func (x *ListHookJobsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[42]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListHookJobsResponse.ProtoReflect.Descriptor instead.
+func (*ListHookJobsResponse) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{42}
+}
+
+func (x *ListHookJobsResponse) GetJobs() []*HookJob {
+	if x != nil {
+		return x.Jobs
+	}
+	return nil
+}
+
+type RetryHookRequest struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Namespace       string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	EnvironmentName string                 `protobuf:"bytes,2,opt,name=environment_name,json=environmentName,proto3" json:"environment_name,omitempty"`
+	HookType        string                 `protobuf:"bytes,3,opt,name=hook_type,json=hookType,proto3" json:"hook_type,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *RetryHookRequest) Reset() {
+	*x = RetryHookRequest{}
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[43]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RetryHookRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RetryHookRequest) ProtoMessage() {}
+
+func (x *RetryHookRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[43]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RetryHookRequest.ProtoReflect.Descriptor instead.
+func (*RetryHookRequest) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{43}
+}
+
+func (x *RetryHookRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *RetryHookRequest) GetEnvironmentName() string {
+	if x != nil {
+		return x.EnvironmentName
+	}
+	return ""
+}
+
+func (x *RetryHookRequest) GetHookType() string {
+	if x != nil {
+		return x.HookType
+	}
+	return ""
+}
+
+type RetryHookResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Job           *HookJob               `protobuf:"bytes,1,opt,name=job,proto3" json:"job,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RetryHookResponse) Reset() {
+	*x = RetryHookResponse{}
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[44]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RetryHookResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RetryHookResponse) ProtoMessage() {}
+
+func (x *RetryHookResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[44]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RetryHookResponse.ProtoReflect.Descriptor instead.
+func (*RetryHookResponse) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{44}
+}
+
+func (x *RetryHookResponse) GetJob() *HookJob {
+	if x != nil {
+		return x.Job
+	}
+	return nil
+}
+
 var File_diverge_v1alpha1_environment_proto protoreflect.FileDescriptor
 
 const file_diverge_v1alpha1_environment_proto_rawDesc = "" +
@@ -3101,7 +3393,27 @@ const file_diverge_v1alpha1_environment_proto_rawDesc = "" +
 	"\x0econtainer_name\x18\x02 \x01(\tR\rcontainerName\x12!\n" +
 	"\fservice_name\x18\x03 \x01(\tR\vserviceName\x12\x18\n" +
 	"\acontent\x18\x04 \x01(\tR\acontent\x128\n" +
-	"\ttimestamp\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp2\xcf\x06\n" +
+	"\ttimestamp\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\x86\x02\n" +
+	"\aHookJob\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
+	"\x04type\x18\x02 \x01(\tR\x04type\x12\x14\n" +
+	"\x05phase\x18\x03 \x01(\tR\x05phase\x12\x18\n" +
+	"\amessage\x18\x04 \x01(\tR\amessage\x129\n" +
+	"\n" +
+	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12=\n" +
+	"\fcompleted_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\vcompletedAt\x12)\n" +
+	"\x10duration_seconds\x18\a \x01(\x05R\x0fdurationSeconds\"^\n" +
+	"\x13ListHookJobsRequest\x12\x1c\n" +
+	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12)\n" +
+	"\x10environment_name\x18\x02 \x01(\tR\x0fenvironmentName\"E\n" +
+	"\x14ListHookJobsResponse\x12-\n" +
+	"\x04jobs\x18\x01 \x03(\v2\x19.diverge.v1alpha1.HookJobR\x04jobs\"x\n" +
+	"\x10RetryHookRequest\x12\x1c\n" +
+	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12)\n" +
+	"\x10environment_name\x18\x02 \x01(\tR\x0fenvironmentName\x12\x1b\n" +
+	"\thook_type\x18\x03 \x01(\tR\bhookType\"@\n" +
+	"\x11RetryHookResponse\x12+\n" +
+	"\x03job\x18\x01 \x01(\v2\x19.diverge.v1alpha1.HookJobR\x03job2\x84\b\n" +
 	"\x12EnvironmentService\x12l\n" +
 	"\x11CreateEnvironment\x12*.diverge.v1alpha1.CreateEnvironmentRequest\x1a+.diverge.v1alpha1.CreateEnvironmentResponse\x12c\n" +
 	"\x0eGetEnvironment\x12'.diverge.v1alpha1.GetEnvironmentRequest\x1a(.diverge.v1alpha1.GetEnvironmentResponse\x12i\n" +
@@ -3111,7 +3423,9 @@ const file_diverge_v1alpha1_environment_proto_rawDesc = "" +
 	"\tExtendTTL\x12\".diverge.v1alpha1.ExtendTTLRequest\x1a#.diverge.v1alpha1.ExtendTTLResponse\x12n\n" +
 	"\x11WatchEnvironments\x12*.diverge.v1alpha1.WatchEnvironmentsRequest\x1a+.diverge.v1alpha1.WatchEnvironmentsResponse0\x01\x12Y\n" +
 	"\n" +
-	"StreamLogs\x12#.diverge.v1alpha1.StreamLogsRequest\x1a$.diverge.v1alpha1.StreamLogsResponse0\x01BHZFgithub.com/divergedev/diverge/api/gen/diverge/v1alpha1;divergev1alpha1b\x06proto3"
+	"StreamLogs\x12#.diverge.v1alpha1.StreamLogsRequest\x1a$.diverge.v1alpha1.StreamLogsResponse0\x01\x12]\n" +
+	"\fListHookJobs\x12%.diverge.v1alpha1.ListHookJobsRequest\x1a&.diverge.v1alpha1.ListHookJobsResponse\x12T\n" +
+	"\tRetryHook\x12\".diverge.v1alpha1.RetryHookRequest\x1a#.diverge.v1alpha1.RetryHookResponseBHZFgithub.com/divergedev/diverge/api/gen/diverge/v1alpha1;divergev1alpha1b\x06proto3"
 
 var (
 	file_diverge_v1alpha1_environment_proto_rawDescOnce sync.Once
@@ -3125,7 +3439,7 @@ func file_diverge_v1alpha1_environment_proto_rawDescGZIP() []byte {
 	return file_diverge_v1alpha1_environment_proto_rawDescData
 }
 
-var file_diverge_v1alpha1_environment_proto_msgTypes = make([]protoimpl.MessageInfo, 44)
+var file_diverge_v1alpha1_environment_proto_msgTypes = make([]protoimpl.MessageInfo, 49)
 var file_diverge_v1alpha1_environment_proto_goTypes = []any{
 	(*SecretRef)(nil),                 // 0: diverge.v1alpha1.SecretRef
 	(*MigrationJobSpec)(nil),          // 1: diverge.v1alpha1.MigrationJobSpec
@@ -3167,31 +3481,36 @@ var file_diverge_v1alpha1_environment_proto_goTypes = []any{
 	(*WatchEnvironmentsResponse)(nil), // 37: diverge.v1alpha1.WatchEnvironmentsResponse
 	(*StreamLogsRequest)(nil),         // 38: diverge.v1alpha1.StreamLogsRequest
 	(*StreamLogsResponse)(nil),        // 39: diverge.v1alpha1.StreamLogsResponse
-	nil,                               // 40: diverge.v1alpha1.EnvironmentDeploy.NamespaceLabelsEntry
-	nil,                               // 41: diverge.v1alpha1.AsyncRouteSpec.EnvVarMappingEntry
-	nil,                               // 42: diverge.v1alpha1.Environment.LabelsEntry
-	nil,                               // 43: diverge.v1alpha1.Environment.AnnotationsEntry
-	(*durationpb.Duration)(nil),       // 44: google.protobuf.Duration
-	(*timestamppb.Timestamp)(nil),     // 45: google.protobuf.Timestamp
-	(*fieldmaskpb.FieldMask)(nil),     // 46: google.protobuf.FieldMask
-	(WatchEventType)(0),               // 47: diverge.v1alpha1.WatchEventType
+	(*HookJob)(nil),                   // 40: diverge.v1alpha1.HookJob
+	(*ListHookJobsRequest)(nil),       // 41: diverge.v1alpha1.ListHookJobsRequest
+	(*ListHookJobsResponse)(nil),      // 42: diverge.v1alpha1.ListHookJobsResponse
+	(*RetryHookRequest)(nil),          // 43: diverge.v1alpha1.RetryHookRequest
+	(*RetryHookResponse)(nil),         // 44: diverge.v1alpha1.RetryHookResponse
+	nil,                               // 45: diverge.v1alpha1.EnvironmentDeploy.NamespaceLabelsEntry
+	nil,                               // 46: diverge.v1alpha1.AsyncRouteSpec.EnvVarMappingEntry
+	nil,                               // 47: diverge.v1alpha1.Environment.LabelsEntry
+	nil,                               // 48: diverge.v1alpha1.Environment.AnnotationsEntry
+	(*durationpb.Duration)(nil),       // 49: google.protobuf.Duration
+	(*timestamppb.Timestamp)(nil),     // 50: google.protobuf.Timestamp
+	(*fieldmaskpb.FieldMask)(nil),     // 51: google.protobuf.FieldMask
+	(WatchEventType)(0),               // 52: diverge.v1alpha1.WatchEventType
 }
 var file_diverge_v1alpha1_environment_proto_depIdxs = []int32{
 	0,  // 0: diverge.v1alpha1.MigrationJobSpec.env_from:type_name -> diverge.v1alpha1.SecretRef
-	40, // 1: diverge.v1alpha1.EnvironmentDeploy.namespace_labels:type_name -> diverge.v1alpha1.EnvironmentDeploy.NamespaceLabelsEntry
+	45, // 1: diverge.v1alpha1.EnvironmentDeploy.namespace_labels:type_name -> diverge.v1alpha1.EnvironmentDeploy.NamespaceLabelsEntry
 	3,  // 2: diverge.v1alpha1.EnvironmentDeploy.manifests:type_name -> diverge.v1alpha1.ManifestSource
-	41, // 3: diverge.v1alpha1.AsyncRouteSpec.env_var_mapping:type_name -> diverge.v1alpha1.AsyncRouteSpec.EnvVarMappingEntry
+	46, // 3: diverge.v1alpha1.AsyncRouteSpec.env_var_mapping:type_name -> diverge.v1alpha1.AsyncRouteSpec.EnvVarMappingEntry
 	5,  // 4: diverge.v1alpha1.EnvironmentRouting.async_routes:type_name -> diverge.v1alpha1.AsyncRouteSpec
 	6,  // 5: diverge.v1alpha1.EnvironmentRouting.cookie:type_name -> diverge.v1alpha1.CookieSpec
 	1,  // 6: diverge.v1alpha1.EnvironmentDatabase.migration_job:type_name -> diverge.v1alpha1.MigrationJobSpec
 	10, // 7: diverge.v1alpha1.EnvironmentDatabase.atlas:type_name -> diverge.v1alpha1.AtlasSpec
 	9,  // 8: diverge.v1alpha1.AtlasSpec.policy:type_name -> diverge.v1alpha1.AtlasPolicySpec
 	0,  // 9: diverge.v1alpha1.PostDeploySpec.env_from:type_name -> diverge.v1alpha1.SecretRef
-	44, // 10: diverge.v1alpha1.EnvironmentLifecycle.ttl:type_name -> google.protobuf.Duration
+	49, // 10: diverge.v1alpha1.EnvironmentLifecycle.ttl:type_name -> google.protobuf.Duration
 	13, // 11: diverge.v1alpha1.TestingSpec.trigger:type_name -> diverge.v1alpha1.TestTriggerSpec
-	44, // 12: diverge.v1alpha1.TestingSpec.timeout:type_name -> google.protobuf.Duration
-	45, // 13: diverge.v1alpha1.TestStatus.started_at:type_name -> google.protobuf.Timestamp
-	45, // 14: diverge.v1alpha1.TestStatus.completed_at:type_name -> google.protobuf.Timestamp
+	49, // 12: diverge.v1alpha1.TestingSpec.timeout:type_name -> google.protobuf.Duration
+	50, // 13: diverge.v1alpha1.TestStatus.started_at:type_name -> google.protobuf.Timestamp
+	50, // 14: diverge.v1alpha1.TestStatus.completed_at:type_name -> google.protobuf.Timestamp
 	16, // 15: diverge.v1alpha1.ServicePreviewConfig.env:type_name -> diverge.v1alpha1.EnvVar
 	17, // 16: diverge.v1alpha1.ServicePreviewConfig.resources:type_name -> diverge.v1alpha1.ResourceOverride
 	2,  // 17: diverge.v1alpha1.EnvironmentSpec.source:type_name -> diverge.v1alpha1.EnvironmentSource
@@ -3201,51 +3520,59 @@ var file_diverge_v1alpha1_environment_proto_depIdxs = []int32{
 	12, // 21: diverge.v1alpha1.EnvironmentSpec.lifecycle:type_name -> diverge.v1alpha1.EnvironmentLifecycle
 	14, // 22: diverge.v1alpha1.EnvironmentSpec.testing:type_name -> diverge.v1alpha1.TestingSpec
 	18, // 23: diverge.v1alpha1.EnvironmentSpec.service_config:type_name -> diverge.v1alpha1.ServicePreviewConfig
-	45, // 24: diverge.v1alpha1.Condition.last_transition_time:type_name -> google.protobuf.Timestamp
-	45, // 25: diverge.v1alpha1.EnvironmentStatus.created_at:type_name -> google.protobuf.Timestamp
-	45, // 26: diverge.v1alpha1.EnvironmentStatus.expires_at:type_name -> google.protobuf.Timestamp
+	50, // 24: diverge.v1alpha1.Condition.last_transition_time:type_name -> google.protobuf.Timestamp
+	50, // 25: diverge.v1alpha1.EnvironmentStatus.created_at:type_name -> google.protobuf.Timestamp
+	50, // 26: diverge.v1alpha1.EnvironmentStatus.expires_at:type_name -> google.protobuf.Timestamp
 	20, // 27: diverge.v1alpha1.EnvironmentStatus.conditions:type_name -> diverge.v1alpha1.Condition
 	15, // 28: diverge.v1alpha1.EnvironmentStatus.test_status:type_name -> diverge.v1alpha1.TestStatus
 	19, // 29: diverge.v1alpha1.Environment.spec:type_name -> diverge.v1alpha1.EnvironmentSpec
 	22, // 30: diverge.v1alpha1.Environment.status:type_name -> diverge.v1alpha1.EnvironmentStatus
-	45, // 31: diverge.v1alpha1.Environment.created_at:type_name -> google.protobuf.Timestamp
-	42, // 32: diverge.v1alpha1.Environment.labels:type_name -> diverge.v1alpha1.Environment.LabelsEntry
-	43, // 33: diverge.v1alpha1.Environment.annotations:type_name -> diverge.v1alpha1.Environment.AnnotationsEntry
+	50, // 31: diverge.v1alpha1.Environment.created_at:type_name -> google.protobuf.Timestamp
+	47, // 32: diverge.v1alpha1.Environment.labels:type_name -> diverge.v1alpha1.Environment.LabelsEntry
+	48, // 33: diverge.v1alpha1.Environment.annotations:type_name -> diverge.v1alpha1.Environment.AnnotationsEntry
 	23, // 34: diverge.v1alpha1.CreateEnvironmentRequest.environment:type_name -> diverge.v1alpha1.Environment
 	23, // 35: diverge.v1alpha1.CreateEnvironmentResponse.environment:type_name -> diverge.v1alpha1.Environment
 	23, // 36: diverge.v1alpha1.GetEnvironmentResponse.environment:type_name -> diverge.v1alpha1.Environment
 	23, // 37: diverge.v1alpha1.ListEnvironmentsResponse.environments:type_name -> diverge.v1alpha1.Environment
 	23, // 38: diverge.v1alpha1.UpdateEnvironmentRequest.environment:type_name -> diverge.v1alpha1.Environment
-	46, // 39: diverge.v1alpha1.UpdateEnvironmentRequest.update_mask:type_name -> google.protobuf.FieldMask
+	51, // 39: diverge.v1alpha1.UpdateEnvironmentRequest.update_mask:type_name -> google.protobuf.FieldMask
 	23, // 40: diverge.v1alpha1.UpdateEnvironmentResponse.environment:type_name -> diverge.v1alpha1.Environment
-	44, // 41: diverge.v1alpha1.ExtendTTLRequest.extend_by:type_name -> google.protobuf.Duration
+	49, // 41: diverge.v1alpha1.ExtendTTLRequest.extend_by:type_name -> google.protobuf.Duration
 	23, // 42: diverge.v1alpha1.ExtendTTLResponse.environment:type_name -> diverge.v1alpha1.Environment
-	47, // 43: diverge.v1alpha1.WatchEnvironmentsResponse.type:type_name -> diverge.v1alpha1.WatchEventType
+	52, // 43: diverge.v1alpha1.WatchEnvironmentsResponse.type:type_name -> diverge.v1alpha1.WatchEventType
 	23, // 44: diverge.v1alpha1.WatchEnvironmentsResponse.environment:type_name -> diverge.v1alpha1.Environment
-	45, // 45: diverge.v1alpha1.WatchEnvironmentsResponse.timestamp:type_name -> google.protobuf.Timestamp
-	45, // 46: diverge.v1alpha1.StreamLogsRequest.since_time:type_name -> google.protobuf.Timestamp
-	45, // 47: diverge.v1alpha1.StreamLogsResponse.timestamp:type_name -> google.protobuf.Timestamp
-	24, // 48: diverge.v1alpha1.EnvironmentService.CreateEnvironment:input_type -> diverge.v1alpha1.CreateEnvironmentRequest
-	26, // 49: diverge.v1alpha1.EnvironmentService.GetEnvironment:input_type -> diverge.v1alpha1.GetEnvironmentRequest
-	28, // 50: diverge.v1alpha1.EnvironmentService.ListEnvironments:input_type -> diverge.v1alpha1.ListEnvironmentsRequest
-	30, // 51: diverge.v1alpha1.EnvironmentService.UpdateEnvironment:input_type -> diverge.v1alpha1.UpdateEnvironmentRequest
-	32, // 52: diverge.v1alpha1.EnvironmentService.DeleteEnvironment:input_type -> diverge.v1alpha1.DeleteEnvironmentRequest
-	34, // 53: diverge.v1alpha1.EnvironmentService.ExtendTTL:input_type -> diverge.v1alpha1.ExtendTTLRequest
-	36, // 54: diverge.v1alpha1.EnvironmentService.WatchEnvironments:input_type -> diverge.v1alpha1.WatchEnvironmentsRequest
-	38, // 55: diverge.v1alpha1.EnvironmentService.StreamLogs:input_type -> diverge.v1alpha1.StreamLogsRequest
-	25, // 56: diverge.v1alpha1.EnvironmentService.CreateEnvironment:output_type -> diverge.v1alpha1.CreateEnvironmentResponse
-	27, // 57: diverge.v1alpha1.EnvironmentService.GetEnvironment:output_type -> diverge.v1alpha1.GetEnvironmentResponse
-	29, // 58: diverge.v1alpha1.EnvironmentService.ListEnvironments:output_type -> diverge.v1alpha1.ListEnvironmentsResponse
-	31, // 59: diverge.v1alpha1.EnvironmentService.UpdateEnvironment:output_type -> diverge.v1alpha1.UpdateEnvironmentResponse
-	33, // 60: diverge.v1alpha1.EnvironmentService.DeleteEnvironment:output_type -> diverge.v1alpha1.DeleteEnvironmentResponse
-	35, // 61: diverge.v1alpha1.EnvironmentService.ExtendTTL:output_type -> diverge.v1alpha1.ExtendTTLResponse
-	37, // 62: diverge.v1alpha1.EnvironmentService.WatchEnvironments:output_type -> diverge.v1alpha1.WatchEnvironmentsResponse
-	39, // 63: diverge.v1alpha1.EnvironmentService.StreamLogs:output_type -> diverge.v1alpha1.StreamLogsResponse
-	56, // [56:64] is the sub-list for method output_type
-	48, // [48:56] is the sub-list for method input_type
-	48, // [48:48] is the sub-list for extension type_name
-	48, // [48:48] is the sub-list for extension extendee
-	0,  // [0:48] is the sub-list for field type_name
+	50, // 45: diverge.v1alpha1.WatchEnvironmentsResponse.timestamp:type_name -> google.protobuf.Timestamp
+	50, // 46: diverge.v1alpha1.StreamLogsRequest.since_time:type_name -> google.protobuf.Timestamp
+	50, // 47: diverge.v1alpha1.StreamLogsResponse.timestamp:type_name -> google.protobuf.Timestamp
+	50, // 48: diverge.v1alpha1.HookJob.created_at:type_name -> google.protobuf.Timestamp
+	50, // 49: diverge.v1alpha1.HookJob.completed_at:type_name -> google.protobuf.Timestamp
+	40, // 50: diverge.v1alpha1.ListHookJobsResponse.jobs:type_name -> diverge.v1alpha1.HookJob
+	40, // 51: diverge.v1alpha1.RetryHookResponse.job:type_name -> diverge.v1alpha1.HookJob
+	24, // 52: diverge.v1alpha1.EnvironmentService.CreateEnvironment:input_type -> diverge.v1alpha1.CreateEnvironmentRequest
+	26, // 53: diverge.v1alpha1.EnvironmentService.GetEnvironment:input_type -> diverge.v1alpha1.GetEnvironmentRequest
+	28, // 54: diverge.v1alpha1.EnvironmentService.ListEnvironments:input_type -> diverge.v1alpha1.ListEnvironmentsRequest
+	30, // 55: diverge.v1alpha1.EnvironmentService.UpdateEnvironment:input_type -> diverge.v1alpha1.UpdateEnvironmentRequest
+	32, // 56: diverge.v1alpha1.EnvironmentService.DeleteEnvironment:input_type -> diverge.v1alpha1.DeleteEnvironmentRequest
+	34, // 57: diverge.v1alpha1.EnvironmentService.ExtendTTL:input_type -> diverge.v1alpha1.ExtendTTLRequest
+	36, // 58: diverge.v1alpha1.EnvironmentService.WatchEnvironments:input_type -> diverge.v1alpha1.WatchEnvironmentsRequest
+	38, // 59: diverge.v1alpha1.EnvironmentService.StreamLogs:input_type -> diverge.v1alpha1.StreamLogsRequest
+	41, // 60: diverge.v1alpha1.EnvironmentService.ListHookJobs:input_type -> diverge.v1alpha1.ListHookJobsRequest
+	43, // 61: diverge.v1alpha1.EnvironmentService.RetryHook:input_type -> diverge.v1alpha1.RetryHookRequest
+	25, // 62: diverge.v1alpha1.EnvironmentService.CreateEnvironment:output_type -> diverge.v1alpha1.CreateEnvironmentResponse
+	27, // 63: diverge.v1alpha1.EnvironmentService.GetEnvironment:output_type -> diverge.v1alpha1.GetEnvironmentResponse
+	29, // 64: diverge.v1alpha1.EnvironmentService.ListEnvironments:output_type -> diverge.v1alpha1.ListEnvironmentsResponse
+	31, // 65: diverge.v1alpha1.EnvironmentService.UpdateEnvironment:output_type -> diverge.v1alpha1.UpdateEnvironmentResponse
+	33, // 66: diverge.v1alpha1.EnvironmentService.DeleteEnvironment:output_type -> diverge.v1alpha1.DeleteEnvironmentResponse
+	35, // 67: diverge.v1alpha1.EnvironmentService.ExtendTTL:output_type -> diverge.v1alpha1.ExtendTTLResponse
+	37, // 68: diverge.v1alpha1.EnvironmentService.WatchEnvironments:output_type -> diverge.v1alpha1.WatchEnvironmentsResponse
+	39, // 69: diverge.v1alpha1.EnvironmentService.StreamLogs:output_type -> diverge.v1alpha1.StreamLogsResponse
+	42, // 70: diverge.v1alpha1.EnvironmentService.ListHookJobs:output_type -> diverge.v1alpha1.ListHookJobsResponse
+	44, // 71: diverge.v1alpha1.EnvironmentService.RetryHook:output_type -> diverge.v1alpha1.RetryHookResponse
+	62, // [62:72] is the sub-list for method output_type
+	52, // [52:62] is the sub-list for method input_type
+	52, // [52:52] is the sub-list for extension type_name
+	52, // [52:52] is the sub-list for extension extendee
+	0,  // [0:52] is the sub-list for field type_name
 }
 
 func init() { file_diverge_v1alpha1_environment_proto_init() }
@@ -3260,7 +3587,7 @@ func file_diverge_v1alpha1_environment_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_diverge_v1alpha1_environment_proto_rawDesc), len(file_diverge_v1alpha1_environment_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   44,
+			NumMessages:   49,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

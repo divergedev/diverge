@@ -45,7 +45,7 @@ func TestBuildJob(t *testing.T) {
 	assert.Equal(t, int32(0), *job.Spec.BackoffLimit)
 
 	require.NotNil(t, job.Spec.TTLSecondsAfterFinished)
-	assert.Equal(t, int32(300), *job.Spec.TTLSecondsAfterFinished)
+	assert.Equal(t, int32(1800), *job.Spec.TTLSecondsAfterFinished)
 
 	require.NotNil(t, job.Spec.ActiveDeadlineSeconds)
 	assert.Equal(t, int64(120), *job.Spec.ActiveDeadlineSeconds)
@@ -56,6 +56,22 @@ func TestBuildJob(t *testing.T) {
 	c := job.Spec.Template.Spec.Containers[0]
 	assert.Equal(t, "alpine:latest", c.Image)
 	assert.Equal(t, []string{"echo", "hello"}, c.Args)
+
+	// PSS: restricted security context
+	require.NotNil(t, job.Spec.Template.Spec.SecurityContext)
+	require.NotNil(t, job.Spec.Template.Spec.SecurityContext.RunAsNonRoot)
+	assert.True(t, *job.Spec.Template.Spec.SecurityContext.RunAsNonRoot)
+	require.NotNil(t, c.SecurityContext)
+	require.NotNil(t, c.SecurityContext.AllowPrivilegeEscalation)
+	assert.False(t, *c.SecurityContext.AllowPrivilegeEscalation)
+	require.NotNil(t, c.SecurityContext.ReadOnlyRootFilesystem)
+	assert.True(t, *c.SecurityContext.ReadOnlyRootFilesystem)
+
+	// PSS: emptyDir /tmp volume
+	require.Len(t, job.Spec.Template.Spec.Volumes, 1)
+	assert.Equal(t, "tmp", job.Spec.Template.Spec.Volumes[0].Name)
+	require.Len(t, c.VolumeMounts, 1)
+	assert.Equal(t, "/tmp", c.VolumeMounts[0].MountPath)
 
 	require.Len(t, job.OwnerReferences, 1)
 	assert.Equal(t, "test-env", job.OwnerReferences[0].Name)

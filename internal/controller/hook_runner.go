@@ -22,7 +22,7 @@ const (
 	hookTypePostDeploy             = "postdeploy"
 	defaultMigrationTimeout  int32 = 120
 	defaultPostDeployTimeout int32 = 60
-	jobTTLAfterFinished      int32 = 300 // 5 min cleanup
+	jobTTLAfterFinished      int32 = 1800 // 30 min for debugging failed hooks
 )
 
 // HookJobConfig holds the parameters for creating a hook Job.
@@ -53,6 +53,10 @@ func buildJob(cfg HookJobConfig) *batchv1.Job {
 		labels[k] = truncateLabel(v)
 	}
 
+	nonRoot := true
+	noPrivEsc := false
+	readOnly := true
+
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      cfg.JobName,
@@ -69,6 +73,20 @@ func buildJob(cfg HookJobConfig) *batchv1.Job {
 				},
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
+					SecurityContext: &corev1.PodSecurityContext{
+						RunAsNonRoot: &nonRoot,
+						SeccompProfile: &corev1.SeccompProfile{
+							Type: corev1.SeccompProfileTypeRuntimeDefault,
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "tmp",
+							VolumeSource: corev1.VolumeSource{
+								EmptyDir: &corev1.EmptyDirVolumeSource{},
+							},
+						},
+					},
 					Containers: []corev1.Container{
 						{
 							Name:    "hook",
@@ -76,6 +94,20 @@ func buildJob(cfg HookJobConfig) *batchv1.Job {
 							Args:    cfg.Args,
 							Env:     cfg.EnvVars,
 							EnvFrom: cfg.EnvFrom,
+							SecurityContext: &corev1.SecurityContext{
+								AllowPrivilegeEscalation: &noPrivEsc,
+								ReadOnlyRootFilesystem:   &readOnly,
+								RunAsNonRoot:             &nonRoot,
+								Capabilities: &corev1.Capabilities{
+									Drop: []corev1.Capability{"ALL"},
+								},
+							},
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									Name:      "tmp",
+									MountPath: "/tmp",
+								},
+							},
 							Resources: corev1.ResourceRequirements{
 								Requests: corev1.ResourceList{
 									corev1.ResourceCPU:    resource.MustParse("100m"),

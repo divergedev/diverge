@@ -20,6 +20,8 @@ jobs:
           go-version-file: go.mod
       - name: Build
         run: go build ./...
+      - name: Vet
+        run: go vet ./...
       - name: Test
         run: |
           # E2E tests in /test/ are filtered out because they require a real cluster
@@ -35,8 +37,6 @@ jobs:
             exit 1
           fi
           echo "✅ Coverage ${COVERAGE}% meets threshold"
-      - name: Vet
-        run: go vet ./...
 
   lint:
     runs-on: ubuntu-latest

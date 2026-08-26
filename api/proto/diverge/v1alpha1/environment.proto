@@ -233,6 +233,8 @@ service EnvironmentService {
   rpc ExtendTTL(ExtendTTLRequest) returns (ExtendTTLResponse);
   rpc WatchEnvironments(WatchEnvironmentsRequest) returns (stream WatchEnvironmentsResponse);
   rpc StreamLogs(StreamLogsRequest) returns (stream StreamLogsResponse);
+  rpc ListHookJobs(ListHookJobsRequest) returns (ListHookJobsResponse);
+  rpc RetryHook(RetryHookRequest) returns (RetryHookResponse);
 }
 
 message CreateEnvironmentRequest {
@@ -318,4 +320,31 @@ message StreamLogsResponse {
   string service_name = 3;
   string content = 4;
   google.protobuf.Timestamp timestamp = 5;
+}
+
+message HookJob {
+  string name = 1;
+  string type = 2;
+  string phase = 3;
+  string message = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp completed_at = 6;
+  int32 duration_seconds = 7;
+}
+
+message ListHookJobsRequest {
+  string namespace = 1;
+  string environment_name = 2;
+}
+message ListHookJobsResponse {
+  repeated HookJob jobs = 1;
+}
+
+message RetryHookRequest {
+  string namespace = 1;
+  string environment_name = 2;
+  string hook_type = 3;
+}
+message RetryHookResponse {
+  HookJob job = 1;
 }

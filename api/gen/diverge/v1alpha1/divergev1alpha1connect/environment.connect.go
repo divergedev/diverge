@@ -57,6 +57,12 @@ const (
 	// EnvironmentServiceStreamLogsProcedure is the fully-qualified name of the EnvironmentService's
 	// StreamLogs RPC.
 	EnvironmentServiceStreamLogsProcedure = "/diverge.v1alpha1.EnvironmentService/StreamLogs"
+	// EnvironmentServiceListHookJobsProcedure is the fully-qualified name of the EnvironmentService's
+	// ListHookJobs RPC.
+	EnvironmentServiceListHookJobsProcedure = "/diverge.v1alpha1.EnvironmentService/ListHookJobs"
+	// EnvironmentServiceRetryHookProcedure is the fully-qualified name of the EnvironmentService's
+	// RetryHook RPC.
+	EnvironmentServiceRetryHookProcedure = "/diverge.v1alpha1.EnvironmentService/RetryHook"
 )
 
 // EnvironmentServiceClient is a client for the diverge.v1alpha1.EnvironmentService service.
@@ -69,6 +75,8 @@ type EnvironmentServiceClient interface {
 	ExtendTTL(context.Context, *connect.Request[v1alpha1.ExtendTTLRequest]) (*connect.Response[v1alpha1.ExtendTTLResponse], error)
 	WatchEnvironments(context.Context, *connect.Request[v1alpha1.WatchEnvironmentsRequest]) (*connect.ServerStreamForClient[v1alpha1.WatchEnvironmentsResponse], error)
 	StreamLogs(context.Context, *connect.Request[v1alpha1.StreamLogsRequest]) (*connect.ServerStreamForClient[v1alpha1.StreamLogsResponse], error)
+	ListHookJobs(context.Context, *connect.Request[v1alpha1.ListHookJobsRequest]) (*connect.Response[v1alpha1.ListHookJobsResponse], error)
+	RetryHook(context.Context, *connect.Request[v1alpha1.RetryHookRequest]) (*connect.Response[v1alpha1.RetryHookResponse], error)
 }
 
 // NewEnvironmentServiceClient constructs a client for the diverge.v1alpha1.EnvironmentService
@@ -130,6 +138,18 @@ func NewEnvironmentServiceClient(httpClient connect.HTTPClient, baseURL string, 
 			connect.WithSchema(environmentServiceMethods.ByName("StreamLogs")),
 			connect.WithClientOptions(opts...),
 		),
+		listHookJobs: connect.NewClient[v1alpha1.ListHookJobsRequest, v1alpha1.ListHookJobsResponse](
+			httpClient,
+			baseURL+EnvironmentServiceListHookJobsProcedure,
+			connect.WithSchema(environmentServiceMethods.ByName("ListHookJobs")),
+			connect.WithClientOptions(opts...),
+		),
+		retryHook: connect.NewClient[v1alpha1.RetryHookRequest, v1alpha1.RetryHookResponse](
+			httpClient,
+			baseURL+EnvironmentServiceRetryHookProcedure,
+			connect.WithSchema(environmentServiceMethods.ByName("RetryHook")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -143,6 +163,8 @@ type environmentServiceClient struct {
 	extendTTL         *connect.Client[v1alpha1.ExtendTTLRequest, v1alpha1.ExtendTTLResponse]
 	watchEnvironments *connect.Client[v1alpha1.WatchEnvironmentsRequest, v1alpha1.WatchEnvironmentsResponse]
 	streamLogs        *connect.Client[v1alpha1.StreamLogsRequest, v1alpha1.StreamLogsResponse]
+	listHookJobs      *connect.Client[v1alpha1.ListHookJobsRequest, v1alpha1.ListHookJobsResponse]
+	retryHook         *connect.Client[v1alpha1.RetryHookRequest, v1alpha1.RetryHookResponse]
 }
 
 // CreateEnvironment calls diverge.v1alpha1.EnvironmentService.CreateEnvironment.
@@ -185,6 +207,16 @@ func (c *environmentServiceClient) StreamLogs(ctx context.Context, req *connect.
 	return c.streamLogs.CallServerStream(ctx, req)
 }
 
+// ListHookJobs calls diverge.v1alpha1.EnvironmentService.ListHookJobs.
+func (c *environmentServiceClient) ListHookJobs(ctx context.Context, req *connect.Request[v1alpha1.ListHookJobsRequest]) (*connect.Response[v1alpha1.ListHookJobsResponse], error) {
+	return c.listHookJobs.CallUnary(ctx, req)
+}
+
+// RetryHook calls diverge.v1alpha1.EnvironmentService.RetryHook.
+func (c *environmentServiceClient) RetryHook(ctx context.Context, req *connect.Request[v1alpha1.RetryHookRequest]) (*connect.Response[v1alpha1.RetryHookResponse], error) {
+	return c.retryHook.CallUnary(ctx, req)
+}
+
 // EnvironmentServiceHandler is an implementation of the diverge.v1alpha1.EnvironmentService
 // service.
 type EnvironmentServiceHandler interface {
@@ -196,6 +228,8 @@ type EnvironmentServiceHandler interface {
 	ExtendTTL(context.Context, *connect.Request[v1alpha1.ExtendTTLRequest]) (*connect.Response[v1alpha1.ExtendTTLResponse], error)
 	WatchEnvironments(context.Context, *connect.Request[v1alpha1.WatchEnvironmentsRequest], *connect.ServerStream[v1alpha1.WatchEnvironmentsResponse]) error
 	StreamLogs(context.Context, *connect.Request[v1alpha1.StreamLogsRequest], *connect.ServerStream[v1alpha1.StreamLogsResponse]) error
+	ListHookJobs(context.Context, *connect.Request[v1alpha1.ListHookJobsRequest]) (*connect.Response[v1alpha1.ListHookJobsResponse], error)
+	RetryHook(context.Context, *connect.Request[v1alpha1.RetryHookRequest]) (*connect.Response[v1alpha1.RetryHookResponse], error)
 }
 
 // NewEnvironmentServiceHandler builds an HTTP handler from the service implementation. It returns
@@ -253,6 +287,18 @@ func NewEnvironmentServiceHandler(svc EnvironmentServiceHandler, opts ...connect
 		connect.WithSchema(environmentServiceMethods.ByName("StreamLogs")),
 		connect.WithHandlerOptions(opts...),
 	)
+	environmentServiceListHookJobsHandler := connect.NewUnaryHandler(
+		EnvironmentServiceListHookJobsProcedure,
+		svc.ListHookJobs,
+		connect.WithSchema(environmentServiceMethods.ByName("ListHookJobs")),
+		connect.WithHandlerOptions(opts...),
+	)
+	environmentServiceRetryHookHandler := connect.NewUnaryHandler(
+		EnvironmentServiceRetryHookProcedure,
+		svc.RetryHook,
+		connect.WithSchema(environmentServiceMethods.ByName("RetryHook")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/diverge.v1alpha1.EnvironmentService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case EnvironmentServiceCreateEnvironmentProcedure:
@@ -271,6 +317,10 @@ func NewEnvironmentServiceHandler(svc EnvironmentServiceHandler, opts ...connect
 			environmentServiceWatchEnvironmentsHandler.ServeHTTP(w, r)
 		case EnvironmentServiceStreamLogsProcedure:
 			environmentServiceStreamLogsHandler.ServeHTTP(w, r)
+		case EnvironmentServiceListHookJobsProcedure:
+			environmentServiceListHookJobsHandler.ServeHTTP(w, r)
+		case EnvironmentServiceRetryHookProcedure:
+			environmentServiceRetryHookHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -310,4 +360,12 @@ func (UnimplementedEnvironmentServiceHandler) WatchEnvironments(context.Context,
 
 func (UnimplementedEnvironmentServiceHandler) StreamLogs(context.Context, *connect.Request[v1alpha1.StreamLogsRequest], *connect.ServerStream[v1alpha1.StreamLogsResponse]) error {
 	return connect.NewError(connect.CodeUnimplemented, errors.New("diverge.v1alpha1.EnvironmentService.StreamLogs is not implemented"))
+}
+
+func (UnimplementedEnvironmentServiceHandler) ListHookJobs(context.Context, *connect.Request[v1alpha1.ListHookJobsRequest]) (*connect.Response[v1alpha1.ListHookJobsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("diverge.v1alpha1.EnvironmentService.ListHookJobs is not implemented"))
+}
+
+func (UnimplementedEnvironmentServiceHandler) RetryHook(context.Context, *connect.Request[v1alpha1.RetryHookRequest]) (*connect.Response[v1alpha1.RetryHookResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("diverge.v1alpha1.EnvironmentService.RetryHook is not implemented"))
 }
