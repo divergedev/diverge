@@ -510,6 +510,7 @@ func (r *PreviewGroupReconciler) buildChildEnvironment(
 		HeaderKey:       pg.Spec.Routing.HeaderKey,
 		Env:             svc.Env,
 		Protocol:        string(svc.Protocol),
+		KEDA:            svc.KEDA,
 	}
 
 	env := &divergeiov1alpha1.Environment{

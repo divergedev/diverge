@@ -127,6 +127,33 @@ type PreviewGroupServiceSpec struct {
 	// PostDeploy configures a generic post-deployment Job hook for this service.
 	// +optional
 	PostDeploy *PostDeploySpec `json:"postDeploy,omitempty"`
+
+	// KEDA configures per-service autoscaling and scale-to-zero settings.
+	// Overrides controller-level CLI flags when set.
+	// +optional
+	KEDA *KEDASpec `json:"keda,omitempty"`
+}
+
+// KEDASpec defines per-service autoscaling configuration for KEDA.
+type KEDASpec struct {
+	// Enabled enables KEDA autoscaling for this service.
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+	// MinReplicas is the minimum number of replicas. Set to 0 for scale-to-zero.
+	// When nil, falls back to the controller CLI flag (--keda-min-replicas).
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	MinReplicas *int32 `json:"minReplicas,omitempty"`
+	// MaxReplicas is the maximum number of replicas.
+	// When nil, falls back to the controller CLI flag (--keda-max-replicas).
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	MaxReplicas *int32 `json:"maxReplicas,omitempty"`
+	// CooldownPeriod is the cooldown period in seconds before scaling down.
+	// When nil, falls back to the controller CLI flag (--keda-cooldown).
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	CooldownPeriod *int32 `json:"cooldownPeriod,omitempty"`
 }
 
 // ResourceOverride allows preview pods to use fewer resources than baseline.

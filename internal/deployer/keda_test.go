@@ -259,3 +259,128 @@ func TestKEDADeployer_Status_NoHSO(t *testing.T) {
 	require.Len(t, status, 1)
 	assert.Equal(t, "Healthy", status[0].Health)
 }
+
+func int32Ptr(i int32) *int32 { return &i }
+
+func TestKEDADeployer_CRDConfigOverridesCLI(t *testing.T) {
+	inner := &mockDeployer{}
+	c := fake.NewClientBuilder().Build()
+
+	d := &KEDADeployer{
+		Inner:  inner,
+		Client: c,
+		Config: KEDAConfig{
+			MinReplicas: 1,
+			MaxReplicas: 5,
+			Cooldown:    600,
+		},
+	}
+	env := &v1alpha1.Environment{}
+	env.Name = "test-env"
+	env.Namespace = "test-ns"
+	env.Spec.Deploy.Namespace = "same"
+	env.Spec.ServiceConfig = &v1alpha1.ServicePreviewConfig{
+		KEDA: &v1alpha1.KEDASpec{
+			MinReplicas:    int32Ptr(0),
+			MaxReplicas:    int32Ptr(10),
+			CooldownPeriod: int32Ptr(120),
+		},
+	}
+
+	err := d.Deploy(context.Background(), env)
+	require.NoError(t, err)
+
+	hso := &unstructured.Unstructured{}
+	hso.SetGroupVersionKind(hsoGVK)
+	err = c.Get(context.Background(), client.ObjectKey{Name: "test-env", Namespace: "test-ns"}, hso)
+	require.NoError(t, err)
+
+	// CRD values should override CLI flags
+	min, _, _ := unstructured.NestedInt64(hso.Object, "spec", "replicas", "min")
+	assert.Equal(t, int64(0), min, "CRD minReplicas=0 should enable scale-to-zero")
+
+	max, _, _ := unstructured.NestedInt64(hso.Object, "spec", "replicas", "max")
+	assert.Equal(t, int64(10), max, "CRD maxReplicas should override CLI")
+
+	cooldown, _, _ := unstructured.NestedInt64(hso.Object, "spec", "scaledownPeriod")
+	assert.Equal(t, int64(120), cooldown, "CRD cooldownPeriod should override CLI")
+}
+
+func TestKEDADeployer_NilCRDFallsBackToCLI(t *testing.T) {
+	inner := &mockDeployer{}
+	c := fake.NewClientBuilder().Build()
+
+	d := &KEDADeployer{
+		Inner:  inner,
+		Client: c,
+		Config: KEDAConfig{
+			MinReplicas: 2,
+			MaxReplicas: 7,
+			Cooldown:    900,
+		},
+	}
+	env := &v1alpha1.Environment{}
+	env.Name = "test-env"
+	env.Namespace = "test-ns"
+	env.Spec.Deploy.Namespace = "same"
+	// No KEDA spec on ServiceConfig
+
+	err := d.Deploy(context.Background(), env)
+	require.NoError(t, err)
+
+	hso := &unstructured.Unstructured{}
+	hso.SetGroupVersionKind(hsoGVK)
+	err = c.Get(context.Background(), client.ObjectKey{Name: "test-env", Namespace: "test-ns"}, hso)
+	require.NoError(t, err)
+
+	min, _, _ := unstructured.NestedInt64(hso.Object, "spec", "replicas", "min")
+	assert.Equal(t, int64(2), min, "should fall back to CLI MinReplicas")
+
+	max, _, _ := unstructured.NestedInt64(hso.Object, "spec", "replicas", "max")
+	assert.Equal(t, int64(7), max, "should fall back to CLI MaxReplicas")
+
+	cooldown, _, _ := unstructured.NestedInt64(hso.Object, "spec", "scaledownPeriod")
+	assert.Equal(t, int64(900), cooldown, "should fall back to CLI Cooldown")
+}
+
+func TestKEDADeployer_PartialCRDOverride(t *testing.T) {
+	inner := &mockDeployer{}
+	c := fake.NewClientBuilder().Build()
+
+	d := &KEDADeployer{
+		Inner:  inner,
+		Client: c,
+		Config: KEDAConfig{
+			MinReplicas: 1,
+			MaxReplicas: 5,
+			Cooldown:    300,
+		},
+	}
+	env := &v1alpha1.Environment{}
+	env.Name = "test-env"
+	env.Namespace = "test-ns"
+	env.Spec.Deploy.Namespace = "same"
+	// Only override minReplicas, leave maxReplicas and cooldown nil
+	env.Spec.ServiceConfig = &v1alpha1.ServicePreviewConfig{
+		KEDA: &v1alpha1.KEDASpec{
+			MinReplicas: int32Ptr(0),
+		},
+	}
+
+	err := d.Deploy(context.Background(), env)
+	require.NoError(t, err)
+
+	hso := &unstructured.Unstructured{}
+	hso.SetGroupVersionKind(hsoGVK)
+	err = c.Get(context.Background(), client.ObjectKey{Name: "test-env", Namespace: "test-ns"}, hso)
+	require.NoError(t, err)
+
+	min, _, _ := unstructured.NestedInt64(hso.Object, "spec", "replicas", "min")
+	assert.Equal(t, int64(0), min, "CRD minReplicas=0 overrides CLI")
+
+	max, _, _ := unstructured.NestedInt64(hso.Object, "spec", "replicas", "max")
+	assert.Equal(t, int64(5), max, "CLI maxReplicas used as fallback")
+
+	cooldown, _, _ := unstructured.NestedInt64(hso.Object, "spec", "scaledownPeriod")
+	assert.Equal(t, int64(300), cooldown, "CLI cooldown used as fallback")
+}

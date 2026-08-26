@@ -341,6 +341,35 @@ spec:
                       ImagePullPolicy overrides the container image pull policy.
                       Valid values: Always, Never, IfNotPresent. Defaults to IfNotPresent.
                     type: string
+                  keda:
+                    description: KEDA configures per-service autoscaling. Overrides
+                      controller CLI flags.
+                    properties:
+                      cooldownPeriod:
+                        description: |-
+                          CooldownPeriod is the cooldown period in seconds before scaling down.
+                          When nil, falls back to the controller CLI flag (--keda-cooldown).
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      enabled:
+                        description: Enabled enables KEDA autoscaling for this service.
+                        type: boolean
+                      maxReplicas:
+                        description: |-
+                          MaxReplicas is the maximum number of replicas.
+                          When nil, falls back to the controller CLI flag (--keda-max-replicas).
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      minReplicas:
+                        description: |-
+                          MinReplicas is the minimum number of replicas. Set to 0 for scale-to-zero.
+                          When nil, falls back to the controller CLI flag (--keda-min-replicas).
+                        format: int32
+                        minimum: 0
+                        type: integer
+                    type: object
                   namespace:
                     description: Namespace is the namespace where the baseline service
                       runs.

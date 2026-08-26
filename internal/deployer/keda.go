@@ -95,10 +95,25 @@ func (d *KEDADeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) er
 	}
 	minRepl := d.Config.MinReplicas
 	maxRepl := d.Config.MaxReplicas
+	cooldown := d.Config.Cooldown
+
+	// CRD per-service config overrides CLI flags
+	if env.Spec.ServiceConfig != nil && env.Spec.ServiceConfig.KEDA != nil {
+		k := env.Spec.ServiceConfig.KEDA
+		if k.MinReplicas != nil {
+			minRepl = int64(*k.MinReplicas)
+		}
+		if k.MaxReplicas != nil {
+			maxRepl = int64(*k.MaxReplicas)
+		}
+		if k.CooldownPeriod != nil {
+			cooldown = int64(*k.CooldownPeriod)
+		}
+	}
+
 	if maxRepl == 0 {
 		maxRepl = 3
 	}
-	cooldown := d.Config.Cooldown
 	if cooldown == 0 {
 		cooldown = 300
 	}

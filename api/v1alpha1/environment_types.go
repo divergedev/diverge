@@ -325,6 +325,9 @@ type ServicePreviewConfig struct {
 	// Resources overrides the resource requests/limits for the preview pod.
 	// +optional
 	Resources *ResourceOverride `json:"resources,omitempty"`
+	// KEDA configures per-service autoscaling. Overrides controller CLI flags.
+	// +optional
+	KEDA *KEDASpec `json:"keda,omitempty"`
 	// WebSocket configures WebSocket proxy support.
 	// +optional
 	WebSocket *WebSocketSpec `json:"websocket,omitempty"`
