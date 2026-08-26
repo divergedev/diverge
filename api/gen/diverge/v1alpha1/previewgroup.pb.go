@@ -40,6 +40,7 @@ type PreviewGroupServiceSpec struct {
 	Env             []*EnvVar              `protobuf:"bytes,12,rep,name=env,proto3" json:"env,omitempty"`
 	Resources       *ResourceOverride      `protobuf:"bytes,13,opt,name=resources,proto3" json:"resources,omitempty"`
 	Database        *EnvironmentDatabase   `protobuf:"bytes,14,opt,name=database,proto3" json:"database,omitempty"`
+	PostDeploy      *PostDeploySpec        `protobuf:"bytes,15,opt,name=post_deploy,json=postDeploy,proto3" json:"post_deploy,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -168,6 +169,13 @@ func (x *PreviewGroupServiceSpec) GetResources() *ResourceOverride {
 func (x *PreviewGroupServiceSpec) GetDatabase() *EnvironmentDatabase {
 	if x != nil {
 		return x.Database
+	}
+	return nil
+}
+
+func (x *PreviewGroupServiceSpec) GetPostDeploy() *PostDeploySpec {
+	if x != nil {
+		return x.PostDeploy
 	}
 	return nil
 }
@@ -1338,7 +1346,7 @@ var File_diverge_v1alpha1_previewgroup_proto protoreflect.FileDescriptor
 
 const file_diverge_v1alpha1_previewgroup_proto_rawDesc = "" +
 	"\n" +
-	"#diverge/v1alpha1/previewgroup.proto\x12\x10diverge.v1alpha1\x1a\"diverge/v1alpha1/environment.proto\x1a\x1cdiverge/v1alpha1/types.proto\x1a\x1egoogle/protobuf/duration.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xa3\x04\n" +
+	"#diverge/v1alpha1/previewgroup.proto\x12\x10diverge.v1alpha1\x1a\"diverge/v1alpha1/environment.proto\x1a\x1cdiverge/v1alpha1/types.proto\x1a\x1egoogle/protobuf/duration.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xe6\x04\n" +
 	"\x17PreviewGroupServiceSpec\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\x12\x12\n" +
@@ -1356,7 +1364,9 @@ const file_diverge_v1alpha1_previewgroup_proto_rawDesc = "" +
 	"\x11image_pull_policy\x18\v \x01(\tR\x0fimagePullPolicy\x12*\n" +
 	"\x03env\x18\f \x03(\v2\x18.diverge.v1alpha1.EnvVarR\x03env\x12@\n" +
 	"\tresources\x18\r \x01(\v2\".diverge.v1alpha1.ResourceOverrideR\tresources\x12A\n" +
-	"\bdatabase\x18\x0e \x01(\v2%.diverge.v1alpha1.EnvironmentDatabaseR\bdatabase\"\xaf\x01\n" +
+	"\bdatabase\x18\x0e \x01(\v2%.diverge.v1alpha1.EnvironmentDatabaseR\bdatabase\x12A\n" +
+	"\vpost_deploy\x18\x0f \x01(\v2 .diverge.v1alpha1.PostDeploySpecR\n" +
+	"postDeploy\"\xaf\x01\n" +
 	"\x13PreviewGroupRouting\x12\x12\n" +
 	"\x04mode\x18\x01 \x01(\tR\x04mode\x12\x1d\n" +
 	"\n" +
@@ -1503,61 +1513,63 @@ var file_diverge_v1alpha1_previewgroup_proto_goTypes = []any{
 	(*EnvVar)(nil),                     // 22: diverge.v1alpha1.EnvVar
 	(*ResourceOverride)(nil),           // 23: diverge.v1alpha1.ResourceOverride
 	(*EnvironmentDatabase)(nil),        // 24: diverge.v1alpha1.EnvironmentDatabase
-	(*durationpb.Duration)(nil),        // 25: google.protobuf.Duration
-	(*EnvironmentSource)(nil),          // 26: diverge.v1alpha1.EnvironmentSource
-	(*timestamppb.Timestamp)(nil),      // 27: google.protobuf.Timestamp
-	(*Condition)(nil),                  // 28: diverge.v1alpha1.Condition
-	(*fieldmaskpb.FieldMask)(nil),      // 29: google.protobuf.FieldMask
-	(WatchEventType)(0),                // 30: diverge.v1alpha1.WatchEventType
+	(*PostDeploySpec)(nil),             // 25: diverge.v1alpha1.PostDeploySpec
+	(*durationpb.Duration)(nil),        // 26: google.protobuf.Duration
+	(*EnvironmentSource)(nil),          // 27: diverge.v1alpha1.EnvironmentSource
+	(*timestamppb.Timestamp)(nil),      // 28: google.protobuf.Timestamp
+	(*Condition)(nil),                  // 29: diverge.v1alpha1.Condition
+	(*fieldmaskpb.FieldMask)(nil),      // 30: google.protobuf.FieldMask
+	(WatchEventType)(0),                // 31: diverge.v1alpha1.WatchEventType
 }
 var file_diverge_v1alpha1_previewgroup_proto_depIdxs = []int32{
 	21, // 0: diverge.v1alpha1.PreviewGroupServiceSpec.async_routes:type_name -> diverge.v1alpha1.AsyncRouteSpec
 	22, // 1: diverge.v1alpha1.PreviewGroupServiceSpec.env:type_name -> diverge.v1alpha1.EnvVar
 	23, // 2: diverge.v1alpha1.PreviewGroupServiceSpec.resources:type_name -> diverge.v1alpha1.ResourceOverride
 	24, // 3: diverge.v1alpha1.PreviewGroupServiceSpec.database:type_name -> diverge.v1alpha1.EnvironmentDatabase
-	25, // 4: diverge.v1alpha1.PreviewGroupLifecycle.ttl:type_name -> google.protobuf.Duration
-	26, // 5: diverge.v1alpha1.PreviewGroupSpec.source:type_name -> diverge.v1alpha1.EnvironmentSource
-	1,  // 6: diverge.v1alpha1.PreviewGroupSpec.routing:type_name -> diverge.v1alpha1.PreviewGroupRouting
-	0,  // 7: diverge.v1alpha1.PreviewGroupSpec.services:type_name -> diverge.v1alpha1.PreviewGroupServiceSpec
-	24, // 8: diverge.v1alpha1.PreviewGroupSpec.database:type_name -> diverge.v1alpha1.EnvironmentDatabase
-	2,  // 9: diverge.v1alpha1.PreviewGroupSpec.lifecycle:type_name -> diverge.v1alpha1.PreviewGroupLifecycle
-	4,  // 10: diverge.v1alpha1.PreviewGroupStatus.services:type_name -> diverge.v1alpha1.PreviewGroupServiceStatus
-	27, // 11: diverge.v1alpha1.PreviewGroupStatus.created_at:type_name -> google.protobuf.Timestamp
-	27, // 12: diverge.v1alpha1.PreviewGroupStatus.expires_at:type_name -> google.protobuf.Timestamp
-	28, // 13: diverge.v1alpha1.PreviewGroupStatus.conditions:type_name -> diverge.v1alpha1.Condition
-	27, // 14: diverge.v1alpha1.PreviewGroupStatus.lease_renewed_at:type_name -> google.protobuf.Timestamp
-	3,  // 15: diverge.v1alpha1.PreviewGroup.spec:type_name -> diverge.v1alpha1.PreviewGroupSpec
-	5,  // 16: diverge.v1alpha1.PreviewGroup.status:type_name -> diverge.v1alpha1.PreviewGroupStatus
-	27, // 17: diverge.v1alpha1.PreviewGroup.created_at:type_name -> google.protobuf.Timestamp
-	19, // 18: diverge.v1alpha1.PreviewGroup.labels:type_name -> diverge.v1alpha1.PreviewGroup.LabelsEntry
-	20, // 19: diverge.v1alpha1.PreviewGroup.annotations:type_name -> diverge.v1alpha1.PreviewGroup.AnnotationsEntry
-	6,  // 20: diverge.v1alpha1.CreatePreviewGroupRequest.preview_group:type_name -> diverge.v1alpha1.PreviewGroup
-	6,  // 21: diverge.v1alpha1.CreatePreviewGroupResponse.preview_group:type_name -> diverge.v1alpha1.PreviewGroup
-	6,  // 22: diverge.v1alpha1.GetPreviewGroupResponse.preview_group:type_name -> diverge.v1alpha1.PreviewGroup
-	6,  // 23: diverge.v1alpha1.ListPreviewGroupsResponse.preview_groups:type_name -> diverge.v1alpha1.PreviewGroup
-	6,  // 24: diverge.v1alpha1.UpdatePreviewGroupRequest.preview_group:type_name -> diverge.v1alpha1.PreviewGroup
-	29, // 25: diverge.v1alpha1.UpdatePreviewGroupRequest.update_mask:type_name -> google.protobuf.FieldMask
-	6,  // 26: diverge.v1alpha1.UpdatePreviewGroupResponse.preview_group:type_name -> diverge.v1alpha1.PreviewGroup
-	30, // 27: diverge.v1alpha1.WatchPreviewGroupsResponse.type:type_name -> diverge.v1alpha1.WatchEventType
-	6,  // 28: diverge.v1alpha1.WatchPreviewGroupsResponse.preview_group:type_name -> diverge.v1alpha1.PreviewGroup
-	27, // 29: diverge.v1alpha1.WatchPreviewGroupsResponse.timestamp:type_name -> google.protobuf.Timestamp
-	7,  // 30: diverge.v1alpha1.PreviewGroupService.CreatePreviewGroup:input_type -> diverge.v1alpha1.CreatePreviewGroupRequest
-	9,  // 31: diverge.v1alpha1.PreviewGroupService.GetPreviewGroup:input_type -> diverge.v1alpha1.GetPreviewGroupRequest
-	11, // 32: diverge.v1alpha1.PreviewGroupService.ListPreviewGroups:input_type -> diverge.v1alpha1.ListPreviewGroupsRequest
-	13, // 33: diverge.v1alpha1.PreviewGroupService.UpdatePreviewGroup:input_type -> diverge.v1alpha1.UpdatePreviewGroupRequest
-	15, // 34: diverge.v1alpha1.PreviewGroupService.DeletePreviewGroup:input_type -> diverge.v1alpha1.DeletePreviewGroupRequest
-	17, // 35: diverge.v1alpha1.PreviewGroupService.WatchPreviewGroups:input_type -> diverge.v1alpha1.WatchPreviewGroupsRequest
-	8,  // 36: diverge.v1alpha1.PreviewGroupService.CreatePreviewGroup:output_type -> diverge.v1alpha1.CreatePreviewGroupResponse
-	10, // 37: diverge.v1alpha1.PreviewGroupService.GetPreviewGroup:output_type -> diverge.v1alpha1.GetPreviewGroupResponse
-	12, // 38: diverge.v1alpha1.PreviewGroupService.ListPreviewGroups:output_type -> diverge.v1alpha1.ListPreviewGroupsResponse
-	14, // 39: diverge.v1alpha1.PreviewGroupService.UpdatePreviewGroup:output_type -> diverge.v1alpha1.UpdatePreviewGroupResponse
-	16, // 40: diverge.v1alpha1.PreviewGroupService.DeletePreviewGroup:output_type -> diverge.v1alpha1.DeletePreviewGroupResponse
-	18, // 41: diverge.v1alpha1.PreviewGroupService.WatchPreviewGroups:output_type -> diverge.v1alpha1.WatchPreviewGroupsResponse
-	36, // [36:42] is the sub-list for method output_type
-	30, // [30:36] is the sub-list for method input_type
-	30, // [30:30] is the sub-list for extension type_name
-	30, // [30:30] is the sub-list for extension extendee
-	0,  // [0:30] is the sub-list for field type_name
+	25, // 4: diverge.v1alpha1.PreviewGroupServiceSpec.post_deploy:type_name -> diverge.v1alpha1.PostDeploySpec
+	26, // 5: diverge.v1alpha1.PreviewGroupLifecycle.ttl:type_name -> google.protobuf.Duration
+	27, // 6: diverge.v1alpha1.PreviewGroupSpec.source:type_name -> diverge.v1alpha1.EnvironmentSource
+	1,  // 7: diverge.v1alpha1.PreviewGroupSpec.routing:type_name -> diverge.v1alpha1.PreviewGroupRouting
+	0,  // 8: diverge.v1alpha1.PreviewGroupSpec.services:type_name -> diverge.v1alpha1.PreviewGroupServiceSpec
+	24, // 9: diverge.v1alpha1.PreviewGroupSpec.database:type_name -> diverge.v1alpha1.EnvironmentDatabase
+	2,  // 10: diverge.v1alpha1.PreviewGroupSpec.lifecycle:type_name -> diverge.v1alpha1.PreviewGroupLifecycle
+	4,  // 11: diverge.v1alpha1.PreviewGroupStatus.services:type_name -> diverge.v1alpha1.PreviewGroupServiceStatus
+	28, // 12: diverge.v1alpha1.PreviewGroupStatus.created_at:type_name -> google.protobuf.Timestamp
+	28, // 13: diverge.v1alpha1.PreviewGroupStatus.expires_at:type_name -> google.protobuf.Timestamp
+	29, // 14: diverge.v1alpha1.PreviewGroupStatus.conditions:type_name -> diverge.v1alpha1.Condition
+	28, // 15: diverge.v1alpha1.PreviewGroupStatus.lease_renewed_at:type_name -> google.protobuf.Timestamp
+	3,  // 16: diverge.v1alpha1.PreviewGroup.spec:type_name -> diverge.v1alpha1.PreviewGroupSpec
+	5,  // 17: diverge.v1alpha1.PreviewGroup.status:type_name -> diverge.v1alpha1.PreviewGroupStatus
+	28, // 18: diverge.v1alpha1.PreviewGroup.created_at:type_name -> google.protobuf.Timestamp
+	19, // 19: diverge.v1alpha1.PreviewGroup.labels:type_name -> diverge.v1alpha1.PreviewGroup.LabelsEntry
+	20, // 20: diverge.v1alpha1.PreviewGroup.annotations:type_name -> diverge.v1alpha1.PreviewGroup.AnnotationsEntry
+	6,  // 21: diverge.v1alpha1.CreatePreviewGroupRequest.preview_group:type_name -> diverge.v1alpha1.PreviewGroup
+	6,  // 22: diverge.v1alpha1.CreatePreviewGroupResponse.preview_group:type_name -> diverge.v1alpha1.PreviewGroup
+	6,  // 23: diverge.v1alpha1.GetPreviewGroupResponse.preview_group:type_name -> diverge.v1alpha1.PreviewGroup
+	6,  // 24: diverge.v1alpha1.ListPreviewGroupsResponse.preview_groups:type_name -> diverge.v1alpha1.PreviewGroup
+	6,  // 25: diverge.v1alpha1.UpdatePreviewGroupRequest.preview_group:type_name -> diverge.v1alpha1.PreviewGroup
+	30, // 26: diverge.v1alpha1.UpdatePreviewGroupRequest.update_mask:type_name -> google.protobuf.FieldMask
+	6,  // 27: diverge.v1alpha1.UpdatePreviewGroupResponse.preview_group:type_name -> diverge.v1alpha1.PreviewGroup
+	31, // 28: diverge.v1alpha1.WatchPreviewGroupsResponse.type:type_name -> diverge.v1alpha1.WatchEventType
+	6,  // 29: diverge.v1alpha1.WatchPreviewGroupsResponse.preview_group:type_name -> diverge.v1alpha1.PreviewGroup
+	28, // 30: diverge.v1alpha1.WatchPreviewGroupsResponse.timestamp:type_name -> google.protobuf.Timestamp
+	7,  // 31: diverge.v1alpha1.PreviewGroupService.CreatePreviewGroup:input_type -> diverge.v1alpha1.CreatePreviewGroupRequest
+	9,  // 32: diverge.v1alpha1.PreviewGroupService.GetPreviewGroup:input_type -> diverge.v1alpha1.GetPreviewGroupRequest
+	11, // 33: diverge.v1alpha1.PreviewGroupService.ListPreviewGroups:input_type -> diverge.v1alpha1.ListPreviewGroupsRequest
+	13, // 34: diverge.v1alpha1.PreviewGroupService.UpdatePreviewGroup:input_type -> diverge.v1alpha1.UpdatePreviewGroupRequest
+	15, // 35: diverge.v1alpha1.PreviewGroupService.DeletePreviewGroup:input_type -> diverge.v1alpha1.DeletePreviewGroupRequest
+	17, // 36: diverge.v1alpha1.PreviewGroupService.WatchPreviewGroups:input_type -> diverge.v1alpha1.WatchPreviewGroupsRequest
+	8,  // 37: diverge.v1alpha1.PreviewGroupService.CreatePreviewGroup:output_type -> diverge.v1alpha1.CreatePreviewGroupResponse
+	10, // 38: diverge.v1alpha1.PreviewGroupService.GetPreviewGroup:output_type -> diverge.v1alpha1.GetPreviewGroupResponse
+	12, // 39: diverge.v1alpha1.PreviewGroupService.ListPreviewGroups:output_type -> diverge.v1alpha1.ListPreviewGroupsResponse
+	14, // 40: diverge.v1alpha1.PreviewGroupService.UpdatePreviewGroup:output_type -> diverge.v1alpha1.UpdatePreviewGroupResponse
+	16, // 41: diverge.v1alpha1.PreviewGroupService.DeletePreviewGroup:output_type -> diverge.v1alpha1.DeletePreviewGroupResponse
+	18, // 42: diverge.v1alpha1.PreviewGroupService.WatchPreviewGroups:output_type -> diverge.v1alpha1.WatchPreviewGroupsResponse
+	37, // [37:43] is the sub-list for method output_type
+	31, // [31:37] is the sub-list for method input_type
+	31, // [31:31] is the sub-list for extension type_name
+	31, // [31:31] is the sub-list for extension extendee
+	0,  // [0:31] is the sub-list for field type_name
 }
 
 func init() { file_diverge_v1alpha1_previewgroup_proto_init() }

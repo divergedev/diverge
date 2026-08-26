@@ -15,7 +15,6 @@ import (
 	"github.com/divergedev/diverge/pkg/sdk/temporal"
 )
 
-
 // TestInterceptorRoundtripPBT uses property-based testing to verify that headers injected
 // by HeadersProvider are properly extracted by the WorkerInterceptor.
 func TestInterceptorRoundtripPBT(t *testing.T) {

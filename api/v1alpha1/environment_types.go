@@ -29,6 +29,10 @@ type MigrationJobSpec struct {
 	EnvFrom []SecretRef `json:"envFrom,omitempty"`
 	// TimeoutSeconds is the maximum duration the migration job can run before being terminated.
 	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"` // Default 120
+	// Blocking controls whether the Environment waits for the migration to complete.
+	// +kubebuilder:default=true
+	// +optional
+	Blocking *bool `json:"blocking,omitempty"` // Default true
 }
 
 // EnvironmentSource defines the source code origin for the environment
@@ -149,6 +153,49 @@ type EnvironmentDatabase struct {
 	ConnectionRef string            `json:"connectionRef,omitempty"`
 	SeedSource    string            `json:"seedSource,omitempty"`
 	MigrationJob  *MigrationJobSpec `json:"migrationJob,omitempty"`
+	Atlas         *AtlasSpec        `json:"atlas,omitempty"`
+}
+
+// AtlasSpec configures Atlas Operator integration for database schema management.
+type AtlasSpec struct {
+	// Mode selects the Atlas migration paradigm.
+	// +kubebuilder:validation:Enum=versioned;declarative
+	Mode string `json:"mode,omitempty"` // versioned (AtlasMigration) or declarative (AtlasSchema)
+	// MigrationConfigMap references a ConfigMap containing versioned .sql migration files and atlas.sum.
+	MigrationConfigMap string `json:"migrationConfigMap,omitempty"`
+	// SchemaConfigMap references a ConfigMap containing the desired schema (SQL or HCL).
+	SchemaConfigMap string `json:"schemaConfigMap,omitempty"`
+	// Blocking controls whether the Environment waits for Atlas to report Ready.
+	// +kubebuilder:default=true
+	// +optional
+	Blocking *bool `json:"blocking,omitempty"`
+	// Policy configures Atlas safety policies.
+	// +optional
+	Policy *AtlasPolicySpec `json:"policy,omitempty"`
+}
+
+// AtlasPolicySpec configures Atlas Operator safety policies.
+type AtlasPolicySpec struct {
+	// Destructive controls how destructive schema changes are handled.
+	// +kubebuilder:validation:Enum=error;warn;allow
+	// +kubebuilder:default=error
+	Destructive string `json:"destructive,omitempty"`
+}
+
+// PostDeploySpec configures a generic post-deployment Job hook.
+type PostDeploySpec struct {
+	// Image is the container image to use for the post-deploy job.
+	Image string `json:"image,omitempty"`
+	// Args specifies the arguments to pass to the post-deploy container.
+	Args []string `json:"args,omitempty"`
+	// EnvFrom specifies environment variables to inject from Secrets.
+	EnvFrom []SecretRef `json:"envFrom,omitempty"`
+	// TimeoutSeconds is the maximum duration before the job is terminated.
+	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"` // Default 60
+	// Blocking controls whether the Environment waits for the post-deploy job.
+	// +kubebuilder:default=false
+	// +optional
+	Blocking *bool `json:"blocking,omitempty"` // Default false
 }
 
 // EnvironmentLifecycle defines the lifecycle configuration
@@ -355,6 +402,16 @@ type EnvironmentStatus struct {
 	// AsyncEnvVars contains environment variables injected by async route provisioners.
 	// +optional
 	AsyncEnvVars map[string]string `json:"asyncEnvVars,omitempty"`
+
+	// MigrationStatus tracks the state of the migration hook.
+	// +optional
+	MigrationStatus string `json:"migrationStatus,omitempty"` // Pending, Running, Succeeded, Failed
+	// MigrationMessage provides details about the migration hook state.
+	// +optional
+	MigrationMessage string `json:"migrationMessage,omitempty"`
+	// PostDeployStatus tracks the state of the post-deploy hook.
+	// +optional
+	PostDeployStatus string `json:"postDeployStatus,omitempty"`
 }
 
 // +kubebuilder:object:root=true

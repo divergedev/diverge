@@ -27,7 +27,7 @@ func WithPropagatorHeaderKey(key string) PropagatorOption {
 type Propagator struct {
 	// EnvName is the preview environment name.
 	// When set, it overrides any user-provided env context (sandbox escape prevention).
-	EnvName string
+	EnvName   string
 	headerKey string
 }
 

@@ -3,7 +3,6 @@ package temporal
 import (
 	"context"
 
-
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/workflow"
