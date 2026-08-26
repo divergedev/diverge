@@ -32,6 +32,11 @@ for tool in buf protoc-gen-go protoc-gen-connect-go controller-gen; do
     fi
 done
 
+# Tidy go.mod for all modules (prevents controller-gen failures when deps change)
+echo "▸ Running go mod tidy..."
+go mod tidy
+(cd pkg/sdk/temporal && go mod tidy)
+
 # Run code generation (same as `make generate manifests`)
 echo "▸ Running buf generate..."
 buf generate
@@ -42,7 +47,7 @@ mkdir -p config/crd/bases
 controller-gen crd webhook rbac:roleName=manager-role paths="./..." output:crd:dir=config/crd/bases
 
 # Check for modified or untracked files
-DIFF_OUTPUT=$(git diff -I 'protoc-gen-go v' -I 'controller-gen' --stat api/ gen/ config/crd/bases/ config/rbac/ config/webhook/ 2>/dev/null || true)
+DIFF_OUTPUT=$(git diff -I 'protoc-gen-go v' -I 'controller-gen' --stat api/ gen/ config/crd/bases/ config/rbac/ config/webhook/ go.mod go.sum pkg/sdk/temporal/go.mod pkg/sdk/temporal/go.sum 2>/dev/null || true)
 UNTRACKED=$(git ls-files --others --exclude-standard -- api/ gen/ config/crd/bases/ config/rbac/ config/webhook/ 2>/dev/null || true)
 
 if [[ -n "$DIFF_OUTPUT" || -n "$UNTRACKED" ]]; then
