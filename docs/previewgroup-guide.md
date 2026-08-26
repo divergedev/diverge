@@ -182,8 +182,13 @@ Set `--database-provider=schema` in your deployment or `database` spec in the YA
 
 ## 11. Scale-to-Zero Integration
 
-PreviewGroup natively integrates with KEDA HTTP Add-on (`HTTPScaledObject`) to automatically scale idle preview services down to zero replicas.
-When configured, environments that receive no traffic for a period will sleep, saving cluster resources. The Diverge **Activator Proxy** intercepts the first request to a sleeping environment, wakes it up, and seamlessly routes the traffic without dropping the request.
+PreviewGroup natively integrates with KEDA to automatically scale idle preview services down to zero replicas:
+
+- **HTTP services:** Via KEDA HTTP Add-on (`HTTPScaledObject`). The Diverge Activator Proxy intercepts the first request and wakes the service seamlessly.
+- **Temporal workers:** Via native KEDA `temporal` trigger. Scales based on task queue backlog.
+- **Kafka consumers:** Via native KEDA `kafka` trigger. Scales based on consumer group lag.
+
+Configure per-service autoscaling in the `keda` block of each service spec. See the [Autoscaling and Scale-to-Zero guide](guides/autoscaling-and-scale-to-zero.md) for details.
 
 ## 12. Troubleshooting
 

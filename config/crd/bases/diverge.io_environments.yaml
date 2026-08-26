@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.17.3
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: environments.diverge.io
 spec:
   group: diverge.io
@@ -369,6 +369,17 @@ spec:
                           When nil, falls back to the controller CLI flag (--keda-min-replicas).
                         format: int32
                         minimum: 0
+                        type: integer
+                      pollingInterval:
+                        description: 'PollingInterval is the interval in seconds KEDA
+                          checks metrics. Default: 30.'
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      targetQueueSize:
+                        description: 'TargetQueueSize is the target backlog per replica
+                          for queue-based scaling. Default: 5.'
+                        format: int32
                         type: integer
                     type: object
                   namespace:

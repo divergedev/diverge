@@ -133,10 +133,24 @@ In preview mode (when `DIVERGE_ENV` is set), the Propagator, HeadersProvider, an
 
 For non-Go languages, implement a ContextPropagator in your language's Temporal SDK that reads/writes the `x-diverge-env` header. The header key and serialization format (Temporal protobuf Payload) are standard across all Temporal SDKs.
 
-## Limitations
+## Scale-to-Zero
 
-### Scale-to-Zero
+Diverge supports scaling Temporal workers to zero replicas using the native KEDA `temporal` trigger (KEDA v2.17+). When no tasks are pending on the preview task queue, workers scale down to zero. When a workflow dispatches a task, KEDA detects the backlog and scales the worker from 0 → 1.
 
-In Phase 3, asynchronous workers (like Temporal workers) cannot be scaled to zero using the KEDA HTTP Add-on because the add-on only intercepts HTTP traffic. Since Temporal workers connect outwards to the Temporal cluster via gRPC to poll for tasks, there is no incoming HTTP request to trigger a scale-up.
+Configure per-service in the `keda` block:
 
-For now, Temporal workers in preview environments must remain running (at least 1 replica).
+```yaml
+services:
+  - name: payments-worker
+    asyncRoutes:
+      - protocol: temporal
+        target: payments-tasks
+    keda:
+      minReplicas: 0       # Enable scale-to-zero
+      maxReplicas: 5
+      targetQueueSize: 5   # Tasks per replica
+```
+
+**Cold start:** Expect 15–60s latency (KEDA polling + pod scheduling + worker registration). Set `StartToCloseTimeout` ≥ 30s for preview workflows.
+
+See the [Autoscaling and Scale-to-Zero guide](autoscaling-and-scale-to-zero.md) for complete details.
