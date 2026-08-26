@@ -1,9 +1,10 @@
 syntax = "proto3";
 
 package diverge.v1alpha1;
-option go_package = "github.com/divergedev/diverge/api/gen/diverge/v1alpha1;divergev1alpha1";
 
 import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/divergedev/diverge/api/gen/diverge/v1alpha1;divergev1alpha1";
 
 // TunnelService provides reverse tunneling for diverge dev.
 // The CLI establishes a bidirectional stream to the server,
@@ -49,7 +50,7 @@ message TunnelRegister {
 // Sent by server when tunnel is active.
 message TunnelReady {
   string tunnel_id = 1;
-  string endpoint = 2;  // cluster-internal endpoint for debugging
+  string endpoint = 2; // cluster-internal endpoint for debugging
 }
 
 // Header entry supporting multi-value headers (Set-Cookie, Accept, etc.)
@@ -66,7 +67,7 @@ message TunnelHTTPRequest {
   string method = 2;
   string path = 3;
   repeated HeaderEntry headers = 4;
-  bytes body = 5;           // inline body for small requests
+  bytes body = 5; // inline body for small requests
   bool has_more_chunks = 6; // true if TunnelRequestChunks follow
 }
 
@@ -84,7 +85,7 @@ message TunnelHTTPResponse {
   string request_id = 1;
   int32 status_code = 2;
   repeated HeaderEntry headers = 3;
-  bytes body = 4;           // inline body for small responses
+  bytes body = 4; // inline body for small responses
   bool has_more_chunks = 5; // true if TunnelResponseChunks follow
 }
 

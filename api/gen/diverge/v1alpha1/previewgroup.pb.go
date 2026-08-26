@@ -394,6 +394,9 @@ type PreviewGroupServiceStatus struct {
 	Message         string                 `protobuf:"bytes,6,opt,name=message,proto3" json:"message,omitempty"`
 	Reason          string                 `protobuf:"bytes,7,opt,name=reason,proto3" json:"reason,omitempty"`
 	LastLogSnippet  string                 `protobuf:"bytes,8,opt,name=last_log_snippet,json=lastLogSnippet,proto3" json:"last_log_snippet,omitempty"`
+	// changed_services lists the services that were modified in this preview,
+	// sourced from the child Environment's spec.deploy.changedServices.
+	ChangedServices []string `protobuf:"bytes,9,rep,name=changed_services,json=changedServices,proto3" json:"changed_services,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -482,6 +485,13 @@ func (x *PreviewGroupServiceStatus) GetLastLogSnippet() string {
 		return x.LastLogSnippet
 	}
 	return ""
+}
+
+func (x *PreviewGroupServiceStatus) GetChangedServices() []string {
+	if x != nil {
+		return x.ChangedServices
+	}
+	return nil
 }
 
 type PreviewGroupStatus struct {
@@ -1328,7 +1338,7 @@ var File_diverge_v1alpha1_previewgroup_proto protoreflect.FileDescriptor
 
 const file_diverge_v1alpha1_previewgroup_proto_rawDesc = "" +
 	"\n" +
-	"#diverge/v1alpha1/previewgroup.proto\x12\x10diverge.v1alpha1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1egoogle/protobuf/duration.proto\x1a google/protobuf/field_mask.proto\x1a\x1cdiverge/v1alpha1/types.proto\x1a\"diverge/v1alpha1/environment.proto\"\xa3\x04\n" +
+	"#diverge/v1alpha1/previewgroup.proto\x12\x10diverge.v1alpha1\x1a\"diverge/v1alpha1/environment.proto\x1a\x1cdiverge/v1alpha1/types.proto\x1a\x1egoogle/protobuf/duration.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xa3\x04\n" +
 	"\x17PreviewGroupServiceSpec\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\x12\x12\n" +
@@ -1364,7 +1374,7 @@ const file_diverge_v1alpha1_previewgroup_proto_rawDesc = "" +
 	"\bservices\x18\x03 \x03(\v2).diverge.v1alpha1.PreviewGroupServiceSpecR\bservices\x12A\n" +
 	"\bdatabase\x18\x04 \x01(\v2%.diverge.v1alpha1.EnvironmentDatabaseR\bdatabase\x12E\n" +
 	"\tlifecycle\x18\x05 \x01(\v2'.diverge.v1alpha1.PreviewGroupLifecycleR\tlifecycle\x12\x14\n" +
-	"\x05owner\x18\x06 \x01(\tR\x05owner\"\xfc\x01\n" +
+	"\x05owner\x18\x06 \x01(\tR\x05owner\"\xa7\x02\n" +
 	"\x19PreviewGroupServiceStatus\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12)\n" +
 	"\x10environment_name\x18\x02 \x01(\tR\x0fenvironmentName\x12\x1c\n" +
@@ -1373,7 +1383,8 @@ const file_diverge_v1alpha1_previewgroup_proto_rawDesc = "" +
 	"\x03url\x18\x05 \x01(\tR\x03url\x12\x18\n" +
 	"\amessage\x18\x06 \x01(\tR\amessage\x12\x16\n" +
 	"\x06reason\x18\a \x01(\tR\x06reason\x12(\n" +
-	"\x10last_log_snippet\x18\b \x01(\tR\x0elastLogSnippet\"\xe1\x03\n" +
+	"\x10last_log_snippet\x18\b \x01(\tR\x0elastLogSnippet\x12)\n" +
+	"\x10changed_services\x18\t \x03(\tR\x0fchangedServices\"\xe1\x03\n" +
 	"\x12PreviewGroupStatus\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12#\n" +
 	"\rservice_count\x18\x02 \x01(\x05R\fserviceCount\x12G\n" +
@@ -1554,8 +1565,8 @@ func file_diverge_v1alpha1_previewgroup_proto_init() {
 	if File_diverge_v1alpha1_previewgroup_proto != nil {
 		return
 	}
-	file_diverge_v1alpha1_types_proto_init()
 	file_diverge_v1alpha1_environment_proto_init()
+	file_diverge_v1alpha1_types_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

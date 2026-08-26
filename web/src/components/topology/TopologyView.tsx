@@ -94,7 +94,7 @@ export function TopologyView({ previewGroup, environment, className }: TopologyV
       {graph.services.length > 0 && !graph.connections.some(c => c.traceData) && (
         <div className="absolute top-4 right-4 bg-muted/50 border border-border rounded-md px-3 py-2 text-xs text-muted-foreground shadow-sm">
           Enable OTel to see real-time trace metrics.{' '}
-          <a href="#" className="text-primary hover:underline">View docs</a>
+          <a href="/docs/guides/otel-setup" className="text-primary hover:underline">View docs</a>
         </div>
       )}
 

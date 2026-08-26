@@ -241,6 +241,10 @@ type PreviewGroupServiceStatus struct {
 	// LastLogSnippet contains the last few lines from the preview pod's
 	// container logs, enabling quick debugging from the MR comment.
 	LastLogSnippet string `json:"lastLogSnippet,omitempty"`
+
+	// ChangedServices lists the services that were modified in this preview,
+	// sourced from the child Environment's spec.deploy.changedServices.
+	ChangedServices []string `json:"changedServices,omitempty"`
 }
 
 // PreviewGroupStatus describes the observed state of a PreviewGroup.

@@ -2,7 +2,6 @@ package observability
 
 import (
 	"context"
-	"os"
 	"testing"
 
 	"go.opentelemetry.io/otel"
@@ -48,14 +47,38 @@ func TestSetup_PropagatorAlwaysSet(t *testing.T) {
 	if prop == nil {
 		t.Fatal("expected text map propagator to be set")
 	}
+
+	// Verify both TraceContext and Baggage propagators are configured
+	inCarrier := propagation.MapCarrier{
+		"traceparent": "00-00000000000000000000000000000001-0000000000000001-01",
+		"baggage":     "key=value",
+	}
+
+	// Extract using the configured global propagator
+	ctx := prop.Extract(context.Background(), inCarrier)
+
+	tc := propagation.TraceContext{}
+	bg := propagation.Baggage{}
+
+	outCarrierTC := propagation.MapCarrier{}
+	tc.Inject(ctx, outCarrierTC)
+	if outCarrierTC["traceparent"] != inCarrier["traceparent"] {
+		t.Errorf("TraceContext missing or incorrect: got %v", outCarrierTC["traceparent"])
+	}
+
+	outCarrierBG := propagation.MapCarrier{}
+	bg.Inject(ctx, outCarrierBG)
+	if outCarrierBG["baggage"] != inCarrier["baggage"] {
+		t.Errorf("Baggage missing or incorrect: got %v", outCarrierBG["baggage"])
+	}
 }
 
 func TestSetup_AnyServiceName_PBT(t *testing.T) {
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")
+
 	rapid.Check(t, func(t *rapid.T) {
 		serviceName := rapid.StringMatching(`.+`).Draw(t, "serviceName")
-
-		_ = os.Unsetenv("OTEL_EXPORTER_OTLP_ENDPOINT")
-		_ = os.Unsetenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
 
 		shutdown, err := Setup(context.Background(), serviceName)
 		if err != nil {

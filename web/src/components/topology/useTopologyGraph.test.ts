@@ -140,6 +140,48 @@ describe('buildGraphFromPreviewGroup', () => {
     expect(connStatuses).toContainEqual({ to: 'svc-failing', status: 'error' })
     expect(connStatuses).toContainEqual({ to: 'svc-starting', status: 'deploying' })
   })
+
+  it('marks services as changed when changedServices is populated in status', () => {
+    const pg = new PreviewGroup({
+      name: 'changed-pg',
+      namespace: 'default',
+      spec: {
+        services: [
+          { name: 'auth', mode: 'image' },
+          { name: 'api', mode: 'image' },
+          { name: 'worker', mode: 'baseline' },
+        ],
+      },
+      status: {
+        services: [
+          { name: 'auth', phase: 'Running', changedServices: ['auth'] },
+          { name: 'api', phase: 'Running', changedServices: ['api'] },
+          { name: 'worker', phase: 'Running', changedServices: [] },
+        ],
+      },
+    })
+
+    const graph = buildGraphFromPreviewGroup(pg)
+    expect(graph.services.find((s) => s.name === 'auth')?.isChanged).toBe(true)
+    expect(graph.services.find((s) => s.name === 'api')?.isChanged).toBe(true)
+    expect(graph.services.find((s) => s.name === 'worker')?.isChanged).toBe(false)
+  })
+
+  it('isChanged is false when changedServices is absent', () => {
+    const pg = new PreviewGroup({
+      name: 'no-changes',
+      namespace: 'default',
+      spec: {
+        services: [{ name: 'svc', mode: 'image' }],
+      },
+      status: {
+        services: [{ name: 'svc', phase: 'Running' }],
+      },
+    })
+
+    const graph = buildGraphFromPreviewGroup(pg)
+    expect(graph.services[0].isChanged).toBe(false)
+  })
 })
 
 describe('buildGraphFromEnvironment', () => {

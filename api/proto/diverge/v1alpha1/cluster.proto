@@ -1,6 +1,7 @@
 syntax = "proto3";
 
 package diverge.v1alpha1;
+
 option go_package = "github.com/divergedev/diverge/api/gen/diverge/v1alpha1;divergev1alpha1";
 
 service ClusterService {

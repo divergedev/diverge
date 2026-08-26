@@ -4,63 +4,61 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	fakediscovery "k8s.io/client-go/discovery/fake"
 	coreclient "k8s.io/client-go/kubernetes/fake"
 )
 
-func TestIsOperatorInstalled_Found_v1alpha2(t *testing.T) {
-	clientset := coreclient.NewSimpleClientset()
-	fakeDisc := clientset.Discovery().(*fakediscovery.FakeDiscovery)
-	fakeDisc.Resources = []*metav1.APIResourceList{
+func TestIsOperatorInstalled(t *testing.T) {
+	tests := []struct {
+		name        string
+		resources   []*metav1.APIResourceList
+		wantFound   bool
+		wantVersion string
+	}{
 		{
-			GroupVersion: "opentelemetry.io/v1alpha2",
-			APIResources: []metav1.APIResource{
-				{Kind: "Instrumentation"},
+			name: "Found_v1alpha2",
+			resources: []*metav1.APIResourceList{
+				{
+					GroupVersion: "opentelemetry.io/v1alpha2",
+					APIResources: []metav1.APIResource{{Kind: "Instrumentation"}},
+				},
 			},
+			wantFound:   true,
+			wantVersion: "opentelemetry.io/v1alpha2",
+		},
+		{
+			name: "Found_v1alpha1_Fallback",
+			resources: []*metav1.APIResourceList{
+				{
+					GroupVersion: "opentelemetry.io/v1alpha1",
+					APIResources: []metav1.APIResource{{Kind: "Instrumentation"}},
+				},
+			},
+			wantFound:   true,
+			wantVersion: "opentelemetry.io/v1alpha1",
+		},
+		{
+			name:      "NotFound",
+			resources: []*metav1.APIResourceList{},
+			wantFound: false,
 		},
 	}
 
-	found, version, err := IsOperatorInstalled(context.Background(), fakeDisc)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !found || version != "opentelemetry.io/v1alpha2" {
-		t.Fatalf("expected true, opentelemetry.io/v1alpha2; got %v, %v", found, version)
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clientset := coreclient.NewSimpleClientset()
+			fakeDisc := clientset.Discovery().(*fakediscovery.FakeDiscovery)
+			fakeDisc.Resources = tt.resources
 
-func TestIsOperatorInstalled_Found_v1alpha1_Fallback(t *testing.T) {
-	clientset := coreclient.NewSimpleClientset()
-	fakeDisc := clientset.Discovery().(*fakediscovery.FakeDiscovery)
-	fakeDisc.Resources = []*metav1.APIResourceList{
-		{
-			GroupVersion: "opentelemetry.io/v1alpha1",
-			APIResources: []metav1.APIResource{
-				{Kind: "Instrumentation"},
-			},
-		},
-	}
-
-	found, version, err := IsOperatorInstalled(context.Background(), fakeDisc)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !found || version != "opentelemetry.io/v1alpha1" {
-		t.Fatalf("expected true, opentelemetry.io/v1alpha1; got %v, %v", found, version)
-	}
-}
-
-func TestIsOperatorInstalled_NotFound(t *testing.T) {
-	clientset := coreclient.NewSimpleClientset()
-	fakeDisc := clientset.Discovery().(*fakediscovery.FakeDiscovery)
-	fakeDisc.Resources = []*metav1.APIResourceList{}
-
-	found, _, err := IsOperatorInstalled(context.Background(), fakeDisc)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if found {
-		t.Fatal("expected false, got true")
+			found, version, err := IsOperatorInstalled(context.Background(), fakeDisc)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantFound, found)
+			if tt.wantFound {
+				assert.Equal(t, tt.wantVersion, version)
+			}
+		})
 	}
 }

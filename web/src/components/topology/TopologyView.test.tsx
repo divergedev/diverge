@@ -138,5 +138,7 @@ describe('TopologyView', () => {
     })
     render(<TopologyView previewGroup={pg} />)
     expect(screen.getByText(/Enable OTel to see real-time trace metrics/i)).toBeInTheDocument()
+    const docsLink = screen.getByText('View docs')
+    expect(docsLink).toHaveAttribute('href', '/docs/guides/otel-setup')
   })
 })
