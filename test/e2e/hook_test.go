@@ -20,9 +20,14 @@ import (
 // and runs to completion when the Environment specifies a MigrationJobSpec.
 func TestEnvironment_HookReconcile(t *testing.T) {
 	f := NewFramework(t)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
 	f.CreateNamespace(ctx)
-	defer f.CleanupNamespace(ctx)
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		f.CleanupNamespace(cleanupCtx)
+	}()
 
 	env := &v1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -72,6 +77,8 @@ func TestEnvironment_HookReconcile(t *testing.T) {
 	container := job.Spec.Template.Spec.Containers[0]
 	require.NotNil(t, container.SecurityContext, "SecurityContext must be set")
 	assert.True(t, *container.SecurityContext.RunAsNonRoot, "RunAsNonRoot must be true")
+	require.NotNil(t, container.SecurityContext.RunAsUser, "RunAsUser must be set")
+	assert.Equal(t, int64(65534), *container.SecurityContext.RunAsUser, "RunAsUser must be 65534 (nobody)")
 	assert.False(t, *container.SecurityContext.AllowPrivilegeEscalation, "AllowPrivilegeEscalation must be false")
 	assert.True(t, *container.SecurityContext.ReadOnlyRootFilesystem, "ReadOnlyRootFilesystem must be true")
 
@@ -95,9 +102,14 @@ func TestEnvironment_HookReconcile(t *testing.T) {
 // the Environment to report MigrationFailed status.
 func TestEnvironment_HookFailure(t *testing.T) {
 	f := NewFramework(t)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
 	f.CreateNamespace(ctx)
-	defer f.CleanupNamespace(ctx)
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		f.CleanupNamespace(cleanupCtx)
+	}()
 
 	env := &v1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -149,9 +161,14 @@ func TestEnvironment_HookFailure(t *testing.T) {
 // after deployment and is labeled correctly.
 func TestEnvironment_PostDeployHook(t *testing.T) {
 	f := NewFramework(t)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
 	f.CreateNamespace(ctx)
-	defer f.CleanupNamespace(ctx)
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		f.CleanupNamespace(cleanupCtx)
+	}()
 
 	env := &v1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -207,9 +224,14 @@ func TestEnvironment_PostDeployHook(t *testing.T) {
 // the parent Environment is deleted (via OwnerReference cascade).
 func TestEnvironment_HookCleanup(t *testing.T) {
 	f := NewFramework(t)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
 	f.CreateNamespace(ctx)
-	defer f.CleanupNamespace(ctx)
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		f.CleanupNamespace(cleanupCtx)
+	}()
 
 	env := &v1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -257,12 +279,15 @@ func TestEnvironment_HookCleanup(t *testing.T) {
 	err = f.WaitForEnvironmentDeleted(ctx, env.Name, 2*time.Minute)
 	require.NoError(t, err)
 
-	// Verify hook Jobs were cascade-deleted
-	var jobs batchv1.JobList
-	err = f.Client.List(ctx, &jobs,
-		client.InNamespace(f.Namespace),
-		client.MatchingLabels{"diverge.io/environment": "hook-cleanup"},
-	)
-	require.NoError(t, err)
-	assert.Len(t, jobs.Items, 0, "Hook Jobs should be cascade-deleted with Environment")
+	// Poll until hook Jobs are cascade-deleted (GC may take a moment)
+	require.Eventually(t, func() bool {
+		var jobs batchv1.JobList
+		if err := f.Client.List(ctx, &jobs,
+			client.InNamespace(f.Namespace),
+			client.MatchingLabels{"diverge.io/environment": "hook-cleanup"},
+		); err != nil {
+			return false
+		}
+		return len(jobs.Items) == 0
+	}, 30*time.Second, 1*time.Second, "Hook Jobs should be cascade-deleted with Environment")
 }
