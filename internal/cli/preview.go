@@ -392,9 +392,11 @@ func runPreviewStatus(ctx context.Context, app *App, name string, out io.Writer)
 		if svc.EnvironmentName != "" {
 			var jobs batchv1.JobList
 			if err := c.List(ctx, &jobs,
-				client.InNamespace(app.Namespace),
-				client.MatchingLabels{"diverge.io/environment": svc.EnvironmentName},
-			); err == nil {
+				client.InNamespace(pg.Namespace),
+				client.MatchingLabels{"diverge.io/environment": truncateLabel(svc.EnvironmentName)},
+			); err != nil {
+				fmt.Fprintf(out, "   ⚠️  Failed to list hooks: %v\n", err)
+			} else {
 				hookJobs.Items = append(hookJobs.Items, jobs.Items...)
 			}
 		}
@@ -548,6 +550,13 @@ func phaseEmoji(phase string) string {
 	default:
 		return "⏳"
 	}
+}
+
+func truncateLabel(s string) string {
+	if len(s) > 63 {
+		return s[:63]
+	}
+	return s
 }
 
 func hookJobStatus(job *batchv1.Job) (string, string) {
