@@ -395,7 +395,7 @@ func runPreviewStatus(ctx context.Context, app *App, name string, out io.Writer)
 				client.InNamespace(pg.Namespace),
 				client.MatchingLabels{"diverge.io/environment": truncateLabel(svc.EnvironmentName)},
 			); err != nil {
-				fmt.Fprintf(out, "   ⚠️  Failed to list hooks: %v\n", err)
+				_, _ = fmt.Fprintf(out, "   ⚠️  Failed to list hooks: %v\n", err)
 			} else {
 				hookJobs.Items = append(hookJobs.Items, jobs.Items...)
 			}
