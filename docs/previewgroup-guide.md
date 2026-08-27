@@ -180,7 +180,22 @@ To prevent your preview environments from corrupting baseline data, PreviewGroup
 
 Set `--database-provider=schema` in your deployment or `database` spec in the YAML. Diverge will automatically create a clone or a fresh schema in PostgreSQL (e.g., `schema_mr_42`) and inject the credentials into your preview pods.
 
-## 11. Scale-to-Zero Integration
+## 11. Migration Hooks
+
+You can run automated database migrations before your preview services start taking traffic.
+
+**Configuration:**
+- **CLI Flags**: `--migration-image`, `--migration-args`, `--migration-blocking`
+- **CRD Fields**: You can configure these in the `.spec.database.migrationJob` field of your `PreviewGroup` CR.
+
+**Viewing Status:**
+You can view the real-time status of your migration hooks (and any other lifecycle hooks) by running:
+```bash
+nix develop -c diverge preview status <name>
+```
+The output will include a **Hooks** section detailing the name, status, duration, and any error messages for each migration job.
+
+## 12. Scale-to-Zero Integration
 
 PreviewGroup natively integrates with KEDA to automatically scale idle preview services down to zero replicas:
 
@@ -190,7 +205,7 @@ PreviewGroup natively integrates with KEDA to automatically scale idle preview s
 
 Configure per-service autoscaling in the `keda` block of each service spec. See the [Autoscaling and Scale-to-Zero guide](guides/autoscaling-and-scale-to-zero.md) for details.
 
-## 12. Troubleshooting
+## 13. Troubleshooting
 
 **1. Service is stuck in `Pending` or `Degraded`:**
 Run `nix develop -c diverge preview status <name>` and look at the `reason` and `message` fields. If the reason is `ImagePullBackOff`, ensure your image name and registry credentials are correct.

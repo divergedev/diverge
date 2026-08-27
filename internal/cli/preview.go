@@ -10,8 +10,11 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
@@ -383,6 +386,35 @@ func runPreviewStatus(ctx context.Context, app *App, name string, out io.Writer)
 		}
 	}
 
+	// Hooks
+	var hookJobs batchv1.JobList
+	for _, svc := range pg.Status.Services {
+		if svc.EnvironmentName != "" {
+			var jobs batchv1.JobList
+			if err := c.List(ctx, &jobs,
+				client.InNamespace(app.Namespace),
+				client.MatchingLabels{"diverge.io/environment": svc.EnvironmentName},
+			); err == nil {
+				hookJobs.Items = append(hookJobs.Items, jobs.Items...)
+			}
+		}
+	}
+
+	if len(hookJobs.Items) > 0 {
+		_, _ = fmt.Fprintln(out)
+		w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+		_, _ = fmt.Fprintf(w, "   HOOK TYPE\tNAME\tSTATUS\tDURATION\tMESSAGE\n")
+		_, _ = fmt.Fprintf(w, "   ─────────\t────\t──────\t────────\t───────\n")
+		for _, job := range hookJobs.Items {
+			hookType := job.Labels["diverge.io/hook-type"]
+			status, icon := hookJobStatus(&job)
+			duration := hookDuration(&job)
+			message := hookMessage(&job)
+			_, _ = fmt.Fprintf(w, "   %s %s\t%s\t%s\t%s\t%s\n", icon, hookType, job.Name, status, duration, message)
+		}
+		_ = w.Flush()
+	}
+
 	return nil
 }
 
@@ -516,4 +548,44 @@ func phaseEmoji(phase string) string {
 	default:
 		return "⏳"
 	}
+}
+
+func hookJobStatus(job *batchv1.Job) (string, string) {
+	for _, c := range job.Status.Conditions {
+		if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
+			return "Succeeded", "✅"
+		}
+		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			return "Failed", "❌"
+		}
+	}
+	if job.Status.Active > 0 {
+		return "Running", "🔄"
+	}
+	return "Pending", "⏳"
+}
+
+func hookDuration(job *batchv1.Job) string {
+	if job.Status.StartTime == nil {
+		return "-"
+	}
+	end := job.Status.CompletionTime
+	if end == nil {
+		now := time.Now()
+		end = &metav1.Time{Time: now}
+	}
+	d := end.Sub(job.Status.StartTime.Time)
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	return fmt.Sprintf("%dm%ds", int(d.Minutes()), int(d.Seconds())%60)
+}
+
+func hookMessage(job *batchv1.Job) string {
+	for _, c := range job.Status.Conditions {
+		if c.Type == batchv1.JobFailed && c.Message != "" {
+			return c.Message
+		}
+	}
+	return "-"
 }
