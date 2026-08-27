@@ -17,10 +17,6 @@ jobs:
           go-version-file: go.mod
       - name: Install Kind
         run: go install sigs.k8s.io/kind@v0.29.0
-      - name: Install Linkerd CLI
-        run: |
-          curl -sL https://run.linkerd.io/install | sh
-          echo "$HOME/.linkerd2/bin" >> $GITHUB_PATH
       - name: Setup Linkerd cluster
         run: make e2e-linkerd-setup
       - name: Run Linkerd conformance tests
