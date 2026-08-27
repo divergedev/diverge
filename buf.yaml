@@ -2,6 +2,7 @@
 version: v2
 modules:
   - path: api/proto
+
 lint:
   use:
     - STANDARD

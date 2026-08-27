@@ -101,6 +101,9 @@ jobs:
           buf generate
       - name: Check for stale generated files
         run: |
+          # Restore MCP files (hand-maintained until proto2mcp streaming skip is fixed)
+          git checkout -- 'api/gen/diverge/v1alpha1/*_mcp.pb.go' 2>/dev/null || true
+          git checkout -- api/gen/protocgen/ 2>/dev/null || true
           DIFF=$(git diff -I 'protoc-gen-go v' --stat api/gen/diverge/ 2>/dev/null || true)
           UNTRACKED=$(git ls-files --others --exclude-standard -- api/gen/diverge/ 2>/dev/null || true)
           if [[ -n "$DIFF" || -n "$UNTRACKED" ]]; then

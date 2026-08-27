@@ -1,0 +1,6 @@
+# buf.gen.mcp.yaml — proto2mcp generation (separate to handle streaming skip annotations)
+version: v2
+plugins:
+  - local: protoc-gen-proto2mcp
+    out: api/gen
+    opt: paths=source_relative
