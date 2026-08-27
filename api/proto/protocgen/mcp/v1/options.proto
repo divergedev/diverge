@@ -1,0 +1,96 @@
+syntax = "proto3";
+
+package protocgen.mcp.v1;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/protocgen/proto2mcp/gen/protocgen/mcp/v1;mcpv1";
+
+extend google.protobuf.MethodOptions {
+  MethodMCPOptions method = 1179;
+}
+
+extend google.protobuf.ServiceOptions {
+  ServiceMCPOptions service = 1180;
+}
+
+extend google.protobuf.FileOptions {
+  FileMCPOptions file = 1181;
+}
+
+extend google.protobuf.FieldOptions {
+  FieldMCPOptions field = 1182;
+}
+
+enum FailureStrategy {
+  FAILURE_STRATEGY_UNSPECIFIED = 0;
+  FAILURE_STRATEGY_FAIL_FAST = 1;
+  FAILURE_STRATEGY_PARTIAL_RESULT = 2;
+  FAILURE_STRATEGY_ROLLBACK = 3;
+}
+
+message MacroStep {
+  string tool = 1;
+  bool parallel = 2;
+  string output_key = 3;
+  map<string, string> input_mapping = 4;
+}
+
+message MacroDefinition {
+  repeated MacroStep steps = 1;
+  FailureStrategy on_failure = 2;
+}
+
+message MethodMCPOptions {
+  string tool_name = 1; // override tool name
+  string description = 2; // LLM-facing description, overrides proto comment
+  bool skip = 3; // don't generate for this method
+  bool resource = 4; // V2: expose as MCP Resource
+  string resource_uri_template = 5; // V2: e.g. "patient://{patient_id}"
+  bool read_only = 6; // V2: hint for LLM
+  bool destructive = 7; // V2: hint for LLM
+  int32 version = 8; // V2: tool version number
+  bool is_deprecated = 9; // V2: explicit deprecation, also reads proto deprecated
+  MacroDefinition macro = 15;
+}
+
+message PromptTemplate {
+  string name = 1;
+  string description = 2;
+  repeated string tools = 3; // tool names this prompt uses
+  repeated PromptArgument arguments = 4; // explicitly declared arguments
+}
+
+message PromptArgument {
+  string name = 1;
+  string description = 2;
+  bool required = 3;
+}
+
+message ServiceMCPOptions {
+  string tool_name_prefix = 1;
+  string description = 2;
+  bool generate_connect = 3; // Generate ConnectRPC forwarding functions
+}
+
+message FileMCPOptions {
+  bool skip = 1; // skip entire file
+
+  // V3: MCP Prompts. Defined at file level because prompts typically
+  // orchestrate tools across multiple services (e.g., an "OnboardPatient"
+  // prompt might use tools from PatientService, BillingService, and
+  // NotificationService). File-level scope allows this naturally.
+  repeated PromptTemplate prompts = 10;
+}
+
+// FieldMCPOptions configures MCP behavior for individual proto fields.
+// Applied via: extend google.protobuf.FieldOptions { FieldMCPOptions field = 1182; }
+message FieldMCPOptions {
+  // resource_key marks this field as a resource identifier.
+  // Fields annotated with resource_key = true have their values
+  // extracted into ToolRequest.ResourceKeys before middleware runs,
+  // enabling ABAC authorization without manual argument parsing.
+  // Only string fields are supported; non-string fields generate
+  // a linter warning.
+  bool resource_key = 1;
+}
