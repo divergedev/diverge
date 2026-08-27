@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { RotateCw, AlertCircle, CheckCircle2, Clock, Play, ChevronDown, ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { useState } from 'react'
+import { useState, Fragment } from 'react'
 
 interface HooksTabProps {
   namespace: string
@@ -95,7 +95,7 @@ export function HooksTab({ namespace, environmentName }: HooksTabProps) {
             {jobs.map((job) => {
               const isExpanded = expandedHook === job.name
               return (
-                <>
+                <Fragment key={job.name}>
                   <TableRow
                     key={job.name}
                     className={cn(
@@ -141,13 +141,13 @@ export function HooksTab({ namespace, environmentName }: HooksTabProps) {
                             namespace={namespace}
                             environmentName={environmentName}
                             hookType={job.type}
-                            className="h-[250px] text-xs"
+                            className="h-[400px] text-xs"
                           />
                         </div>
                       </TableCell>
                     </TableRow>
                   )}
-                </>
+                </Fragment>
               )
             })}
           </TableBody>

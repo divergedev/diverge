@@ -17,7 +17,7 @@ export function LogViewer({ namespace, environmentName, hookType, className }: {
     async function stream() {
       try {
         for await (const msg of environmentClient.streamLogs(
-          { namespace, environmentName, hookType: hookType ?? '', follow: !hookType, tailLines: BigInt(hookType ? 100 : 200) },
+          { namespace, environmentName, hookType: hookType ?? '', follow: true, tailLines: BigInt(hookType ? 100 : 200) },
           { signal: ac.signal },
         )) {
           setLines((prev) => {
