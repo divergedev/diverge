@@ -7,6 +7,3 @@ plugins:
   - local: protoc-gen-connect-go
     out: api/gen
     opt: paths=source_relative
-  - local: protoc-gen-proto2mcp
-    out: api/gen
-    opt: paths=source_relative

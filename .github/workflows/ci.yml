@@ -91,8 +91,6 @@ jobs:
         run: |
           go install google.golang.org/protobuf/cmd/protoc-gen-go@$(grep google.golang.org/protobuf go.mod | awk '{print $2}')
           go install connectrpc.com/connect/cmd/protoc-gen-connect-go@$(grep connectrpc.com/connect go.mod | awk '{print $2}')
-          git clone --depth=1 https://github.com/protocgen/proto2mcp.git /tmp/proto2mcp
-          cd /tmp/proto2mcp/codegen && go build -o $(go env GOPATH)/bin/protoc-gen-proto2mcp ./cmd/protoc-gen-proto2mcp
       - name: Proto lint and breaking check
         run: |
           buf lint api/proto
