@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils'
 
 interface LogLine { pod: string; timestamp: string; message: string }
 
-export function LogViewer({ namespace, environmentName, className }: { namespace: string; environmentName: string; className?: string }) {
+export function LogViewer({ namespace, environmentName, hookType, className }: { namespace: string; environmentName: string; hookType?: string; className?: string }) {
   const [lines, setLines] = useState<LogLine[]>([])
   const [follow, setFollow] = useState(true)
   const [showTimestamps, setShowTimestamps] = useState(true)
@@ -17,7 +17,7 @@ export function LogViewer({ namespace, environmentName, className }: { namespace
     async function stream() {
       try {
         for await (const msg of environmentClient.streamLogs(
-          { namespace, environmentName, follow: true, tailLines: BigInt(200) },
+          { namespace, environmentName, hookType: hookType ?? '', follow: true, tailLines: BigInt(hookType ? 100 : 200) },
           { signal: ac.signal },
         )) {
           setLines((prev) => {
@@ -32,7 +32,7 @@ export function LogViewer({ namespace, environmentName, className }: { namespace
     }
     stream()
     return () => ac.abort()
-  }, [namespace, environmentName])
+  }, [namespace, environmentName, hookType])
 
   useEffect(() => {
     if (follow && containerRef.current && !userScrolledRef.current) {

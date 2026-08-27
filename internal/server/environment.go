@@ -488,9 +488,21 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 		return err
 	}
 
+	labels := map[string]string{}
+	if msg.HookType != "" {
+		if err := ValidateDNS1123Label(msg.HookType, "hook_type"); err != nil {
+			return err
+		}
+		// Hook pods use diverge.io/ labels (set by hook_runner.go)
+		labels["diverge.io/environment"] = msg.EnvironmentName
+		labels["diverge.io/hook-type"] = msg.HookType
+	} else {
+		// Service pods use diverge.dev/ labels (set by deployer)
+		labels["diverge.dev/environment"] = msg.EnvironmentName
+	}
 	opts := []client.ListOption{
 		client.InNamespace(msg.Namespace),
-		client.MatchingLabels{"diverge.dev/environment": msg.EnvironmentName},
+		client.MatchingLabels(labels),
 	}
 	var podList corev1.PodList
 	if err := s.client.List(ctx, &podList, opts...); err != nil {
@@ -499,7 +511,7 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 
 	var targetPods []corev1.Pod
 	for _, pod := range podList.Items {
-		if msg.ServiceName != "" {
+		if msg.HookType == "" && msg.ServiceName != "" {
 			svcName := pod.Labels["app.kubernetes.io/name"]
 			if svcName != "" && svcName != msg.ServiceName {
 				continue

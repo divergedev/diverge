@@ -323,6 +323,9 @@ message StreamLogsRequest {
   google.protobuf.Timestamp since_time = 7;
   bool timestamps = 8;
   bool previous = 9;
+  // hook_type filters logs to hook Job pods (e.g. "migration", "postdeploy").
+  // When set, pods are matched by diverge.io/hook-type label instead of service name.
+  string hook_type = 10;
 }
 message StreamLogsResponse {
   string pod_name = 1;
