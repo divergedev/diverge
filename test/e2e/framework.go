@@ -175,3 +175,22 @@ func (f *Framework) ControllerRunning(ctx context.Context) bool {
 	}, &dep)
 	return err == nil && dep.Status.ReadyReplicas > 0
 }
+
+// AnnotateNamespace adds annotations to the test namespace (e.g. for Linkerd injection).
+func (f *Framework) AnnotateNamespace(ctx context.Context, namespace string, annotations map[string]string) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	ns, err := f.Clientset.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
+	if err != nil {
+		f.T.Fatalf("Failed to get namespace %s: %v", namespace, err)
+	}
+	if ns.Annotations == nil {
+		ns.Annotations = map[string]string{}
+	}
+	for k, v := range annotations {
+		ns.Annotations[k] = v
+	}
+	if _, err := f.Clientset.CoreV1().Namespaces().Update(ctx, ns, metav1.UpdateOptions{}); err != nil {
+		f.T.Fatalf("Failed to annotate namespace %s: %v", namespace, err)
+	}
+}

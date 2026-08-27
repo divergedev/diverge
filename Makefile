@@ -86,6 +86,40 @@ e2e-dual-teardown:
 e2e-istio:
 	go test -tags=e2e,e2e_istio -v -count=1 -timeout=15m ./test/e2e/...
 
+.PHONY: e2e-cilium-setup e2e-cilium-run e2e-cilium-teardown e2e-cilium
+
+e2e-cilium-setup: ## Create Kind cluster with Cilium Gateway API
+	./test/e2e/setup_cilium.sh
+
+e2e-cilium-run: ## Run Cilium conformance tests
+	go test -tags=e2e,e2e_cilium -v -count=1 -timeout=15m ./test/e2e/...
+
+e2e-cilium-teardown: ## Delete Cilium Kind cluster
+	kind delete cluster --name diverge-cilium
+
+e2e-cilium: e2e-cilium-setup ## Full Cilium E2E cycle
+	@$(MAKE) e2e-cilium-run; \
+	status=$$?; \
+	$(MAKE) e2e-cilium-teardown; \
+	exit $$status
+
+.PHONY: e2e-linkerd-setup e2e-linkerd-run e2e-linkerd-teardown e2e-linkerd
+
+e2e-linkerd-setup: ## Create Kind cluster with Linkerd mesh
+	./test/e2e/setup_linkerd.sh
+
+e2e-linkerd-run: ## Run Linkerd conformance tests
+	go test -tags=e2e,e2e_linkerd -v -count=1 -timeout=15m ./test/e2e/...
+
+e2e-linkerd-teardown: ## Delete Linkerd Kind cluster
+	kind delete cluster --name diverge-linkerd
+
+e2e-linkerd: e2e-linkerd-setup ## Full Linkerd E2E cycle
+	@$(MAKE) e2e-linkerd-run; \
+	status=$$?; \
+	$(MAKE) e2e-linkerd-teardown; \
+	exit $$status
+
 ##@ Build
 
 .PHONY: build
