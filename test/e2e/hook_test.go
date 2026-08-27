@@ -40,7 +40,7 @@ func TestEnvironment_HookReconcile(t *testing.T) {
 				Project:  "divergedev/test-app",
 				Branch:   "feat/hooks-e2e",
 			},
-			Database: &v1alpha1.EnvironmentDatabase{
+			Database: v1alpha1.EnvironmentDatabase{
 				Mode: "shared",
 				MigrationJob: &v1alpha1.MigrationJobSpec{
 					Image:    "alpine:3.20",
@@ -122,7 +122,7 @@ func TestEnvironment_HookFailure(t *testing.T) {
 				Project:  "divergedev/test-app",
 				Branch:   "feat/hooks-fail",
 			},
-			Database: &v1alpha1.EnvironmentDatabase{
+			Database: v1alpha1.EnvironmentDatabase{
 				Mode: "shared",
 				MigrationJob: &v1alpha1.MigrationJobSpec{
 					Image:          "alpine:3.20",
@@ -157,8 +157,8 @@ func TestEnvironment_HookFailure(t *testing.T) {
 	assert.NotEmpty(t, updated.Status.MigrationMessage, "MigrationMessage should describe the failure")
 }
 
-// TestEnvironment_PostDeployHook verifies that a post-deploy hook Job runs
-// after deployment and is labeled correctly.
+// TestEnvironment_PostDeployHook verifies that a non-blocking migration hook Job runs
+// alongside deployment without blocking the Environment from becoming Ready.
 func TestEnvironment_PostDeployHook(t *testing.T) {
 	f := NewFramework(t)
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
@@ -172,7 +172,7 @@ func TestEnvironment_PostDeployHook(t *testing.T) {
 
 	env := &v1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "hook-postdeploy",
+			Name:      "hook-nonblocking",
 			Namespace: f.Namespace,
 		},
 		Spec: v1alpha1.EnvironmentSpec{
@@ -181,10 +181,12 @@ func TestEnvironment_PostDeployHook(t *testing.T) {
 				Project:  "divergedev/test-app",
 				Branch:   "feat/postdeploy",
 			},
-			ServiceConfig: &v1alpha1.ServicePreviewConfig{
-				PostDeploy: &v1alpha1.PostDeploySpec{
-					Image: "alpine:3.20",
-					Args:  []string{"sh", "-c", "echo post-deploy-complete"},
+			Database: v1alpha1.EnvironmentDatabase{
+				Mode: "shared",
+				MigrationJob: &v1alpha1.MigrationJobSpec{
+					Image:    "alpine:3.20",
+					Args:     []string{"sh", "-c", "sleep 2 && echo non-blocking-done"},
+					Blocking: ptr.To(false),
 				},
 			},
 		},
@@ -197,27 +199,27 @@ func TestEnvironment_PostDeployHook(t *testing.T) {
 		t.Skip("controller not deployed — skipping reconciliation assertions")
 	}
 
-	// Wait for post-deploy Job
+	// Wait for migration Job to be created
 	var jobs batchv1.JobList
 	require.Eventually(t, func() bool {
 		err := f.Client.List(ctx, &jobs,
 			client.InNamespace(f.Namespace),
 			client.MatchingLabels{
-				"diverge.io/hook-type":   "postdeploy",
-				"diverge.io/environment": "hook-postdeploy",
+				"diverge.io/hook-type":   "migration",
+				"diverge.io/environment": "hook-nonblocking",
 			},
 		)
 		return err == nil && len(jobs.Items) > 0
-	}, 2*time.Minute, 2*time.Second, "postdeploy Job was not created")
+	}, 2*time.Minute, 2*time.Second)
 
-	// Verify labels
+	// Verify labels are correctly set
 	job := jobs.Items[0]
-	assert.Equal(t, "postdeploy", job.Labels["diverge.io/hook-type"])
-	assert.Equal(t, "hook-postdeploy", job.Labels["diverge.io/environment"])
+	assert.Equal(t, "migration", job.Labels["diverge.io/hook-type"])
+	assert.Equal(t, "hook-nonblocking", job.Labels["diverge.io/environment"])
 
-	// Wait for environment Ready
+	// Wait for environment Ready (non-blocking migration should not delay readiness)
 	err = f.WaitForCondition(ctx, env.Name, "Ready", metav1.ConditionTrue, 2*time.Minute)
-	require.NoError(t, err, "Environment did not become Ready after post-deploy hook")
+	require.NoError(t, err, "Environment did not become Ready with non-blocking migration")
 }
 
 // TestEnvironment_HookCleanup verifies that hook Jobs are cleaned up when
@@ -244,7 +246,7 @@ func TestEnvironment_HookCleanup(t *testing.T) {
 				Project:  "divergedev/test-app",
 				Branch:   "feat/cleanup",
 			},
-			Database: &v1alpha1.EnvironmentDatabase{
+			Database: v1alpha1.EnvironmentDatabase{
 				Mode: "shared",
 				MigrationJob: &v1alpha1.MigrationJobSpec{
 					Image:    "alpine:3.20",
