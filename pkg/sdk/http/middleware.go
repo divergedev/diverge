@@ -121,6 +121,8 @@ var binContextKey = binaryContextKeyType{}
 func extractEnv(r *http.Request, cfg *middlewareConfig) (string, string) {
 	// 0. Check binary header (highest priority)
 	if encoded := r.Header.Get(sdk.BinaryHeaderKey); encoded != "" {
+		// Always strip the binary header to prevent leaking to downstream handlers.
+		r.Header.Del(sdk.BinaryHeaderKey)
 		if ctx, err := sdk.DecodePropagationContext(encoded); err == nil {
 			if ctx.Environment != "" && isValidEnvName(ctx.Environment) {
 				return ctx.Environment, encoded

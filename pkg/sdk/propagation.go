@@ -3,6 +3,7 @@ package sdk
 import (
 	"encoding/base64"
 	"fmt"
+	"strings"
 
 	"google.golang.org/protobuf/proto"
 
@@ -31,7 +32,7 @@ func DecodePropagationContext(encoded string) (*divergev1alpha1.PropagationConte
 	if len(encoded) > 4096 {
 		return nil, fmt.Errorf("encoded propagation context too large")
 	}
-	b, err := base64.RawStdEncoding.DecodeString(encoded)
+	b, err := base64.RawStdEncoding.DecodeString(strings.TrimRight(encoded, "="))
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode base64 PropagationContext: %w", err)
 	}
