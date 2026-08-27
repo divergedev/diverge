@@ -97,25 +97,33 @@ func PropagateEnvironmentWithOptions(opts ...Option) func(http.Handler) http.Han
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			env := extractEnv(r, cfg)
+			env, rawBin := extractEnv(r, cfg)
 			if env != "" {
 				// Promote to header for downstream handlers
 				r.Header.Set(cfg.headerKey, env)
-				r = r.WithContext(sdk.WithEnvironment(r.Context(), env))
+				ctx := sdk.WithEnvironment(r.Context(), env)
+				if rawBin != "" {
+					ctx = context.WithValue(ctx, binContextKey, rawBin)
+				}
+				r = r.WithContext(ctx)
 			}
 			next.ServeHTTP(w, r)
 		})
 	}
 }
 
+type binaryContextKeyType struct{}
+
+var binContextKey = binaryContextKeyType{}
+
 // extractEnv resolves the environment name from the request.
 // Precedence: Binary Context Header → Plain Header → Query Param → Subdomain.
-func extractEnv(r *http.Request, cfg *middlewareConfig) string {
+func extractEnv(r *http.Request, cfg *middlewareConfig) (string, string) {
 	// 0. Check binary header (highest priority)
 	if encoded := r.Header.Get(sdk.BinaryHeaderKey); encoded != "" {
 		if ctx, err := sdk.DecodePropagationContext(encoded); err == nil {
 			if ctx.Environment != "" && isValidEnvName(ctx.Environment) {
-				return ctx.Environment
+				return ctx.Environment, encoded
 			}
 		}
 	}
@@ -123,9 +131,9 @@ func extractEnv(r *http.Request, cfg *middlewareConfig) string {
 	// 1. Check existing header (highest priority)
 	if env := r.Header.Get(cfg.headerKey); env != "" {
 		if isValidEnvName(env) {
-			return env
+			return env, ""
 		}
-		return ""
+		return "", ""
 	}
 
 	// 2. Check query parameters
@@ -142,18 +150,18 @@ func extractEnv(r *http.Request, cfg *middlewareConfig) string {
 				r2.URL.RawQuery = q.Encode()
 				*r = *r2
 			}
-			return env
+			return env, ""
 		}
 	}
 
 	// 3. Check subdomain
 	if cfg.baseDomain != "" {
 		if env := extractSubdomain(r.Host, cfg.baseDomain); env != "" {
-			return env
+			return env, ""
 		}
 	}
 
-	return ""
+	return "", ""
 }
 
 // extractSubdomain extracts an environment name from the Host header.
@@ -214,12 +222,17 @@ func (rt *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 		req = req.Clone(req.Context())
 		req.Header.Set(DefaultHeaderKey, env)
 
-		// Inject binary context header
-		pCtx := &divergev1alpha1.PropagationContext{
-			Environment: env,
-		}
-		if encoded, err := sdk.EncodePropagationContext(pCtx); err == nil {
-			req.Header.Set(sdk.BinaryHeaderKey, encoded)
+		// Check if we have a cached binary context
+		if cachedBin, ok := req.Context().Value(binContextKey).(string); ok && cachedBin != "" {
+			req.Header.Set(sdk.BinaryHeaderKey, cachedBin)
+		} else {
+			// Inject binary context header
+			pCtx := &divergev1alpha1.PropagationContext{
+				Environment: env,
+			}
+			if encoded, err := sdk.EncodePropagationContext(pCtx); err == nil {
+				req.Header.Set(sdk.BinaryHeaderKey, encoded)
+			}
 		}
 	}
 	return rt.base.RoundTrip(req)

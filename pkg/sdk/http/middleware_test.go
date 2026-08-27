@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	divergev1alpha1 "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 	"github.com/divergedev/diverge/pkg/sdk"
 )
 
@@ -243,4 +244,93 @@ func TestBackwardCompatibility(t *testing.T) {
 	handler.ServeHTTP(httptest.NewRecorder(), req)
 
 	assert.Equal(t, "legacy-env", gotEnv)
+}
+
+func makeBinaryHeader(t *testing.T, envName string) string {
+	ctx := &divergev1alpha1.PropagationContext{Environment: envName}
+	encoded, err := sdk.EncodePropagationContext(ctx)
+	require.NoError(t, err)
+	return encoded
+}
+
+func TestBinaryHeader_Extraction(t *testing.T) {
+	handler := PropagateEnvironment(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		env := sdk.EnvironmentFromContext(r.Context())
+		assert.Equal(t, "bin-env", env)
+		assert.Equal(t, "bin-env", r.Header.Get(DefaultHeaderKey))
+	}))
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set(sdk.BinaryHeaderKey, makeBinaryHeader(t, "bin-env"))
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+}
+
+func TestBinaryHeader_PrecedenceOverPlain(t *testing.T) {
+	handler := PropagateEnvironment(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		env := sdk.EnvironmentFromContext(r.Context())
+		assert.Equal(t, "pr-1", env)
+	}))
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set(sdk.BinaryHeaderKey, makeBinaryHeader(t, "pr-1"))
+	req.Header.Set(DefaultHeaderKey, "pr-2")
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+}
+
+func TestRoundTripper_InjectsBinaryHeader(t *testing.T) {
+	var gotPlain, gotBin string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPlain = r.Header.Get(DefaultHeaderKey)
+		gotBin = r.Header.Get(sdk.BinaryHeaderKey)
+	}))
+	defer ts.Close()
+
+	client := &http.Client{
+		Transport: RoundTripper(http.DefaultTransport),
+	}
+
+	req, _ := http.NewRequest("GET", ts.URL, nil)
+	ctx := sdk.WithEnvironment(req.Context(), "out-env")
+	req = req.WithContext(ctx)
+
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	assert.Equal(t, "out-env", gotPlain)
+	assert.NotEmpty(t, gotBin)
+
+	decoded, err := sdk.DecodePropagationContext(gotBin)
+	require.NoError(t, err)
+	assert.Equal(t, "out-env", decoded.Environment)
+}
+
+func TestBinaryHeader_InvalidBase64(t *testing.T) {
+	handler := PropagateEnvironment(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		env := sdk.EnvironmentFromContext(r.Context())
+		assert.Equal(t, "fallback-env", env)
+	}))
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set(sdk.BinaryHeaderKey, "invalid!!!base64")
+	req.Header.Set(DefaultHeaderKey, "fallback-env")
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+}
+
+func TestBinaryHeader_MaxLength(t *testing.T) {
+	handler := PropagateEnvironment(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		env := sdk.EnvironmentFromContext(r.Context())
+		assert.Equal(t, "fallback-env", env)
+	}))
+
+	req := httptest.NewRequest("GET", "/", nil)
+
+	longBytes := make([]byte, 5000)
+	for i := range longBytes {
+		longBytes[i] = 'a'
+	}
+
+	req.Header.Set(sdk.BinaryHeaderKey, string(longBytes))
+	req.Header.Set(DefaultHeaderKey, "fallback-env")
+	handler.ServeHTTP(httptest.NewRecorder(), req)
 }

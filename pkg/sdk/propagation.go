@@ -23,12 +23,15 @@ func EncodePropagationContext(ctx *divergev1alpha1.PropagationContext) (string, 
 		return "", fmt.Errorf("failed to marshal PropagationContext: %w", err)
 	}
 
-	return base64.StdEncoding.EncodeToString(b), nil
+	return base64.RawStdEncoding.EncodeToString(b), nil
 }
 
 // DecodePropagationContext decodes a base64 string and unmarshals it into a PropagationContext.
 func DecodePropagationContext(encoded string) (*divergev1alpha1.PropagationContext, error) {
-	b, err := base64.StdEncoding.DecodeString(encoded)
+	if len(encoded) > 4096 {
+		return nil, fmt.Errorf("encoded propagation context too large")
+	}
+	b, err := base64.RawStdEncoding.DecodeString(encoded)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode base64 PropagationContext: %w", err)
 	}

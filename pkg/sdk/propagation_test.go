@@ -38,7 +38,7 @@ func TestDecodePropagationContext_InvalidBase64(t *testing.T) {
 
 func TestDecodePropagationContext_InvalidProto(t *testing.T) {
 	invalidProto := []byte("invalid proto bytes")
-	encoded := base64.StdEncoding.EncodeToString(invalidProto)
+	encoded := base64.RawStdEncoding.EncodeToString(invalidProto)
 
 	_, err := sdk.DecodePropagationContext(encoded)
 	require.Error(t, err)
