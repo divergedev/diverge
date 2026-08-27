@@ -15,12 +15,12 @@ All tools are available in the nix dev shell: `nix develop`
 
 ```bash
 # Full lifecycle: create cluster, build images, deploy, run tests, teardown
-make e2e
+nix develop -c make e2e
 
 # Individual steps:
-make e2e-setup    # Create Kind cluster + deploy controller
-make e2e-run      # Run tests
-make e2e-teardown # Delete Kind cluster
+nix develop -c make e2e-setup    # Create Kind cluster + deploy controller
+nix develop -c make e2e-run      # Run tests
+nix develop -c make e2e-teardown # Delete Kind cluster
 ```
 
 ## Writing E2E Tests

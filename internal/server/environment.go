@@ -490,6 +490,9 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 
 	labels := map[string]string{}
 	if msg.HookType != "" {
+		if err := ValidateDNS1123Label(msg.HookType, "hook_type"); err != nil {
+			return err
+		}
 		// Hook pods use diverge.io/ labels (set by hook_runner.go)
 		labels["diverge.io/environment"] = msg.EnvironmentName
 		labels["diverge.io/hook-type"] = msg.HookType

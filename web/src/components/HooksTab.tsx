@@ -105,9 +105,18 @@ export function HooksTab({ namespace, environmentName }: HooksTabProps) {
                     onClick={() => setExpandedHook(isExpanded ? null : job.name)}
                   >
                     <TableCell>
-                      {isExpanded
-                        ? <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                        : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        aria-expanded={isExpanded}
+                        aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${job.type} hook logs`}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setExpandedHook(isExpanded ? null : job.name)
+                        }}
+                      >
+                        {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                      </Button>
                     </TableCell>
                     <TableCell className="font-mono text-xs">{job.type}</TableCell>
                     <TableCell className="font-mono text-xs max-w-[200px] truncate">{job.name}</TableCell>
