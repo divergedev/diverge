@@ -1,10 +1,12 @@
 import { useListHookJobs, useRetryHook } from '@/api/queries'
 import { StatusBadge } from '@/components/StatusBadge'
+import { LogViewer } from '@/components/LogViewer'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { RotateCw, AlertCircle, CheckCircle2, Clock, Play } from 'lucide-react'
+import { RotateCw, AlertCircle, CheckCircle2, Clock, Play, ChevronDown, ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useState } from 'react'
 
 interface HooksTabProps {
   namespace: string
@@ -30,6 +32,7 @@ function hookIcon(phase: string) {
 export function HooksTab({ namespace, environmentName }: HooksTabProps) {
   const { data, isLoading, error } = useListHookJobs(namespace, environmentName)
   const retryHook = useRetryHook()
+  const [expandedHook, setExpandedHook] = useState<string | null>(null)
 
   if (isLoading) {
     return (
@@ -89,35 +92,64 @@ export function HooksTab({ namespace, environmentName }: HooksTabProps) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {jobs.map((job) => (
-              <TableRow key={job.name} className={cn(
-                job.phase === 'Failed' && 'bg-destructive/5'
-              )}>
-                <TableCell>{hookIcon(job.phase)}</TableCell>
-                <TableCell className="font-mono text-xs">{job.type}</TableCell>
-                <TableCell className="font-mono text-xs max-w-[200px] truncate">{job.name}</TableCell>
-                <TableCell><StatusBadge phase={job.phase} /></TableCell>
-                <TableCell className="text-sm tabular-nums">
-                  {job.durationSeconds > 0 ? formatDuration(job.durationSeconds) : '—'}
-                </TableCell>
-                <TableCell className="text-xs text-muted-foreground max-w-[300px] truncate" title={job.message}>
-                  {job.message || '—'}
-                </TableCell>
-                <TableCell>
-                  {job.phase === 'Failed' && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleRetry(job.type)}
-                      disabled={retryHook.isPending}
-                      aria-label={`Retry ${job.type} hook`}
-                    >
-                      <RotateCw className={cn('h-4 w-4', retryHook.isPending && 'animate-spin')} />
-                    </Button>
+            {jobs.map((job) => {
+              const isExpanded = expandedHook === job.name
+              return (
+                <>
+                  <TableRow
+                    key={job.name}
+                    className={cn(
+                      job.phase === 'Failed' && 'bg-destructive/5',
+                      'cursor-pointer hover:bg-muted/50',
+                    )}
+                    onClick={() => setExpandedHook(isExpanded ? null : job.name)}
+                  >
+                    <TableCell>
+                      {isExpanded
+                        ? <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                        : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">{job.type}</TableCell>
+                    <TableCell className="font-mono text-xs max-w-[200px] truncate">{job.name}</TableCell>
+                    <TableCell><StatusBadge phase={job.phase} /></TableCell>
+                    <TableCell className="text-sm tabular-nums">
+                      {job.durationSeconds > 0 ? formatDuration(job.durationSeconds) : '—'}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground max-w-[300px] truncate" title={job.message}>
+                      {job.message || '—'}
+                    </TableCell>
+                    <TableCell>
+                      {job.phase === 'Failed' && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => { e.stopPropagation(); handleRetry(job.type) }}
+                          disabled={retryHook.isPending}
+                          aria-label={`Retry ${job.type} hook`}
+                        >
+                          <RotateCw className={cn('h-4 w-4', retryHook.isPending && 'animate-spin')} />
+                        </Button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                  {isExpanded && (
+                    <TableRow key={`${job.name}-logs`}>
+                      <TableCell colSpan={7} className="p-0">
+                        <div className="border-t border-border bg-muted/30 p-2">
+                          <p className="text-xs text-muted-foreground mb-1 px-1">Pod logs for {job.type} hook</p>
+                          <LogViewer
+                            namespace={namespace}
+                            environmentName={environmentName}
+                            hookType={job.type}
+                            className="h-[250px] text-xs"
+                          />
+                        </div>
+                      </TableCell>
+                    </TableRow>
                   )}
-                </TableCell>
-              </TableRow>
-            ))}
+                </>
+              )
+            })}
           </TableBody>
         </Table>
       </CardContent>
