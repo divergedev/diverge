@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	divergev1alpha1 "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 	"github.com/divergedev/diverge/pkg/sdk"
 )
 
@@ -108,8 +109,17 @@ func PropagateEnvironmentWithOptions(opts ...Option) func(http.Handler) http.Han
 }
 
 // extractEnv resolves the environment name from the request.
-// Precedence: Header → Query Param → Subdomain.
+// Precedence: Binary Context Header → Plain Header → Query Param → Subdomain.
 func extractEnv(r *http.Request, cfg *middlewareConfig) string {
+	// 0. Check binary header (highest priority)
+	if encoded := r.Header.Get(sdk.BinaryHeaderKey); encoded != "" {
+		if ctx, err := sdk.DecodePropagationContext(encoded); err == nil {
+			if ctx.Environment != "" && isValidEnvName(ctx.Environment) {
+				return ctx.Environment
+			}
+		}
+	}
+
 	// 1. Check existing header (highest priority)
 	if env := r.Header.Get(cfg.headerKey); env != "" {
 		if isValidEnvName(env) {
@@ -203,6 +213,14 @@ func (rt *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 		// Clone request to avoid modifying original
 		req = req.Clone(req.Context())
 		req.Header.Set(DefaultHeaderKey, env)
+
+		// Inject binary context header
+		pCtx := &divergev1alpha1.PropagationContext{
+			Environment: env,
+		}
+		if encoded, err := sdk.EncodePropagationContext(pCtx); err == nil {
+			req.Header.Set(sdk.BinaryHeaderKey, encoded)
+		}
 	}
 	return rt.base.RoundTrip(req)
 }
