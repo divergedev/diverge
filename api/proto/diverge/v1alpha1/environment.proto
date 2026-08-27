@@ -234,6 +234,17 @@ message Environment {
 }
 
 // EnvironmentService
+// MCP tool descriptions (for proto2mcp, when streaming skip is fixed):
+//   CreateEnvironment: "Create a new preview environment with the given services and routing configuration"
+//   GetEnvironment: "Get a preview environment by name and namespace, including its current phase and service statuses"
+//   ListEnvironments: "List all preview environments, optionally filtered by namespace"
+//   UpdateEnvironment: "Update a preview environment's configuration such as TTL, services, or routing"
+//   DeleteEnvironment: "Delete a preview environment and clean up all associated resources" (destructive)
+//   ExtendTTL: "Extend the time-to-live of a preview environment to prevent automatic expiration"
+//   WatchEnvironments: skip (streaming)
+//   StreamLogs: skip (streaming)
+//   ListHookJobs: "List migration and post-deploy hook jobs for an environment"
+//   RetryHook: "Retry a failed migration or post-deploy hook job"
 service EnvironmentService {
   rpc CreateEnvironment(CreateEnvironmentRequest) returns (CreateEnvironmentResponse);
   rpc GetEnvironment(GetEnvironmentRequest) returns (GetEnvironmentResponse);

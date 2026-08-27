@@ -91,8 +91,6 @@ jobs:
         run: |
           go install google.golang.org/protobuf/cmd/protoc-gen-go@$(grep google.golang.org/protobuf go.mod | awk '{print $2}')
           go install connectrpc.com/connect/cmd/protoc-gen-connect-go@$(grep connectrpc.com/connect go.mod | awk '{print $2}')
-          git clone --depth=1 https://github.com/protocgen/proto2mcp.git /tmp/proto2mcp
-          cd /tmp/proto2mcp/codegen && go build -o $(go env GOPATH)/bin/protoc-gen-proto2mcp ./cmd/protoc-gen-proto2mcp
       - name: Proto lint and breaking check
         run: |
           buf lint api/proto
@@ -103,6 +101,9 @@ jobs:
           buf generate
       - name: Check for stale generated files
         run: |
+          # Restore MCP files (hand-maintained until proto2mcp streaming skip is fixed)
+          git checkout -- 'api/gen/diverge/v1alpha1/*_mcp.pb.go' 2>/dev/null || true
+          git checkout -- api/gen/protocgen/ 2>/dev/null || true
           DIFF=$(git diff -I 'protoc-gen-go v' --stat api/gen/diverge/ 2>/dev/null || true)
           UNTRACKED=$(git ls-files --others --exclude-standard -- api/gen/diverge/ 2>/dev/null || true)
           if [[ -n "$DIFF" || -n "$UNTRACKED" ]]; then
