@@ -173,6 +173,15 @@ func TestLinkerd_CrossNamespaceRouting(t *testing.T) {
 		t.Skip("controller not deployed — skipping cross-namespace assertions")
 	}
 
+	// Create the target namespace for cross-namespace route reference
+	targetNS := f.Namespace + "-target"
+	f.CreateNamespaceByName(ctx, targetNS)
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		f.CleanupNamespaceByName(cleanupCtx, targetNS)
+	}()
+
 	env := &v1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "linkerd-crossns",
@@ -186,7 +195,7 @@ func TestLinkerd_CrossNamespaceRouting(t *testing.T) {
 			},
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "remote-svc",
-				Namespace:   "production",
+				Namespace:   targetNS,
 				Port:        8080,
 				Image:       "hashicorp/http-echo:0.2.3",
 			},
@@ -199,11 +208,11 @@ func TestLinkerd_CrossNamespaceRouting(t *testing.T) {
 	// Wait for ReferenceGrant in target namespace
 	var grants gatewayv1.ReferenceGrantList
 	require.Eventually(t, func() bool {
-		if err := f.Client.List(ctx, &grants, client.InNamespace("production")); err != nil {
+		if err := f.Client.List(ctx, &grants, client.InNamespace(targetNS)); err != nil {
 			return false
 		}
 		return len(grants.Items) > 0
-	}, 2*time.Minute, 2*time.Second, "ReferenceGrant not created in production namespace")
+	}, 2*time.Minute, 2*time.Second, "ReferenceGrant not created in target namespace")
 }
 
 // TestLinkerd_RouteCleanup verifies that HTTPRoute resources are garbage

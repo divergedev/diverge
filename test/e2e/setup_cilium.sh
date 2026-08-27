@@ -5,11 +5,16 @@ set -euo pipefail
 
 CLUSTER_NAME="${CLUSTER_NAME:-diverge-cilium}"
 CILIUM_VERSION="${CILIUM_VERSION:-1.17.3}"
+GWAPI_VERSION="${GWAPI_VERSION:-v1.2.1}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "==> Creating Kind cluster '${CLUSTER_NAME}' (no default CNI)..."
 kind get clusters | grep -q "${CLUSTER_NAME}" || \
   kind create cluster --name "${CLUSTER_NAME}" --config "${SCRIPT_DIR}/kind-cilium.yaml"
+
+echo "==> Installing Gateway API CRDs ${GWAPI_VERSION}..."
+kubectl apply --context "kind-${CLUSTER_NAME}" \
+  -f "https://github.com/kubernetes-sigs/gateway-api/releases/download/${GWAPI_VERSION}/standard-install.yaml"
 
 echo "==> Installing Cilium ${CILIUM_VERSION} with Gateway API support..."
 helm repo add cilium https://helm.cilium.io/ 2>/dev/null || true

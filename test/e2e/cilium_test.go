@@ -164,6 +164,13 @@ func TestCilium_SubdomainRouting(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "Expected hostname cilium-subdomain.preview.local in HTTPRoute")
+
+	// Data-plane: verify subdomain routing reaches preview pod
+	err = f.WaitForRouteReachable(ctx, RequestOpts{
+		GatewayURL: ciliumGatewayURL,
+		Host:       "cilium-subdomain.preview.local",
+	}, 90*time.Second)
+	require.NoError(t, err, "Subdomain route not reachable through Cilium gateway")
 }
 
 // TestCilium_GAMMAMeshRouting verifies east-west routing via GAMMA
@@ -241,6 +248,15 @@ func TestCilium_CrossNamespaceGrant(t *testing.T) {
 		t.Skip("controller not deployed — skipping cross-namespace assertions")
 	}
 
+	// Create the target namespace that the cross-namespace route will reference
+	targetNS := f.Namespace + "-target"
+	f.CreateNamespaceByName(ctx, targetNS)
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		f.CleanupNamespaceByName(cleanupCtx, targetNS)
+	}()
+
 	env := &v1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "cilium-crossns",
@@ -254,7 +270,7 @@ func TestCilium_CrossNamespaceGrant(t *testing.T) {
 			},
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "external-svc",
-				Namespace:   "production",
+				Namespace:   targetNS,
 				Port:        8080,
 				Image:       "hashicorp/http-echo:0.2.3",
 			},
@@ -264,10 +280,10 @@ func TestCilium_CrossNamespaceGrant(t *testing.T) {
 	err := f.CreateEnvironment(ctx, env)
 	require.NoError(t, err)
 
-	// Wait for ReferenceGrant
+	// Wait for ReferenceGrant in the target namespace
 	var grants gatewayv1.ReferenceGrantList
 	require.Eventually(t, func() bool {
-		if err := f.Client.List(ctx, &grants, client.InNamespace("production")); err != nil {
+		if err := f.Client.List(ctx, &grants, client.InNamespace(targetNS)); err != nil {
 			return false
 		}
 		return len(grants.Items) > 0

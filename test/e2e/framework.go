@@ -194,3 +194,24 @@ func (f *Framework) AnnotateNamespace(ctx context.Context, namespace string, ann
 		f.T.Fatalf("Failed to annotate namespace %s: %v", namespace, err)
 	}
 }
+
+// CreateNamespaceByName creates a namespace with a specific name (for cross-namespace tests).
+func (f *Framework) CreateNamespaceByName(ctx context.Context, name string) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+	}
+	if _, err := f.Clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{}); err != nil {
+		f.T.Fatalf("Failed to create namespace %s: %v", name, err)
+	}
+}
+
+// CleanupNamespaceByName deletes a namespace by name.
+func (f *Framework) CleanupNamespaceByName(ctx context.Context, name string) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if err := f.Clientset.CoreV1().Namespaces().Delete(ctx, name, metav1.DeleteOptions{}); err != nil {
+		f.T.Logf("Failed to delete namespace %s: %v", name, err)
+	}
+}

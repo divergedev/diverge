@@ -11,7 +11,6 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/stretchr/testify/require"
 )
@@ -35,11 +34,6 @@ type Response struct {
 	StatusCode int
 	Body       string
 	Headers    http.Header
-}
-
-// intstr8080 returns an IntOrString for port 8080.
-func intstr8080() intstr.IntOrString {
-	return intstr.FromInt32(8080)
 }
 
 // SendRequest sends an HTTP request through the gateway and returns the response.
@@ -94,19 +88,21 @@ func (f *Framework) SendRequest(ctx context.Context, opts RequestOpts) (*Respons
 // for the given request options. Route programming can take seconds after
 // HTTPRoute creation.
 func (f *Framework) WaitForRouteReachable(ctx context.Context, opts RequestOpts, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		resp, err := f.SendRequest(ctx, opts)
+	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		resp, err := f.SendRequest(timeoutCtx, opts)
 		if err == nil && resp.StatusCode < 500 {
 			return nil
 		}
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(2 * time.Second):
+		case <-timeoutCtx.Done():
+			return fmt.Errorf("route not reachable after %s", timeout)
+		case <-ticker.C:
 		}
 	}
-	return fmt.Errorf("route not reachable after %s", timeout)
 }
 
 // DeployEchoServer creates a simple echo Deployment + Service in the given

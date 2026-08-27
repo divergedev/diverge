@@ -3,9 +3,12 @@
 package e2e
 
 import (
+	"fmt"
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 )
 
@@ -27,10 +30,20 @@ func echoDeployment(name, namespace string, port int32) *appsv1.Deployment {
 					Containers: []corev1.Container{{
 						Name:  "echo",
 						Image: "hashicorp/http-echo:0.2.3",
-						Args:  []string{"-listen", ":8080", "-text", name},
+						Args:  []string{"-listen", formatPort(port), "-text", name},
 						Ports: []corev1.ContainerPort{{
-							ContainerPort: 8080,
+							ContainerPort: port,
 						}},
+						ReadinessProbe: &corev1.Probe{
+							ProbeHandler: corev1.ProbeHandler{
+								HTTPGet: &corev1.HTTPGetAction{
+									Path: "/",
+									Port: intstr.FromInt32(port),
+								},
+							},
+							InitialDelaySeconds: 1,
+							PeriodSeconds:       2,
+						},
 					}},
 				},
 			},
@@ -49,8 +62,13 @@ func echoService(name, namespace string, port int32) *corev1.Service {
 			Selector: map[string]string{"app": name},
 			Ports: []corev1.ServicePort{{
 				Port:       port,
-				TargetPort: intstr8080(),
+				TargetPort: intstr.FromInt32(port),
 			}},
 		},
 	}
+}
+
+// formatPort returns a port string like ":8080".
+func formatPort(port int32) string {
+	return fmt.Sprintf(":%d", port)
 }

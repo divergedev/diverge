@@ -15,14 +15,22 @@ echo "==> Installing Gateway API CRDs..."
 kubectl apply --context "kind-${CLUSTER_NAME}" \
   -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
 
+echo "==> Installing Linkerd CLI ${LINKERD_VERSION}..."
+LINKERD_BIN="/tmp/linkerd-${LINKERD_VERSION}"
+if [ ! -f "${LINKERD_BIN}" ]; then
+  curl -sL "https://github.com/linkerd/linkerd2/releases/download/${LINKERD_VERSION}/linkerd2-cli-${LINKERD_VERSION}-linux-amd64" \
+    -o "${LINKERD_BIN}"
+  chmod +x "${LINKERD_BIN}"
+fi
+
 echo "==> Installing Linkerd CRDs..."
-linkerd install --crds | kubectl apply --context "kind-${CLUSTER_NAME}" -f -
+"${LINKERD_BIN}" install --crds | kubectl apply --context "kind-${CLUSTER_NAME}" -f -
 
 echo "==> Installing Linkerd control plane..."
-linkerd install | kubectl apply --context "kind-${CLUSTER_NAME}" -f -
+"${LINKERD_BIN}" install | kubectl apply --context "kind-${CLUSTER_NAME}" -f -
 
 echo "==> Waiting for Linkerd control plane..."
-linkerd check --context "kind-${CLUSTER_NAME}" --wait 120s || true
+"${LINKERD_BIN}" check --context "kind-${CLUSTER_NAME}" --wait 120s || true
 
 echo "==> Building and loading controller image..."
 make docker-build
