@@ -78,6 +78,23 @@ func TestLinkerd_GAMMARouting(t *testing.T) {
 		}
 		return false
 	}, 2*time.Minute, 2*time.Second, "GAMMA mesh HTTPRoute not created")
+
+	// Deploy in-cluster client for GAMMA requests
+	err = f.DeployInClusterClient(ctx, "gamma-client", ns)
+	require.NoError(t, err)
+
+	// Wait for east-west routing to be programmed
+	require.Eventually(t, func() bool {
+		out, err := f.SendMeshRequest(ctx, "gamma-client", ns, "orders-svc", 8080, map[string]string{
+			"x-diverge-env": "linkerd-gamma",
+		})
+		if err != nil {
+			return false
+		}
+		// A successful connection through the mesh with a non-empty response
+		// proves the east-west GAMMA route is programmed correctly.
+		return len(out) > 0
+	}, 2*time.Minute, 2*time.Second, "Mesh route not reachable or not routing to preview pod")
 }
 
 // TestLinkerd_HeaderPropagation verifies that the x-diverge-env header

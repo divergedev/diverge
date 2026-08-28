@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -40,10 +41,11 @@ func init() {
 
 // Framework holds the test context for E2E tests.
 type Framework struct {
-	Client    client.Client
-	Clientset *kubernetes.Clientset
-	Namespace string
-	T         *testing.T
+	Client     client.Client
+	Clientset  *kubernetes.Clientset
+	RestConfig *rest.Config
+	Namespace  string
+	T          *testing.T
 }
 
 // NewFramework creates a new E2E test framework.
@@ -75,10 +77,11 @@ func NewFramework(t *testing.T) *Framework {
 	}
 
 	return &Framework{
-		Client:    c,
-		Clientset: clientset,
-		Namespace: fmt.Sprintf("e2e-test-%d", time.Now().UnixNano()),
-		T:         t,
+		Client:     c,
+		Clientset:  clientset,
+		RestConfig: config,
+		Namespace:  fmt.Sprintf("e2e-test-%d", time.Now().UnixNano()),
+		T:          t,
 	}
 }
 
