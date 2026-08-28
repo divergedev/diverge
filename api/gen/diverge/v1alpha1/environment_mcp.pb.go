@@ -15,8 +15,6 @@ type EnvironmentServiceMCPHandler interface {
 	UpdateEnvironment(ctx context.Context, req *UpdateEnvironmentRequest) (*UpdateEnvironmentResponse, error)
 	DeleteEnvironment(ctx context.Context, req *DeleteEnvironmentRequest) (*DeleteEnvironmentResponse, error)
 	ExtendTTL(ctx context.Context, req *ExtendTTLRequest) (*ExtendTTLResponse, error)
-	WatchEnvironments(ctx context.Context, req *WatchEnvironmentsRequest) (*WatchEnvironmentsResponse, error)
-	StreamLogs(ctx context.Context, req *StreamLogsRequest) (*StreamLogsResponse, error)
 	ListHookJobs(ctx context.Context, req *ListHookJobsRequest) (*ListHookJobsResponse, error)
 	RetryHook(ctx context.Context, req *RetryHookRequest) (*RetryHookResponse, error)
 }
@@ -50,16 +48,6 @@ const EnvironmentService_ExtendTTLName = "EnvironmentService_ExtendTTL"
 const EnvironmentService_ExtendTTLDescription = ""
 
 var EnvironmentService_ExtendTTLSchema = []byte("{\"type\":\"object\",\"properties\":{\"extendBy\":{\"description\":\"Duration (e.g., \\\"1.5s\\\")\",\"format\":\"duration\",\"title\":\"Duration\",\"type\":\"string\"},\"name\":{\"type\":\"string\"},\"namespace\":{\"type\":\"string\"}},\"additionalProperties\":false}")
-
-const EnvironmentService_WatchEnvironmentsName = "EnvironmentService_WatchEnvironments"
-const EnvironmentService_WatchEnvironmentsDescription = ""
-
-var EnvironmentService_WatchEnvironmentsSchema = []byte("{\"type\":\"object\",\"properties\":{\"labelSelector\":{\"type\":\"string\"},\"namespace\":{\"type\":\"string\"},\"resourceVersion\":{\"type\":\"string\"}},\"additionalProperties\":false}")
-
-const EnvironmentService_StreamLogsName = "EnvironmentService_StreamLogs"
-const EnvironmentService_StreamLogsDescription = ""
-
-var EnvironmentService_StreamLogsSchema = []byte("{\"type\":\"object\",\"properties\":{\"container\":{\"type\":\"string\"},\"environmentName\":{\"type\":\"string\"},\"follow\":{\"type\":\"boolean\"},\"hookType\":{\"description\":\"// hook_type filters logs to hook Job pods (e.g. \\\"migration\\\", \\\"postdeploy\\\").\\n// When set, pods are matched by diverge.io/hook-type label instead of service name.\",\"type\":\"string\"},\"namespace\":{\"type\":\"string\"},\"previous\":{\"type\":\"boolean\"},\"serviceName\":{\"type\":\"string\"},\"sinceTime\":{\"description\":\"RFC 3339 timestamp\",\"format\":\"date-time\",\"title\":\"Timestamp\",\"type\":\"string\"},\"tailLines\":{\"description\":\"(serialized as string for 64-bit precision)\",\"format\":\"int64\",\"type\":\"string\"},\"timestamps\":{\"type\":\"boolean\"}},\"additionalProperties\":false}")
 
 const EnvironmentService_ListHookJobsName = "EnvironmentService_ListHookJobs"
 const EnvironmentService_ListHookJobsDescription = ""
@@ -162,36 +150,6 @@ func RegisterEnvironmentServiceMCP(registry mcpruntime.Registry, handler Environ
 			return mcpruntime.InvalidParamsError(err), nil
 		}
 		resp, err := handler.ExtendTTL(ctx, &input)
-		if err != nil {
-			return connectbridge.MapConnectError(err), nil
-		}
-		return mcpruntime.MarshalToolResult(resp)
-	}))
-	registry.Register(mcpruntime.ToolDefinition{
-		Description: EnvironmentService_WatchEnvironmentsDescription,
-		InputSchema: json.RawMessage(EnvironmentService_WatchEnvironmentsSchema),
-		Name:        EnvironmentService_WatchEnvironmentsName,
-	}, cfg.WrapHandler(EnvironmentService_WatchEnvironmentsName, func(ctx context.Context, req mcpruntime.ToolRequest) (*mcpruntime.CallToolResult, error) {
-		var input WatchEnvironmentsRequest
-		if err := mcpruntime.UnmarshalToolInput(req, &input); err != nil {
-			return mcpruntime.InvalidParamsError(err), nil
-		}
-		resp, err := handler.WatchEnvironments(ctx, &input)
-		if err != nil {
-			return connectbridge.MapConnectError(err), nil
-		}
-		return mcpruntime.MarshalToolResult(resp)
-	}))
-	registry.Register(mcpruntime.ToolDefinition{
-		Description: EnvironmentService_StreamLogsDescription,
-		InputSchema: json.RawMessage(EnvironmentService_StreamLogsSchema),
-		Name:        EnvironmentService_StreamLogsName,
-	}, cfg.WrapHandler(EnvironmentService_StreamLogsName, func(ctx context.Context, req mcpruntime.ToolRequest) (*mcpruntime.CallToolResult, error) {
-		var input StreamLogsRequest
-		if err := mcpruntime.UnmarshalToolInput(req, &input); err != nil {
-			return mcpruntime.InvalidParamsError(err), nil
-		}
-		resp, err := handler.StreamLogs(ctx, &input)
 		if err != nil {
 			return connectbridge.MapConnectError(err), nil
 		}

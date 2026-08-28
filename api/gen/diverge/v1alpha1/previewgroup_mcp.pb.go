@@ -14,7 +14,6 @@ type PreviewGroupServiceMCPHandler interface {
 	ListPreviewGroups(ctx context.Context, req *ListPreviewGroupsRequest) (*ListPreviewGroupsResponse, error)
 	UpdatePreviewGroup(ctx context.Context, req *UpdatePreviewGroupRequest) (*UpdatePreviewGroupResponse, error)
 	DeletePreviewGroup(ctx context.Context, req *DeletePreviewGroupRequest) (*DeletePreviewGroupResponse, error)
-	WatchPreviewGroups(ctx context.Context, req *WatchPreviewGroupsRequest) (*WatchPreviewGroupsResponse, error)
 }
 
 const PreviewGroupService_CreatePreviewGroupName = "PreviewGroupService_CreatePreviewGroup"
@@ -41,11 +40,6 @@ const PreviewGroupService_DeletePreviewGroupName = "PreviewGroupService_DeletePr
 const PreviewGroupService_DeletePreviewGroupDescription = ""
 
 var PreviewGroupService_DeletePreviewGroupSchema = []byte("{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"namespace\":{\"type\":\"string\"}},\"additionalProperties\":false}")
-
-const PreviewGroupService_WatchPreviewGroupsName = "PreviewGroupService_WatchPreviewGroups"
-const PreviewGroupService_WatchPreviewGroupsDescription = ""
-
-var PreviewGroupService_WatchPreviewGroupsSchema = []byte("{\"type\":\"object\",\"properties\":{\"labelSelector\":{\"type\":\"string\"},\"namespace\":{\"type\":\"string\"},\"resourceVersion\":{\"type\":\"string\"}},\"additionalProperties\":false}")
 
 func RegisterPreviewGroupServiceMCP(registry mcpruntime.Registry, handler PreviewGroupServiceMCPHandler, opts ...mcpruntime.Option) {
 	if tr, ok := registry.(*mcpruntime.ToolRegistry); ok {
@@ -123,21 +117,6 @@ func RegisterPreviewGroupServiceMCP(registry mcpruntime.Registry, handler Previe
 			return mcpruntime.InvalidParamsError(err), nil
 		}
 		resp, err := handler.DeletePreviewGroup(ctx, &input)
-		if err != nil {
-			return connectbridge.MapConnectError(err), nil
-		}
-		return mcpruntime.MarshalToolResult(resp)
-	}))
-	registry.Register(mcpruntime.ToolDefinition{
-		Description: PreviewGroupService_WatchPreviewGroupsDescription,
-		InputSchema: json.RawMessage(PreviewGroupService_WatchPreviewGroupsSchema),
-		Name:        PreviewGroupService_WatchPreviewGroupsName,
-	}, cfg.WrapHandler(PreviewGroupService_WatchPreviewGroupsName, func(ctx context.Context, req mcpruntime.ToolRequest) (*mcpruntime.CallToolResult, error) {
-		var input WatchPreviewGroupsRequest
-		if err := mcpruntime.UnmarshalToolInput(req, &input); err != nil {
-			return mcpruntime.InvalidParamsError(err), nil
-		}
-		resp, err := handler.WatchPreviewGroups(ctx, &input)
 		if err != nil {
 			return connectbridge.MapConnectError(err), nil
 		}
