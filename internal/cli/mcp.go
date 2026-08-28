@@ -175,18 +175,7 @@ func (h *mcpPgHandler) WatchPreviewGroups(ctx context.Context, req *divergev1alp
 	return nil, fmt.Errorf("not implemented")
 }
 
-func runMCP(ctx context.Context, app *App, serverURL string, allowDestructive bool) error {
-	if serverURL == "" {
-		serverURL = os.Getenv("DIVERGE_SERVER_URL")
-		if serverURL == "" {
-			return fmt.Errorf("server URL required: use --server-url or set DIVERGE_SERVER_URL")
-		}
-	}
-
-	httpClient := http.DefaultClient
-	envClient := divergev1alpha1connect.NewEnvironmentServiceClient(httpClient, serverURL)
-	pgClient := divergev1alpha1connect.NewPreviewGroupServiceClient(httpClient, serverURL)
-
+func newMCPServer(envClient divergev1alpha1connect.EnvironmentServiceClient, pgClient divergev1alpha1connect.PreviewGroupServiceClient, allowDestructive bool) *server.MCPServer {
 	registry := mcpruntime.NewToolRegistry()
 
 	envHandler := &mcpEnvHandler{client: envClient}
@@ -201,25 +190,39 @@ func runMCP(ctx context.Context, app *App, serverURL string, allowDestructive bo
 	mcpServer := server.NewMCPServer("diverge", "1.0.0")
 
 	for _, def := range registry.Tools() {
+		toolName := def.Name
+		if service, method, ok := strings.Cut(def.Name, "_"); ok && !strings.HasPrefix(def.Name, "diverge_") {
+			toolName = divergeToolNamer(service, method)
+		}
+
+		// Skip streaming methods (proto2mcp generated them because it couldn't skip them, but MCP tools are request-response)
+		if strings.Contains(toolName, "watch") || strings.Contains(toolName, "stream_logs") {
+			continue
+		}
+
 		// Only register if allowed (simple destructive check)
-		if !allowDestructive && strings.Contains(def.Name, "delete") {
+		if !allowDestructive && strings.Contains(toolName, "delete") {
 			continue
 		}
 
 		var toolSchema mcp.ToolInputSchema
 		if err := json.Unmarshal(def.InputSchema, &toolSchema); err != nil {
-			fmt.Fprintf(os.Stderr, "failed to unmarshal schema for tool %s: %v\n", def.Name, err)
+			fmt.Fprintf(os.Stderr, "failed to unmarshal schema for tool %s: %v\n", toolName, err)
 			continue
 		}
 
 		tool := mcp.Tool{
-			Name:        def.Name,
+			Name:        toolName,
 			Description: def.Description,
 			InputSchema: toolSchema,
 		}
 
+		lookupName := def.Name
 		mcpServer.AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			handler, ok := registry.Lookup(request.Params.Name)
+			handler, ok := registry.Lookup(lookupName)
+			if !ok {
+				handler, ok = registry.Lookup(request.Params.Name)
+			}
 			if !ok {
 				return nil, fmt.Errorf("tool %s not found", request.Params.Name)
 			}
@@ -267,6 +270,23 @@ func runMCP(ctx context.Context, app *App, serverURL string, allowDestructive bo
 			}, nil
 		})
 	}
+
+	return mcpServer
+}
+
+func runMCP(ctx context.Context, app *App, serverURL string, allowDestructive bool) error {
+	if serverURL == "" {
+		serverURL = os.Getenv("DIVERGE_SERVER_URL")
+		if serverURL == "" {
+			return fmt.Errorf("server URL required: use --server-url or set DIVERGE_SERVER_URL")
+		}
+	}
+
+	httpClient := http.DefaultClient
+	envClient := divergev1alpha1connect.NewEnvironmentServiceClient(httpClient, serverURL)
+	pgClient := divergev1alpha1connect.NewPreviewGroupServiceClient(httpClient, serverURL)
+
+	mcpServer := newMCPServer(envClient, pgClient, allowDestructive)
 
 	return server.ServeStdio(mcpServer)
 }
