@@ -11,13 +11,18 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/tools/remotecommand"
 	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/remotecommand"
 )
 
 // DeployInClusterClient deploys a curl pod for testing GAMMA mesh routing.
 func (f *Framework) DeployInClusterClient(ctx context.Context, name, namespace string) error {
+	if errs := validation.IsValidLabelValue(name); len(errs) > 0 {
+		return fmt.Errorf("invalid client pod name %q: %s", name, strings.Join(errs, "; "))
+	}
+
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -63,8 +68,13 @@ func (f *Framework) DeployInClusterClient(ctx context.Context, name, namespace s
 }
 
 // SendMeshRequest sends an HTTP request from inside the client pod.
+// A per-request timeout of 10 seconds ensures stalled exec attempts
+// terminate within the caller's retry window.
 func (f *Framework) SendMeshRequest(ctx context.Context, clientPod, namespace, targetService string, port int32, headers map[string]string) (string, error) {
-	curlCmd := []string{"curl", "-s"}
+	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	curlCmd := []string{"curl", "-s", "--max-time", "8"}
 	for k, v := range headers {
 		curlCmd = append(curlCmd, "-H", fmt.Sprintf("%s: %s", k, v))
 	}
@@ -90,7 +100,7 @@ func (f *Framework) SendMeshRequest(ctx context.Context, clientPod, namespace, t
 	}
 
 	var stdout, stderr bytes.Buffer
-	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
+	err = exec.StreamWithContext(reqCtx, remotecommand.StreamOptions{
 		Stdout: &stdout,
 		Stderr: &stderr,
 		Tty:    false,
