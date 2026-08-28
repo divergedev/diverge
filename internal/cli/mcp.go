@@ -21,11 +21,20 @@ import (
 
 // pascalToSnake converts PascalCase to snake_case.
 func pascalToSnake(s string) string {
+	runes := []rune(s)
 	var result strings.Builder
-	for i, r := range s {
+	for i, r := range runes {
 		if unicode.IsUpper(r) {
+			// Insert underscore before this uppercase run if:
+			// 1. Not at the start
+			// 2. Either the previous char was lowercase, or the next char is lowercase
+			//    (the latter handles "TTL" -> "ttl" but "TTLExpiry" -> "ttl_expiry")
 			if i > 0 {
-				result.WriteByte('_')
+				prevLower := unicode.IsLower(runes[i-1])
+				nextLower := i+1 < len(runes) && unicode.IsLower(runes[i+1])
+				if prevLower || nextLower {
+					result.WriteByte('_')
+				}
 			}
 			result.WriteRune(unicode.ToLower(r))
 		} else {
