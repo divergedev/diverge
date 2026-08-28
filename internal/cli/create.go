@@ -21,12 +21,13 @@ import (
 
 func newCreateCmd(app *App) *cobra.Command {
 	var (
-		configPath string
-		envName    string
-		envType    string
-		mrNumber   int
-		labels     string
-		dryRun     bool
+		configPath  string
+		envName     string
+		envType     string
+		mrNumber    int
+		labels      string
+		dryRun      bool
+		withIngress bool
 	)
 
 	cmd := &cobra.Command{
@@ -39,7 +40,7 @@ and detecting the current git context (branch, provider, project).
 The environment name is generated deterministically from the MR/PR number
 or branch name, unless overridden with --name.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runCreate(cmd, args, app, configPath, envName, envType, mrNumber, labels, dryRun)
+			return runCreate(cmd, args, app, configPath, envName, envType, mrNumber, labels, dryRun, withIngress)
 		},
 	}
 	cmd.Flags().StringVarP(&configPath, "config", "c", ".diverge.yaml", "path to config file")
@@ -48,11 +49,12 @@ or branch name, unless overridden with --name.`,
 	cmd.Flags().IntVar(&mrNumber, "mr", 0, "MR/PR number")
 	cmd.Flags().StringVarP(&labels, "labels", "l", "", "comma-separated MR labels for overrides")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print Environment YAML without creating")
+	cmd.Flags().BoolVar(&withIngress, "with-ingress", true, "resolve and log ingress paths from service topology")
 
 	return cmd
 }
 
-func runCreate(cmd *cobra.Command, _ []string, app *App, configPath, envName, envType string, mrNumber int, labels string, dryRun bool) error {
+func runCreate(cmd *cobra.Command, _ []string, app *App, configPath, envName, envType string, mrNumber int, labels string, dryRun, withIngress bool) error {
 	// Load config
 	cfg, err := config.Load(configPath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -92,6 +94,35 @@ func runCreate(cmd *cobra.Command, _ []string, app *App, configPath, envName, en
 	env, err := buildEnvironment(cmd.Context(), name, gitCtx, resolved, cfg, app, mrNumber)
 	if err != nil {
 		return fmt.Errorf("failed to build environment: %w", err)
+	}
+
+	// Resolve topology and log ingress paths (to stderr so dry-run YAML stays clean)
+	if withIngress && cfg != nil && len(cfg.Services) > 0 {
+		graph := buildGraphFromConfig(cfg)
+		if err := graph.Validate(); err != nil {
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "⚠ Topology warning: %v\n", err)
+		}
+
+		changedServices := env.Spec.Deploy.ChangedServices
+		if len(changedServices) == 0 {
+			// If no delta detection, resolve for all services
+			for svcName := range cfg.Services {
+				changedServices = append(changedServices, svcName)
+			}
+		}
+
+		stderr := cmd.ErrOrStderr()
+		for _, svc := range changedServices {
+			paths := graph.AllIngressPaths(svc)
+			if len(paths) > 0 {
+				for _, p := range paths {
+					_, _ = fmt.Fprintf(stderr, "✓ Ingress path: %s (%d hops)\n", strings.Join(p.Hops, " → "), len(p.Hops)-1)
+				}
+			} else {
+				_, _ = fmt.Fprintf(stderr, "ℹ No ingress path found for %s (direct access only)\n", svc)
+			}
+		}
+		_, _ = fmt.Fprintf(stderr, "ℹ Downstream services handled by mesh routing\n")
 	}
 
 	if dryRun {

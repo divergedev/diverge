@@ -563,6 +563,42 @@ spec:
                 - project
                 - provider
                 type: object
+              topologyOverrides:
+                description: |-
+                  TopologyOverrides provides inline service dependency edges for environments
+                  created via CI/CD or webhooks where .diverge.yaml is not accessible.
+                  These override auto-discovered edges from Gateway API and Prometheus.
+                items:
+                  description: TopologyEdge represents a directed dependency between
+                    two services.
+                  properties:
+                    from:
+                      description: From is the source service name (the caller).
+                      minLength: 1
+                      type: string
+                    protocol:
+                      default: http
+                      description: Protocol is the communication protocol (http, grpc,
+                        async).
+                      enum:
+                      - http
+                      - grpc
+                      - async
+                      type: string
+                    suppress:
+                      description: |-
+                        Suppress removes this edge from the auto-discovered graph (tombstone).
+                        Use to correct false-positive edges from Prometheus metrics.
+                      type: boolean
+                    to:
+                      description: To is the target service name (the callee).
+                      minLength: 1
+                      type: string
+                  required:
+                  - from
+                  - to
+                  type: object
+                type: array
             required:
             - routing
             - services
@@ -639,10 +675,45 @@ spec:
                 description: CreatedAt is when the preview group was first created.
                 format: date-time
                 type: string
+              discoveredIngressPaths:
+                description: |-
+                  DiscoveredIngressPaths contains the resolved ingress routing paths
+                  from gateway entrypoints to the changed services in this group.
+                  Populated by the topology discovery engine during environment creation.
+                items:
+                  description: |-
+                    DiscoveredIngressPath represents a resolved routing path from a gateway
+                    entrypoint to a target service.
+                  properties:
+                    entrypoint:
+                      description: Entrypoint is the gateway service name where the
+                        path originates.
+                      type: string
+                    hops:
+                      description: |-
+                        Hops is the ordered list of services along the path,
+                        from entrypoint to target inclusive.
+                      items:
+                        type: string
+                      type: array
+                    target:
+                      description: Target is the destination service name.
+                      type: string
+                  required:
+                  - entrypoint
+                  - hops
+                  - target
+                  type: object
+                type: array
               expiresAt:
                 description: ExpiresAt is when the preview group will expire (from
                   TTL).
                 format: date-time
+                type: string
+              graphSource:
+                description: |-
+                  GraphSource describes where the topology graph was discovered from
+                  (e.g. "gateway-api+prometheus+static").
                 type: string
               leaseRenewedAt:
                 description: LeaseRenewedAt is the last time the owning CLI heartbeat

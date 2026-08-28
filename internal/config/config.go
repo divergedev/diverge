@@ -26,6 +26,15 @@ type ServiceConfig struct {
 	Image       ImageConfig               `yaml:"image"`
 	Helm        *HelmConfig               `yaml:"helm,omitempty"`
 	AsyncRoutes []v1alpha1.AsyncRouteSpec `yaml:"asyncRoutes,omitempty" json:"asyncRoutes,omitempty"`
+
+	// DependsOn lists services that this service calls at runtime.
+	// Used for topology graph resolution in composable environments.
+	// Standard semantics: "A dependsOn B" means A calls B.
+	DependsOn []string `yaml:"dependsOn,omitempty"`
+
+	// Entrypoint marks this service as an ingress gateway.
+	// Entrypoints are the starting points for ingress path resolution.
+	Entrypoint bool `yaml:"entrypoint,omitempty"`
 }
 
 type ImageConfig struct {

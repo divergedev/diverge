@@ -250,6 +250,35 @@ type PreviewGroupSpec struct {
 	// Owner is the username of the developer who created this PreviewGroup.
 	// Used for collision detection and audit.
 	Owner string `json:"owner,omitempty"`
+
+	// TopologyOverrides provides inline service dependency edges for environments
+	// created via CI/CD or webhooks where .diverge.yaml is not accessible.
+	// These override auto-discovered edges from Gateway API and Prometheus.
+	// +optional
+	TopologyOverrides []TopologyEdge `json:"topologyOverrides,omitempty"`
+}
+
+// TopologyEdge represents a directed dependency between two services.
+type TopologyEdge struct {
+	// From is the source service name (the caller).
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	From string `json:"from"`
+
+	// To is the target service name (the callee).
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	To string `json:"to"`
+
+	// Protocol is the communication protocol (http, grpc, async).
+	// +kubebuilder:validation:Enum=http;grpc;async
+	// +kubebuilder:default=http
+	Protocol string `json:"protocol,omitempty"`
+
+	// Suppress removes this edge from the auto-discovered graph (tombstone).
+	// Use to correct false-positive edges from Prometheus metrics.
+	// +optional
+	Suppress bool `json:"suppress,omitempty"`
 }
 
 // PreviewGroupServiceStatus reports the current state of a single service
@@ -319,6 +348,31 @@ type PreviewGroupStatus struct {
 
 	// LeaseRenewedAt is the last time the owning CLI heartbeat renewed the lease.
 	LeaseRenewedAt *metav1.Time `json:"leaseRenewedAt,omitempty"`
+
+	// DiscoveredIngressPaths contains the resolved ingress routing paths
+	// from gateway entrypoints to the changed services in this group.
+	// Populated by the topology discovery engine during environment creation.
+	// +optional
+	DiscoveredIngressPaths []DiscoveredIngressPath `json:"discoveredIngressPaths,omitempty"`
+
+	// GraphSource describes where the topology graph was discovered from
+	// (e.g. "gateway-api+prometheus+static").
+	// +optional
+	GraphSource string `json:"graphSource,omitempty"`
+}
+
+// DiscoveredIngressPath represents a resolved routing path from a gateway
+// entrypoint to a target service.
+type DiscoveredIngressPath struct {
+	// Entrypoint is the gateway service name where the path originates.
+	Entrypoint string `json:"entrypoint"`
+
+	// Target is the destination service name.
+	Target string `json:"target"`
+
+	// Hops is the ordered list of services along the path,
+	// from entrypoint to target inclusive.
+	Hops []string `json:"hops"`
 }
 
 // +kubebuilder:object:root=true
