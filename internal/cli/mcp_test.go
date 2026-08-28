@@ -43,7 +43,9 @@ func TestPascalToSnake(t *testing.T) {
 		{"CreatePreviewGroup", "create_preview_group"},
 		{"WatchEnvironments", "watch_environments"},
 		{"StreamLogs", "stream_logs"},
-		{"ABCTest", "a_b_c_test"},
+		{"ABCTest", "abc_test"},
+		{"ExtendTTL", "extend_ttl"},
+		{"ListHTTPRoutes", "list_http_routes"},
 	}
 
 	for _, tt := range tests {
@@ -55,6 +57,8 @@ func TestPascalToSnake(t *testing.T) {
 
 func TestDivergeToolNamer(t *testing.T) {
 	assert.Equal(t, "diverge_get_environment", divergeToolNamer("EnvironmentService", "GetEnvironment"))
+	assert.Equal(t, "diverge_extend_ttl", divergeToolNamer("EnvironmentService", "ExtendTTL"))
+	assert.Equal(t, "diverge_create_preview_group", divergeToolNamer("PreviewGroupService", "CreatePreviewGroup"))
 }
 
 func TestMCPToolRegistration(t *testing.T) {

@@ -15,6 +15,7 @@ The `diverge` CLI manages your local development environments and interacts with
 | `diverge init` | Initialize a local development playground |
 | `diverge list` | List all environments in the cluster |
 | `diverge logs [env-name]` | Stream logs from a preview environment |
+| `diverge mcp` | Run MCP server over stdio for AI agent integration |
 | `diverge open <name>` | Open the environment URL in browser |
 | `diverge plugins` | Manage plugins |
 | `diverge preview create` | Create a preview group from current branch |
@@ -59,3 +60,13 @@ Export environment variables for a service.
 - `dotenv` (default)
 - `json`
 - `shell`
+
+### `diverge mcp`
+
+Run a Model Context Protocol (MCP) server over `stdio` for AI agent integration (Claude Desktop, Cursor, VS Code).
+
+**Flags:**
+- `--server-url` — Diverge API server URL (defaults to `DIVERGE_SERVER_URL` env var)
+- `--allow-destructive` — Enable destructive tools (`delete`)
+
+See the [MCP Server Guide](mcp-server.md) for full setup instructions and editor configurations.

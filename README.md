@@ -23,6 +23,7 @@ curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/v0.6.0/install.s
 Documentation: [https://divergedev.com](https://divergedev.com)
 - [Hot Reload Guide](docs/guides/hot-reload.md)
 - [Observability Guide](docs/guides/observability.md)
+- [MCP Server Guide](docs/guides/mcp-server.md)
 - [CLI Reference](docs/guides/cli-reference.md)
 
 ## Try It
@@ -118,6 +119,7 @@ The `diverge` CLI helps you manage environments efficiently:
 *   `diverge logs` - Stream logs for a preview environment
 *   `diverge dev` - Local development mode with preview routing
 *   `diverge env export` - Export environment variables (dotenv, JSON, shell)
+*   `diverge mcp` - Run MCP server over stdio for AI agent integration
 *   `diverge preview` - Create preview environments from CLI
 *   `diverge validate` - Validate your `.diverge.yaml`
 *   `diverge delete` - Delete an environment
