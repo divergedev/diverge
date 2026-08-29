@@ -14,7 +14,7 @@ permissions:
   pull-requests: write
 
 env:
-  DIVERGE_VERSION: "0.8.0"
+  DIVERGE_VERSION: "0.8.1"
 
 jobs:
   # Deploy or update preview environment for active PRs

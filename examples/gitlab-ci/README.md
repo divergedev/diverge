@@ -1,28 +1,102 @@
 # GitLab CI/CD Integration for Diverge
 
-This directory contains examples of how to integrate Diverge into your GitLab CI/CD pipelines.
-Using Diverge in CI allows you to spin up preview environments automatically for each Merge Request, run tests against them, and tear them down when the MR is closed.
+This directory contains a complete GitLab CI/CD pipeline for Diverge preview environments.
 
-## Examples
+## Pipeline Stages
 
-- **Single Service**: `.gitlab-ci.yml` demonstrates a basic pipeline that builds a Docker image, creates a preview environment, runs a test using the preview header, and cleans up.
-- **Multi-Service with PreviewGroups**: The `multi-service/` directory and `.diverge.yaml` show how to deploy multiple interdependent services at once using a `PreviewGroup`.
+| Stage | Job | Description |
+|-------|-----|-------------|
+| `build` | `build` | Build Docker image with Kaniko, push to GitLab Container Registry |
+| `analyze` | `analyze` | `diverge diff` to detect changed services, `diverge route` to trace request paths |
+| `preview` | `preview:deploy` | Deploy preview environment, post sticky MR comment with summary table |
+| `test` | `test:preview` | Run health check against preview environment using routing header |
+| `cleanup` | `cleanup` | Tear down preview environment when MR is merged or closed |
+
+## Features
+
+- **Change Detection**: `diverge diff --output json` identifies which services changed based on git diff + `.diverge.yaml` path mappings
+- **Route Tracing**: `diverge route <service>` traces the ingress path for each changed service
+- **Sticky MR Comments**: Creates/updates a single MR note with deployment summary, preview URL, and route traces (using `<!-- diverge-preview-comment -->` marker)
+- **Delta Deployments**: Only modified services get new pods — unchanged services fall back to baseline via mesh routing
+- **Automatic Cleanup**: Preview environments are deleted on MR merge or close
+
+## Prerequisites
+
+### 1. Kubernetes Cluster Access
+
+**Option A: GitLab Kubernetes Agent (recommended)**
+```yaml
+variables:
+  KUBE_CONTEXT: path/to/project:agent-name
+before_script:
+  - kubectl config use-context $KUBE_CONTEXT
+```
+
+**Option B: KUBECONFIG CI/CD variable**
+Define a CI/CD variable `KUBECONFIG` of type "File" containing your cluster kubeconfig.
+
+### 2. CI/CD Variables
+
+| Variable | Type | Required | Description |
+|----------|------|----------|-------------|
+| `KUBECONFIG` | File | Yes | Kubernetes cluster credentials |
+| `DIVERGE_GITLAB_TOKEN` | Variable (masked) | Yes | GitLab API token with `api` scope for MR comments |
+
+### 3. Diverge Controller
+
+The controller must be running in your cluster with GitLab notifier configured:
+
+```bash
+helm install diverge diverge/diverge \
+  --set notifierProvider=gitlab \
+  --set controller.env.DIVERGE_NOTIFIER_TOKEN=<gitlab-api-token> \
+  --set controller.env.DIVERGE_WEBHOOK_SECRET=<webhook-secret>
+```
+
+Register webhooks in GitLab: **Settings → Webhooks** → URL: `https://<diverge-server>/gitlab-webhook`
 
 ## Quick Start
 
-1. Add a `.diverge.yaml` file to the root of your repository to define your services and routing configuration.
-2. Ensure that your CI pipeline has access to a Kubernetes cluster.
-   - **Using GitLab Kubernetes Agent**: Define the agent context in your `.gitlab-ci.yml` before calling `diverge`:
-     ```yaml
-     variables:
-       KUBE_CONTEXT: path/to/project:agent-name
-     before_script:
-       - kubectl config use-context $KUBE_CONTEXT
-     ```
-   - **Using KUBECONFIG variable**: Define a CI/CD variable `KUBECONFIG` of type "File" containing your cluster config.
-3. Copy the relevant `.gitlab-ci.yml` structure into your repository.
-4. Open a Merge Request to see Diverge build and deploy a preview environment for your branch.
+1. Copy `.gitlab-ci.yml` and `.diverge.yaml` to your repository root
+2. Update the `DIVERGE_VERSION` variable to the latest release
+3. Update the `REGISTRY` variable if not using GitLab Container Registry
+4. Configure CI/CD variables (`KUBECONFIG`, `DIVERGE_GITLAB_TOKEN`)
+5. Open a Merge Request — the pipeline will automatically deploy a preview
 
-Note: In these examples, cleanup is handled automatically. The Diverge controller listens to GitLab webhooks and deletes the preview environment when the Merge Request is closed or merged. You do not need a dedicated `cleanup` job in your CI pipeline.
+## Multi-Service (PreviewGroup)
 
-For more details, see the official [Diverge Documentation](https://divergedev.github.io).
+For deploying multiple interdependent services, see the `multi-service/` directory which uses `diverge preview create` with `--service` flags.
+
+## MR Comment Example
+
+When the pipeline runs, it posts a comment like this on your MR:
+
+> ## 🚀 Diverge Preview Environment
+>
+> | Property | Value |
+> |---|---|
+> | **Environment** | `preview-mr-42` |
+> | **Preview URL** | https://preview-mr-42.preview.example.com |
+> | **Changed Services (2)** | `backend, worker` |
+> | **Deploy Mode** | `delta` (only modified services deployed) |
+
+The comment is updated on each push — only one comment per MR.
+
+## Comparison with GitHub Actions
+
+Both examples provide the same capabilities:
+
+| Feature | GitHub Actions | GitLab CI |
+|---------|---------------|-----------|
+| Change detection | `diverge diff` | `diverge diff` |
+| Route tracing | `diverge route` | `diverge route` |
+| Sticky comment | `actions/github-script` | GitLab Notes API |
+| Binary caching | `actions/cache` | Not cached (fast install) |
+| Cleanup trigger | `pull_request: closed` | `CI_MERGE_REQUEST_EVENT_TYPE` |
+| Container build | Docker/Buildx | Kaniko |
+
+## Related
+
+- [GitHub Actions Example](../github-actions/)
+- [Diverge for GitLab Guide](../../docs/guides/diverge-for-gitlab.md)
+- [GitLab CI Component](../../ci/gitlab/) — Reusable CI component for PreviewGroups

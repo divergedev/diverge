@@ -1,13 +1,24 @@
 stages:
   - build
+  - analyze
   - preview
   - test
+  - cleanup
 
 variables:
-  DIVERGE_VERSION: "0.3.0"
+  DIVERGE_VERSION: "0.8.1"
   REGISTRY: ${CI_REGISTRY_IMAGE}
 
-# Build the service image
+# ─── CLI Installation (reusable) ─────────────────────────────────────────────
+.diverge-cli:
+  before_script:
+    - |
+      if [ ! -f /usr/local/bin/diverge ]; then
+        apk add --no-cache curl tar jq 2>/dev/null || apt-get update && apt-get install -y curl tar jq 2>/dev/null || true
+        curl -sSL "https://github.com/divergedev/diverge/releases/download/v${DIVERGE_VERSION}/diverge_${DIVERGE_VERSION}_linux_amd64.tar.gz" | tar xz -C /usr/local/bin diverge
+      fi
+
+# ─── Build ───────────────────────────────────────────────────────────────────
 build:
   stage: build
   image:
@@ -15,30 +26,160 @@ build:
     entrypoint: [""]
   script:
     - mkdir -p /kaniko/.docker
-    - echo "{\"auths\":{\"${CI_REGISTRY}\":{\"auth\":\"$(printf "%s:%s" "${CI_REGISTRY_USER}" "${CI_REGISTRY_PASSWORD}" | base64 | tr -d '\n')\"}}}" > /kaniko/.docker/config.json
-    - /kaniko/executor --context $CI_PROJECT_DIR --dockerfile $CI_PROJECT_DIR/Dockerfile --destination ${REGISTRY}:${CI_COMMIT_SHORT_SHA}
+    - echo "{\"auths\":{\"${CI_REGISTRY}\":{\"auth\":\"$(printf '%s:%s' "${CI_REGISTRY_USER}" "${CI_REGISTRY_PASSWORD}" | base64 | tr -d '\n')\"}}}" > /kaniko/.docker/config.json
+    - /kaniko/executor
+        --context "${CI_PROJECT_DIR}"
+        --dockerfile "${CI_PROJECT_DIR}/Dockerfile"
+        --destination "${REGISTRY}:${CI_COMMIT_SHORT_SHA}"
+        --cache=true
+        --cache-repo="${REGISTRY}/cache"
   rules:
     - if: $CI_MERGE_REQUEST_IID
 
-# Create preview environment on MR open
-preview:create:
+# ─── Analyze: Change Detection + Route Tracing ──────────────────────────────
+analyze:
+  stage: analyze
+  image: alpine:latest
+  extends: .diverge-cli
+  script:
+    - echo "Comparing ${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME} against origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}..."
+
+    # 1. Detect changed services
+    - DIFF_JSON=$(diverge diff --output json --base "origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}")
+    - echo "${DIFF_JSON}" | jq .
+    - SERVICES=$(echo "${DIFF_JSON}" | jq -r '.services // [] | join(", ")')
+    - COUNT=$(echo "${DIFF_JSON}" | jq -r '.count // 0')
+    - echo "Changed services (${COUNT}):" ${SERVICES}
+
+    # 2. Trace request routes for each changed service
+    - |
+      ROUTES_LOG=""
+      for svc in $(echo "${DIFF_JSON}" | jq -r '.services[]?' 2>/dev/null); do
+        echo "--- Route trace for ${svc} ---"
+        ROUTE_INFO=$(diverge route "${svc}" 2>&1) || true
+        echo "${ROUTE_INFO}"
+        ROUTES_LOG="${ROUTES_LOG}\n### Route for \`${svc}\`\n\`\`\`\n${ROUTE_INFO}\n\`\`\`\n"
+      done
+
+    # 3. Save artifacts for downstream jobs
+    - echo "${DIFF_JSON}" > diff_output.json
+    - echo "${SERVICES}" > changed_services.txt
+    - echo "${COUNT}" > changed_count.txt
+    - printf "%b" "${ROUTES_LOG}" > routes_summary.md
+  artifacts:
+    paths:
+      - diff_output.json
+      - changed_services.txt
+      - changed_count.txt
+      - routes_summary.md
+    expire_in: 1 hour
+  rules:
+    - if: $CI_MERGE_REQUEST_IID
+
+# ─── Deploy Preview Environment ─────────────────────────────────────────────
+preview:deploy:
   stage: preview
   image: alpine:latest
-  before_script:
-    - apk add --no-cache curl tar
-    - curl -sL https://github.com/divergedev/diverge/releases/download/v${DIVERGE_VERSION}/diverge_${DIVERGE_VERSION}_linux_amd64.tar.gz | tar xz -C /usr/local/bin diverge
+  extends: .diverge-cli
   script:
-    - diverge create --mr ${CI_MERGE_REQUEST_IID}
+    - ENV_NAME="preview-mr-${CI_MERGE_REQUEST_IID}"
+    - echo "Deploying preview environment ${ENV_NAME}..."
+
+    # Deploy with delta mode
+    - DEPLOY_OUTPUT=$(diverge create --mr "${CI_MERGE_REQUEST_IID}" 2>&1)
+    - echo "${DEPLOY_OUTPUT}"
+
+    # Extract preview URL
+    - PREVIEW_URL=$(echo "${DEPLOY_OUTPUT}" | grep -o 'https://[^ ]*' | head -n 1)
+    - |
+      if [ -z "${PREVIEW_URL}" ]; then
+        PREVIEW_URL="https://${ENV_NAME}.preview.example.com"
+      fi
+    - echo "PREVIEW_URL=${PREVIEW_URL}" > deploy.env
+    - echo "ENV_NAME=${ENV_NAME}" >> deploy.env
+
+    # Post sticky MR comment with deployment summary
+    - CHANGED_SERVICES=$(cat changed_services.txt 2>/dev/null || echo "N/A")
+    - CHANGED_COUNT=$(cat changed_count.txt 2>/dev/null || echo "0")
+    - ROUTES=$(cat routes_summary.md 2>/dev/null || echo "No route traces available.")
+    - |
+      COMMENT_BODY="<!-- diverge-preview-comment -->
+      ## 🚀 Diverge Preview Environment
+
+      | Property | Value |
+      |---|---|
+      | **Environment** | \`${ENV_NAME}\` |
+      | **Preview URL** | [${PREVIEW_URL}](${PREVIEW_URL}) |
+      | **Changed Services (${CHANGED_COUNT})** | \`${CHANGED_SERVICES}\` |
+      | **Deploy Mode** | \`delta\` (only modified services deployed) |
+      | **Commit** | \`${CI_COMMIT_SHORT_SHA}\` |
+
+      <details>
+      <summary><b>🔍 Request Route Traces</b></summary>
+
+      ${ROUTES}
+
+      </details>
+
+      ---
+      *Updated by Diverge CI for MR !${CI_MERGE_REQUEST_IID}*"
+
+    # Find existing note and update, or create new one
+    - |
+      EXISTING_NOTE_ID=$(curl -s --header "PRIVATE-TOKEN: ${DIVERGE_GITLAB_TOKEN}" \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests/${CI_MERGE_REQUEST_IID}/notes?per_page=100" \
+        | jq -r '.[] | select(.body | contains("diverge-preview-comment")) | .id' | head -1)
+
+      if [ -n "${EXISTING_NOTE_ID}" ] && [ "${EXISTING_NOTE_ID}" != "null" ]; then
+        echo "Updating existing MR note ${EXISTING_NOTE_ID}..."
+        curl -s --request PUT \
+          --header "PRIVATE-TOKEN: ${DIVERGE_GITLAB_TOKEN}" \
+          --header "Content-Type: application/json" \
+          --data "$(jq -n --arg body "${COMMENT_BODY}" '{body: $body}')" \
+          "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests/${CI_MERGE_REQUEST_IID}/notes/${EXISTING_NOTE_ID}" > /dev/null
+      else
+        echo "Creating new MR note..."
+        curl -s --request POST \
+          --header "PRIVATE-TOKEN: ${DIVERGE_GITLAB_TOKEN}" \
+          --header "Content-Type: application/json" \
+          --data "$(jq -n --arg body "${COMMENT_BODY}" '{body: $body}')" \
+          "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests/${CI_MERGE_REQUEST_IID}/notes" > /dev/null
+      fi
+  artifacts:
+    reports:
+      dotenv: deploy.env
+    expire_in: 1 hour
+  needs: ["build", "analyze"]
   rules:
     - if: $CI_MERGE_REQUEST_IID
-      when: always
 
-# Run tests against preview
+# ─── Test Against Preview ────────────────────────────────────────────────────
 test:preview:
   stage: test
   image: curlimages/curl:latest
   script:
-    - curl -H "x-diverge-env: preview-mr-${CI_MERGE_REQUEST_IID}" https://preview.example.com/health
+    - echo "Testing preview environment ${ENV_NAME}..."
+    - |
+      curl -sf \
+        -H "x-diverge-env: ${ENV_NAME}" \
+        "${PREVIEW_URL}/health" \
+        && echo "✅ Health check passed" \
+        || echo "❌ Health check failed"
+  needs: ["preview:deploy"]
   rules:
     - if: $CI_MERGE_REQUEST_IID
-  needs: ["preview:create"]
+
+# ─── Cleanup on MR Close/Merge ──────────────────────────────────────────────
+cleanup:
+  stage: cleanup
+  image: alpine:latest
+  extends: .diverge-cli
+  script:
+    - ENV_NAME="preview-mr-${CI_MERGE_REQUEST_IID}"
+    - echo "Tearing down preview environment ${ENV_NAME}..."
+    - diverge delete "${ENV_NAME}" || true
+  rules:
+    - if: $CI_MERGE_REQUEST_EVENT_TYPE == "merged"
+      when: always
+    - if: $CI_MERGE_REQUEST_EVENT_TYPE == "closed"
+      when: always
