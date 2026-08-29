@@ -65,6 +65,35 @@ func TestClaimStringSlice(t *testing.T) {
 			"groups",
 			0,
 		},
+		{
+			"zitadel map roles",
+			map[string]interface{}{
+				"urn:zitadel:iam:org:project:roles": map[string]interface{}{
+					"developer": map[string]interface{}{"org_id": "123"},
+					"admin":     map[string]interface{}{"org_id": "123"},
+				},
+			},
+			"urn:zitadel:iam:org:project:roles",
+			2,
+		},
+		{
+			"zitadel single role",
+			map[string]interface{}{
+				"urn:zitadel:iam:org:project:roles": map[string]interface{}{
+					"viewer": map[string]interface{}{},
+				},
+			},
+			"urn:zitadel:iam:org:project:roles",
+			1,
+		},
+		{
+			"zitadel empty map",
+			map[string]interface{}{
+				"urn:zitadel:iam:org:project:roles": map[string]interface{}{},
+			},
+			"urn:zitadel:iam:org:project:roles",
+			0,
+		},
 	}
 
 	for _, tt := range tests {
@@ -75,6 +104,83 @@ func TestClaimStringSlice(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestClaimStringSlice_ZitadelRoleValues(t *testing.T) {
+	claims := map[string]interface{}{
+		"urn:zitadel:iam:org:project:roles": map[string]interface{}{
+			"developer": map[string]interface{}{"org_id": "123"},
+			"admin":     map[string]interface{}{"org_id": "456"},
+		},
+	}
+	got := ClaimStringSlice(claims, "urn:zitadel:iam:org:project:roles")
+
+	// Should be sorted deterministically
+	if len(got) != 2 {
+		t.Fatalf("expected 2 roles, got %d", len(got))
+	}
+	if got[0] != "admin" || got[1] != "developer" {
+		t.Errorf("expected [admin developer], got %v", got)
+	}
+}
+
+func TestClaimStringSlice_ZitadelAllowedGroups(t *testing.T) {
+	// End-to-end: Zitadel roles + checkAllowedGroups
+	p := &OIDCProvider{
+		allowedGroups: map[string]bool{"developer": true},
+	}
+	claims := map[string]interface{}{
+		"urn:zitadel:iam:org:project:roles": map[string]interface{}{
+			"developer": map[string]interface{}{"org_id": "123"},
+		},
+	}
+	groups := ClaimStringSlice(claims, "urn:zitadel:iam:org:project:roles")
+	if err := p.checkAllowedGroups(groups); err != nil {
+		t.Errorf("Zitadel developer role should be allowed, got: %v", err)
+	}
+
+	// User without the allowed role
+	claims2 := map[string]interface{}{
+		"urn:zitadel:iam:org:project:roles": map[string]interface{}{
+			"viewer": map[string]interface{}{"org_id": "123"},
+		},
+	}
+	groups2 := ClaimStringSlice(claims2, "urn:zitadel:iam:org:project:roles")
+	if err := p.checkAllowedGroups(groups2); err == nil {
+		t.Error("Zitadel viewer role should NOT be allowed")
+	}
+}
+
+// PBT: ClaimStringSlice always returns a subset of input keys/values.
+func TestPBT_ClaimStringSlice_MapKeysExtracted(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		numRoles := rapid.IntRange(0, 10).Draw(t, "numRoles")
+		roleMap := make(map[string]interface{}, numRoles)
+		expectedKeys := make(map[string]bool)
+		for i := 0; i < numRoles; i++ {
+			key := rapid.StringMatching(`^[a-z_]{2,15}$`).Draw(t, "role")
+			roleMap[key] = map[string]interface{}{}
+			expectedKeys[key] = true
+		}
+
+		claims := map[string]interface{}{"roles": roleMap}
+		got := ClaimStringSlice(claims, "roles")
+
+		if len(got) != len(expectedKeys) {
+			t.Errorf("expected %d roles, got %d", len(expectedKeys), len(got))
+		}
+		for _, role := range got {
+			if !expectedKeys[role] {
+				t.Errorf("unexpected role %q in result", role)
+			}
+		}
+		// Verify sorted
+		for i := 1; i < len(got); i++ {
+			if got[i] < got[i-1] {
+				t.Errorf("result not sorted: %v", got)
+			}
+		}
+	})
 }
 
 func TestOIDCProviderConfig_Defaults(t *testing.T) {
@@ -213,5 +319,143 @@ func TestClaimString_PBT(t *testing.T) {
 
 		// Ensure this doesn't panic
 		_ = ClaimString(claims, key)
+	})
+}
+
+// PBT: []interface{} format always extracts exactly the string elements.
+func TestPBT_ClaimStringSlice_InterfaceSliceFilterNonStrings(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		numItems := rapid.IntRange(0, 20).Draw(t, "numItems")
+		items := make([]interface{}, 0, numItems)
+		expectedCount := 0
+		for i := 0; i < numItems; i++ {
+			switch rapid.IntRange(0, 2).Draw(t, "itemType") {
+			case 0:
+				items = append(items, rapid.String().Draw(t, "str"))
+				expectedCount++
+			case 1:
+				items = append(items, rapid.Int().Draw(t, "int"))
+			case 2:
+				items = append(items, rapid.Bool().Draw(t, "bool"))
+			}
+		}
+
+		claims := map[string]interface{}{"groups": items}
+		got := ClaimStringSlice(claims, "groups")
+
+		if len(got) != expectedCount {
+			t.Errorf("expected %d string items, got %d", expectedCount, len(got))
+		}
+		// Every returned item must be a non-empty extraction from the input
+		for _, s := range got {
+			found := false
+			for _, item := range items {
+				if str, ok := item.(string); ok && str == s {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("result %q not found in input", s)
+			}
+		}
+	})
+}
+
+// PBT: ClaimStringSlice never panics regardless of claim value type.
+func TestPBT_ClaimStringSlice_NeverPanics(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		valGen := rapid.Custom(func(t *rapid.T) interface{} {
+			switch rapid.IntRange(0, 5).Draw(t, "type") {
+			case 0:
+				return rapid.String().Draw(t, "s")
+			case 1:
+				return rapid.Int().Draw(t, "i")
+			case 2:
+				return []interface{}{rapid.String().Draw(t, "elem")}
+			case 3:
+				return []string{rapid.String().Draw(t, "elem")}
+			case 4:
+				return map[string]interface{}{rapid.String().Draw(t, "k"): nil}
+			default:
+				return nil
+			}
+		})
+
+		key := rapid.StringMatching(`^[a-z]{1,10}$`).Draw(t, "key")
+		claims := map[string]interface{}{key: valGen.Draw(t, "val")}
+
+		// Must not panic
+		_ = ClaimStringSlice(claims, key)
+	})
+}
+
+// PBT: Map format output is always sorted (deterministic iteration).
+func TestPBT_ClaimStringSlice_MapAlwaysSorted(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		numRoles := rapid.IntRange(0, 20).Draw(t, "numRoles")
+		roleMap := make(map[string]interface{}, numRoles)
+		for i := 0; i < numRoles; i++ {
+			key := rapid.StringMatching(`^[a-z]{2,12}$`).Draw(t, "role")
+			roleMap[key] = map[string]interface{}{}
+		}
+
+		claims := map[string]interface{}{"roles": roleMap}
+		got := ClaimStringSlice(claims, "roles")
+
+		for i := 1; i < len(got); i++ {
+			if got[i] < got[i-1] {
+				t.Fatalf("not sorted at index %d: %v", i, got)
+			}
+		}
+	})
+}
+
+// PBT: Zitadel end-to-end — random roles, allowedGroups check is consistent.
+func TestPBT_ZitadelRoles_AllowedGroupsConsistency(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		// Generate random Zitadel-style role map
+		numRoles := rapid.IntRange(1, 8).Draw(t, "numRoles")
+		roleMap := make(map[string]interface{}, numRoles)
+		allRoles := make([]string, 0, numRoles)
+		for i := 0; i < numRoles; i++ {
+			role := rapid.StringMatching(`^[a-z_]{2,12}$`).Draw(t, "role")
+			roleMap[role] = map[string]interface{}{"org_id": "123"}
+			allRoles = append(allRoles, role)
+		}
+
+		// Generate random allowed set (may or may not overlap)
+		numAllowed := rapid.IntRange(1, 5).Draw(t, "numAllowed")
+		allowedMap := make(map[string]bool, numAllowed)
+		for i := 0; i < numAllowed; i++ {
+			if rapid.Bool().Draw(t, "useExisting") && len(allRoles) > 0 {
+				idx := rapid.IntRange(0, len(allRoles)-1).Draw(t, "idx")
+				allowedMap[allRoles[idx]] = true
+			} else {
+				allowedMap[rapid.StringMatching(`^[a-z_]{2,12}$`).Draw(t, "newRole")] = true
+			}
+		}
+
+		claims := map[string]interface{}{"urn:zitadel:iam:org:project:roles": roleMap}
+		groups := ClaimStringSlice(claims, "urn:zitadel:iam:org:project:roles")
+
+		p := &OIDCProvider{allowedGroups: allowedMap}
+		err := p.checkAllowedGroups(groups)
+
+		// Compute expected: should pass iff any group is in allowedMap
+		shouldPass := false
+		for _, g := range groups {
+			if allowedMap[g] {
+				shouldPass = true
+				break
+			}
+		}
+
+		if shouldPass && err != nil {
+			t.Errorf("expected pass (overlap exists), got err: %v\nroles: %v, allowed: %v", err, groups, allowedMap)
+		}
+		if !shouldPass && err == nil {
+			t.Errorf("expected fail (no overlap), got nil\nroles: %v, allowed: %v", groups, allowedMap)
+		}
 	})
 }

@@ -145,7 +145,10 @@ func ClaimString(claims map[string]interface{}, key string) string {
 }
 
 // ClaimStringSlice extracts a string slice claim from the raw claims map.
-// Handles both []string and []interface{} formats.
+// Handles three formats:
+//   - []string (standard OIDC)
+//   - []interface{} (JSON-decoded array)
+//   - map[string]interface{} (Zitadel project roles, where keys are role names)
 func ClaimStringSlice(claims map[string]interface{}, key string) []string {
 	v, ok := claims[key]
 	if !ok {
@@ -162,7 +165,25 @@ func ClaimStringSlice(claims map[string]interface{}, key string) []string {
 		return result
 	case []string:
 		return val
+	case map[string]interface{}:
+		// Zitadel returns roles as: {"role_name": {"org_id": "..."}, ...}
+		// Extract map keys as the role/group names.
+		result := make([]string, 0, len(val))
+		for k := range val {
+			result = append(result, k)
+		}
+		sortStrings(result)
+		return result
 	default:
 		return nil
+	}
+}
+
+// sortStrings sorts a string slice in-place.
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j] < s[j-1]; j-- {
+			s[j], s[j-1] = s[j-1], s[j]
+		}
 	}
 }
