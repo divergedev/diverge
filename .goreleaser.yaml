@@ -2,7 +2,7 @@ version: 2
 project_name: diverge
 before:
   hooks:
-    - bash -c "cd web && npm ci && npm run build && cp -r dist/* ../internal/server/dashboard/dist/"
+    - bash -c "buf generate --template buf.gen.web.yaml && cd web && npm ci && npm run build && cp -r dist/* ../internal/server/dashboard/dist/"
 builds:
   - id: diverge-controller
     main: cmd/controller/main.go
