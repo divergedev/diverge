@@ -1,0 +1,48 @@
+version: "1"
+services:
+  gateway:
+    image:
+      repository: gateway
+      tag_template: "{{ .SHA }}"
+    entrypoint: true
+    paths:
+      - services/gateway
+    dependsOn:
+      - user-api
+      - order-api
+  user-api:
+    image:
+      repository: user-api
+      tag_template: "{{ .SHA }}"
+    paths:
+      - services/user-api
+    dependsOn:
+      - postgres
+  order-api:
+    image:
+      repository: order-api
+      tag_template: "{{ .SHA }}"
+    paths:
+      - services/order-api
+    dependsOn:
+      - postgres
+      - notification-svc
+  notification-svc:
+    image:
+      repository: notification-svc
+      tag_template: "{{ .SHA }}"
+    paths:
+      - services/notification-svc
+  postgres:
+    image:
+      repository: postgres
+      tag_template: "16"
+    paths:
+      - migrations
+
+defaults:
+  routing:
+    mode: header
+    domain: preview.example.com
+  deploy:
+    mode: delta
