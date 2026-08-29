@@ -181,7 +181,7 @@ nix develop -c make install
 nix develop -c make run
 ```
 
-Currently, the project contains **147 tests** utilizing table-driven tests, `testify/assert`, and Property-Based Testing (PBT) using the Hegel framework (`hegel.dev/go/hegel`).
+Currently, the project contains **943 tests** utilizing table-driven tests, `testify/assert`, and Property-Based Testing (PBT) using the Hegel framework (`hegel.dev/go/hegel`).
 
 ## Roadmap
 
@@ -193,9 +193,9 @@ Currently, the project contains **147 tests** utilizing table-driven tests, `tes
 - [x] **GitLab/GitHub Commit Statuses** — Merge gating via `diverge/preview` commit status checks
 - [x] **Schema-per-Environment** — SQL-based schema provisioning with SchemaProvider
 - [x] **Proto Foundation** — Protobuf domain types + ConnectRPC service definition
-- [ ] **Async Router** — Preview environments for event-driven backends (Kafka, Temporal)
-- [ ] **Subdomain Routing** — Browser-accessible frontend preview environments
-- [ ] **Slim Build** — Build tags to exclude ArgoCD/Temporal for smaller binaries
+- [x] **Async Router** — Kafka, Temporal, and Webhook providers with KEDA auto-scaling and SDK helpers
+- [x] **Subdomain Routing** — Browser-accessible frontend preview environments via wildcard DNS
+- [x] **Slim Build** — Build tags (no_knative, no_schema, no_temporal, no_kafka) for smaller binaries
 - [x] **ConnectRPC API Server** (#12) — gRPC/ConnectRPC API server for environment management
 - [ ] **WebSocket Support** (#6) — Full WebSocket proxying for real-time preview environments
 
