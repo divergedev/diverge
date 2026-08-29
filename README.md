@@ -17,7 +17,7 @@ Environment-as-a-service engine for Kubernetes. Diverge creates ephemeral previe
 ### Get Started
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/v0.6.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/v0.7.0/install.sh | sh
 ```
 
 Documentation: [https://divergedev.com](https://divergedev.com)
@@ -143,7 +143,7 @@ sh install.sh
 Or install via Go:
 
 ```bash
-go install github.com/divergedev/diverge/cmd/diverge@v0.6.0
+go install github.com/divergedev/diverge/cmd/diverge@v0.7.0
 ```
 
 ### Install via Helm (Kubernetes Operator)
@@ -158,7 +158,7 @@ helm install diverge diverge/diverge --namespace diverge-system --create-namespa
 
 The controller and proxy images are available at:
 ```bash
-docker pull ghcr.io/divergedev/diverge:v0.6.0
+docker pull ghcr.io/divergedev/diverge:v0.7.0
 ```
 
 Or download the binary from [Releases](https://github.com/divergedev/diverge/releases).
