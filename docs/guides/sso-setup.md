@@ -106,6 +106,65 @@ server:
 
 ---
 
+## Zitadel
+
+### 1. Create Application
+
+1. In the Zitadel Console, go to **Projects → Your Project → Applications → New**
+2. Application type: **Web**
+3. Authentication method: **PKCE** (or **Code**)
+4. Redirect URI: `https://diverge.example.com/auth/callback`
+5. Post-logout URI: `https://diverge.example.com/login`
+6. Copy the **Client ID**
+
+### 2. Configure Project Roles
+
+1. Go to **Projects → Your Project → Roles**
+2. Create roles for Diverge access (e.g., `developer`, `admin`, `viewer`)
+3. Go to **Projects → Your Project → Settings** and enable **Assert Roles on Authentication**
+4. Assign roles to users in **Users → Authorizations**
+
+> [!IMPORTANT]
+> Zitadel returns roles as a **map** in the JWT claim
+> `urn:zitadel:iam:org:project:roles`, not as a string array. Diverge v0.8.1+
+> handles this format natively by extracting the map keys as role names.
+
+### 3. Create Kubernetes Secret
+
+```bash
+kubectl create secret generic diverge-oidc-secret \
+  --namespace diverge \
+  --from-literal=clientSecret=your-zitadel-client-secret
+```
+
+### 4. Configure Helm Values
+
+```yaml
+server:
+  auth:
+    oidc:
+      enabled: true
+      issuerUrl: "https://your-instance.zitadel.cloud"
+      clientId: "your-diverge-client-id"
+      clientSecretSecretRef:
+        name: "diverge-oidc-secret"
+        key: "clientSecret"
+      redirectUrl: "https://diverge.example.com/auth/callback"
+      providerName: "Zitadel"
+      # Zitadel uses this claim for project roles (map format)
+      groupsClaim: "urn:zitadel:iam:org:project:roles"
+      # Optional: restrict access to specific roles
+      allowedGroups: "developer,admin"
+```
+
+### 5. Upgrade
+
+```bash
+helm upgrade diverge diverge/diverge -f values.yaml
+```
+
+---
+
 ## GitHub (via Dex)
 
 GitHub OAuth is **not** OIDC-compliant (it doesn't issue ID tokens). To use
