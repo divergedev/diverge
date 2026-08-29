@@ -109,6 +109,7 @@ func addCommands(root *cobra.Command, app *App) {
 	root.AddCommand(newVersionCmd(app))
 	root.AddCommand(newMCPCmd(app))
 	root.AddCommand(newGraphCmd(app))
+	root.AddCommand(newDiffCmd(app))
 }
 
 // ResolveNamespace resolves the namespace from the kubeconfig if not
