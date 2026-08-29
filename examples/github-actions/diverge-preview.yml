@@ -1,0 +1,199 @@
+name: Diverge Preview Environment
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+# Prevent concurrent workflow runs from racing on the same PR branch
+concurrency:
+  group: diverge-preview-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  DIVERGE_VERSION: "0.8.0"
+
+jobs:
+  # Deploy or update preview environment for active PRs
+  preview:
+    name: Deploy Preview Environment
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Full git history required for accurate base branch diffing
+
+      - name: Cache Diverge CLI
+        id: cache-diverge
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/bin/diverge
+          key: diverge-cli-${{ runner.os }}-${{ env.DIVERGE_VERSION }}
+
+      - name: Install Diverge CLI
+        if: steps.cache-diverge.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "${{ runner.temp }}/bin"
+          curl -sSL "https://github.com/divergedev/diverge/releases/download/v${DIVERGE_VERSION}/diverge_${DIVERGE_VERSION}_linux_amd64.tar.gz" | tar -xz -C "${{ runner.temp }}/bin" diverge
+          chmod +x "${{ runner.temp }}/bin/diverge"
+
+      - name: Add Diverge CLI to PATH
+        run: echo "${{ runner.temp }}/bin" >> $GITHUB_PATH
+
+      - name: Set up Kubernetes credentials
+        env:
+          KUBECONFIG_DATA: ${{ secrets.KUBECONFIG }}
+        run: |
+          mkdir -p ~/.kube
+          echo "$KUBECONFIG_DATA" | base64 -d > ~/.kube/config || echo "$KUBECONFIG_DATA" > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Detect changed services
+        id: diff
+        run: |
+          echo "Comparing branch against origin/main..."
+          DIFF_JSON=$(diverge diff --output json --base origin/main)
+          echo "diff_output=${DIFF_JSON}" >> $GITHUB_OUTPUT
+
+          SERVICES=$(echo "$DIFF_JSON" | jq -r '.services // [] | join(", ")')
+          COUNT=$(echo "$DIFF_JSON" | jq -r '.count // 0')
+          echo "changed_services=${SERVICES}" >> $GITHUB_OUTPUT
+          echo "changed_count=${COUNT}" >> $GITHUB_OUTPUT
+
+          echo "Changed services (${COUNT}): ${SERVICES}"
+
+      - name: Trace request routes for changed services
+        id: routes
+        run: |
+          ROUTES_LOG=""
+          SERVICES=$(echo '${{ steps.diff.outputs.diff_output }}' | jq -r '.services[]?')
+
+          if [ -z "$SERVICES" ]; then
+            echo "No services changed. Skipping route traces."
+            ROUTES_LOG="No services changed (delta deployment will reuse existing baseline services)."
+          else
+            for svc in $SERVICES; do
+              echo "::group::Route trace for $svc"
+              ROUTE_INFO=$(diverge route "$svc")
+              echo "$ROUTE_INFO"
+              ROUTES_LOG+=$'\n'"### Route for \`$svc\`"$'\n'"\`\`\`text"$'\n'"$ROUTE_INFO"$'\n'"\`\`\`"
+              echo "::endgroup::"
+            done
+          fi
+
+          # Output multiline summary to GITHUB_OUTPUT safely
+          {
+            echo "routes_summary<<EOF"
+            echo "$ROUTES_LOG"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Deploy preview environment
+        id: deploy
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          ENV_NAME="preview-mr-${PR_NUMBER}"
+          echo "Deploying preview environment: ${ENV_NAME}..."
+
+          # Create or update environment in delta mode
+          DEPLOY_OUTPUT=$(diverge create --mr "${PR_NUMBER}")
+          echo "$DEPLOY_OUTPUT"
+
+          # Extract preview URL from output or construct from domain
+          PREVIEW_URL=$(echo "$DEPLOY_OUTPUT" | grep -o 'https://[^ ]*' | head -n 1)
+          if [ -z "$PREVIEW_URL" ]; then
+            PREVIEW_URL="https://${ENV_NAME}.preview.example.com"
+          fi
+
+          echo "env_name=${ENV_NAME}" >> $GITHUB_OUTPUT
+          echo "preview_url=${PREVIEW_URL}" >> $GITHUB_OUTPUT
+
+      - name: Comment Preview URL on PR
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prNumber = context.issue.number;
+            const envName = '${{ steps.deploy.outputs.env_name }}';
+            const previewUrl = '${{ steps.deploy.outputs.preview_url }}';
+            const changedServices = '${{ steps.diff.outputs.changed_services }}' || 'None (baseline reused)';
+            const changedCount = '${{ steps.diff.outputs.changed_count }}';
+            const routesSummary = `${{ steps.routes.outputs.routes_summary }}`;
+
+            const commentIdentifier = '<!-- diverge-preview-comment -->';
+            const body = `${commentIdentifier}
+            ## 🚀 Diverge Preview Environment
+
+            | Property | Value |
+            |---|---|
+            | **Environment** | \`${envName}\` |
+            | **Preview URL** | [${previewUrl}](${previewUrl}) |
+            | **Changed Services (${changedCount})** | \`${changedServices}\` |
+            | **Deploy Mode** | \`delta\` (only modified services deployed) |
+
+            <details>
+            <summary><b>🔍 Request Route Traces</b></summary>
+
+            ${routesSummary}
+
+            </details>
+
+            ---
+            *Updated automatically for commit \`${context.sha.substring(0, 7)}\`.*`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+            });
+
+            const existingComment = comments.find(c => c.body && c.body.includes(commentIdentifier));
+
+            if (existingComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existingComment.id,
+                body: body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: body,
+              });
+            }
+
+  # Automatically teardown preview environment when PR is closed or merged
+  cleanup:
+    name: Teardown Preview Environment
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Kubernetes credentials
+        env:
+          KUBECONFIG_DATA: ${{ secrets.KUBECONFIG }}
+        run: |
+          mkdir -p ~/.kube
+          echo "$KUBECONFIG_DATA" | base64 -d > ~/.kube/config || echo "$KUBECONFIG_DATA" > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Install Diverge CLI
+        run: |
+          mkdir -p /tmp/bin
+          curl -sSL "https://github.com/divergedev/diverge/releases/download/v${DIVERGE_VERSION}/diverge_${DIVERGE_VERSION}_linux_amd64.tar.gz" | tar -xz -C /tmp/bin diverge
+          chmod +x /tmp/bin/diverge
+          echo "/tmp/bin" >> $GITHUB_PATH
+
+      - name: Delete preview environment
+        run: |
+          ENV_NAME="preview-mr-${{ github.event.pull_request.number }}"
+          echo "Tearing down preview environment: ${ENV_NAME}"
+          diverge delete "${ENV_NAME}" || true

@@ -25,6 +25,8 @@ Documentation: [https://divergedev.com](https://divergedev.com)
 - [Observability Guide](docs/guides/observability.md)
 - [MCP Server Guide](docs/guides/mcp-server.md)
 - [CLI Reference](docs/guides/cli-reference.md)
+- [Topology & Route Simulation](docs/guides/cli-reference.md#diverge-route)
+- [Header Propagation](docs/header-propagation.md)
 
 ## Try It
 
@@ -60,6 +62,9 @@ diverge dev --service my-app
 *   **Multi-SCM Notifiers**: GitLab MR comments and GitHub PR comments with status updates.
 *   **E2E Tested**: Dual-cluster end-to-end tests with k3d, Envoy Gateway, and real CRD reconciliation.
 *   **ConnectRPC API Server**: Opt-in API server (`server.enabled: true` in Helm) featuring ConnectRPC (HTTP/1.1 + HTTP/2, browser-native, curlable), OIDC JWT + K8s TokenReview authentication, namespace-scoped RBAC authorization, structured audit logging, list pagination, optimistic concurrency, and CORS for browser/SPA clients.
+*   **Service Topology & Route Simulation**: `diverge route <service>` traces request paths through your service graph. `diverge graph show` renders the topology as Mermaid, DOT, or JSON.
+*   **Changed-Service Detection**: `diverge diff` identifies which services are affected by your code changes using git diff + path-based service mapping. Outputs JSON for CI integration.
+*   **Prometheus Topology Discovery**: Auto-discovers service dependencies from Istio, Linkerd, or Cilium mesh metrics. Background cache with stale-while-revalidate for zero-latency CLI responses.
 
 ### Async Routing
 

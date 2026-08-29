@@ -11,16 +11,68 @@ The `.diverge.yaml` file is placed in the root of your application repository. I
 | `version` | string | `v1` | The schema version of the configuration file. |
 | `services` | map[string]Service | `{}` | A map where the key is the service name and the value contains the configuration for that service. |
 | `services.<name>.path` | string | `""` | A glob pattern defining which file paths trigger a redeployment of this service. |
+| `services.<name>.dependsOn` | list[string] | `[]` | List of services that this service calls at runtime. Used for topology graph resolution. |
+| `services.<name>.entrypoint` | bool | `false` | Marks this service as an ingress gateway / entrypoint for request path resolution. |
+| `topology` | TopologyConfig | `{}` | Configuration for dynamic topology discovery and service mesh integration. |
+| `topology.prometheus` | PrometheusConfig | `{}` | Prometheus discovery configuration for inferring runtime service dependencies. |
+
+### Topology Configuration
+
+Diverge can dynamically discover service topology from Prometheus metrics emitted by service meshes (such as Istio, Linkerd, or Cilium) or Kubernetes Gateway API resources.
+
+```yaml
+topology:
+  prometheus:
+    url: http://prometheus.monitoring:9090
+    # Authentication (pick one)
+    tokenEnv: PROMETHEUS_TOKEN        # read bearer token from env var
+    tokenFile: /var/run/secrets/token  # or read from file
+    # TLS
+    caBundle: /etc/ssl/certs/ca.pem
+    insecureTLS: false
+    # Cache
+    ttl: 5m          # how long cached topology is fresh
+    staleTTL: 30s    # serve stale while refreshing in background
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `topology.prometheus.url` | string | `""` | URL of the Prometheus server endpoint. |
+| `topology.prometheus.tokenEnv` | string | `""` | Environment variable name containing bearer token for authentication. |
+| `topology.prometheus.tokenFile` | string | `""` | Path to a file containing bearer token for authentication. |
+| `topology.prometheus.caBundle` | string | `""` | Path to custom CA certificate bundle for TLS verification. |
+| `topology.prometheus.insecureTLS` | bool | `false` | Skip TLS certificate verification when connecting to Prometheus. |
+| `topology.prometheus.ttl` | string | `5m` | Duration string indicating how long cached topology is considered fresh. |
+| `topology.prometheus.staleTTL` | string | `30s` | Duration string for serving stale cached data while refreshing in background. |
 
 ### Example
 
 ```yaml
 version: v1
 services:
+  gateway:
+    entrypoint: true
+    path: services/gateway/**
+    dependsOn:
+      - auth-service
+      - payment-service
   auth-service:
     path: services/auth/**
   payment-service:
     path: services/payment/**
+    dependsOn:
+      - ledger-service
+  ledger-service:
+    path: services/ledger/**
+
+topology:
+  prometheus:
+    url: http://prometheus.monitoring:9090
+    tokenEnv: PROMETHEUS_TOKEN
+    caBundle: /etc/ssl/certs/ca.pem
+    insecureTLS: false
+    ttl: 5m
+    staleTTL: 30s
 ```
 
 ## Environment CRD Reference
