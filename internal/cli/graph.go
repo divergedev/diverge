@@ -8,6 +8,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/manifoldco/promptui"
+	"golang.org/x/term"
+
 	"github.com/divergedev/diverge/internal/config"
 	"github.com/divergedev/diverge/pkg/topology"
 )
@@ -48,9 +51,20 @@ func buildGraphFromConfig(cfg *config.Config) *topology.ServiceGraph {
 	return g
 }
 
+func renderTree(g *topology.ServiceGraph, w io.Writer) {
+	_, _ = fmt.Fprintf(w, "Service Graph (source: static)\n")
+	eps := g.Entrypoints()
+	for _, ep := range eps {
+		_, _ = fmt.Fprintf(w, "  ● %s (entrypoint)\n", ep)
+		printTree(w, g, ep, "    ", make(map[string]bool))
+	}
+}
+
 func newGraphShowCmd(app *App) *cobra.Command {
 	var configPath string
 	var service string
+	var output string
+	var gateway string
 
 	cmd := &cobra.Command{
 		Use:   "show",
@@ -70,9 +84,58 @@ func newGraphShowCmd(app *App) *cobra.Command {
 			g := buildGraphFromConfig(cfg)
 			out := cmd.OutOrStdout()
 
+			if output != "text" {
+				switch GraphFormat(output) {
+				case FormatMermaid:
+					return RenderMermaid(g, out)
+				case FormatDot:
+					return RenderDot(g, out)
+				case FormatJSON:
+					return RenderJSON(g, out)
+				default:
+					return fmt.Errorf("unsupported output format: %s", output)
+				}
+			}
+
 			if service != "" {
-				_, _ = fmt.Fprintf(out, "Ingress paths to %s:\n", service)
 				paths := g.AllIngressPaths(service)
+
+				if gateway == "" && term.IsTerminal(int(os.Stdout.Fd())) {
+					// Check if multiple gateways exist in the paths
+					gatewaySet := make(map[string]bool)
+					for _, p := range paths {
+						if len(p.Hops) > 0 {
+							gatewaySet[p.Hops[0]] = true
+						}
+					}
+					var gateways []string
+					for gw := range gatewaySet {
+						gateways = append(gateways, gw)
+					}
+					if len(gateways) > 1 {
+						prompt := promptui.Select{
+							Label: "Multiple gateways found. Select gateway to filter",
+							Items: gateways,
+						}
+						_, result, err := prompt.Run()
+						if err != nil {
+							return fmt.Errorf("prompt failed: %w", err)
+						}
+						gateway = result
+					}
+				}
+
+				if gateway != "" {
+					var filtered []topology.IngressPath
+					for _, p := range paths {
+						if len(p.Hops) > 0 && p.Hops[0] == gateway {
+							filtered = append(filtered, p)
+						}
+					}
+					paths = filtered
+				}
+
+				_, _ = fmt.Fprintf(out, "Ingress paths to %s:\n", service)
 				if len(paths) == 0 {
 					_, _ = fmt.Fprintf(out, "  (none)\n")
 				} else {
@@ -110,12 +173,7 @@ func newGraphShowCmd(app *App) *cobra.Command {
 				return nil
 			}
 
-			_, _ = fmt.Fprintf(out, "Service Graph (source: static)\n")
-			eps := g.Entrypoints()
-			for _, ep := range eps {
-				_, _ = fmt.Fprintf(out, "  ● %s (entrypoint)\n", ep)
-				printTree(out, g, ep, "    ", make(map[string]bool))
-			}
+			renderTree(g, out)
 
 			return nil
 		},
@@ -123,6 +181,8 @@ func newGraphShowCmd(app *App) *cobra.Command {
 
 	cmd.Flags().StringVar(&configPath, "config", ".diverge.yaml", "path to config file")
 	cmd.Flags().StringVar(&service, "service", "", "show ingress paths for a specific service")
+	cmd.Flags().StringVarP(&output, "output", "o", "text", "output format (text, mermaid, dot, json)")
+	cmd.Flags().StringVar(&gateway, "gateway", "", "filter ingress paths to specific entrypoint")
 
 	return cmd
 }

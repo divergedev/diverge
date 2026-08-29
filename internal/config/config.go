@@ -17,6 +17,7 @@ type Config struct {
 	Environments   map[string]EnvironmentType `yaml:"environments"`
 	LabelOverrides map[string]LabelOverride   `yaml:"label_overrides"`
 	Notifications  NotificationConfig         `yaml:"notifications"`
+	Topology       TopologyConfig             `yaml:"topology,omitempty"`
 }
 
 var ErrConfigNotFound = errors.New("config not found")
@@ -95,6 +96,23 @@ type NotificationConfig struct {
 	CommentOnCreate  bool   `yaml:"comment_on_create"`
 	CommentOnReady   bool   `yaml:"comment_on_ready"`
 	CommentOnDestroy bool   `yaml:"comment_on_destroy"`
+}
+
+type TopologyConfig struct {
+	Prometheus *PrometheusConfig `yaml:"prometheus,omitempty"`
+}
+
+type PrometheusConfig struct {
+	Address        string   `yaml:"address,omitempty"`
+	TokenEnv       string   `yaml:"tokenEnv,omitempty"`
+	TokenFile      string   `yaml:"tokenFile,omitempty"`
+	CABundle       string   `yaml:"caBundle,omitempty"`
+	InsecureTLS    bool     `yaml:"insecureTLS,omitempty"`
+	PollInterval   string   `yaml:"pollInterval,omitempty"`
+	CacheTTL       string   `yaml:"cacheTTL,omitempty"`
+	MeshType       string   `yaml:"meshType,omitempty"`
+	LookbackWindow string   `yaml:"lookbackWindow,omitempty"`
+	Namespaces     []string `yaml:"namespaces,omitempty"`
 }
 
 // ResolvedSettings represents a fully resolved environment configuration
