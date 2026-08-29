@@ -62,7 +62,7 @@ func (g *ServiceGraph) AddEntrypoint(service string) {
 	g.nodes[service] = true
 }
 
-// Edges returns all non-tombstone edges.
+// Edges returns all non-tombstone edges sorted by From, then To.
 func (g *ServiceGraph) Edges() []Edge {
 	var allEdges []Edge
 	for _, edges := range g.edges {
@@ -72,6 +72,12 @@ func (g *ServiceGraph) Edges() []Edge {
 			}
 		}
 	}
+	sort.Slice(allEdges, func(i, j int) bool {
+		if allEdges[i].From != allEdges[j].From {
+			return allEdges[i].From < allEdges[j].From
+		}
+		return allEdges[i].To < allEdges[j].To
+	})
 	return allEdges
 }
 

@@ -76,8 +76,8 @@ func TestFormatJSON(t *testing.T) {
 	assert.Contains(t, res.Entrypoints, "gateway")
 
 	assert.Len(t, res.Edges, 2)
-	assert.Equal(t, "gateway", res.Edges[0].From)
-	assert.Equal(t, "api", res.Edges[0].To)
-	assert.Equal(t, "api", res.Edges[1].From)
-	assert.Equal(t, "payments", res.Edges[1].To)
+	assert.Equal(t, "api", res.Edges[0].From)
+	assert.Equal(t, "payments", res.Edges[0].To)
+	assert.Equal(t, "gateway", res.Edges[1].From)
+	assert.Equal(t, "api", res.Edges[1].To)
 }
