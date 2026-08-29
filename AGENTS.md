@@ -60,8 +60,8 @@ Slim builds are available with build tags: `no_knative`, `no_schema`, `no_tempor
 - We use Property-Based Testing (PBT) with `pgregory.net/rapid`.
 - Packages with PBTs: `auth`, `proxy`, `webhook`, `controller`, `routing`, `argocd`, `api/v1alpha1`, `database`, `notifier`, `changeset`, `cli`, `topology`, `async`, `server/streaming`, `cache`, `session`.
 - Currently passing **943 tests**.
-- Config YAML tests **must** include `version: "1"` (strict decoding).
-- Config YAML tags are **camelCase** (`dependsOn` not `depends_on`).
+- Config YAML tests **must** include `version: "1"` (strict decoding with `KnownFields(true)`).
+- Config YAML tags use **snake_case** for most fields (`tag_template`, `header_key`, `baseline_namespace`) but **camelCase** for newer fields (`dependsOn`, `asyncRoutes`, `tagTemplate` is NOT valid — use `tag_template`).
 
 ## Conventions
 
@@ -94,6 +94,8 @@ Slim builds are available with build tags: `no_knative`, `no_schema`, `no_tempor
 - **GoReleaser**: Builds 4 binaries (controller, server, proxy, CLI) × 2 OS × 2 arch + slim variants. Dashboard built via `before.hooks` (buf generate + npm build). Docker images pushed to `ghcr.io/divergedev/diverge`.
 - **Pre-push guards**: `check-test-files` (every .go needs _test.go), `check-generated-stale` (runs make generate + git diff), `golangci-lint`, `go-test`.
 
-## Open Issues / Coming Next
+## Supported Protocols
 
-- **WebSocket Support** (#6) — Dedicated WebSocket proxying with header injection for preview routing
+- **HTTP/1.1 and HTTP/2** — via Gateway API HTTPRoute
+- **gRPC** — via Gateway API GRPCRoute (`protocol: grpc` in service config)
+- **WebSocket** — via HTTPRoute with `spec.serviceConfig.webSocket.enabled`, path matching, and configurable timeouts

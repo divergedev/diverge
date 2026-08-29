@@ -197,7 +197,8 @@ Currently, the project contains **943 tests** utilizing table-driven tests, `tes
 - [x] **Subdomain Routing** — Browser-accessible frontend preview environments via wildcard DNS
 - [x] **Slim Build** — Build tags (no_knative, no_schema, no_temporal, no_kafka) for smaller binaries
 - [x] **ConnectRPC API Server** (#12) — gRPC/ConnectRPC API server for environment management
-- [ ] **WebSocket Support** (#6) — Full WebSocket proxying for real-time preview environments
+- [x] **WebSocket Support** (#6) — WebSocket proxy routing via Gateway API HTTPRoute with path matching and configurable timeouts
+- [x] **gRPC Routing** — Gateway API GRPCRoute generation for gRPC services (`protocol: grpc`)
 
 ## License
 Apache 2.0
