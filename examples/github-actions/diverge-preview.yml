@@ -13,9 +13,6 @@ permissions:
   contents: read
   pull-requests: write
 
-env:
-  DIVERGE_VERSION: "0.8.1"
-
 jobs:
   # Deploy or update preview environment for active PRs
   preview:
@@ -28,22 +25,8 @@ jobs:
         with:
           fetch-depth: 0 # Full git history required for accurate base branch diffing
 
-      - name: Cache Diverge CLI
-        id: cache-diverge
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/bin/diverge
-          key: diverge-cli-${{ runner.os }}-${{ env.DIVERGE_VERSION }}
-
       - name: Install Diverge CLI
-        if: steps.cache-diverge.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p "${{ runner.temp }}/bin"
-          curl -sSL "https://github.com/divergedev/diverge/releases/download/v${DIVERGE_VERSION}/diverge_${DIVERGE_VERSION}_linux_amd64.tar.gz" | tar -xz -C "${{ runner.temp }}/bin" diverge
-          chmod +x "${{ runner.temp }}/bin/diverge"
-
-      - name: Add Diverge CLI to PATH
-        run: echo "${{ runner.temp }}/bin" >> $GITHUB_PATH
+        uses: divergedev/setup-diverge@v1
 
       - name: Set up Kubernetes credentials
         env:
@@ -177,6 +160,9 @@ jobs:
     if: github.event.action == 'closed'
     runs-on: ubuntu-latest
     steps:
+      - name: Install Diverge CLI
+        uses: divergedev/setup-diverge@v1
+
       - name: Set up Kubernetes credentials
         env:
           KUBECONFIG_DATA: ${{ secrets.KUBECONFIG }}
@@ -184,13 +170,6 @@ jobs:
           mkdir -p ~/.kube
           echo "$KUBECONFIG_DATA" | base64 -d > ~/.kube/config || echo "$KUBECONFIG_DATA" > ~/.kube/config
           chmod 600 ~/.kube/config
-
-      - name: Install Diverge CLI
-        run: |
-          mkdir -p /tmp/bin
-          curl -sSL "https://github.com/divergedev/diverge/releases/download/v${DIVERGE_VERSION}/diverge_${DIVERGE_VERSION}_linux_amd64.tar.gz" | tar -xz -C /tmp/bin diverge
-          chmod +x /tmp/bin/diverge
-          echo "/tmp/bin" >> $GITHUB_PATH
 
       - name: Delete preview environment
         run: |

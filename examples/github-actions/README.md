@@ -49,17 +49,21 @@ permissions:
 ```
 > **Note**: `fetch-depth: 0` ensures the full commit history is retrieved so `diverge diff` can accurately compare the PR branch against `origin/main`.
 
-### 2. CLI Caching & Installation
+### 2. Install Diverge CLI
 
-The workflow caches the `diverge` binary using `actions/cache@v4` keyed by the OS and version to minimize CI build times.
+The workflow uses the official [`divergedev/setup-diverge`](https://github.com/divergedev/setup-diverge) action to install and cache the CLI:
 
 ```yaml
-- name: Cache Diverge CLI
-  id: cache-diverge
-  uses: actions/cache@v4
+- name: Install Diverge CLI
+  uses: divergedev/setup-diverge@v1
+```
+
+The action automatically resolves the latest release, caches the binary per OS/arch/version, and adds it to `PATH`. To pin a specific version:
+
+```yaml
+- uses: divergedev/setup-diverge@v1
   with:
-    path: ${{ runner.temp }}/bin/diverge
-    key: diverge-cli-${{ runner.os }}-${{ env.DIVERGE_VERSION }}
+    version: '0.8.2'
 ```
 
 ### 3. Change Detection (`diverge diff`)
