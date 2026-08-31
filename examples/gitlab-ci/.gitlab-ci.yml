@@ -6,17 +6,11 @@ stages:
   - cleanup
 
 variables:
-  DIVERGE_VERSION: "0.8.1"
   REGISTRY: ${CI_REGISTRY_IMAGE}
 
-# ─── CLI Installation (reusable) ─────────────────────────────────────────────
-.diverge-cli:
-  before_script:
-    - |
-      if [ ! -f /usr/local/bin/diverge ]; then
-        apk add --no-cache curl tar jq 2>/dev/null || apt-get update && apt-get install -y curl tar jq 2>/dev/null || true
-        curl -sSL "https://github.com/divergedev/diverge/releases/download/v${DIVERGE_VERSION}/diverge_${DIVERGE_VERSION}_linux_amd64.tar.gz" | tar xz -C /usr/local/bin diverge
-      fi
+# All jobs that need the Diverge CLI use this image (git, curl, jq included)
+default:
+  image: ghcr.io/divergedev/diverge-cli:v0.8.2
 
 # ─── Build ───────────────────────────────────────────────────────────────────
 build:
@@ -39,8 +33,6 @@ build:
 # ─── Analyze: Change Detection + Route Tracing ──────────────────────────────
 analyze:
   stage: analyze
-  image: alpine:latest
-  extends: .diverge-cli
   script:
     - echo "Comparing ${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME} against origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}..."
 
@@ -79,8 +71,6 @@ analyze:
 # ─── Deploy Preview Environment ─────────────────────────────────────────────
 preview:deploy:
   stage: preview
-  image: alpine:latest
-  extends: .diverge-cli
   script:
     - ENV_NAME="preview-mr-${CI_MERGE_REQUEST_IID}"
     - echo "Deploying preview environment ${ENV_NAME}..."
@@ -172,8 +162,6 @@ test:preview:
 # ─── Cleanup on MR Close/Merge ──────────────────────────────────────────────
 cleanup:
   stage: cleanup
-  image: alpine:latest
-  extends: .diverge-cli
   script:
     - ENV_NAME="preview-mr-${CI_MERGE_REQUEST_IID}"
     - echo "Tearing down preview environment ${ENV_NAME}..."

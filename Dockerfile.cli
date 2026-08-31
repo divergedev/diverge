@@ -1,0 +1,6 @@
+FROM alpine:3.20
+RUN apk add --no-cache git curl jq bash \
+    && adduser -D -u 1000 diverge
+COPY diverge /usr/local/bin/diverge
+USER 1000:1000
+ENTRYPOINT ["diverge"]

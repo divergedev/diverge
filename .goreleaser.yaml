@@ -226,6 +226,28 @@ dockers:
       - "--platform=linux/arm64"
     goos: linux
     goarch: arm64
+  - id: diverge-cli-amd64
+    image_templates:
+      - "ghcr.io/divergedev/diverge-cli:{{ .Tag }}-amd64"
+    dockerfile: Dockerfile.cli
+    use: buildx
+    ids:
+      - diverge
+    build_flag_templates:
+      - "--platform=linux/amd64"
+    goos: linux
+    goarch: amd64
+  - id: diverge-cli-arm64
+    image_templates:
+      - "ghcr.io/divergedev/diverge-cli:{{ .Tag }}-arm64"
+    dockerfile: Dockerfile.cli
+    use: buildx
+    ids:
+      - diverge
+    build_flag_templates:
+      - "--platform=linux/arm64"
+    goos: linux
+    goarch: arm64
 docker_manifests:
   - name_template: "ghcr.io/divergedev/diverge:{{ .Tag }}"
     image_templates:
@@ -251,6 +273,14 @@ docker_manifests:
     image_templates:
       - "ghcr.io/divergedev/activator-proxy:{{ .Tag }}-amd64"
       - "ghcr.io/divergedev/activator-proxy:{{ .Tag }}-arm64"
+  - name_template: "ghcr.io/divergedev/diverge-cli:{{ .Tag }}"
+    image_templates:
+      - "ghcr.io/divergedev/diverge-cli:{{ .Tag }}-amd64"
+      - "ghcr.io/divergedev/diverge-cli:{{ .Tag }}-arm64"
+  - name_template: "ghcr.io/divergedev/diverge-cli:latest"
+    image_templates:
+      - "ghcr.io/divergedev/diverge-cli:{{ .Tag }}-amd64"
+      - "ghcr.io/divergedev/diverge-cli:{{ .Tag }}-arm64"
 checksum:
   name_template: 'checksums.txt'
   algorithm: sha256
