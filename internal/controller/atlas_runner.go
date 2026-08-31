@@ -16,7 +16,7 @@ import (
 )
 
 // ensureAtlasCR creates or updates an AtlasMigration or AtlasSchema CR.
-func (r *PreviewGroupReconciler) ensureAtlasCR(ctx context.Context, env *divergeiov1alpha1.Environment, dbResult *database.DatabaseResult) error {
+func (r *EnvironmentReconciler) ensureAtlasCR(ctx context.Context, env *divergeiov1alpha1.Environment, dbResult *database.DatabaseResult) error {
 	logger := log.FromContext(ctx)
 	atlasSpec := env.Spec.Database.Atlas
 

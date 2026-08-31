@@ -198,7 +198,6 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 		// Create or update
 		var existingEnv divergeiov1alpha1.Environment
-		isNew := false
 		err := r.Get(ctx, types.NamespacedName{Name: envName, Namespace: targetNS}, &existingEnv)
 		if err != nil {
 			if !apierrors.IsNotFound(err) {
@@ -225,7 +224,6 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			svcStatus.Message = "Environment created"
 			svcStatus.ChangedServices = desiredEnv.Spec.Deploy.ChangedServices
 			existingEnv = *desiredEnv
-			isNew = true
 		} else {
 			// Update — sync spec if changed
 			if r.needsUpdate(&existingEnv, desiredEnv) {
@@ -249,49 +247,6 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 						break
 					}
 				}
-			}
-		}
-
-		// Provision database if configured
-		var dbRes *database.DatabaseResult
-		if existingEnv.Spec.Database.Mode != "" && r.DatabaseProvider != nil {
-			dbCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-			res, err := r.DatabaseProvider.Provision(dbCtx, &existingEnv)
-			cancel()
-			if err != nil {
-				logger.Error(err, "failed to provision database for child Environment")
-			} else {
-				dbRes = res
-				if isNew && res != nil && len(res.EnvVars) > 0 {
-					for k, v := range res.EnvVars {
-						existingEnv.Spec.ServiceConfig.Env = append(existingEnv.Spec.ServiceConfig.Env, divergeiov1alpha1.EnvVar{
-							Name:  k,
-							Value: v,
-						})
-					}
-					if err := r.Update(ctx, &existingEnv); err != nil {
-						logger.Error(err, "failed to update child Environment with database env vars")
-					}
-				}
-			}
-		}
-
-		// Run database migrations
-		if dbRes != nil {
-			if err := r.runMigrations(ctx, &existingEnv, dbRes); err != nil {
-				if errors.Is(err, ErrHookInProgress) {
-					requeue = true
-					svcStatus.Phase = divergeiov1alpha1.PhaseDeploying
-					svcStatus.Reason = "MigrationRunning"
-					svcStatus.Message = "Migration is currently running"
-				} else {
-					logger.Error(err, "migration failed for child Environment")
-					svcStatus.Phase = divergeiov1alpha1.PhaseFailed
-					svcStatus.Reason = "MigrationFailed"
-					svcStatus.Message = fmt.Sprintf("Migration failed: %v", err)
-				}
-				serviceStatuses = append(serviceStatuses, svcStatus)
-				continue
 			}
 		}
 
@@ -406,6 +361,10 @@ func (r *PreviewGroupReconciler) handleTeardown(ctx context.Context, pg *diverge
 	}
 
 	r.Recorder.Event(pg, "Normal", "Terminating", "Teardown started")
+
+	if err := r.cleanupRoutesAndEndpoints(ctx, pg.Name); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	// List all child Environments
 	children, err := r.listChildEnvironments(ctx, pg)

@@ -43,9 +43,19 @@ func TestSchemaDatabaseProvider_Provision(t *testing.T) {
 	assert.Contains(t, res.SetupSQL, "SET LOCAL search_path TO preview_test_env, public;")
 	assert.Contains(t, res.SetupSQL, "ALTER TABLE %I.%I ALTER COLUMN %I SET DEFAULT %s")
 	assert.Contains(t, res.SetupSQL, "CREATE SEQUENCE IF NOT EXISTS %I.%I")
-	assert.Equal(t, "postgres://admin@localhost/db?search_path=preview_test_env,public", res.DSN)
-	assert.Equal(t, "postgres://admin@localhost/db?search_path=preview_test_env,public", res.EnvVars["DATABASE_URL"])
+
+	// S1: DSN must use per-schema restricted role, NOT admin credentials
+	assert.Contains(t, res.DSN, "diverge_preview_preview_test_env:")
+	assert.Contains(t, res.DSN, "search_path=preview_test_env,public")
+	assert.NotContains(t, res.DSN, "admin", "DSN must not contain admin credentials")
+	assert.Contains(t, res.EnvVars["DATABASE_URL"], "diverge_preview_preview_test_env:")
+	assert.NotContains(t, res.EnvVars["DATABASE_URL"], "admin", "DATABASE_URL must not contain admin credentials")
 	assert.Equal(t, "preview_test_env", res.EnvVars["DIVERGE_PREVIEW_SCHEMA"])
+
+	// Verify role creation SQL
+	assert.Contains(t, res.SetupSQL, "CREATE ROLE")
+	assert.Contains(t, res.SetupSQL, "GRANT USAGE ON SCHEMA")
+	assert.Contains(t, res.SetupSQL, "GRANT ALL ON ALL TABLES IN SCHEMA")
 }
 
 func TestSchemaDatabaseProvider_Provision_EmptyName(t *testing.T) {
@@ -150,4 +160,71 @@ func TestSchemaDatabaseProvider_Provision_Concurrent(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+func TestSchemaDatabaseProvider_Provision_Idempotent(t *testing.T) {
+	mockExec := &recordingExecutor{}
+	provider := &SchemaDatabaseProvider{AdminDSN: "postgres://admin@localhost/db", Executor: mockExec}
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-env"},
+	}
+
+	res1, err := provider.Provision(context.Background(), env)
+	assert.NoError(t, err)
+	assert.True(t, res1.Ready)
+
+	res2, err := provider.Provision(context.Background(), env)
+	assert.NoError(t, err)
+	assert.True(t, res2.Ready)
+
+	// Assert both DSNs contain the same role name
+	assert.Contains(t, res1.DSN, "diverge_preview_preview_test_env")
+	assert.Contains(t, res2.DSN, "diverge_preview_preview_test_env")
+
+	// Assert SetupSQL contains IF NOT EXISTS
+	assert.Contains(t, res1.SetupSQL, "IF NOT EXISTS")
+}
+
+func TestSafeRoleName_Short(t *testing.T) {
+	res := safeRoleName("test_env")
+	assert.LessOrEqual(t, len(res), 63)
+	assert.Equal(t, "diverge_preview_test_env", res)
+}
+
+func TestSafeRoleName_Long(t *testing.T) {
+	// 60 chars
+	schema := strings.Repeat("a", 60)
+	res := safeRoleName(schema)
+	assert.LessOrEqual(t, len(res), 63)
+	assert.True(t, strings.HasPrefix(res, "diverge_preview_"))
+
+	// Has hash suffix (8 hex chars)
+	parts := strings.Split(res, "_")
+	hashPart := parts[len(parts)-1]
+	assert.Equal(t, 8, len(hashPart))
+}
+
+func TestSafeRoleName_Deterministic(t *testing.T) {
+	schema := strings.Repeat("a", 60)
+	res1 := safeRoleName(schema)
+	res2 := safeRoleName(schema)
+	assert.Equal(t, res1, res2)
+}
+
+func TestBuildWorkloadDSN_URLForm(t *testing.T) {
+	adminDSN := "postgres://admin:pass@localhost/db?sslmode=disable"
+	res := buildWorkloadDSN(adminDSN, "my_role", "my_pass", "my_schema")
+	assert.Contains(t, res, "my_role")
+	assert.Contains(t, res, "my_pass")
+	assert.NotContains(t, res, "admin")
+	assert.Contains(t, res, "search_path=my_schema")
+}
+
+func TestBuildWorkloadDSN_KeywordValueForm(t *testing.T) {
+	adminDSN := "user=admin password=admin host=localhost dbname=db"
+	res := buildWorkloadDSN(adminDSN, "my_role", "my_pass", "my_schema")
+	assert.Contains(t, res, "user=my_role")
+	assert.Contains(t, res, "password=my_pass")
+	assert.Contains(t, res, "search_path=my_schema")
+	assert.NotContains(t, res, "admin")
 }

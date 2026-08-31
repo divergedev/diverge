@@ -3,6 +3,7 @@ kind: Deployment
 metadata:
   name: {{ include "diverge.fullname" . }}-controller-manager
   labels:
+    {{- include "diverge.labels" . | nindent 4 }}
     control-plane: controller-manager
 spec:
   replicas: {{ .Values.replicaCount }}
@@ -12,6 +13,7 @@ spec:
   template:
     metadata:
       labels:
+        {{- include "diverge.selectorLabels" . | nindent 8 }}
         control-plane: controller-manager
     spec:
       serviceAccountName: {{ .Values.serviceAccount.name | default (include "diverge.fullname" .) }}
@@ -108,3 +110,16 @@ spec:
       - name: webhook-tls
         secret:
           secretName: {{ .Values.webhook.tlsSecretName | default "diverge-webhook-tls" }}
+          optional: true
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: ghcr.io/divergedev/diverge
-  tag: "v0.4.0"
+  tag: ""  # defaults to .Chart.AppVersion
   pullPolicy: IfNotPresent
 
 routingProvider: gateway  # gateway or istio
@@ -41,7 +41,7 @@ grafana:
 
 prometheus:
   alerts:
-    enabled: true
+    enabled: false  # requires Prometheus Operator CRDs (monitoring.coreos.com)
 
 webhook:
   port: 9443
@@ -103,7 +103,7 @@ activatorProxy:
   replicas: 1
   image:
     repository: ghcr.io/divergedev/activator-proxy
-    tag: v0.4.0
+    tag: ""  # defaults to .Chart.AppVersion
   port: 8080
   activatorUrl: ""
   targetNamespace: "default"
@@ -175,9 +175,10 @@ server:
         name: ""
         key: "session-secret"
   cors:
-    # WARNING: Default "*" allows all origins. In production, set this to your
-    # specific domain(s) to prevent unauthorized cross-origin access.
+    # WARNING: When AllowCredentials is true, you MUST set specific origins.
+    # Using "*" with credentials is a CSRF vulnerability.
     allowedOrigins: "*"
+    allowCredentials: false  # set to true only with explicit origins
     maxAge: 86400
   dashboard:
     # -- Enable the embedded web dashboard at /
@@ -196,3 +197,13 @@ server:
     serviceMonitor:
       enabled: false
       interval: 30s
+
+# cert-manager integration for webhook TLS
+certManager:
+  # -- Enable cert-manager Certificate/Issuer for webhook TLS.
+  # When false, you must create the TLS secret manually.
+  enabled: false
+  # -- Issuer kind: Issuer (namespace-scoped) or ClusterIssuer
+  issuerKind: Issuer
+  # -- Issuer name. Empty = create a self-signed Issuer automatically.
+  issuerName: ""

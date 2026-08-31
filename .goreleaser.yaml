@@ -9,6 +9,8 @@ builds:
     binary: diverge-controller
     flags:
       - -trimpath
+    env:
+      - CGO_ENABLED=0
     goos:
       - linux
       - darwin
@@ -22,6 +24,8 @@ builds:
     binary: diverge-server
     flags:
       - -trimpath
+    env:
+      - CGO_ENABLED=0
     goos:
       - linux
       - darwin
@@ -75,6 +79,8 @@ builds:
     binary: diverge
     flags:
       - -trimpath
+    env:
+      - CGO_ENABLED=0
     goos:
       - linux
       - darwin
@@ -108,6 +114,8 @@ builds:
     binary: diverge-proxy
     flags:
       - -trimpath
+    env:
+      - CGO_ENABLED=0
     goos:
       - linux
       - darwin
@@ -121,6 +129,8 @@ builds:
     binary: diverge-activator-proxy
     flags:
       - -trimpath
+    env:
+      - CGO_ENABLED=0
     goos:
       - linux
       - darwin

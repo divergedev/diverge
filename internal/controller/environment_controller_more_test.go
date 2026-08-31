@@ -348,3 +348,50 @@ func TestReconcile_AsyncTeardown(t *testing.T) {
 
 	assert.Equal(t, 1, fp.teardownCalls)
 }
+
+func TestValidateEnvVarMapping_BlocksLDPreload(t *testing.T) {
+	err := validateEnvVarMapping(map[string]string{"LD_PRELOAD": "something"})
+	assert.Error(t, err)
+
+	err = validateEnvVarMapping(map[string]string{"SAFE_VAR": "LD_PRELOAD"})
+	assert.Error(t, err)
+
+	err = validateEnvVarMapping(map[string]string{"NODE_OPTIONS": "something"})
+	assert.Error(t, err)
+
+	err = validateEnvVarMapping(map[string]string{"SAFE_VAR": "SAFE_VAL"})
+	assert.NoError(t, err)
+}
+
+func TestReconcile_Teardown_PartialFailure(t *testing.T) {
+	now := metav1.Now()
+	env := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "test-env",
+			Namespace:         "default",
+			Finalizers:        []string{environmentFinalizer},
+			DeletionTimestamp: &now,
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Deploy: divergeiov1alpha1.EnvironmentDeploy{
+				Namespace: "create",
+			},
+		},
+	}
+	r, _, dep, rot, db := newTestReconciler(t, env, nil, "")
+
+	dep.teardownErr = errors.New("deploy teardown failed")
+	rot.teardownErr = nil
+	db.teardownErr = errors.New("db teardown failed")
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-env", Namespace: "default"}}
+	_, err := r.Reconcile(context.Background(), req)
+	require.Error(t, err)
+
+	assert.True(t, dep.teardownCalled)
+	assert.True(t, rot.teardownCalled)
+	assert.True(t, db.teardownCalled)
+
+	assert.Contains(t, err.Error(), "deploy teardown")
+	assert.Contains(t, err.Error(), "db teardown")
+}

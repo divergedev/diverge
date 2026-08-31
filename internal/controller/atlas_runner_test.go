@@ -24,7 +24,7 @@ func TestEnsureAtlasCR_Migration(t *testing.T) {
 	require.NoError(t, corev1.AddToScheme(s))
 
 	c := fake.NewClientBuilder().WithScheme(s).Build()
-	r := &PreviewGroupReconciler{Client: c}
+	r := &EnvironmentReconciler{Client: c}
 	ctx := context.Background()
 
 	tFalse := false
@@ -84,7 +84,7 @@ func TestEnsureAtlasCR_Schema(t *testing.T) {
 	require.NoError(t, corev1.AddToScheme(s))
 
 	c := fake.NewClientBuilder().WithScheme(s).Build()
-	r := &PreviewGroupReconciler{Client: c}
+	r := &EnvironmentReconciler{Client: c}
 	ctx := context.Background()
 
 	tFalse := false
@@ -143,7 +143,7 @@ func TestEnsureAtlasCR_PBT(t *testing.T) {
 
 	c := fake.NewClientBuilder().WithScheme(s).Build()
 	ctx := context.Background()
-	r := &PreviewGroupReconciler{Client: c}
+	r := &EnvironmentReconciler{Client: c}
 
 	hegel.Test(t, func(ht *hegel.T) {
 		mode := hegel.Draw(ht, hegel.Text())

@@ -528,3 +528,63 @@ func TestDirectDeployer_Deploy_UpdatesExisting(t *testing.T) {
 	err := d.Deploy(context.Background(), env)
 	require.NoError(t, err)
 }
+
+func TestDirectDeployer_Deploy_RejectsClusterRole(t *testing.T) {
+	s := testScheme()
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+
+	obj := unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "rbac.authorization.k8s.io/v1",
+			"kind":       "ClusterRole",
+			"metadata": map[string]interface{}{
+				"name": "test-clusterrole",
+			},
+		},
+	}
+	fetcher := &mockFetcher{
+		objects: []unstructured.Unstructured{obj},
+	}
+	d := &DirectDeployer{Client: c, Fetcher: fetcher}
+	env := testEnv("test-env", "test-ns", "same")
+	err := d.Deploy(context.Background(), env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not permitted")
+}
+
+func TestDirectDeployer_Deploy_RejectsNamespace(t *testing.T) {
+	s := testScheme()
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+
+	obj := unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "Namespace",
+			"metadata": map[string]interface{}{
+				"name": "test-namespace",
+			},
+		},
+	}
+	fetcher := &mockFetcher{
+		objects: []unstructured.Unstructured{obj},
+	}
+	d := &DirectDeployer{Client: c, Fetcher: fetcher}
+	env := testEnv("test-env", "test-ns", "same")
+	err := d.Deploy(context.Background(), env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not permitted")
+}
+
+func TestDirectDeployer_Deploy_AllowsDeployment(t *testing.T) {
+	s := testScheme()
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+
+	obj := testDeploymentUnstructured("dep1", "")
+	fetcher := &mockFetcher{
+		objects: []unstructured.Unstructured{obj},
+	}
+	d := &DirectDeployer{Client: c, Fetcher: fetcher}
+	env := testEnv("test-env", "test-ns", "same")
+	err := d.Deploy(context.Background(), env)
+	require.NoError(t, err)
+}

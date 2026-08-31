@@ -229,8 +229,8 @@ func TestAsyncRouting_Conflict(t *testing.T) {
 
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-env", Namespace: "default"}}
 	_, err := r.Reconcile(context.Background(), req)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "env var collision")
+	// M1: Terminal validation errors no longer requeue — error is nil
+	require.NoError(t, err)
 
 	updatedEnv := &divergeiov1alpha1.Environment{}
 	require.NoError(t, client.Get(context.Background(), req.NamespacedName, updatedEnv))

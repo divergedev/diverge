@@ -26,7 +26,7 @@ func TestRunMigrationJob_Success(t *testing.T) {
 	require.NoError(t, corev1.AddToScheme(s))
 
 	c := fake.NewClientBuilder().WithScheme(s).Build()
-	r := &PreviewGroupReconciler{Client: c}
+	r := &EnvironmentReconciler{Client: c}
 
 	ctx := context.Background()
 
@@ -90,7 +90,7 @@ func TestRunMigrationJob_BlockingTrue_Wait(t *testing.T) {
 	require.NoError(t, corev1.AddToScheme(s))
 
 	c := fake.NewClientBuilder().WithScheme(s).Build()
-	r := &PreviewGroupReconciler{Client: c}
+	r := &EnvironmentReconciler{Client: c}
 
 	ctx := context.Background()
 
@@ -146,7 +146,7 @@ func TestRunMigrationJob_BlockingTrue_Failed(t *testing.T) {
 	require.NoError(t, corev1.AddToScheme(s))
 
 	c := fake.NewClientBuilder().WithScheme(s).Build()
-	r := &PreviewGroupReconciler{Client: c}
+	r := &EnvironmentReconciler{Client: c}
 
 	ctx := context.Background()
 

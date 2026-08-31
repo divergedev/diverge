@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.21.0
+    controller-gen.kubebuilder.io/version: v0.17.3
   name: environments.diverge.io
 spec:
   group: diverge.io
@@ -167,6 +167,7 @@ spec:
                         type: string
                       url:
                         description: URL for HTTP-based manifest fetching (when type=url).
+                        pattern: ^https?://.*
                         type: string
                     required:
                     - type
@@ -223,11 +224,15 @@ spec:
                         target:
                           description: Target is the baseline resource name (e.g.,
                             task queue name or topic name).
+                          maxLength: 249
+                          minLength: 1
+                          pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]*$
                           type: string
                       required:
                       - protocol
                       - target
                       type: object
+                    maxItems: 50
                     type: array
                   banner:
                     description: Banner configures a preview indicator banner to inject
@@ -236,6 +241,7 @@ spec:
                       color:
                         default: '#FF6B00'
                         description: Color is the hex color code for the banner background.
+                        pattern: ^#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$
                         type: string
                       enabled:
                         description: Enabled controls whether the preview banner is

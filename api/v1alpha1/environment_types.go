@@ -72,6 +72,9 @@ type AsyncRouteSpec struct {
 	Protocol string `json:"protocol" yaml:"protocol"`
 
 	// Target is the baseline resource name (e.g., task queue name or topic name).
+	// +kubebuilder:validation:Pattern="^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=249
 	Target string `json:"target" yaml:"target"`
 
 	// EnvVarMapping maps provisioned targets to environment variable names.
@@ -111,6 +114,7 @@ type EnvironmentRouting struct {
 	BaseDomain string `json:"baseDomain,omitempty"`
 	// AsyncRoutes defines async routing targets for event-driven backends.
 	// +optional
+	// +kubebuilder:validation:MaxItems=50
 	AsyncRoutes []AsyncRouteSpec `json:"asyncRoutes,omitempty"`
 	// Cookie enables sticky routing using cookies.
 	// +optional
@@ -142,6 +146,7 @@ type BannerSpec struct {
 	// +kubebuilder:default=top
 	Position string `json:"position,omitempty"`
 	// Color is the hex color code for the banner background.
+	// +kubebuilder:validation:Pattern="^#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"
 	// +kubebuilder:default="#FF6B00"
 	Color string `json:"color,omitempty"`
 }
@@ -211,6 +216,7 @@ type ManifestSource struct {
 	// +kubebuilder:validation:Enum=configmap;url
 	Type string `json:"type"`
 	// URL for HTTP-based manifest fetching (when type=url).
+	// +kubebuilder:validation:Pattern="^https?://.*"
 	URL string `json:"url,omitempty"`
 }
 

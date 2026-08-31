@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -37,15 +38,34 @@ import (
 const environmentFinalizer = "diverge.io/environment-protection"
 
 var blockedEnvVars = map[string]bool{
+	// Kubernetes internal
 	"KUBERNETES_SERVICE_HOST": true,
 	"KUBERNETES_SERVICE_PORT": true,
-	"HOME":                    true,
-	"PATH":                    true,
 	"KUBECONFIG":              true,
+	// System paths
+	"HOME": true,
+	"PATH": true,
+	// Dynamic linker injection
+	"LD_PRELOAD":            true,
+	"LD_LIBRARY_PATH":       true,
+	"DYLD_INSERT_LIBRARIES": true, // macOS
+	// Language-specific path injection
+	"PYTHONPATH":        true,
+	"NODE_PATH":         true,
+	"RUBYLIB":           true,
+	"PERL5LIB":          true,
+	"CLASSPATH":         true,
+	"GEM_HOME":          true,
+	"GOPATH":            true,
+	"NODE_OPTIONS":      true,
+	"JAVA_TOOL_OPTIONS": true,
 }
 
 func validateEnvVarMapping(mapping map[string]string) error {
-	for _, v := range mapping {
+	for k, v := range mapping {
+		if blockedEnvVars[k] {
+			return fmt.Errorf("env var key %q is restricted and cannot be used in mapping", k)
+		}
 		if blockedEnvVars[v] {
 			return fmt.Errorf("env var %q is restricted and cannot be overridden", v)
 		}
@@ -220,6 +240,16 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			Message: "Database is ready",
 		})
 		env.Status.DatabaseStatus = dbStatus.Message
+
+		// Run migrations (Atlas / MigrationJob) if configured
+		if env.Spec.Database.Atlas != nil || env.Spec.Database.MigrationJob != nil {
+			migCtx, migCancel := context.WithTimeout(ctx, 60*time.Second)
+			defer migCancel()
+			if migErr := r.runMigrations(migCtx, &env, dbStatus); migErr != nil {
+				logger.Error(migErr, "database migration failed")
+				r.Recorder.Event(&env, "Warning", "MigrationFailed", migErr.Error())
+			}
+		}
 	} else {
 		meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 			Type:    "DatabaseReady",
@@ -270,7 +300,8 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 						Reason:  "EnvVarConflict",
 						Message: err.Error(),
 					})
-					return r.updateStatusWithRequeue(ctx, &env, statusBase, err, 0)
+					r.Recorder.Event(&env, "Warning", "ValidationFailed", err.Error())
+					return r.updateStatusWithRequeue(ctx, &env, statusBase, nil, 0)
 				}
 			}
 
@@ -307,7 +338,8 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 							Reason:  "EnvVarConflict",
 							Message: err.Error(),
 						})
-						return r.updateStatusWithRequeue(ctx, &env, statusBase, err, 0)
+						r.Recorder.Event(&env, "Warning", "ValidationFailed", err.Error())
+						return r.updateStatusWithRequeue(ctx, &env, statusBase, nil, 0)
 					}
 					asyncEnvVars[k] = v
 				}
@@ -609,12 +641,14 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 			}
 		}
 
+		var errs []error
+
 		if r.Deployer != nil {
 			tCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-			defer cancel()
 			if err := r.Deployer.Teardown(tCtx, env); err != nil {
-				return ctrl.Result{}, fmt.Errorf("failed to teardown deployments: %w", err)
+				errs = append(errs, fmt.Errorf("failed to teardown deployments: %w", err))
 			}
+			cancel()
 		}
 
 		// Teardown async routes
@@ -622,25 +656,29 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 			for _, route := range env.Spec.Routing.AsyncRoutes {
 				tCtxA, cancelA := context.WithTimeout(ctx, 15*time.Second)
 				if err := r.AsyncProvisioner.Teardown(tCtxA, env, route); err != nil {
-					cancelA()
+					errs = append(errs, fmt.Errorf("failed to teardown async route %s/%s: %w", route.Protocol, route.Target, err))
 					asyncTeardownsTotal.WithLabelValues(string(route.Protocol), "error").Inc()
-					return ctrl.Result{}, fmt.Errorf("failed to teardown async route %s/%s: %w", route.Protocol, route.Target, err)
+				} else {
+					asyncTeardownsTotal.WithLabelValues(string(route.Protocol), "success").Inc()
 				}
-				asyncTeardownsTotal.WithLabelValues(string(route.Protocol), "success").Inc()
 				cancelA()
 			}
 		}
 
 		tCtxR, cancelR := context.WithTimeout(ctx, 15*time.Second)
-		defer cancelR()
 		if err := r.Router.Teardown(tCtxR, env); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to teardown routing: %w", err)
+			errs = append(errs, fmt.Errorf("failed to teardown routing: %w", err))
 		}
+		cancelR()
 
 		tCtxDB, cancelDB := context.WithTimeout(ctx, 15*time.Second)
-		defer cancelDB()
 		if err := r.DatabaseProvider.Teardown(tCtxDB, env); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to teardown database: %w", err)
+			errs = append(errs, fmt.Errorf("failed to teardown database: %w", err))
+		}
+		cancelDB()
+
+		if len(errs) > 0 {
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, errors.Join(errs...)
 		}
 
 		// C4: Wait for ArgoCD Applications to be fully deleted before

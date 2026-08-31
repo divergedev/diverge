@@ -15,6 +15,38 @@ import (
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
 
+// allowedKinds is an allowlist of Kubernetes resource kinds permitted in
+// preview deployment manifests. Only namespaced workload resources that
+// Diverge needs to deploy are allowed. Any kind not in this list —
+// including cluster-scoped resources and custom CRDs — is rejected.
+// This is safer than a blocklist: new cluster-scoped kinds are blocked
+// by default rather than requiring explicit enumeration.
+var allowedKinds = map[string]bool{
+	"Deployment":              true,
+	"StatefulSet":             true,
+	"DaemonSet":               true,
+	"ReplicaSet":              true,
+	"Job":                     true,
+	"CronJob":                 true,
+	"Service":                 true,
+	"ConfigMap":               true,
+	"Secret":                  true,
+	"Ingress":                 true,
+	"ServiceAccount":          true,
+	"Role":                    true,
+	"RoleBinding":             true,
+	"NetworkPolicy":           true,
+	"PersistentVolumeClaim":   true,
+	"HorizontalPodAutoscaler": true,
+	"PodDisruptionBudget":     true,
+	"Endpoints":               true,
+	"EndpointSlice":           true,
+}
+
+func isAllowedKind(kind string) bool {
+	return allowedKinds[kind]
+}
+
 // DirectDeployer applies pre-rendered Kubernetes manifests directly
 // via Server-Side Apply, without requiring ArgoCD.
 type DirectDeployer struct {
@@ -47,8 +79,16 @@ func (d *DirectDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) 
 	for i := range objects {
 		obj := &objects[i]
 
-		// CR2: Enforce namespace scope — reject or override any namespace
-		// that doesn't match targetNS to prevent cross-namespace writes.
+		// S3: Only permit allowlisted resource kinds in preview deployments.
+		// This prevents privilege escalation via cluster-scoped resources
+		// (ClusterRole, Namespace, CRD) and unknown custom resources.
+		kind := obj.GetObjectKind().GroupVersionKind().Kind
+		if !isAllowedKind(kind) {
+			return fmt.Errorf("resource kind %q is not permitted in preview deployments (only workload resources are allowed)", kind)
+		}
+
+		// CR2: Enforce namespace scope — override empty namespaces and
+		// reject mismatched namespaces to prevent cross-namespace writes.
 		objNS := obj.GetNamespace()
 		if objNS != "" && objNS != targetNS {
 			return fmt.Errorf("manifest %s %s/%s targets namespace %q, but environment targets %q; cross-namespace manifests are not allowed",

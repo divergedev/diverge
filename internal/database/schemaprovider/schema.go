@@ -4,8 +4,12 @@ package schemaprovider
 
 import (
 	"context"
+	crypto_rand "crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -89,12 +93,35 @@ END
 $$;`, schema)
 	// editorconfig-checker-enable
 
-	dsn := p.AdminDSN
-	if strings.Contains(dsn, "?") {
-		dsn += "&search_path=" + schema + ",public"
-	} else {
-		dsn += "?search_path=" + schema + ",public"
+	pwBytes := make([]byte, 32)
+	if _, err := crypto_rand.Read(pwBytes); err != nil {
+		return nil, fmt.Errorf("failed to generate password: %w", err)
 	}
+	password := hex.EncodeToString(pwBytes)
+	roleName := safeRoleName(schema)
+
+	schemaIdent := pgx.Identifier{schema}.Sanitize()
+	roleIdent := pgx.Identifier{roleName}.Sanitize()
+
+	// Idempotent role creation: create if not exists, update password on re-reconcile
+	// editorconfig-checker-disable
+	setupSQL += fmt.Sprintf(`
+DO $diverge_role$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '%s') THEN
+    CREATE ROLE %s WITH LOGIN PASSWORD '%s';
+  ELSE
+    ALTER ROLE %s WITH PASSWORD '%s';
+  END IF;
+END
+$diverge_role$;
+`, roleName, roleIdent, password, roleIdent, password)
+	// editorconfig-checker-enable
+	setupSQL += fmt.Sprintf("GRANT USAGE ON SCHEMA %s TO %s;\n", schemaIdent, roleIdent)
+	setupSQL += fmt.Sprintf("GRANT ALL ON ALL TABLES IN SCHEMA %s TO %s;\n", schemaIdent, roleIdent)
+	setupSQL += fmt.Sprintf("ALTER DEFAULT PRIVILEGES IN SCHEMA %s GRANT ALL ON TABLES TO %s;\n", schemaIdent, roleIdent)
+
+	dsn := buildWorkloadDSN(p.AdminDSN, roleName, password, schema)
 
 	result := &pkgdb.DatabaseResult{
 		DSN: dsn,
@@ -155,7 +182,7 @@ func (p *SchemaDatabaseProvider) Teardown(ctx context.Context, env *v1alpha1.Env
 		return fmt.Errorf("failed to drop schema: %w", err)
 	}
 
-	roleName := fmt.Sprintf("diverge_preview_%s", schema)
+	roleName := safeRoleName(schema)
 	roleIdent := pgx.Identifier{roleName}.Sanitize()
 	query = fmt.Sprintf("DROP ROLE IF EXISTS %s", roleIdent)
 	_, err = db.ExecContext(ctx, query)
@@ -199,4 +226,86 @@ func (p *SchemaDatabaseProvider) Status(ctx context.Context, env *v1alpha1.Envir
 		SchemaName:  schema,
 		Message:     "Schema does not exist",
 	}, nil
+}
+
+// safeRoleName generates a PostgreSQL role name that fits within the
+// 63-byte NAMEDATALEN limit. For short schemas the name is simply
+// "diverge_preview_<schema>". For long schemas the name is truncated
+// and a stable 8-char hash suffix is appended for uniqueness.
+func safeRoleName(schema string) string {
+	const prefix = "diverge_preview_"
+	const maxLen = 63 // PostgreSQL NAMEDATALEN - 1
+
+	name := prefix + schema
+	if len(name) <= maxLen {
+		return name
+	}
+
+	// Truncate and append stable hash to avoid collisions
+	hash := sha256.Sum256([]byte(schema))
+	suffix := hex.EncodeToString(hash[:4]) // 8 hex chars
+	// prefix(16) + truncated + _ + suffix(8) = maxLen
+	truncLen := maxLen - len(prefix) - 1 - 8
+	return prefix + schema[:truncLen] + "_" + suffix
+}
+
+// buildWorkloadDSN constructs a connection string for the per-schema
+// restricted role. It supports both URL-form (postgres://user@host/db)
+// and pgx keyword/value-form (user=admin host=localhost dbname=db).
+func buildWorkloadDSN(adminDSN, roleName, password, schema string) string {
+	if isURLFormDSN(adminDSN) {
+		parsed, err := url.Parse(adminDSN)
+		if err != nil {
+			// Fallback: build a simple DSN
+			return fmt.Sprintf("postgres://%s:%s@localhost/%s?search_path=%s,public",
+				roleName, password, schema, schema)
+		}
+		parsed.User = url.UserPassword(roleName, password)
+		dsn := parsed.String()
+		if strings.Contains(dsn, "?") {
+			dsn += "&search_path=" + schema + ",public"
+		} else {
+			dsn += "?search_path=" + schema + ",public"
+		}
+		return dsn
+	}
+
+	// keyword/value format: replace or add user/password, append search_path
+	parts := parseKeyValueDSN(adminDSN)
+	parts["user"] = roleName
+	parts["password"] = password
+	parts["search_path"] = schema + ",public"
+	var sb strings.Builder
+	for k, v := range parts {
+		if sb.Len() > 0 {
+			sb.WriteByte(' ')
+		}
+		sb.WriteString(k)
+		sb.WriteByte('=')
+		// Quote values containing spaces
+		if strings.ContainsAny(v, " '\\") {
+			sb.WriteString("'" + strings.ReplaceAll(v, "'", "\\'") + "'")
+		} else {
+			sb.WriteString(v)
+		}
+	}
+	return sb.String()
+}
+
+// isURLFormDSN returns true if the DSN looks like a postgres:// or postgresql:// URL.
+func isURLFormDSN(dsn string) bool {
+	return strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://")
+}
+
+// parseKeyValueDSN parses a pgx keyword/value connection string into a map.
+func parseKeyValueDSN(dsn string) map[string]string {
+	result := make(map[string]string)
+	for _, part := range strings.Fields(dsn) {
+		if idx := strings.IndexByte(part, '='); idx > 0 {
+			key := part[:idx]
+			val := strings.Trim(part[idx+1:], "'")
+			result[key] = val
+		}
+	}
+	return result
 }
