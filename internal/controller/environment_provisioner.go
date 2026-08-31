@@ -35,6 +35,36 @@ func (r *EnvironmentReconciler) notifyFailed(ctx context.Context, env *divergeio
 func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *divergeiov1alpha1.Environment, statusBase *divergeiov1alpha1.Environment) (ctrl.Result, bool, error) {
 	logger := log.FromContext(ctx)
 
+	// S5: Cross-namespace SecretRef Validation
+	for _, ref := range env.Spec.EnvFrom {
+		if ref.Namespace != "" && ref.Namespace != env.Namespace {
+			r.Recorder.Event(env, "Warning", "SecurityViolation",
+				fmt.Sprintf("cross-namespace SecretRef not allowed: %s/%s", ref.Namespace, ref.Name))
+			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+				Type:    "SecretRefValid",
+				Status:  metav1.ConditionFalse,
+				Reason:  "CrossNamespaceRef",
+				Message: "cross-namespace SecretRef not allowed",
+			})
+			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, nil, 0)
+			return res, true, retErr
+		}
+	}
+	for _, ref := range env.Spec.Deploy.EnvFrom {
+		if ref.Namespace != "" && ref.Namespace != env.Namespace {
+			r.Recorder.Event(env, "Warning", "SecurityViolation",
+				fmt.Sprintf("cross-namespace SecretRef not allowed: %s/%s", ref.Namespace, ref.Name))
+			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+				Type:    "SecretRefValid",
+				Status:  metav1.ConditionFalse,
+				Reason:  "CrossNamespaceRef",
+				Message: "cross-namespace SecretRef not allowed",
+			})
+			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, nil, 0)
+			return res, true, retErr
+		}
+	}
+
 	// 5. Ensure namespace
 	if err := r.ensureNamespace(ctx, env); err != nil {
 		meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{

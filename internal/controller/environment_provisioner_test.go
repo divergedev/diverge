@@ -95,3 +95,60 @@ func TestNotifyFailed_ErrorHandled(t *testing.T) {
 		r.notifyFailed(context.Background(), env, "test error")
 	})
 }
+
+func TestCrossNamespaceSecretRef_Rejected(t *testing.T) {
+	env := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-env",
+			Namespace: "default",
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			EnvFrom: []divergeiov1alpha1.SecretRef{
+				{Namespace: "kube-system", Name: "secret-1"},
+			},
+		},
+	}
+	r, _, _, _, _ := newTestReconciler(t, env, nil, "")
+
+	statusBase := env.DeepCopy()
+	res, done, err := r.reconcileProvisioning(context.Background(), env, statusBase)
+	assert.Empty(t, res)
+	assert.True(t, done)
+	require.NoError(t, err)
+
+	cond := env.Status.Conditions[0]
+	assert.Equal(t, "SecretRefValid", cond.Type)
+	assert.Equal(t, metav1.ConditionFalse, cond.Status)
+	assert.Equal(t, "CrossNamespaceRef", cond.Reason)
+}
+
+func TestCrossNamespaceSecretRef_SameNamespaceAllowed(t *testing.T) {
+	env := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-env",
+			Namespace: "default",
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			EnvFrom: []divergeiov1alpha1.SecretRef{
+				{Namespace: "default", Name: "secret-1"},
+				{Name: "secret-2"}, // implicit same namespace
+			},
+			Deploy: divergeiov1alpha1.EnvironmentDeploy{
+				EnvFrom: []divergeiov1alpha1.SecretRef{
+					{Namespace: "default", Name: "secret-3"},
+				},
+			},
+		},
+	}
+	r, _, _, rot, db := newTestReconciler(t, env, nil, "")
+	db.provisionErr = errors.New("stop here")
+	rot.reconcileErr = errors.New("stop here")
+
+	statusBase := env.DeepCopy()
+	// This will fail later in reconcileProvisioning, but pass the SecretRef check
+	_, _, _ = r.reconcileProvisioning(context.Background(), env, statusBase)
+
+	for _, cond := range env.Status.Conditions {
+		assert.NotEqual(t, "CrossNamespaceRef", cond.Reason)
+	}
+}

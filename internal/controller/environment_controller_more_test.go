@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -94,6 +95,7 @@ func getTestScheme() *runtime.Scheme {
 	s := runtime.NewScheme()
 	_ = divergeiov1alpha1.AddToScheme(s)
 	_ = corev1.AddToScheme(s)
+	_ = networkingv1.AddToScheme(s)
 	return s
 }
 

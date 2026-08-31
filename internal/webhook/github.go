@@ -26,6 +26,7 @@ type GitHubWebhookHandler struct {
 	Config        WebhookConfig
 	ConfigFetcher ConfigFetcher
 	DefaultNS     string
+	Dedup         *DeliveryDedup
 }
 
 type GitHubPRPayload struct {
@@ -82,6 +83,14 @@ func (h *GitHubWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	if !hmac.Equal([]byte(signature), []byte(expectedSignature)) {
 		logger.Info("Unauthorized webhook request")
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Dedup check AFTER authentication to prevent cache poisoning
+	deliveryID := r.Header.Get("X-GitHub-Delivery")
+	if h.Dedup != nil && h.Dedup.IsDuplicate(deliveryID) {
+		logger.Info("Duplicate webhook event received", "deliveryID", deliveryID)
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 

@@ -207,3 +207,10 @@ certManager:
   issuerKind: Issuer
   # -- Issuer name. Empty = create a self-signed Issuer automatically.
   issuerName: ""
+
+rbac:
+  # -- Scope the controller's permissions to specific namespaces.
+  # When false (default), a ClusterRole is used for cluster-wide access.
+  namespaceScoped: false
+  # -- List of namespaces to manage when namespaceScoped is true.
+  managedNamespaces: []

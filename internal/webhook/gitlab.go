@@ -28,6 +28,7 @@ type GitLabWebhookHandler struct {
 	Config        WebhookConfig
 	ConfigFetcher ConfigFetcher
 	DefaultNS     string
+	Dedup         *DeliveryDedup
 }
 
 // GitLabMRPayload is a simple struct to decode MR webhook payloads
@@ -71,6 +72,14 @@ func (h *GitLabWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	if !ValidateGitLabWebhookToken(r, h.Config.SecretToken) {
 		logger.Info("Unauthorized webhook request")
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Dedup check AFTER authentication to prevent cache poisoning
+	deliveryID := r.Header.Get("X-Gitlab-Event-UUID")
+	if h.Dedup != nil && h.Dedup.IsDuplicate(deliveryID) {
+		logger.Info("Duplicate webhook event received", "deliveryID", deliveryID)
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -117,8 +118,16 @@ func (w *WebhookProvisioner) call(ctx context.Context, reqBody WebhookRequest) (
 		return nil, fmt.Errorf("webhook returned status %d", resp.StatusCode)
 	}
 
+	const maxResponseSize = 1 << 20 // 1MB
 	var result WebhookResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read webhook response: %w", err)
+	}
+	if len(respBody) > maxResponseSize {
+		return nil, fmt.Errorf("webhook response exceeds maximum size of %d bytes", maxResponseSize)
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, fmt.Errorf("failed to decode webhook response: %w", err)
 	}
 	return &result, nil
