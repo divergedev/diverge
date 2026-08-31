@@ -36,7 +36,11 @@ func (m *mockDatabaseProvider) Status(ctx context.Context, env *divergeiov1alpha
 	return &database.DatabaseStatus{}, nil
 }
 
-func TestPreviewGroupReconciler_DB_Provision_InjectsEnvVars(t *testing.T) {
+// TestPreviewGroupReconciler_DB_DelegatedToChildEnvironment verifies that
+// PreviewGroup does NOT call DatabaseProvider.Provision directly — it sets
+// the Database spec on child Environment CRs and lets EnvironmentReconciler
+// handle provisioning.
+func TestPreviewGroupReconciler_DB_DelegatedToChildEnvironment(t *testing.T) {
 	pg := &divergeiov1alpha1.PreviewGroup{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "mr-db-1",
@@ -74,7 +78,7 @@ func TestPreviewGroupReconciler_DB_Provision_InjectsEnvVars(t *testing.T) {
 		t.Fatalf("first reconcile failed: %v", err)
 	}
 
-	// Second reconcile: creates child Environments and provisions DB
+	// Second reconcile: creates child Environments (but does NOT provision DB)
 	_, err = r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "mr-db-1"},
 	})
@@ -82,31 +86,28 @@ func TestPreviewGroupReconciler_DB_Provision_InjectsEnvVars(t *testing.T) {
 		t.Fatalf("second reconcile failed: %v", err)
 	}
 
-	if mockDB.provisionCalls != 1 {
-		t.Errorf("expected 1 Provision call, got %d", mockDB.provisionCalls)
+	// H5: PreviewGroup should NOT call Provision — EnvironmentReconciler does that
+	if mockDB.provisionCalls != 0 {
+		t.Errorf("expected 0 Provision calls (delegated to EnvironmentReconciler), got %d", mockDB.provisionCalls)
 	}
 
+	// Verify child Environment was created with the Database spec set
 	envName := childEnvironmentName("mr-db-1", "api")
 	var childEnv divergeiov1alpha1.Environment
 	if err := c.Get(context.Background(), types.NamespacedName{Name: envName, Namespace: "ns1"}, &childEnv); err != nil {
 		t.Fatalf("failed to get child Environment: %v", err)
 	}
 
-	hasDBVar := false
-	if childEnv.Spec.ServiceConfig != nil {
-		for _, envVar := range childEnv.Spec.ServiceConfig.Env {
-			if envVar.Name == "DB_URL" && envVar.Value == "postgres://user:pass@host/db" {
-				hasDBVar = true
-				break
-			}
-		}
-	}
-	if !hasDBVar {
-		t.Errorf("child Environment missing injected DB_URL env var")
+	// Child should have the Database spec so EnvironmentReconciler provisions it
+	if childEnv.Spec.Database.Mode != "schema" {
+		t.Errorf("expected child Database.Mode='schema', got %q", childEnv.Spec.Database.Mode)
 	}
 }
 
-func TestPreviewGroupReconciler_DB_Provision_Error_DoesNotBlock(t *testing.T) {
+// TestPreviewGroupReconciler_DB_NotProvisionedByPreviewGroup verifies that
+// PreviewGroup does not provision DB even when DatabaseProvider returns errors
+// (because it should not be calling Provision at all).
+func TestPreviewGroupReconciler_DB_NotProvisionedByPreviewGroup(t *testing.T) {
 	pg := &divergeiov1alpha1.PreviewGroup{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "mr-db-2",
@@ -140,7 +141,7 @@ func TestPreviewGroupReconciler_DB_Provision_Error_DoesNotBlock(t *testing.T) {
 		t.Fatalf("first reconcile failed: %v", err)
 	}
 
-	// Second reconcile: creates child Environments and attempts DB provision
+	// Second reconcile: creates child Environments (no DB provision)
 	_, err = r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "mr-db-2"},
 	})
@@ -148,8 +149,9 @@ func TestPreviewGroupReconciler_DB_Provision_Error_DoesNotBlock(t *testing.T) {
 		t.Fatalf("second reconcile failed: %v", err)
 	}
 
-	if mockDB.provisionCalls != 1 {
-		t.Errorf("expected 1 Provision call, got %d", mockDB.provisionCalls)
+	// H5: PreviewGroup should NOT call Provision
+	if mockDB.provisionCalls != 0 {
+		t.Errorf("expected 0 Provision calls, got %d", mockDB.provisionCalls)
 	}
 
 	envName := childEnvironmentName("mr-db-2", "api")

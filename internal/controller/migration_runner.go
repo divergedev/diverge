@@ -25,7 +25,7 @@ var (
 )
 
 // runMigrations checks if a migration is needed and runs it.
-func (r *PreviewGroupReconciler) runMigrations(ctx context.Context, env *divergeiov1alpha1.Environment, dbResult *database.DatabaseResult) error {
+func (r *EnvironmentReconciler) runMigrations(ctx context.Context, env *divergeiov1alpha1.Environment, dbResult *database.DatabaseResult) error {
 	if env.Spec.Database.Atlas != nil && env.Spec.Database.MigrationJob != nil {
 		return fmt.Errorf("cannot configure both Atlas and MigrationJob for database hooks")
 	}
@@ -43,7 +43,7 @@ func (r *PreviewGroupReconciler) runMigrations(ctx context.Context, env *diverge
 }
 
 // runMigrationJob creates and monitors a K8s Job for database migrations.
-func (r *PreviewGroupReconciler) runMigrationJob(ctx context.Context, env *divergeiov1alpha1.Environment, dbResult *database.DatabaseResult) error {
+func (r *EnvironmentReconciler) runMigrationJob(ctx context.Context, env *divergeiov1alpha1.Environment, dbResult *database.DatabaseResult) error {
 	logger := log.FromContext(ctx)
 	mjSpec := env.Spec.Database.MigrationJob
 

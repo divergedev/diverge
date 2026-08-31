@@ -1,0 +1,31 @@
+{{- if .Values.certManager.enabled }}
+{{- if and (not .Values.certManager.issuerName) (ne (.Values.certManager.issuerKind | default "Issuer") "ClusterIssuer") }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "diverge.fullname" . }}-selfsigned
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "diverge.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+{{- end }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "diverge.fullname" . }}-webhook
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "diverge.labels" . | nindent 4 }}
+spec:
+  secretName: {{ .Values.webhook.tlsSecretName | default "diverge-webhook-tls" }}
+  issuerRef:
+    name: {{ .Values.certManager.issuerName | default (printf "%s-selfsigned" (include "diverge.fullname" .)) }}
+    kind: {{ .Values.certManager.issuerKind | default "Issuer" }}
+  dnsNames:
+    - {{ include "diverge.fullname" . }}-webhook.{{ .Release.Namespace }}.svc
+    - {{ include "diverge.fullname" . }}-webhook.{{ .Release.Namespace }}.svc.cluster.local
+  duration: 8760h  # 1 year
+  renewBefore: 720h  # 30 days
+{{- end }}

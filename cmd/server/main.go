@@ -332,7 +332,7 @@ func main() {
 		AllowedMethods:   []string{"GET", "POST"},
 		AllowedHeaders:   []string{"Authorization", "Content-Type", "Connect-Protocol-Version", "Connect-Timeout-Ms", "X-Grpc-Web", "X-User-Agent", "Grpc-Timeout"},
 		ExposedHeaders:   []string{"Grpc-Status", "Grpc-Message", "Grpc-Status-Details-Bin"},
-		AllowCredentials: true,
+		AllowCredentials: false, // Disabling AllowCredentials prevents CSRF vulnerability with wildcard origins
 		MaxAge:           corsMaxAge,
 	}
 	if len(origins) == 1 && origins[0] == "*" {

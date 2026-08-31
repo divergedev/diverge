@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -65,14 +66,23 @@ func (h *GitLabWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 5<<20) // 5MB limit
+
 	if !ValidateGitLabWebhookToken(r, h.Config.SecretToken) {
 		logger.Info("Unauthorized webhook request")
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		logger.Error(err, "Failed to read request body")
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
 	var payload GitLabMRPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
 		logger.Error(err, "Failed to decode payload")
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
