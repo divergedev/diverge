@@ -40,7 +40,13 @@ func TestEnsureNamespace(t *testing.T) {
 
 		assert.Equal(t, "test-env", ns.Labels["diverge.io/environment"])
 		assert.Equal(t, "diverge", ns.Labels["diverge.io/managed-by"])
-		assert.Len(t, ns.Labels, 2)
+		assert.Equal(t, "restricted", ns.Labels["pod-security.kubernetes.io/enforce"])
+		assert.Equal(t, "latest", ns.Labels["pod-security.kubernetes.io/enforce-version"])
+		assert.Equal(t, "restricted", ns.Labels["pod-security.kubernetes.io/warn"])
+		assert.Equal(t, "latest", ns.Labels["pod-security.kubernetes.io/warn-version"])
+		assert.Equal(t, "restricted", ns.Labels["pod-security.kubernetes.io/audit"])
+		assert.Equal(t, "latest", ns.Labels["pod-security.kubernetes.io/audit-version"])
+		assert.Len(t, ns.Labels, 8)
 	})
 
 	t.Run("injects limit range and resource quota", func(t *testing.T) {

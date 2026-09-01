@@ -82,10 +82,6 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		}
 		cancelDB()
 
-		if len(errs) > 0 {
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, errors.Join(errs...)
-		}
-
 		// C4: Wait for ArgoCD Applications to be fully deleted before
 		// deleting the namespace, preventing finalizer deadlocks where
 		// the namespace enters Terminating but ArgoCD resources still
@@ -96,9 +92,8 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 				defer cancel()
 				status, err := r.Deployer.Status(tCtx, env)
 				if err != nil {
-					return ctrl.Result{}, fmt.Errorf("failed to check deployer status during teardown: %w", err)
-				}
-				if len(status) > 0 {
+					errs = append(errs, fmt.Errorf("failed to check deployer status during teardown: %w", err))
+				} else if len(status) > 0 {
 					log.FromContext(ctx).Info("Waiting for deployer resources to be fully deleted", "remaining", len(status))
 					return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 				}
@@ -112,8 +107,12 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 			err := r.Delete(deleteCtx, ns)
 			cancelDelete()
 			if err != nil && !apierrors.IsNotFound(err) {
-				return ctrl.Result{}, fmt.Errorf("failed to delete namespace: %w", err)
+				errs = append(errs, fmt.Errorf("failed to delete namespace: %w", err))
 			}
+		}
+
+		if len(errs) > 0 {
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, errors.Join(errs...)
 		}
 
 		controllerutil.RemoveFinalizer(env, environmentFinalizer)
@@ -121,7 +120,7 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		err := r.Update(updateCtx, env)
 		cancelUpdate()
 		if err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to remove finalizer: %w", err)
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, fmt.Errorf("failed to remove finalizer: %w", err)
 		}
 
 		metrics.EnvironmentsActive.Dec()

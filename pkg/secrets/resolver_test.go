@@ -3,7 +3,6 @@ package secrets
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -26,32 +25,32 @@ func TestEnvResolver_Empty(t *testing.T) {
 }
 
 func TestFileResolver_Success(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "secret.txt")
-	require.NoError(t, os.WriteFile(path, []byte("file-secret\n"), 0600))
+	err := os.WriteFile("test_secret.txt", []byte("file-secret\n"), 0600)
+	require.NoError(t, err)
+	defer func() { _ = os.Remove("test_secret.txt") }()
 
 	r := NewFileResolver()
-	val, err := r.Resolve(context.Background(), SecretRef{Path: path})
+	val, err := r.Resolve(context.Background(), SecretRef{Path: "test_secret.txt"})
 	require.NoError(t, err)
 	assert.Equal(t, "file-secret", val)
 }
 
 func TestFileResolver_NotFound(t *testing.T) {
 	r := NewFileResolver()
-	_, err := r.Resolve(context.Background(), SecretRef{Path: "/does/not/exist.txt"})
+	_, err := r.Resolve(context.Background(), SecretRef{Path: "does/not/exist.txt"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to stat file")
 }
 
 func TestFileResolver_TooLarge(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "large.txt")
+	path := "large_test.txt"
 	// Make a file exactly maxFileSize + 1
 	f, err := os.Create(path)
 	require.NoError(t, err)
 	err = f.Truncate(maxFileSize + 1)
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
+	defer func() { _ = os.Remove(path) }()
 
 	r := NewFileResolver()
 	_, err = r.Resolve(context.Background(), SecretRef{Path: path})
@@ -61,7 +60,7 @@ func TestFileResolver_TooLarge(t *testing.T) {
 
 func TestFileResolver_PathTraversal(t *testing.T) {
 	r := NewFileResolver()
-	_, err := r.Resolve(context.Background(), SecretRef{Path: "/etc/../etc/passwd"})
+	_, err := r.Resolve(context.Background(), SecretRef{Path: "etc/../etc/passwd"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "path traversal not allowed")
 }

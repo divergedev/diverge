@@ -2,24 +2,134 @@
   "$schema": "http://json-schema.org/schema#",
   "type": "object",
   "properties": {
-    "replicaCount": { "type": "integer" },
-    "image": { "type": "object" },
+    "replicaCount": {
+      "type": "integer",
+      "description": "Number of replicas for the controller"
+    },
+    "image": {
+      "type": "object",
+      "properties": {
+        "repository": { "type": "string", "description": "Image repository" },
+        "tag": { "type": "string", "description": "Image tag" },
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["IfNotPresent", "Always", "Never"],
+          "description": "Image pull policy"
+        }
+      }
+    },
     "routingProvider": {
       "type": "string",
-      "enum": ["gateway", "istio"]
+      "enum": ["gateway", "istio"],
+      "description": "Routing provider to use"
     },
-    "resources": { "type": "object" },
-    "metrics": { "type": "object" },
-    "observability": { "type": "object" },
-    "grafana": { "type": "object" },
-    "prometheus": { "type": "object" },
-    "webhook": { "type": "object" },
+    "resources": {
+      "type": "object",
+      "description": "Resource limits and requests for the controller",
+      "properties": {
+        "limits": {
+          "type": "object",
+          "properties": {
+            "cpu": { "type": "string" },
+            "memory": { "type": "string" }
+          }
+        },
+        "requests": {
+          "type": "object",
+          "properties": {
+            "cpu": { "type": "string" },
+            "memory": { "type": "string" }
+          }
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "serviceMonitor": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "namespace": { "type": "string" },
+            "interval": { "type": "string" }
+          }
+        },
+        "cloudMonitoringDashboard": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "observability": {
+      "type": "object",
+      "properties": {
+        "otel": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "endpoint": { "type": "string" },
+            "serviceName": { "type": "string" }
+          }
+        },
+        "autoInstrumentation": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "endpoint": { "type": "string" },
+            "go": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "grafana": {
+      "type": "object",
+      "properties": {
+        "dashboards": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "prometheus": {
+      "type": "object",
+      "properties": {
+        "alerts": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "webhook": {
+      "type": "object",
+      "properties": {
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "secretName": { "type": "string" }
+      }
+    },
     "deploy": {
       "type": "object",
       "properties": {
         "provider": {
           "type": "string",
-          "enum": ["argocd", "direct", "noop"]
+          "enum": ["argocd", "direct", "noop"],
+          "description": "Deployment provider"
+        },
+        "manifestSourceType": {
+          "type": "string",
+          "enum": ["configmap", "url"],
+          "description": "Manifest source type"
         }
       }
     },
@@ -28,19 +138,149 @@
       "properties": {
         "provider": {
           "type": "string",
-          "enum": ["noop", "shared", "schema"]
+          "enum": ["noop", "shared", "schema"],
+          "description": "Database provider"
+        },
+        "host": { "type": "string" },
+        "port": { "type": "integer" },
+        "user": { "type": "string" },
+        "name": { "type": "string" },
+        "sslMode": { "type": "string" },
+        "passwordSecretName": { "type": "string" },
+        "passwordSecretKey": { "type": "string" }
+      }
+    },
+    "serviceAccount": {
+      "type": "object",
+      "properties": {
+        "create": { "type": "boolean" },
+        "name": { "type": "string" },
+        "annotations": { "type": "object" }
+      }
+    },
+    "podDisruptionBudget": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minAvailable": { "type": "integer" }
+      }
+    },
+    "nodeSelector": { "type": "object" },
+    "tolerations": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "affinity": { "type": "object" },
+    "proxy": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "replicaCount": { "type": "integer" },
+        "port": { "type": "integer" },
+        "previewDomain": { "type": "string" },
+        "upstream": { "type": "string" },
+        "headerKey": { "type": "string" },
+        "resources": { "type": "object" },
+        "service": { "type": "object" }
+      }
+    },
+    "activatorProxy": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "replicas": { "type": "integer" },
+        "image": { "type": "object" },
+        "port": { "type": "integer" },
+        "activatorUrl": { "type": "string" },
+        "targetNamespace": { "type": "string" },
+        "targetSelector": { "type": "string" },
+        "targetPort": { "type": "integer" },
+        "targetRevision": { "type": "string" },
+        "resources": { "type": "object" }
+      }
+    },
+    "server": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "replicaCount": { "type": "integer" },
+        "image": { "type": "object" },
+        "resources": { "type": "object" },
+        "service": { "type": "object" },
+        "auth": {
+          "type": "object",
+          "properties": {
+            "tokenCacheTTL": { "type": "string" },
+            "audiences": { "type": "array", "items": { "type": "string" } },
+            "maxStreams": { "type": "integer" },
+            "maxStreamsPerUser": { "type": "integer" },
+            "oidc": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "issuerUrl": { "type": "string" },
+                "clientId": { "type": "string" },
+                "clientSecretSecretRef": { "type": "object" },
+                "redirectUrl": { "type": "string" },
+                "providerName": { "type": "string" },
+                "scopes": { "type": "string" },
+                "usernameClaim": { "type": "string" },
+                "groupsClaim": { "type": "string" },
+                "allowedGroups": { "type": "string" }
+              }
+            },
+            "session": {
+              "type": "object",
+              "properties": {
+                "maxAge": { "type": "integer" },
+                "secretRef": { "type": "object" }
+              }
+            }
+          }
+        },
+        "cors": {
+          "type": "object",
+          "properties": {
+            "allowedOrigins": { "type": "string" },
+            "allowCredentials": { "type": "boolean" },
+            "maxAge": { "type": "integer" }
+          }
+        },
+        "dashboard": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        },
+        "rbac": {
+          "type": "object",
+          "properties": {
+            "clusterWidePodAccess": { "type": "boolean" },
+            "targetNamespaces": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "metrics": {
+          "type": "object",
+          "properties": {
+            "serviceMonitor": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "interval": { "type": "string" }
+              }
+            }
+          }
         }
       }
     },
-    "serviceAccount": { "type": "object" },
-    "podDisruptionBudget": { "type": "object" },
-    "nodeSelector": { "type": "object" },
-    "tolerations": { "type": "array" },
-    "affinity": { "type": "object" },
-    "proxy": { "type": "object" },
-    "activatorProxy": { "type": "object" },
-    "server": { "type": "object" },
-    "certManager": { "type": "object" },
+    "certManager": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "issuerKind": { "type": "string", "enum": ["Issuer", "ClusterIssuer"] },
+        "issuerName": { "type": "string" }
+      }
+    },
     "rbac": {
       "type": "object",
       "properties": {

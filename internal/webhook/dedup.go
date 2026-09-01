@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"sort"
 	"sync"
 	"time"
 )
@@ -51,13 +52,20 @@ func (d *DeliveryDedup) IsDuplicate(id string) bool {
 		}
 		// If still full, evict oldest 10%
 		if len(d.entries) >= maxDeliveryIDs {
-			toRemove := maxDeliveryIDs / 10
-			for k := range d.entries {
-				delete(d.entries, k)
-				toRemove--
-				if toRemove <= 0 {
-					break
-				}
+			type dedupEntry struct {
+				key string
+				ts  time.Time
+			}
+			entriesList := make([]dedupEntry, 0, len(d.entries))
+			for k, v := range d.entries {
+				entriesList = append(entriesList, dedupEntry{key: k, ts: v})
+			}
+			sort.Slice(entriesList, func(i, j int) bool {
+				return entriesList[i].ts.Before(entriesList[j].ts)
+			})
+			evictCount := maxDeliveryIDs / 10
+			for i := 0; i < evictCount && i < len(entriesList); i++ {
+				delete(d.entries, entriesList[i].key)
 			}
 		}
 	}

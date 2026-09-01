@@ -35,6 +35,7 @@ func TestEnsureNamespace_CreateMode(t *testing.T) {
 	err = client.Get(context.Background(), types.NamespacedName{Name: nsName}, ns)
 	require.NoError(t, err)
 	assert.Equal(t, nsName, ns.Name)
+	assert.NotEmpty(t, ns.Labels["pod-security.kubernetes.io/enforce"])
 }
 
 func TestEnsureNamespace_ExistingMode(t *testing.T) {
@@ -91,10 +92,13 @@ func TestNetworkPolicy_CreatedOnCreateMode(t *testing.T) {
 	assert.Equal(t, "diverge-default-netpol", netpol.Name)
 	assert.Equal(t, env.PreviewNamespace(), netpol.Namespace)
 	require.Len(t, netpol.Spec.Egress, 1)
-	require.Len(t, netpol.Spec.Egress[0].To, 1)
+	require.Len(t, netpol.Spec.Egress[0].To, 2)
 	require.NotNil(t, netpol.Spec.Egress[0].To[0].IPBlock)
 	assert.Equal(t, "0.0.0.0/0", netpol.Spec.Egress[0].To[0].IPBlock.CIDR)
 	assert.Contains(t, netpol.Spec.Egress[0].To[0].IPBlock.Except, "169.254.169.254/32")
+	require.NotNil(t, netpol.Spec.Egress[0].To[1].IPBlock)
+	assert.Equal(t, "::/0", netpol.Spec.Egress[0].To[1].IPBlock.CIDR)
+	assert.Contains(t, netpol.Spec.Egress[0].To[1].IPBlock.Except, "fd00:ec2::254/128")
 }
 
 func TestNetworkPolicy_NotCreatedOnSameMode(t *testing.T) {

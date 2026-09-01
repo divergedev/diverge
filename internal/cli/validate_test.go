@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -124,4 +125,74 @@ services:
 	err := cmd.Execute()
 	assert.NoError(t, err)
 	assert.Contains(t, out.String(), "Config is valid")
+}
+
+func TestValidateInvalidConfig_JSONOutput(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, ".diverge.yaml")
+	err := os.WriteFile(configPath, []byte(`version: 999`), 0644)
+	require.NoError(t, err)
+
+	app := &App{}
+	cmd := newValidateCmd(app)
+	cmd.SetArgs([]string{"--config", configPath, "--output", "json"})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+
+	err = cmd.Execute()
+	assert.Error(t, err)
+
+	var result map[string]interface{}
+	require.NoError(t, json.Unmarshal(out.Bytes(), &result))
+
+	valid, ok := result["valid"].(bool)
+	require.True(t, ok)
+	assert.False(t, valid)
+
+	errorsSlice, ok := result["errors"].([]interface{})
+	require.True(t, ok)
+	assert.NotEmpty(t, errorsSlice)
+
+	for _, errObj := range errorsSlice {
+		errMap := errObj.(map[string]interface{})
+		_, hasPath := errMap["path"]
+		_, hasMsg := errMap["message"]
+		assert.True(t, hasPath, "error should have path")
+		assert.True(t, hasMsg, "error should have message")
+	}
+}
+
+func TestValidateValidConfig_JSONOutput(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, ".diverge.yaml")
+	// editorconfig-checker-disable
+	err := os.WriteFile(configPath, []byte(`version: "1"
+services:
+  api:
+    paths: ["src/**"]
+    image:
+      repository: "registry.example.com/api"
+`), 0644)
+	// editorconfig-checker-enable
+	require.NoError(t, err)
+
+	app := &App{}
+	cmd := newValidateCmd(app)
+	cmd.SetArgs([]string{"--config", configPath, "--output", "json"})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+
+	err = cmd.Execute()
+	assert.NoError(t, err)
+
+	var result map[string]interface{}
+	require.NoError(t, json.Unmarshal(out.Bytes(), &result))
+
+	valid, ok := result["valid"].(bool)
+	require.True(t, ok)
+	assert.True(t, valid)
+
+	errorsSlice, ok := result["errors"].([]interface{})
+	require.True(t, ok)
+	assert.Empty(t, errorsSlice)
 }

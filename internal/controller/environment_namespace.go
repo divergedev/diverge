@@ -35,6 +35,15 @@ func (r *EnvironmentReconciler) ensureNamespace(ctx context.Context, env *diverg
 		}
 		_, err := controllerutil.CreateOrUpdate(ctx, r.Client, ns, func() error {
 			ns.Labels = labels
+			if ns.Labels == nil {
+				ns.Labels = make(map[string]string)
+			}
+			ns.Labels["pod-security.kubernetes.io/enforce"] = "restricted"
+			ns.Labels["pod-security.kubernetes.io/enforce-version"] = "latest"
+			ns.Labels["pod-security.kubernetes.io/warn"] = "restricted"
+			ns.Labels["pod-security.kubernetes.io/warn-version"] = "latest"
+			ns.Labels["pod-security.kubernetes.io/audit"] = "restricted"
+			ns.Labels["pod-security.kubernetes.io/audit-version"] = "latest"
 			return nil
 		})
 		if err != nil {
@@ -99,12 +108,20 @@ func (r *EnvironmentReconciler) ensureNamespace(ctx context.Context, env *diverg
 				PodSelector: metav1.LabelSelector{}, // all pods
 				PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
 				Egress: []networkingv1.NetworkPolicyEgressRule{{
-					To: []networkingv1.NetworkPolicyPeer{{
-						IPBlock: &networkingv1.IPBlock{
-							CIDR:   "0.0.0.0/0",
-							Except: []string{"169.254.169.254/32"},
+					To: []networkingv1.NetworkPolicyPeer{
+						{
+							IPBlock: &networkingv1.IPBlock{
+								CIDR:   "0.0.0.0/0",
+								Except: []string{"169.254.169.254/32"},
+							},
 						},
-					}},
+						{
+							IPBlock: &networkingv1.IPBlock{
+								CIDR:   "::/0",
+								Except: []string{"fd00:ec2::254/128"},
+							},
+						},
+					},
 				}},
 			},
 		}

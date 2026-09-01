@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 type VaultResolver struct {
@@ -21,6 +23,7 @@ type VaultResolver struct {
 	mountPath   string
 	tokenExpiry time.Time
 	mu          sync.RWMutex
+	sfGroup     singleflight.Group
 }
 
 func NewVaultResolver() *VaultResolver {
@@ -33,6 +36,9 @@ func NewVaultResolver() *VaultResolver {
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 10 {
+					return fmt.Errorf("stopped after 10 redirects")
+				}
 				if req.URL.Scheme != "https" {
 					return fmt.Errorf("refusing non-HTTPS redirect to %s", req.URL)
 				}
@@ -87,6 +93,7 @@ func (r *VaultResolver) Resolve(ctx context.Context, ref SecretRef) (string, err
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return "", fmt.Errorf("failed to decode vault response: %w", err)
 	}
+	_, _ = io.Copy(io.Discard, resp.Body)
 
 	if result.Data == nil {
 		return "", fmt.Errorf("no data found at vault path %q", ref.Path)
@@ -94,7 +101,8 @@ func (r *VaultResolver) Resolve(ctx context.Context, ref SecretRef) (string, err
 
 	// Try KV v2 first: actual data is inside data.data
 	var secretMap map[string]interface{}
-	if dataMap, ok := result.Data["data"].(map[string]interface{}); ok {
+	_, hasMetadata := result.Data["metadata"]
+	if dataMap, ok := result.Data["data"].(map[string]interface{}); ok && hasMetadata {
 		secretMap = dataMap // KV v2
 	} else {
 		secretMap = result.Data // KV v1
@@ -129,68 +137,74 @@ func (r *VaultResolver) getToken(ctx context.Context) (string, error) {
 	r.mu.RUnlock()
 
 	// Try Kubernetes Auth
-	jwtBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token")
-	if err != nil {
-		if os.IsNotExist(err) && r.token == "" {
-			return "", fmt.Errorf("no VAULT_TOKEN set and kubernetes token not found")
-		} else if os.IsNotExist(err) {
-			// fall back to whatever token we might have
-			return r.token, nil
+	v, err, _ := r.sfGroup.Do("token", func() (interface{}, error) {
+		jwtBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token")
+		if err != nil {
+			if os.IsNotExist(err) && r.token == "" {
+				return "", fmt.Errorf("no VAULT_TOKEN set and kubernetes token not found")
+			} else if os.IsNotExist(err) {
+				// fall back to whatever token we might have
+				return r.token, nil
+			}
+			return "", fmt.Errorf("failed to read kubernetes token: %w", err)
 		}
-		return "", fmt.Errorf("failed to read kubernetes token: %w", err)
-	}
 
-	if r.role == "" {
-		return "", fmt.Errorf("kubernetes auth requires a role")
-	}
+		if r.role == "" {
+			return "", fmt.Errorf("kubernetes auth requires a role")
+		}
 
-	mount := r.mountPath
-	if mount == "" {
-		mount = "kubernetes"
-	}
+		mount := r.mountPath
+		if mount == "" {
+			mount = "kubernetes"
+		}
 
-	payload := map[string]string{
-		"role": r.role,
-		"jwt":  string(jwtBytes),
-	}
-	body, _ := json.Marshal(payload)
+		payload := map[string]string{
+			"role": r.role,
+			"jwt":  string(jwtBytes),
+		}
+		body, _ := json.Marshal(payload)
 
-	authCtx, authCancel := context.WithTimeout(ctx, 30*time.Second)
-	defer authCancel()
+		authCtx, authCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer authCancel()
 
-	reqURL := fmt.Sprintf("%s/v1/auth/%s/login", strings.TrimRight(r.addr, "/"), mount)
-	req, err := http.NewRequestWithContext(authCtx, http.MethodPost, reqURL, bytes.NewReader(body))
+		reqURL := fmt.Sprintf("%s/v1/auth/%s/login", strings.TrimRight(r.addr, "/"), mount)
+		req, err := http.NewRequestWithContext(authCtx, http.MethodPost, reqURL, bytes.NewReader(body))
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := r.client.Do(req)
+		if err != nil {
+			return "", fmt.Errorf("kubernetes auth request failed: %w", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+
+		if resp.StatusCode != http.StatusOK {
+			b, _ := io.ReadAll(resp.Body)
+			return "", fmt.Errorf("kubernetes auth returned status %d: %s", resp.StatusCode, string(b))
+		}
+
+		var authResp struct {
+			Auth struct {
+				ClientToken   string `json:"client_token"`
+				LeaseDuration int    `json:"lease_duration"`
+			} `json:"auth"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&authResp); err != nil {
+			return "", fmt.Errorf("failed to decode auth response: %w", err)
+		}
+
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		r.token = authResp.Auth.ClientToken
+		// Cache it for slightly less than the lease duration
+		r.tokenExpiry = time.Now().Add(time.Duration(authResp.Auth.LeaseDuration-10) * time.Second)
+
+		return r.token, nil
+	})
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := r.client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("kubernetes auth request failed: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("kubernetes auth returned status %d: %s", resp.StatusCode, string(b))
-	}
-
-	var authResp struct {
-		Auth struct {
-			ClientToken   string `json:"client_token"`
-			LeaseDuration int    `json:"lease_duration"`
-		} `json:"auth"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&authResp); err != nil {
-		return "", fmt.Errorf("failed to decode auth response: %w", err)
-	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.token = authResp.Auth.ClientToken
-	// Cache it for slightly less than the lease duration
-	r.tokenExpiry = time.Now().Add(time.Duration(authResp.Auth.LeaseDuration-10) * time.Second)
-
-	return r.token, nil
+	return v.(string), nil
 }
