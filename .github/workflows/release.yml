@@ -39,6 +39,10 @@ jobs:
       - name: Extract tag
         id: tag
         run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+      - name: Sync CRDs to Helm chart
+        run: |
+          rm -f charts/diverge/crds/*.yaml
+          cp config/crd/bases/*.yaml charts/diverge/crds/
       - name: Package Helm chart
         run: |
           helm package charts/diverge --version ${{ steps.tag.outputs.version }} --app-version ${{ steps.tag.outputs.version }}

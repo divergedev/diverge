@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -16,6 +17,9 @@ func NewFileResolver() *FileResolver {
 }
 
 func (r *FileResolver) Resolve(ctx context.Context, ref SecretRef) (string, error) {
+	if filepath.IsAbs(ref.Path) || strings.HasPrefix(ref.Path, `\`) || (len(ref.Path) >= 2 && ref.Path[1] == ':') {
+		return "", fmt.Errorf("absolute paths not allowed in file secret refs")
+	}
 	if strings.Contains(ref.Path, "..") {
 		return "", fmt.Errorf("path traversal not allowed: %q", ref.Path)
 	}

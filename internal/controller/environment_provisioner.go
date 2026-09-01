@@ -184,12 +184,14 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 			g.SetLimit(5) // bounded concurrency
 			results := make([]routeResult, len(env.Spec.Routing.AsyncRoutes))
 
+			envCopy := env.DeepCopy()
 			for i, route := range env.Spec.Routing.AsyncRoutes {
+				i, route := i, route
 				g.Go(func() error {
 					tCtxA, cancelA := context.WithTimeout(gCtx, 30*time.Second)
 					defer cancelA()
 					startA := time.Now()
-					result, err := r.AsyncProvisioner.Provision(tCtxA, env, route)
+					result, err := r.AsyncProvisioner.Provision(tCtxA, envCopy, route)
 					durationA := time.Since(startA).Seconds()
 					if err == nil && result == nil {
 						err = async.ErrNilProvisionResult
