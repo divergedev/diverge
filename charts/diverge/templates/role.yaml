@@ -1,8 +1,12 @@
-{{- if not .Values.rbac.namespaceScoped }}
+{{- if .Values.rbac.namespaceScoped }}
+{{- $fullname := include "diverge.fullname" . }}
+{{- range .Values.rbac.managedNamespaces }}
+---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
+kind: Role
 metadata:
-  name: {{ include "diverge.fullname" . }}-controller-role
+  name: {{ $fullname }}-controller-role
+  namespace: {{ . }}
 rules:
   # Diverge CRDs
   - apiGroups: ["diverge.io"]
@@ -51,4 +55,5 @@ rules:
   - apiGroups: ["http.keda.sh"]
     resources: [httpscaledobjects]
     verbs: [get, list, watch, create, update, patch, delete]
+{{- end }}
 {{- end }}

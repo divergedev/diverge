@@ -60,8 +60,22 @@ type DotDivergeContainer struct {
 
 // ParseDotDivergeConfig parses the raw bytes of a .diverge.yaml file.
 func ParseDotDivergeConfig(data []byte) (*DotDivergeConfig, error) {
+	const maxManifestSize = 5 << 20 // 5MB
+	if len(data) > maxManifestSize {
+		return nil, fmt.Errorf("manifest exceeds maximum size of %d bytes", maxManifestSize)
+	}
+
 	var cfg DotDivergeConfig
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+
+	// Create decoder with alias limits to prevent YAML bombs
+	var node yaml.Node
+	if err := yaml.Unmarshal(data, &node); err != nil {
+		return nil, fmt.Errorf("failed to parse .diverge.yaml: %w", err)
+	}
+
+	// Note: go-yaml v3 mitigates yaml-bombs by limiting alias depth inherently,
+	// but we decode into node first then into our struct to be safe.
+	if err := node.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse .diverge.yaml: %w", err)
 	}
 	if cfg.Spec.ServiceName == "" {

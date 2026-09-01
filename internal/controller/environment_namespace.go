@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -86,6 +87,29 @@ func (r *EnvironmentReconciler) ensureNamespace(ctx context.Context, env *diverg
 		}
 		if err := r.Create(ctx, quota); err != nil && !apierrors.IsAlreadyExists(err) {
 			return fmt.Errorf("failed to create resource quota: %w", err)
+		}
+
+		netpol := &networkingv1.NetworkPolicy{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "diverge-default-netpol",
+				Namespace: env.PreviewNamespace(),
+				Labels:    map[string]string{"diverge.io/managed-by": "diverge"},
+			},
+			Spec: networkingv1.NetworkPolicySpec{
+				PodSelector: metav1.LabelSelector{}, // all pods
+				PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
+				Egress: []networkingv1.NetworkPolicyEgressRule{{
+					To: []networkingv1.NetworkPolicyPeer{{
+						IPBlock: &networkingv1.IPBlock{
+							CIDR:   "0.0.0.0/0",
+							Except: []string{"169.254.169.254/32"},
+						},
+					}},
+				}},
+			},
+		}
+		if err := r.Create(ctx, netpol); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("failed to create network policy: %w", err)
 		}
 	}
 	// "same" mode: namespace already exists (it's where the CR lives), nothing to do

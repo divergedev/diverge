@@ -1,0 +1,21 @@
+{{- if .Values.rbac.namespaceScoped }}
+{{- $fullname := include "diverge.fullname" . }}
+{{- $serviceAccount := .Values.serviceAccount.name | default (include "diverge.fullname" .) }}
+{{- $namespace := .Release.Namespace }}
+{{- range .Values.rbac.managedNamespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullname }}-controller-binding
+  namespace: {{ . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $serviceAccount }}
+    namespace: {{ $namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fullname }}-controller-role
+{{- end }}
+{{- end }}

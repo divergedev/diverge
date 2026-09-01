@@ -63,6 +63,9 @@ type EnvironmentDeploy struct {
 	// Required when using the direct deployer.
 	// +optional
 	Manifests *ManifestSource `json:"manifests,omitempty"`
+	// EnvFrom specifies environment variables to inject from Secrets.
+	// +optional
+	EnvFrom []SecretRef `json:"envFrom,omitempty"`
 }
 
 // AsyncRouteSpec defines an async routing target for event-driven services.
@@ -373,6 +376,9 @@ type EnvironmentSpec struct {
 	// this config rather than using ManifestFetcher.
 	// +optional
 	ServiceConfig *ServicePreviewConfig `json:"serviceConfig,omitempty"`
+	// EnvFrom specifies environment variables to inject from Secrets.
+	// +optional
+	EnvFrom []SecretRef `json:"envFrom,omitempty"`
 }
 
 // EnvironmentPhase defines the phases an Environment can be in

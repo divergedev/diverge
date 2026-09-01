@@ -153,6 +153,24 @@ spec:
                     items:
                       type: string
                     type: array
+                  envFrom:
+                    description: EnvFrom specifies environment variables to inject
+                      from Secrets.
+                    items:
+                      description: SecretRef references a specific key within a Kubernetes
+                        Secret.
+                      properties:
+                        key:
+                          description: Key is the specific key in the Secret to reference.
+                          type: string
+                        name:
+                          description: Name is the name of the Secret.
+                          type: string
+                        namespace:
+                          description: Namespace is the namespace of the Secret.
+                          type: string
+                      type: object
+                    type: array
                   manifests:
                     description: |-
                       Manifests specifies where pre-rendered manifests are stored.
@@ -188,6 +206,24 @@ spec:
                       type: string
                     type: object
                 type: object
+              envFrom:
+                description: EnvFrom specifies environment variables to inject from
+                  Secrets.
+                items:
+                  description: SecretRef references a specific key within a Kubernetes
+                    Secret.
+                  properties:
+                    key:
+                      description: Key is the specific key in the Secret to reference.
+                      type: string
+                    name:
+                      description: Name is the name of the Secret.
+                      type: string
+                    namespace:
+                      description: Namespace is the namespace of the Secret.
+                      type: string
+                  type: object
+                type: array
               lifecycle:
                 description: EnvironmentLifecycle defines the lifecycle configuration
                 properties:

@@ -1,43 +1,66 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "http://json-schema.org/schema#",
   "type": "object",
   "properties": {
-    "controller": { "type": "object" },
+    "replicaCount": { "type": "integer" },
+    "image": { "type": "object" },
+    "routingProvider": {
+      "type": "string",
+      "enum": ["gateway", "istio"]
+    },
+    "resources": { "type": "object" },
     "metrics": { "type": "object" },
-    "server": {
+    "observability": { "type": "object" },
+    "grafana": { "type": "object" },
+    "prometheus": { "type": "object" },
+    "webhook": { "type": "object" },
+    "deploy": {
       "type": "object",
       "properties": {
-        "enabled": { "type": "boolean" },
-        "replicaCount": { "type": "integer", "minimum": 1 },
-        "image": {
-          "type": "object",
-          "properties": {
-            "repository": { "type": "string" },
-            "tag": { "type": "string" }
-          }
-        },
-        "auth": {
-          "type": "object",
-          "properties": {
-            "oidc": {
-              "type": "object",
-              "properties": {
-                "issuerURL": { "type": "string", "format": "uri" }
-              }
-            }
-          }
-        },
-        "cors": {
-          "type": "object",
-          "properties": {
-            "allowedOrigins": {
-              "type": ["string", "array"],
-              "items": { "type": "string" }
-            }
-          }
+        "provider": {
+          "type": "string",
+          "enum": ["argocd", "direct", "noop"]
         }
+      }
+    },
+    "database": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["noop", "shared", "schema"]
+        }
+      }
+    },
+    "serviceAccount": { "type": "object" },
+    "podDisruptionBudget": { "type": "object" },
+    "nodeSelector": { "type": "object" },
+    "tolerations": { "type": "array" },
+    "affinity": { "type": "object" },
+    "proxy": { "type": "object" },
+    "activatorProxy": { "type": "object" },
+    "server": { "type": "object" },
+    "certManager": { "type": "object" },
+    "rbac": {
+      "type": "object",
+      "properties": {
+        "namespaceScoped": { "type": "boolean" },
+        "managedNamespaces": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "if": {
+        "properties": { "namespaceScoped": { "const": true } },
+        "required": ["namespaceScoped"]
+      },
+      "then": {
+        "properties": {
+          "managedNamespaces": { "minItems": 1 }
+        },
+        "required": ["managedNamespaces"]
       }
     }
   },
-  "required": ["server"]
+  "required": ["replicaCount", "image", "routingProvider", "deploy", "database"]
 }

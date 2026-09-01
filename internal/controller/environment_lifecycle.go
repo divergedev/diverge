@@ -28,7 +28,10 @@ func (r *EnvironmentReconciler) reconcileLifecycle(ctx context.Context, env *div
 		env.Status.ExpiresAt = &metav1.Time{Time: expiryTime}
 		if time.Now().After(expiryTime) {
 			logger.Info("Environment TTL expired, triggering deletion")
-			if err := r.Delete(ctx, env); err != nil {
+			deleteCtx, cancelDelete := context.WithTimeout(ctx, 15*time.Second)
+			err := r.Delete(deleteCtx, env)
+			cancelDelete()
+			if err != nil {
 				return 0, ctrl.Result{}, true, fmt.Errorf("failed to delete expired environment: %w", err)
 			}
 			return 0, ctrl.Result{}, true, nil

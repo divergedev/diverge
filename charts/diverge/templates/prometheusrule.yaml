@@ -1,0 +1,20 @@
+{{- if and .Values.prometheus.alerts.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "diverge.fullname" . }}-alerts
+  labels:
+    {{- include "diverge.labels" . | nindent 4 }}
+spec:
+  groups:
+    - name: diverge.rules
+      rules:
+        - alert: DivergeControllerDown
+          expr: absent(up{job="{{ include "diverge.fullname" . }}"} == 1)
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Diverge controller is down
+            description: The Diverge controller has been unavailable for more than 5 minutes.
+{{- end }}
