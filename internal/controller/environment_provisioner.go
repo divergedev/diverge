@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"golang.org/x/sync/errgroup"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -173,33 +174,55 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 			}
 
 			asyncEnvVars := make(map[string]string)
-			for _, route := range env.Spec.Routing.AsyncRoutes {
-				tCtxA, cancelA := context.WithTimeout(ctx, 30*time.Second)
-				startA := time.Now()
-				result, err := r.AsyncProvisioner.Provision(tCtxA, env, route)
-				durationA := time.Since(startA).Seconds()
-				cancelA()
-				if err == nil && result == nil {
-					err = async.ErrNilProvisionResult
-				}
-				if err != nil {
+			type routeResult struct {
+				route    divergeiov1alpha1.AsyncRouteSpec
+				envVars  map[string]string
+				duration float64
+			}
+
+			g, gCtx := errgroup.WithContext(ctx)
+			g.SetLimit(5) // bounded concurrency
+			results := make([]routeResult, len(env.Spec.Routing.AsyncRoutes))
+
+			for i, route := range env.Spec.Routing.AsyncRoutes {
+				g.Go(func() error {
+					tCtxA, cancelA := context.WithTimeout(gCtx, 30*time.Second)
+					defer cancelA()
+					startA := time.Now()
+					result, err := r.AsyncProvisioner.Provision(tCtxA, env, route)
+					durationA := time.Since(startA).Seconds()
+					if err == nil && result == nil {
+						err = async.ErrNilProvisionResult
+					}
+					if err != nil {
+						asyncProvisionDuration.WithLabelValues(string(route.Protocol)).Observe(durationA)
+						asyncProvisionsTotal.WithLabelValues(string(route.Protocol), "error").Inc()
+						return fmt.Errorf("async provision failed for %s/%s: %w", route.Protocol, route.Target, err)
+					}
 					asyncProvisionDuration.WithLabelValues(string(route.Protocol)).Observe(durationA)
-					asyncProvisionsTotal.WithLabelValues(string(route.Protocol), "error").Inc()
-					meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
-						Type:    "AsyncRoutingReady",
-						Status:  metav1.ConditionFalse,
-						Reason:  "AsyncProvisionFailed",
-						Message: fmt.Sprintf("async provision failed for %s/%s: %s", route.Protocol, route.Target, err.Error()),
-					})
-					r.Recorder.Event(env, "Warning", "AsyncProvisionFailed", fmt.Sprintf("async provision failed for %s/%s: %s", route.Protocol, route.Target, err.Error()))
-					res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
-					return res, true, retErr
-				}
-				asyncProvisionDuration.WithLabelValues(string(route.Protocol)).Observe(durationA)
-				asyncProvisionsTotal.WithLabelValues(string(route.Protocol), "success").Inc()
-				for k, v := range result.EnvVars {
+					asyncProvisionsTotal.WithLabelValues(string(route.Protocol), "success").Inc()
+					results[i] = routeResult{route: route, envVars: result.EnvVars, duration: durationA}
+					return nil
+				})
+			}
+
+			if err := g.Wait(); err != nil {
+				meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+					Type:    "AsyncRoutingReady",
+					Status:  metav1.ConditionFalse,
+					Reason:  "AsyncProvisionFailed",
+					Message: err.Error(),
+				})
+				r.Recorder.Event(env, "Warning", "AsyncProvisionFailed", err.Error())
+				res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
+				return res, true, retErr
+			}
+
+			// Merge env vars sequentially to detect collisions deterministically
+			for _, rr := range results {
+				for k, v := range rr.envVars {
 					if existing, ok := asyncEnvVars[k]; ok && existing != v {
-						err = fmt.Errorf("env var collision for %q", k)
+						err := fmt.Errorf("env var collision for %q", k)
 						meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 							Type:    "AsyncRoutingReady",
 							Status:  metav1.ConditionFalse,
