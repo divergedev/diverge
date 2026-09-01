@@ -65,6 +65,9 @@ database:
   # Reference to existing K8s Secret containing the database password
   passwordSecretName: ""
   passwordSecretKey: "password"
+  # SetupJob configures the K8s Job that executes the schema initialization SQL
+  setupJob:
+    image: "postgres:17-alpine"
 
 serviceAccount:
   create: true

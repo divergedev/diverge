@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -106,6 +107,31 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 		return res, true, retErr
 	}
 	if dbStatus != nil && dbStatus.Ready {
+		// Run SetupSQL job if configured
+		if dbStatus.SetupSQL != "" {
+			if setupErr := r.runSetupSQLJob(ctx, env, dbStatus.SetupSQL, dbStatus.AdminDSN); setupErr != nil {
+				if errors.Is(setupErr, ErrHookInProgress) {
+					meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+						Type:    "DatabaseReady",
+						Status:  metav1.ConditionFalse,
+						Reason:  "DatabaseSetupRunning",
+						Message: "SetupSQL job is running",
+					})
+					res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, nil, 2*time.Second)
+					return res, true, retErr
+				}
+				meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+					Type:    "DatabaseReady",
+					Status:  metav1.ConditionFalse,
+					Reason:  "DatabaseSetupFailed",
+					Message: setupErr.Error(),
+				})
+				r.notifyFailed(ctx, env, setupErr.Error())
+				res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, setupErr, 0)
+				return res, true, retErr
+			}
+		}
+
 		meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 			Type:    "DatabaseReady",
 			Status:  metav1.ConditionTrue,

@@ -43,6 +43,7 @@ type EnvironmentReconciler struct {
 	Deployer         deployer.Deployer
 	TestRunner       divtesting.TestRunner
 	AsyncProvisioner async.Provisioner
+	SetupJobImage    string
 }
 
 // +kubebuilder:rbac:groups=diverge.io,resources=environments,verbs=get;list;watch;create;update;patch;delete
