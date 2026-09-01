@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -103,10 +104,10 @@ func TestAsyncRouting_MultipleRoutes(t *testing.T) {
 	}
 	r, client, _, _, _ := newTestReconciler(t, env.DeepCopy(), &database.DatabaseResult{Ready: true}, "https://test.com")
 
-	callCount := 0
+	var callCount atomic.Int32
 	r.AsyncProvisioner = &fakeProvisionerDynamic{
 		provisionFn: func(ctx context.Context, e *divergeiov1alpha1.Environment, route divergeiov1alpha1.AsyncRouteSpec) (*async.ProvisionResult, error) {
-			callCount++
+			callCount.Add(1)
 			if route.Protocol == "temporal" {
 				return &async.ProvisionResult{EnvVars: map[string]string{"TEMPORAL_TASK_QUEUE": "payments-test-env"}}, nil
 			}
@@ -121,7 +122,7 @@ func TestAsyncRouting_MultipleRoutes(t *testing.T) {
 	updatedEnv := &divergeiov1alpha1.Environment{}
 	require.NoError(t, client.Get(context.Background(), req.NamespacedName, updatedEnv))
 
-	assert.Equal(t, 2, callCount)
+	assert.Equal(t, int32(2), callCount.Load())
 	condition := meta.FindStatusCondition(updatedEnv.Status.Conditions, "AsyncRoutingReady")
 	require.NotNil(t, condition)
 	assert.Contains(t, condition.Message, "2 async routes")
@@ -216,11 +217,9 @@ func TestAsyncRouting_Conflict(t *testing.T) {
 	}
 	r, client, _, _, _ := newTestReconciler(t, env.DeepCopy(), &database.DatabaseResult{Ready: true}, "https://test.com")
 
-	i := 0
 	r.AsyncProvisioner = &fakeProvisionerDynamic{
 		provisionFn: func(ctx context.Context, e *divergeiov1alpha1.Environment, route divergeiov1alpha1.AsyncRouteSpec) (*async.ProvisionResult, error) {
-			i++
-			if i == 1 {
+			if route.Target == "q1" {
 				return &async.ProvisionResult{EnvVars: map[string]string{"CONFLICT_VAR": "val1"}}, nil
 			}
 			return &async.ProvisionResult{EnvVars: map[string]string{"CONFLICT_VAR": "val2"}}, nil
