@@ -9,29 +9,49 @@ jobs:
     permissions:
       contents: write
       packages: write
+      id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '22'
-      - uses: bufbuild/buf-action@v1
+      - uses: bufbuild/buf-action@e8b15693be91ae73e965d157c722987338c768b3 # v1
         with:
           setup_only: true
-      - uses: docker/setup-qemu-action@v4
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: goreleaser/goreleaser-action@v7
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
         with:
           version: '~> v2'
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Extract tag
+        id: tag
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+      - name: Package Helm chart
+        run: |
+          helm package charts/diverge --version ${{ steps.tag.outputs.version }} --app-version ${{ steps.tag.outputs.version }}
+      - name: Push Helm chart to OCI
+        run: |
+          helm push diverge-${{ steps.tag.outputs.version }}.tgz oci://ghcr.io/divergedev/charts
+      - name: Install cosign
+        uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd1d5ad28adf5d6 # v3
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@61119d458adab75f756bc0b9e4bde25725f86a7a # v0
+      - name: Generate SBOM
+        run: syft ghcr.io/divergedev/diverge:${{ github.ref_name }} -o spdx-json > diverge-sbom.spdx.json
+      - name: Sign container image
+        run: cosign sign --yes ghcr.io/divergedev/diverge:${{ github.ref_name }}
+      - name: Attach SBOM
+        run: cosign attach sbom --sbom diverge-sbom.spdx.json ghcr.io/divergedev/diverge:${{ github.ref_name }}

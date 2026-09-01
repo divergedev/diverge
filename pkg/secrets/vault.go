@@ -28,9 +28,20 @@ func NewVaultResolver() *VaultResolver {
 	token := os.Getenv("VAULT_TOKEN")
 
 	return &VaultResolver{
-		addr:   addr,
-		token:  token,
-		client: &http.Client{Timeout: 10 * time.Second},
+		addr:  addr,
+		token: token,
+		client: &http.Client{
+			Timeout: 10 * time.Second,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if req.URL.Scheme != "https" {
+					return fmt.Errorf("refusing non-HTTPS redirect to %s", req.URL)
+				}
+				if len(via) > 0 && req.URL.Host != via[0].URL.Host {
+					return fmt.Errorf("refusing cross-host redirect from %s to %s", via[0].URL.Host, req.URL.Host)
+				}
+				return nil
+			},
+		},
 	}
 }
 

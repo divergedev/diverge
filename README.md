@@ -17,7 +17,7 @@ Environment-as-a-service engine for Kubernetes. Diverge creates ephemeral previe
 ### Get Started
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/v0.8.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/main/install.sh | sh
 ```
 
 Documentation: [https://divergedev.com](https://divergedev.com)
@@ -39,6 +39,14 @@ You can quickly test Diverge locally with the CLI:
 ```bash
 diverge dev --service my-app
 ```
+
+## Helm Install
+
+```bash
+helm install diverge oci://ghcr.io/divergedev/charts/diverge --version <version>
+```
+
+See [charts/diverge/values.yaml](charts/diverge/values.yaml) for configuration options.
 
 ## Key Features
 *   **PreviewGroup Orchestration**: Manage multiple child environments and services under a single CR tied directly to an MR/PR. Automatic orphan cleanup and label-based ownership.
@@ -76,7 +84,14 @@ Diverge provides fully isolated preview environments for asynchronous workloads.
 See the [Async Routing Guide](docs/async-routing.md) for full configuration details and YAML examples.
 
 ## Security
+
 Diverge takes security seriously. The platform features strict CRD OpenAPI validation, context timeouts on all external calls, and prevention mechanisms for shell/markdown injection in templates. The controller uses RBAC-scoped clients to ensure it only has the permissions it needs. Webhook interactions are secured using constant-time comparisons for secrets and RFC 7230-compliant header validation. Recent hardening includes ArgoCD namespace bypass prevention, safe SHA handling to eliminate panics, IPv6-safe pod URLs, comprehensive label validation, and Typed Server-Side Apply (SSA) to ensure safe resource updates.
+
+- Container images are signed with [cosign](https://github.com/sigstore/cosign) using keyless (OIDC) identity
+- Every release includes an SBOM (SPDX) attached to the container image
+- CRD YAML bundles are published as release artifacts
+- Helm chart is published to `oci://ghcr.io/divergedev/charts`
+- GitHub Actions are pinned to commit SHAs
 
 ## Architecture
 

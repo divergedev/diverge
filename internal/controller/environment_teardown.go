@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/otel"
+
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -18,6 +20,9 @@ import (
 )
 
 func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *divergeiov1alpha1.Environment) (ctrl.Result, error) {
+	ctx, span := otel.Tracer("diverge").Start(ctx, "handleTeardown")
+	defer span.End()
+
 	// Clean up per-environment TTL gauge to prevent cardinality leak
 	metrics.EnvironmentTTLRemaining.DeleteLabelValues(env.Name, env.Namespace)
 

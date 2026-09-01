@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/otel"
+
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -57,6 +59,9 @@ type EnvironmentReconciler struct {
 
 // Reconcile performs its designated operation.
 func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, retErr error) {
+	ctx, span := otel.Tracer("diverge").Start(ctx, "Reconcile")
+	defer span.End()
+
 	logger := log.FromContext(ctx)
 
 	var env divergeiov1alpha1.Environment
