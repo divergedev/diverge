@@ -313,3 +313,8 @@ release:
   github:
     owner: divergedev
     name: diverge
+  extra_files:
+    - glob: config/crd/bases/*.yaml
+sboms:
+  - artifacts: archive
+    cmd: syft

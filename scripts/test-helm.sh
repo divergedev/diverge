@@ -19,12 +19,12 @@ if echo "$output" | grep -qE '^kind: ClusterRole$'; then
   echo 'FAIL: ClusterRole found when namespaceScoped=true'
   exit 1
 fi
-if ! echo "$output" | grep -qE '^kind: Role$'; then
-  echo 'FAIL: Role not found when namespaceScoped=true'
+if ! echo "$output" | grep -A4 '^kind: Role$' | grep -q 'namespace: test-ns'; then
+  echo 'FAIL: Role not in expected namespace'
   exit 1
 fi
-if ! echo "$output" | grep -qE '^kind: RoleBinding$'; then
-  echo 'FAIL: RoleBinding not found when namespaceScoped=true'
+if ! echo "$output" | grep -A4 '^kind: RoleBinding$' | grep -q 'namespace: test-ns'; then
+  echo 'FAIL: RoleBinding not in expected namespace'
   exit 1
 fi
 echo '✅ All Helm tests passed'

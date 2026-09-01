@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -33,6 +35,9 @@ func (r *EnvironmentReconciler) notifyFailed(ctx context.Context, env *divergeio
 }
 
 func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *divergeiov1alpha1.Environment, statusBase *divergeiov1alpha1.Environment) (ctrl.Result, bool, error) {
+	ctx, span := otel.Tracer("diverge").Start(ctx, "reconcileProvisioning")
+	defer span.End()
+
 	logger := log.FromContext(ctx)
 
 	// S5: Cross-namespace SecretRef Validation

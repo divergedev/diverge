@@ -88,3 +88,32 @@ func TestVaultResolver_RejectsHTTP(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must use HTTPS")
 }
+
+func TestVaultResolver_RejectsCrossHostRedirect(t *testing.T) {
+	// Create the target server (different host)
+	targetSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer targetSrv.Close()
+
+	// Create the initial server that redirects to the target server
+	redirectSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, targetSrv.URL+r.URL.Path, http.StatusFound)
+	}))
+	defer redirectSrv.Close()
+
+	t.Setenv("VAULT_ADDR", redirectSrv.URL)
+	t.Setenv("VAULT_TOKEN", "test-token")
+
+	r := NewVaultResolver()
+	// Need to use a custom transport that trusts the test certificates
+	tr := redirectSrv.Client().Transport.(*http.Transport).Clone()
+	// Add trust for the target server's certificate too
+	tr.TLSClientConfig.RootCAs = nil
+	tr.TLSClientConfig.InsecureSkipVerify = true
+	r.client.Transport = tr
+
+	_, err := r.Resolve(context.Background(), SecretRef{Path: "secret/data/myapp", Key: "mykey"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "refusing cross-host redirect from")
+}

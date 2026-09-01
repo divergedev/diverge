@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -98,4 +100,28 @@ func TestValidateWorksFromAnyDirectory(t *testing.T) {
 
 	err = cmd.RunE(cmd, nil)
 	assert.NoError(t, err, "validate should work from any directory with embedded schema")
+}
+
+func TestValidateRemoteConfig(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// editorconfig-checker-disable
+		_, _ = w.Write([]byte(`version: "1"
+services:
+  api:
+    paths: ["src/**"]
+    image:
+      repository: "registry.example.com/api"`))
+		// editorconfig-checker-enable
+	}))
+	defer ts.Close()
+
+	app := &App{}
+	cmd := newValidateCmd(app)
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+
+	cmd.SetArgs([]string{"--config", ts.URL})
+	err := cmd.Execute()
+	assert.NoError(t, err)
+	assert.Contains(t, out.String(), "Config is valid")
 }

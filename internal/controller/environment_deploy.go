@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"go.opentelemetry.io/otel"
+
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -12,6 +14,9 @@ import (
 )
 
 func (r *EnvironmentReconciler) reconcileDeploy(ctx context.Context, env *divergeiov1alpha1.Environment, statusBase *divergeiov1alpha1.Environment) (ctrl.Result, bool, error) {
+	ctx, span := otel.Tracer("diverge").Start(ctx, "reconcileDeploy")
+	defer span.End()
+
 	if r.Deployer != nil {
 		tCtxD, cancelD := context.WithTimeout(ctx, 15*time.Second)
 		defer cancelD()

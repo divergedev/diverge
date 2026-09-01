@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/otel"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -13,6 +15,9 @@ import (
 )
 
 func (r *EnvironmentReconciler) reconcileLifecycle(ctx context.Context, env *divergeiov1alpha1.Environment, statusBase *divergeiov1alpha1.Environment, oldPhase divergeiov1alpha1.EnvironmentPhase) (time.Duration, ctrl.Result, bool, error) {
+	ctx, span := otel.Tracer("diverge").Start(ctx, "reconcileLifecycle")
+	defer span.End()
+
 	logger := log.FromContext(ctx)
 	newPhase := env.Status.Phase
 

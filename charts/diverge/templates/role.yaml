@@ -13,10 +13,8 @@ rules:
     resources: [environments, environments/status, environments/finalizers,
                 previewgroups, previewgroups/status, previewgroups/finalizers]
     verbs: [get, list, watch, create, update, patch, delete]
-  # Core K8s - Namespaces
-  - apiGroups: [""]
-    resources: [namespaces]
-    verbs: [get, list, watch, create, update, patch, delete]
+
+
   # Core K8s - Workloads
   - apiGroups: [""]
     resources: [services, secrets, configmaps, serviceaccounts]
