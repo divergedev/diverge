@@ -153,6 +153,8 @@ export function buildGraphFromEnvironment(env: Environment): TopologyGraph {
   const dependencies: DependencyNodeData[] = []
   const connections: TopologyConnection[] = []
 
+  const changedServices = new Set<string>(env.spec?.deploy?.changedServices ?? [])
+
   const svcConfig = env.spec?.serviceConfig
   const phase = env.status?.phase ?? 'Unknown'
 
@@ -173,7 +175,7 @@ export function buildGraphFromEnvironment(env: Environment): TopologyGraph {
       lastLogSnippet: '',
       environmentName: env.name,
       url: env.status?.url ?? '',
-      isChanged: true,
+      isChanged: changedServices.has(svcConfig.serviceName),
     })
 
     // Ingress → Service
@@ -230,7 +232,7 @@ export function buildGraphFromEnvironment(env: Environment): TopologyGraph {
         lastLogSnippet: '',
         environmentName: env.name,
         url: env.status?.url ?? '',
-        isChanged: false,
+        isChanged: changedServices.has(svcName),
       })
       if (ingress) {
         connections.push({

@@ -1,4 +1,4 @@
-import React, { ReactElement } from 'react'
+import React, { ReactElement, useState } from 'react'
 import { render, RenderOptions, renderHook as rtlRenderHook, RenderHookOptions } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ThemeProvider } from '@/components/ThemeProvider'
@@ -6,15 +6,15 @@ import { AuthProvider } from '@/hooks/useAuth'
 
 import { MemoryRouter } from 'react-router-dom'
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      retry: false,
-    },
-  },
-})
-
 export const AllTheProviders = ({ children }: { children: React.ReactNode }) => {
+  const [queryClient] = useState(() => new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  }))
+
   return (
     <MemoryRouter>
       <QueryClientProvider client={queryClient}>
