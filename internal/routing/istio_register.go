@@ -7,6 +7,6 @@ func init() {
 		Create: func(deps registry.Deps) (Router, error) {
 			return &IstioRouter{Client: deps.Client}, nil
 		},
-		Description: "Istio VirtualService routing",
+		Description: "Istio AuthorizationPolicy for intercept access control (no header routing)",
 	})
 }

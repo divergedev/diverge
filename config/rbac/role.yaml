@@ -136,10 +136,9 @@ rules:
   - update
   - watch
 - apiGroups:
-  - networking.istio.io
+  - security.istio.io
   resources:
-  - destinationrules
-  - virtualservices
+  - authorizationpolicies
   verbs:
   - create
   - delete
