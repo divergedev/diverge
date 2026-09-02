@@ -122,8 +122,8 @@ server:
   enabled: false
   replicaCount: 1
   image:
-    repository: ""  # defaults to same as controller
-    tag: ""  # defaults to .Chart.AppVersion
+    repository: ""  # defaults to image.repository
+    tag: ""  # defaults to image.tag, then .Chart.AppVersion
   resources:
     limits:
       memory: 256Mi
