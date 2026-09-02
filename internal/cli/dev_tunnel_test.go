@@ -85,6 +85,7 @@ func TestRunDev_TunnelTimeout(t *testing.T) {
 			Cmd:      cmd,
 			NoTunnel: false,
 			Server:   ts.URL,
+			Token:    "test-token",
 			Options:  []DevOption{WithEnvironmentDetector(detector)},
 		})
 	}()
@@ -144,4 +145,30 @@ users:
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "failed to discover server")
+}
+
+// TestRunDev_TunnelNoCredential pins the actionable failure when no credential
+// can be resolved. The server rejects an unauthenticated Tunnel RPC with 401,
+// so failing here beats reconnecting into that forever.
+func TestRunDev_TunnelNoCredential(t *testing.T) {
+	t.Setenv(tunnelTokenEnvVar, "")
+
+	detector := fakeDetector{
+		tailscaleIP: "100.100.100.100",
+		serviceName: "web",
+		username:    "alice",
+		gitBranch:   "main",
+	}
+	app, _, cmd, cancel := runDevTestSetup(t, detector)
+	defer cancel()
+
+	err := runDev(runDevParams{
+		App:      app,
+		Cmd:      cmd,
+		NoTunnel: false,
+		Server:   "http://dummy.local",
+		Options:  []DevOption{WithEnvironmentDetector(detector)},
+	})
+	require.ErrorIs(t, err, ErrNoTunnelCredential)
+	require.Contains(t, err.Error(), "--token")
 }

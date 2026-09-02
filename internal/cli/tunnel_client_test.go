@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/client-go/rest"
 )
 
 type mockTunnelServer struct {
@@ -104,7 +107,7 @@ func TestTunnelClient(t *testing.T) {
 	ts.StartTLS()
 	defer ts.Close()
 
-	tc := NewTunnelClient(ts.URL, port, "test-preview", "test-service", "default",
+	tc := NewTunnelClient(ts.URL, port, "test-preview", "test-service", "default", "test-token",
 		slog.New(slog.NewTextHandler(os.Stdout, nil)))
 	tc.httpClient = ts.Client() // use test server's TLS client
 	tc.tunnelHTTPClient = ts.Client()
@@ -167,7 +170,7 @@ func TestTunnelClient_ReadyChannel(t *testing.T) {
 	ts.StartTLS()
 	defer ts.Close()
 
-	tc := NewTunnelClient(ts.URL, port, "test-preview", "test-service", "default", slog.Default())
+	tc := NewTunnelClient(ts.URL, port, "test-preview", "test-service", "default", "test-token", slog.Default())
 	tc.httpClient = ts.Client()
 	tc.tunnelHTTPClient = ts.Client()
 
@@ -233,7 +236,7 @@ func TestTunnelClient_Reconnect(t *testing.T) {
 	ts.StartTLS()
 	defer ts.Close()
 
-	tc := NewTunnelClient(ts.URL, port, "test-preview", "test-service", "default", slog.Default())
+	tc := NewTunnelClient(ts.URL, port, "test-preview", "test-service", "default", "test-token", slog.Default())
 	tc.httpClient = ts.Client()
 	tc.tunnelHTTPClient = ts.Client()
 
@@ -254,5 +257,118 @@ func TestTunnelClient_Reconnect(t *testing.T) {
 	case <-msgCh:
 	case <-time.After(5 * time.Second):
 		t.Fatal("timeout waiting for second register")
+	}
+}
+
+// TestNewTunnelClient_SendsAuthorizationHeader is the regression guard for the
+// tunnel connecting with no credential at all. The server authenticates every
+// Tunnel RPC by TokenReview and rejects an unauthenticated request with 401,
+// so the header has to reach the wire.
+func TestNewTunnelClient_SendsAuthorizationHeader(t *testing.T) {
+	var gotAuth string
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gotAuth = r.Header.Get("Authorization")
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	tc := NewTunnelClient(srv.URL, 8080, "preview-1", "svc", "ns", "s3cret-token", slog.Default())
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL, nil)
+	require.NoError(t, err)
+	resp, err := tc.tunnelHTTPClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, "Bearer s3cret-token", gotAuth)
+}
+
+// TestTunnelAuthTransport_DoesNotMutateRequest pins the RoundTripper contract:
+// the caller's request must not be modified in place.
+func TestTunnelAuthTransport_DoesNotMutateRequest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	transport := &tunnelAuthTransport{base: http.DefaultTransport, token: "tok"}
+	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+	require.NoError(t, err)
+
+	resp, err := transport.RoundTrip(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	assert.Empty(t, req.Header.Get("Authorization"),
+		"RoundTrip must not modify the request it is given")
+}
+
+func TestResolveTunnelToken(t *testing.T) {
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	require.NoError(t, os.WriteFile(tokenFile, []byte("  file-token\n"), 0o600))
+
+	tests := []struct {
+		name     string
+		explicit string
+		env      string
+		restCfg  *rest.Config
+		want     string
+		wantErr  error
+	}{
+		{
+			name:     "explicit token wins",
+			explicit: "flag-token",
+			env:      "env-token",
+			restCfg:  &rest.Config{BearerToken: "kube-token"},
+			want:     "flag-token",
+		},
+		{
+			name:    "env var used when no flag",
+			env:     "env-token",
+			restCfg: &rest.Config{BearerToken: "kube-token"},
+			want:    "env-token",
+		},
+		{
+			name:    "kubeconfig bearer token is the fallback",
+			restCfg: &rest.Config{BearerToken: "kube-token"},
+			want:    "kube-token",
+		},
+		{
+			name:    "bearer token file is read",
+			restCfg: &rest.Config{BearerTokenFile: tokenFile},
+			want:    "file-token",
+		},
+		{
+			name:     "surrounding whitespace is trimmed",
+			explicit: "  spaced  ",
+			want:     "spaced",
+		},
+		{
+			name:    "no credential anywhere",
+			restCfg: &rest.Config{},
+			wantErr: ErrNoTunnelCredential,
+		},
+		{
+			name:    "nil rest config",
+			wantErr: ErrNoTunnelCredential,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(tunnelTokenEnvVar, tt.env)
+			got, err := resolveTunnelToken(tt.explicit, tt.restCfg)
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
 	}
 }

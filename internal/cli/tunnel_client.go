@@ -3,16 +3,20 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"connectrpc.com/connect"
 	pb "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 	"github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
+	"k8s.io/client-go/rest"
 )
 
 const (
@@ -23,7 +27,15 @@ const (
 	// tunnelLocalTimeout is the HTTP client timeout for localhost requests.
 	// P1 #11: Prevents goroutine leaks from slow/stuck localhost services.
 	tunnelLocalTimeout = 30 * time.Second
+
+	// tunnelTokenEnvVar overrides the credential used for the tunnel.
+	tunnelTokenEnvVar = "DIVERGE_TOKEN"
 )
+
+// ErrNoTunnelCredential is returned when no credential can be resolved for the
+// tunnel. The server authenticates every Tunnel RPC by Kubernetes TokenReview,
+// so connecting without one only ever yields 401.
+var ErrNoTunnelCredential = errors.New("no credential available for the diverge server")
 
 type TunnelClient struct {
 	serverAddr       string
@@ -38,17 +50,67 @@ type TunnelClient struct {
 	readyOnce        sync.Once
 }
 
-func NewTunnelClient(serverAddr string, localPort int, previewID, service, namespace string, logger *slog.Logger) *TunnelClient {
+// tunnelAuthTransport attaches the bearer credential to every tunnel request.
+type tunnelAuthTransport struct {
+	base  http.RoundTripper
+	token string
+}
+
+func (t *tunnelAuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// RoundTrippers must not modify the request they are given.
+	clone := req.Clone(req.Context())
+	clone.Header.Set("Authorization", "Bearer "+t.token)
+	return t.base.RoundTrip(clone)
+}
+
+// resolveTunnelToken picks the credential to present to the diverge server, in
+// order: an explicit token (--token), the DIVERGE_TOKEN environment variable,
+// then the bearer credential from the kubeconfig the CLI already loaded.
+//
+// The kubeconfig fallback only works where that credential is a Kubernetes
+// token TokenReview accepts for the server's audience; a provider-issued
+// kubeconfig credential (GKE, EKS) generally is not, and needs --token with a
+// token minted for the server audience.
+func resolveTunnelToken(explicit string, restCfg *rest.Config) (string, error) {
+	if token := strings.TrimSpace(explicit); token != "" {
+		return token, nil
+	}
+	if token := strings.TrimSpace(os.Getenv(tunnelTokenEnvVar)); token != "" {
+		return token, nil
+	}
+	if restCfg != nil {
+		if token := strings.TrimSpace(restCfg.BearerToken); token != "" {
+			return token, nil
+		}
+		if restCfg.BearerTokenFile != "" {
+			data, err := os.ReadFile(restCfg.BearerTokenFile)
+			if err != nil {
+				return "", fmt.Errorf("failed to read bearer token file %s: %w", restCfg.BearerTokenFile, err)
+			}
+			if token := strings.TrimSpace(string(data)); token != "" {
+				return token, nil
+			}
+		}
+	}
+	return "", ErrNoTunnelCredential
+}
+
+func NewTunnelClient(serverAddr string, localPort int, previewID, service, namespace, token string, logger *slog.Logger) *TunnelClient {
 	return &TunnelClient{
-		serverAddr:       serverAddr,
-		localPort:        localPort,
-		previewID:        previewID,
-		service:          service,
-		namespace:        namespace,
-		logger:           logger,
-		httpClient:       &http.Client{Timeout: tunnelLocalTimeout}, // P1 #11
-		tunnelHTTPClient: &http.Client{},
-		Ready:            make(chan struct{}),
+		serverAddr: serverAddr,
+		localPort:  localPort,
+		previewID:  previewID,
+		service:    service,
+		namespace:  namespace,
+		logger:     logger,
+		httpClient: &http.Client{Timeout: tunnelLocalTimeout}, // P1 #11
+		tunnelHTTPClient: &http.Client{
+			Transport: &tunnelAuthTransport{
+				base:  http.DefaultTransport,
+				token: token,
+			},
+		},
+		Ready: make(chan struct{}),
 	}
 }
 
