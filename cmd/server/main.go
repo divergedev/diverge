@@ -48,6 +48,7 @@ func main() {
 		metricsAddr        string
 		tlsCertFile        string
 		tlsKeyFile         string
+		secureCookiesMode  string
 		tokenCacheTTL      time.Duration
 		maxStreams         int
 		maxStreamsPerUser  int
@@ -75,6 +76,8 @@ func main() {
 	flag.StringVar(&metricsAddr, "metrics-addr", ":9090", "Prometheus metrics endpoint address")
 	flag.StringVar(&tlsCertFile, "tls-cert-file", "", "TLS certificate file (optional)")
 	flag.StringVar(&tlsKeyFile, "tls-key-file", "", "TLS private key file (optional)")
+	flag.StringVar(&secureCookiesMode, "secure-cookies", server.SecureCookiesAuto,
+		"Set the Secure flag on session cookies: 'auto' (when this server terminates TLS, or the OIDC redirect URL is https), 'true', or 'false'")
 	flag.DurationVar(&tokenCacheTTL, "token-cache-ttl", 5*time.Second, "TokenReview cache TTL")
 	flag.IntVar(&maxStreams, "max-streams", 250, "Maximum concurrent streams (global)")
 	flag.IntVar(&maxStreamsPerUser, "max-streams-per-user", 20, "Maximum concurrent streams per user")
@@ -245,7 +248,15 @@ func main() {
 		authProvider = composite
 
 		// Create OIDC HTTP handler
-		secureCookies := tlsCertFile != "" // Enable Secure flag when TLS is configured
+		secureCookies, secErr := server.ResolveSecureCookies(secureCookiesMode, tlsCertFile != "", oidcRedirectURL)
+		if secErr != nil {
+			logger.Error("invalid secure cookie configuration", "err", secErr)
+			os.Exit(1)
+		}
+		if !secureCookies {
+			logger.Warn("session cookies will not have the Secure flag",
+				"hint", "set --secure-cookies=true when TLS is terminated in front of this server")
+		}
 		oidcHandler, err = server.NewOIDCHandler(server.OIDCHandlerConfig{
 			IssuerURL:      oidcIssuerURL,
 			ClientID:       oidcClientID,
