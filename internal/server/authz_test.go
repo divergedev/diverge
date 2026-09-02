@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/server/auth"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -195,4 +196,28 @@ func TestCheckSAR_ExtraPassthrough_PBT(t *testing.T) {
 
 		assert.Equal(t, extra, capturedSAR.Spec.Extra)
 	})
+}
+
+// TestAuthorizeAction_UsesCRDAPIGroup guards against the SubjectAccessReview
+// being issued for an API group that no Diverge CRD is served under. The
+// installed CRDs are diverge.io; a SAR against any other group can never be
+// satisfied by RBAC an operator writes against the real resources, and the
+// denial surfaces only as a bare "permission denied".
+func TestAuthorizeAction_UsesCRDAPIGroup(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	var capturedSAR *authorizationv1.SubjectAccessReview
+	client.PrependReactor("create", "subjectaccessreviews", func(action coretesting.Action) (handled bool, ret runtime.Object, err error) {
+		capturedSAR = action.(coretesting.CreateAction).GetObject().(*authorizationv1.SubjectAccessReview)
+		capturedSAR.Status.Allowed = true
+		return true, capturedSAR, nil
+	})
+
+	ctx := auth.ContextWithUserInfo(context.Background(), &auth.UserInfo{Username: "bob"})
+
+	err := AuthorizeAction(ctx, client, NewAuditLogger(slog.Default()), "get", "default", "environments")
+	require.NoError(t, err)
+	require.NotNil(t, capturedSAR)
+	assert.Equal(t, "diverge.io", capturedSAR.Spec.ResourceAttributes.Group)
+	assert.Equal(t, v1alpha1.GroupVersion.Group, capturedSAR.Spec.ResourceAttributes.Group)
+	assert.Equal(t, "environments", capturedSAR.Spec.ResourceAttributes.Resource)
 }
