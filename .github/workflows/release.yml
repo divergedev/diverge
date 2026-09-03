@@ -30,6 +30,10 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install cosign
+        uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a # v3.8.1
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@61119d458adab75f756bc0b9e4bde25725f86a7a # v0
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
         with:
           version: '~> v2'
@@ -49,10 +53,6 @@ jobs:
       - name: Push Helm chart to OCI
         run: |
           helm push diverge-${{ steps.tag.outputs.version }}.tgz oci://ghcr.io/divergedev/charts
-      - name: Install cosign
-        uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a # v3.8.1
-      - name: Install syft
-        uses: anchore/sbom-action/download-syft@61119d458adab75f756bc0b9e4bde25725f86a7a # v0
       - name: Generate SBOM
         run: syft ghcr.io/divergedev/diverge:${{ github.ref_name }} -o spdx-json > diverge-sbom.spdx.json
       - name: Sign container image
