@@ -165,6 +165,37 @@ func TestBuildEnvironmentWithBanner(t *testing.T) {
 	assert.Equal(t, "#00FF00", env.Spec.Routing.Banner.Color)
 }
 
+func TestBuildEnvironmentWithBannerImplicitEnabled(t *testing.T) {
+	gitCtx := &git.GitContext{
+		Provider: "github",
+		Project:  "divergedev/diverge",
+		Branch:   "feat/implicit-banner",
+	}
+
+	resolved := &config.ResolvedSettings{
+		EnvironmentSettings: config.EnvironmentSettings{
+			Deploy: config.DeploySettings{Mode: "full"},
+			Routing: config.RoutingSettings{
+				Mode: "header",
+				Banner: &config.BannerSettings{
+					Text:     "Auto Preview",
+					Position: "top",
+				},
+			},
+		},
+	}
+
+	app := &App{Namespace: "default"}
+
+	env, err := buildEnvironment(context.Background(), "preview-mr-3", gitCtx, resolved, nil, app, 3)
+	require.NoError(t, err)
+
+	require.NotNil(t, env.Spec.Routing.Banner)
+	assert.True(t, env.Spec.Routing.Banner.Enabled)
+	assert.Equal(t, "Auto Preview", env.Spec.Routing.Banner.Text)
+	assert.Equal(t, "top", env.Spec.Routing.Banner.Position)
+}
+
 func TestBuildEnvironmentWithBannerDisabled(t *testing.T) {
 	gitCtx := &git.GitContext{
 		Provider: "github",

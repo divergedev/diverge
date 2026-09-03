@@ -199,6 +199,25 @@ func mergeSettings(dst, src *EnvironmentSettings) {
 	if src.Routing.Domain != "" {
 		dst.Routing.Domain = src.Routing.Domain
 	}
+	if src.Routing.Banner != nil {
+		b := &BannerSettings{}
+		if dst.Routing.Banner != nil {
+			*b = *dst.Routing.Banner
+		}
+		if src.Routing.Banner.Enabled != nil {
+			b.Enabled = src.Routing.Banner.Enabled
+		}
+		if src.Routing.Banner.Text != "" {
+			b.Text = src.Routing.Banner.Text
+		}
+		if src.Routing.Banner.Position != "" {
+			b.Position = src.Routing.Banner.Position
+		}
+		if src.Routing.Banner.Color != "" {
+			b.Color = src.Routing.Banner.Color
+		}
+		dst.Routing.Banner = b
+	}
 
 	// Database
 	if src.Database.Mode != "" {
