@@ -46,6 +46,18 @@ Route cluster traffic for a service to your local machine.
 - `--proxy-port` — Port for the local proxy (default: 19001)
 - `--no-proxy` — Disables the local proxy
 - `--proxy-mode` — Proxy mode, either `path` or `host` (default: path)
+- `--server` — Diverge server address for the tunnel (default: auto-detect via port-forward)
+- `--token` — Bearer token for the Diverge server (default: `$DIVERGE_TOKEN`, then the kubeconfig credential)
+
+The server authenticates tunnel connections by Kubernetes TokenReview, so the
+token must be accepted for the server's `--audiences` (default:
+`diverge-server`). The kubeconfig fallback works where that credential is such
+a token; a provider-issued kubeconfig credential (GKE, EKS) needs an explicit
+`--token`:
+
+```bash
+kubectl create token my-sa --audience diverge-server
+```
 
 ### `diverge logs`
 

@@ -58,6 +58,7 @@ func newDevCmd(app *App) *cobra.Command {
 		previewIdFlag string
 		noTunnelFlag  bool
 		serverFlag    string
+		tokenFlag     string
 		proxyPortFlag int
 		noProxyFlag   bool
 		proxyModeFlag string
@@ -80,7 +81,7 @@ traffic for the specified service to your local machine's Tailscale IP or via a 
 				App: app, Service: serviceFlag, Port: portFlag,
 				Endpoint: endpointFlag, Devspace: devspaceFlag,
 				PreviewID: previewIdFlag, Args: args, Cmd: cmd,
-				NoTunnel: noTunnelFlag, Server: serverFlag,
+				NoTunnel: noTunnelFlag, Server: serverFlag, Token: tokenFlag,
 				ProxyPort: proxyPortFlag, NoProxy: noProxyFlag,
 				ProxyMode: proxyModeFlag, WatchEnv: watchEnvFlag,
 			})
@@ -93,6 +94,7 @@ traffic for the specified service to your local machine's Tailscale IP or via a 
 	cmd.Flags().StringVar(&previewIdFlag, "preview-id", "", "Preview ID for routing (default: git branch name)")
 	cmd.Flags().BoolVar(&noTunnelFlag, "no-tunnel", false, "Disable ConnectRPC tunnel and use direct routing (e.g., Tailscale)")
 	cmd.Flags().StringVar(&serverFlag, "server", "", "Diverge server address for tunnel (default: auto-detect via port-forward)")
+	cmd.Flags().StringVar(&tokenFlag, "token", "", "Bearer token for the diverge server (default: $DIVERGE_TOKEN, then the kubeconfig credential)")
 	cmd.Flags().IntVar(&proxyPortFlag, "proxy-port", 19001, "Local loopback proxy port for outbound service routing")
 	cmd.Flags().BoolVar(&noProxyFlag, "no-proxy", false, "Disable local loopback proxy")
 	cmd.Flags().StringVar(&proxyModeFlag, "proxy-mode", proxyModePath, "Proxy routing mode: 'path' (default) or 'host' (requires *.localhost DNS)")
@@ -112,6 +114,7 @@ type runDevParams struct {
 	Cmd       *cobra.Command
 	NoTunnel  bool
 	Server    string
+	Token     string
 	Options   []DevOption
 	ProxyPort int
 	NoProxy   bool
@@ -247,9 +250,14 @@ dev:
 
 	if !p.NoTunnel {
 		fmt.Println("▸ Establishing tunnel...          ")
+
 		sAddr := p.Server
+
+		// Discovery needs a rest config; with an explicit --server it is only
+		// consulted as a credential fallback, so a missing kubeconfig there
+		// must not be fatal.
+		restCfg, cfgErr := p.App.RestConfig()
 		if sAddr == "" {
-			restCfg, cfgErr := p.App.RestConfig()
 			if cfgErr != nil {
 				return fmt.Errorf("failed to get rest config: %w", cfgErr)
 			}
@@ -263,13 +271,27 @@ dev:
 			if stopCh != nil {
 				defer close(stopCh)
 			}
+		} else if cfgErr != nil {
+			restCfg = nil
 		}
 
 		if errs := validation.IsDNS1123Label(headerValue); len(errs) > 0 {
 			return fmt.Errorf("preview-id %q is not a valid DNS label: %s", headerValue, strings.Join(errs, "; "))
 		}
 
-		tc := NewTunnelClient(sAddr, int(port), headerValue, serviceName, ns, slog.Default())
+		// The server authenticates every Tunnel RPC by TokenReview. Fail here
+		// with something actionable rather than in a 401 reconnect loop.
+		token, tokenErr := resolveTunnelToken(p.Token, restCfg)
+		if tokenErr != nil {
+			if errors.Is(tokenErr, ErrNoTunnelCredential) {
+				return fmt.Errorf("%w: pass --token, set %s, or use a kubeconfig with a bearer token. "+
+					"The token must be accepted by the server's --audiences (default: diverge-server)",
+					tokenErr, tunnelTokenEnvVar)
+			}
+			return tokenErr
+		}
+
+		tc := NewTunnelClient(sAddr, int(port), headerValue, serviceName, ns, token, slog.Default())
 		go tc.ConnectWithRetry(ctx)
 
 		select {
