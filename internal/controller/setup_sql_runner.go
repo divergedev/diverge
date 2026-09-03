@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	defaultSetupJobImage = "postgres:17-alpine"
+	defaultSetupJobImage = "postgres:17-alpine@sha256:7456ef82e5f5bc43d997f4781bbd7c0d6389bff397564649a356e206ba473aee"
 	hookTypeSetupSQL     = "setup-sql"
 )
 
@@ -96,7 +96,7 @@ func (r *EnvironmentReconciler) runSetupSQLJob(ctx context.Context, env *diverge
 		JobName:   jobName,
 		Namespace: env.Namespace,
 		Image:     image,
-		Args:      []string{"psql", "-v", "ON_ERROR_STOP=1", "-f", "/setup/setup.sql"},
+		Args:      []string{"psql", "-v", "ON_ERROR_STOP=1", "-d", "$(DATABASE_URL)", "-f", "/setup/setup.sql"},
 		EnvVars: []corev1.EnvVar{
 			{
 				Name: "DATABASE_URL",

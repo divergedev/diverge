@@ -54,6 +54,7 @@ func TestRunSetupSQLJob_CreatesConfigMapAndJob(t *testing.T) {
 	require.Len(t, jobList.Items, 1)
 	assert.Contains(t, jobList.Items[0].Name, "setup-sql-test-env")
 	assert.Equal(t, defaultSetupJobImage, jobList.Items[0].Spec.Template.Spec.Containers[0].Image)
+	assert.Equal(t, []string{"psql", "-v", "ON_ERROR_STOP=1", "-d", "$(DATABASE_URL)", "-f", "/setup/setup.sql"}, jobList.Items[0].Spec.Template.Spec.Containers[0].Args)
 
 	// Verify SQL ConfigMap is mounted
 	volumes := jobList.Items[0].Spec.Template.Spec.Volumes
