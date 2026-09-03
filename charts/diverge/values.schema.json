@@ -147,7 +147,13 @@
         "name": { "type": "string" },
         "sslMode": { "type": "string" },
         "passwordSecretName": { "type": "string" },
-        "passwordSecretKey": { "type": "string" }
+        "passwordSecretKey": { "type": "string" },
+        "setupJob": {
+          "type": "object",
+          "properties": {
+            "image": { "type": "string" }
+          }
+        }
       }
     },
     "serviceAccount": {
