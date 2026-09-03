@@ -125,6 +125,73 @@ func TestBuildEnvironment(t *testing.T) {
 
 	// Verify lifecycle
 	assert.NotNil(t, env.Spec.Lifecycle.TTL)
+
+	// Verify banner not set when not configured
+	assert.Nil(t, env.Spec.Routing.Banner)
+}
+
+func TestBuildEnvironmentWithBanner(t *testing.T) {
+	gitCtx := &git.GitContext{
+		Provider: "github",
+		Project:  "divergedev/diverge",
+		Branch:   "feat/banner",
+	}
+
+	enabled := true
+	resolved := &config.ResolvedSettings{
+		EnvironmentSettings: config.EnvironmentSettings{
+			Deploy: config.DeploySettings{Mode: "full"},
+			Routing: config.RoutingSettings{
+				Mode: "header",
+				Banner: &config.BannerSettings{
+					Enabled:  &enabled,
+					Text:     "Staging",
+					Position: "bottom",
+					Color:    "#00FF00",
+				},
+			},
+		},
+	}
+
+	app := &App{Namespace: "default"}
+
+	env, err := buildEnvironment(context.Background(), "preview-mr-1", gitCtx, resolved, nil, app, 1)
+	require.NoError(t, err)
+
+	require.NotNil(t, env.Spec.Routing.Banner)
+	assert.True(t, env.Spec.Routing.Banner.Enabled)
+	assert.Equal(t, "Staging", env.Spec.Routing.Banner.Text)
+	assert.Equal(t, "bottom", env.Spec.Routing.Banner.Position)
+	assert.Equal(t, "#00FF00", env.Spec.Routing.Banner.Color)
+}
+
+func TestBuildEnvironmentWithBannerDisabled(t *testing.T) {
+	gitCtx := &git.GitContext{
+		Provider: "github",
+		Project:  "divergedev/diverge",
+		Branch:   "feat/no-banner",
+	}
+
+	disabled := false
+	resolved := &config.ResolvedSettings{
+		EnvironmentSettings: config.EnvironmentSettings{
+			Deploy: config.DeploySettings{Mode: "full"},
+			Routing: config.RoutingSettings{
+				Mode: "header",
+				Banner: &config.BannerSettings{
+					Enabled: &disabled,
+				},
+			},
+		},
+	}
+
+	app := &App{Namespace: "default"}
+
+	env, err := buildEnvironment(context.Background(), "preview-mr-2", gitCtx, resolved, nil, app, 2)
+	require.NoError(t, err)
+
+	require.NotNil(t, env.Spec.Routing.Banner)
+	assert.False(t, env.Spec.Routing.Banner.Enabled)
 }
 
 func TestBuildEnvironmentNilConfig(t *testing.T) {
