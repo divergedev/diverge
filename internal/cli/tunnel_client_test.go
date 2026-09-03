@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/client-go/rest"
+	"pgregory.net/rapid"
 )
 
 type mockTunnelServer struct {
@@ -371,4 +373,47 @@ func TestResolveTunnelToken(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestResolveTunnelToken_PBT(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		tokenGen := rapid.StringMatching(`[a-zA-Z0-9_\-\.]{1,40}`)
+		wsGen := rapid.StringMatching(`[ \t\r\n]{0,4}`)
+
+		// Property 1: Explicit non-whitespace token always wins
+		cleanExplicit := tokenGen.Draw(rt, "cleanExplicit")
+		explicit := wsGen.Draw(rt, "wsPre1") + cleanExplicit + wsGen.Draw(rt, "wsPost1")
+		envToken := wsGen.Draw(rt, "wsPre2") + tokenGen.Draw(rt, "cleanEnv") + wsGen.Draw(rt, "wsPost2")
+		kubeToken := wsGen.Draw(rt, "wsPre3") + tokenGen.Draw(rt, "cleanKube") + wsGen.Draw(rt, "wsPost3")
+
+		t.Setenv(tunnelTokenEnvVar, envToken)
+		restCfg := &rest.Config{BearerToken: kubeToken}
+
+		got, err := resolveTunnelToken(explicit, restCfg)
+		require.NoError(t, err)
+		assert.Equal(t, cleanExplicit, got, "explicit token must win over env and kubeconfig")
+		assert.Equal(t, strings.TrimSpace(got), got, "token must never have surrounding whitespace")
+
+		// Property 2: When explicit is whitespace-only, env token wins over kubeconfig
+		onlyWS := wsGen.Draw(rt, "onlyWS")
+		got, err = resolveTunnelToken(onlyWS, restCfg)
+		require.NoError(t, err)
+		assert.Equal(t, strings.TrimSpace(envToken), got, "env token must win when explicit token is whitespace-only")
+		assert.Equal(t, strings.TrimSpace(got), got)
+
+		// Property 3: When explicit and env are empty/whitespace, kubeconfig wins
+		t.Setenv(tunnelTokenEnvVar, onlyWS)
+		got, err = resolveTunnelToken(onlyWS, restCfg)
+		require.NoError(t, err)
+		assert.Equal(t, strings.TrimSpace(kubeToken), got, "kubeconfig token must win when flag and env are absent")
+		assert.Equal(t, strings.TrimSpace(got), got)
+
+		// Property 4: When all sources lack a credential, ErrNoTunnelCredential is returned
+		emptyRestCfg := &rest.Config{BearerToken: onlyWS}
+		_, err = resolveTunnelToken(onlyWS, emptyRestCfg)
+		assert.ErrorIs(t, err, ErrNoTunnelCredential)
+
+		_, err = resolveTunnelToken(onlyWS, nil)
+		assert.ErrorIs(t, err, ErrNoTunnelCredential)
+	})
 }
