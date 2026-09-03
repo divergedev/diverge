@@ -64,6 +64,9 @@ type DatabaseResult struct {
 	// returns. May be empty if the provider handles setup internally.
 	SetupSQL string
 
+	// AdminDSN is the connection string for the admin role, used to execute SetupSQL.
+	AdminDSN string
+
 	// Ready reports that the provider finished its own work. It does not
 	// guarantee that SetupSQL has been executed; callers must run SetupSQL
 	// separately if non-empty.
