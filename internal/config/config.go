@@ -61,10 +61,20 @@ type DeploySettings struct {
 }
 
 type RoutingSettings struct {
-	Mode              string `yaml:"mode"` // header | namespace | subdomain
-	BaselineNamespace string `yaml:"baseline_namespace"`
-	HeaderKey         string `yaml:"header_key"`
-	Domain            string `yaml:"domain"`
+	Mode              string          `yaml:"mode"` // header | namespace | subdomain
+	BaselineNamespace string          `yaml:"baseline_namespace"`
+	HeaderKey         string          `yaml:"header_key"`
+	Domain            string          `yaml:"domain"`
+	Banner            *BannerSettings `yaml:"banner,omitempty"`
+}
+
+// BannerSettings configures the visual preview environment indicator.
+type BannerSettings struct {
+	// Enabled controls whether the preview banner is injected. Defaults to true when banner is specified.
+	Enabled  *bool  `yaml:"enabled,omitempty"`
+	Text     string `yaml:"text,omitempty"`
+	Position string `yaml:"position,omitempty"` // top | bottom
+	Color    string `yaml:"color,omitempty"`    // hex color code
 }
 
 type DatabaseSettings struct {
@@ -188,6 +198,25 @@ func mergeSettings(dst, src *EnvironmentSettings) {
 	}
 	if src.Routing.Domain != "" {
 		dst.Routing.Domain = src.Routing.Domain
+	}
+	if src.Routing.Banner != nil {
+		b := &BannerSettings{}
+		if dst.Routing.Banner != nil {
+			*b = *dst.Routing.Banner
+		}
+		if src.Routing.Banner.Enabled != nil {
+			b.Enabled = src.Routing.Banner.Enabled
+		}
+		if src.Routing.Banner.Text != "" {
+			b.Text = src.Routing.Banner.Text
+		}
+		if src.Routing.Banner.Position != "" {
+			b.Position = src.Routing.Banner.Position
+		}
+		if src.Routing.Banner.Color != "" {
+			b.Color = src.Routing.Banner.Color
+		}
+		dst.Routing.Banner = b
 	}
 
 	// Database

@@ -130,3 +130,52 @@ func TestResolveMultipleLabels(t *testing.T) {
 	res := c.Resolve("preview", []string{"label1", "label2"})
 	assert.Equal(t, "fresh", res.Database.Mode)
 }
+
+func TestResolveBannerSettings(t *testing.T) {
+	enabledTrue := true
+	enabledFalse := false
+	c := &Config{
+		Defaults: EnvironmentSettings{
+			Routing: RoutingSettings{
+				Banner: &BannerSettings{
+					Enabled:  &enabledTrue,
+					Text:     "Default Banner",
+					Position: "top",
+					Color:    "#FF6B00",
+				},
+			},
+		},
+		Environments: map[string]EnvironmentType{
+			"staging": {
+				EnvironmentSettings: EnvironmentSettings{
+					Routing: RoutingSettings{
+						Banner: &BannerSettings{
+							Text: "Staging Preview",
+						},
+					},
+				},
+			},
+			"silent": {
+				EnvironmentSettings: EnvironmentSettings{
+					Routing: RoutingSettings{
+						Banner: &BannerSettings{
+							Enabled: &enabledFalse,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	stagingRes := c.Resolve("staging", nil)
+	require.NotNil(t, stagingRes.Routing.Banner)
+	assert.True(t, *stagingRes.Routing.Banner.Enabled)
+	assert.Equal(t, "Staging Preview", stagingRes.Routing.Banner.Text)
+	assert.Equal(t, "top", stagingRes.Routing.Banner.Position)
+	assert.Equal(t, "#FF6B00", stagingRes.Routing.Banner.Color)
+
+	silentRes := c.Resolve("silent", nil)
+	require.NotNil(t, silentRes.Routing.Banner)
+	assert.False(t, *silentRes.Routing.Banner.Enabled)
+	assert.Equal(t, "Default Banner", silentRes.Routing.Banner.Text)
+}
