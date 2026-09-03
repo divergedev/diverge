@@ -72,3 +72,21 @@ func runChildProcess(ctx context.Context, args []string, envMap map[string]strin
 
 	return cmd, nil
 }
+
+func configureSupervisorCmd(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		pgid := -cmd.Process.Pid
+		if err := syscall.Kill(pgid, syscall.SIGTERM); err != nil {
+			if errors.Is(err, syscall.ESRCH) {
+				return os.ErrProcessDone
+			}
+			return err
+		}
+		return nil
+	}
+}
+
+func notifySupervisorSignals(sigCh chan os.Signal) {
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+}

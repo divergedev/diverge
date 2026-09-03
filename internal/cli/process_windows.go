@@ -43,3 +43,16 @@ func runChildProcess(ctx context.Context, args []string, envMap map[string]strin
 
 	return cmd, nil
 }
+
+func configureSupervisorCmd(cmd *exec.Cmd) {
+	cmd.Cancel = func() error {
+		if cmd.Process != nil {
+			return cmd.Process.Kill()
+		}
+		return nil
+	}
+}
+
+func notifySupervisorSignals(sigCh chan os.Signal) {
+	signal.Notify(sigCh, os.Interrupt)
+}
