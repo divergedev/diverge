@@ -213,6 +213,21 @@ func buildEnvironment(ctx context.Context, name string, gitCtx *git.GitContext, 
 		env.Spec.Routing.ExternalURL = fmt.Sprintf("https://%s.%s", name, resolved.Routing.Domain)
 	}
 
+	// Configure preview banner
+	if resolved.Routing.Banner != nil {
+		bannerCfg := resolved.Routing.Banner
+		enabled := true
+		if bannerCfg.Enabled != nil {
+			enabled = *bannerCfg.Enabled
+		}
+		env.Spec.Routing.Banner = &divergeiov1alpha1.BannerSpec{
+			Enabled:  enabled,
+			Text:     bannerCfg.Text,
+			Position: bannerCfg.Position,
+			Color:    bannerCfg.Color,
+		}
+	}
+
 	// Detect changed services for delta mode
 	if resolved.Deploy.Mode == "delta" && cfg != nil {
 		servicePaths := make(map[string][]string, len(cfg.Services))
