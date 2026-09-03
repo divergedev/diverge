@@ -24,9 +24,9 @@ rules:
   - apiGroups: ["batch"]
     resources: [jobs]
     verbs: [get, list, watch, create, update, patch, delete]
-  # Istio networking
-  - apiGroups: ["networking.istio.io"]
-    resources: [virtualservices, destinationrules]
+  # Istio - AuthorizationPolicy written by the istio routing provider
+  - apiGroups: ["security.istio.io"]
+    resources: [authorizationpolicies]
     verbs: [get, list, watch, create, update, patch, delete]
   # Gateway API
   - apiGroups: ["gateway.networking.k8s.io"]

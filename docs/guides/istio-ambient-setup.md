@@ -1,5 +1,12 @@
 # Istio Ambient Setup Guide for Diverge
 
+> **Scope**: the `istio` routing provider writes an `AuthorizationPolicy` that
+> restricts who may reach an intercepted service. It does **not** route by
+> header, and `GetExternalURL` returns an empty string for it. Header-based
+> preview routing — the mechanism that makes a preview a preview — requires the
+> `gateway` or `composite` provider and Gateway API, whichever mesh is in use.
+> Use `istio` alongside those for access control, not instead of them.
+
 ## Prerequisites
 - Kubernetes 1.28+
 - Istio 1.23+ with Ambient profile
@@ -39,14 +46,31 @@ spec:
 > - Or use PROXY protocol
 > - Configure `meshConfig.defaultConfig.gatewayTopology.numTrustedProxies`
 
-### 5. Waypoint Proxies (Optional)
+### 5. Waypoint Proxies
 For L7 traffic management (HTTP method matching, request transformation):
 ```bash
 istioctl waypoint apply -n <preview-namespace>
 ```
 
-Note: Diverge's AuthorizationPolicy uses pure L4 rules and does NOT
-require Waypoint proxies for basic functionality.
+Diverge's AuthorizationPolicy itself uses pure L4 rules, so it does not need a
+waypoint. Header-based preview routing does: in ambient mode, L7 matching
+happens at a waypoint, and ztunnel alone will not do it. If previews are
+selected by header, install a waypoint for the preview namespace.
+
+### 6. Reaching Your Machine
+
+The `devIP` above assumes the cluster can open a connection *to* the developer
+— a tailnet the nodes have joined, plus source IP preservation as described in
+step 4. Where nodes are not tailnet members (most managed clusters, including
+GKE), that will not work. Use the ConnectRPC tunnel instead, which dials
+outward from your machine:
+
+```bash
+diverge dev --service <name>
+```
+
+The tunnel needs no `devIP`, no source IP preservation, and no inbound path to
+your machine.
 
 ## Troubleshooting
 - **503 errors**: Check that the ztunnel pods are running
