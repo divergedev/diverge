@@ -17,7 +17,6 @@ import (
 	pkgdb "github.com/divergedev/diverge/pkg/database"
 	"github.com/jackc/pgx/v5"
 	_ "github.com/jackc/pgx/v5/stdlib"
-	"time"
 )
 
 // SQLExecutor defines the contract for this component.
@@ -124,38 +123,15 @@ $diverge_role$;
 	dsn := buildWorkloadDSN(p.AdminDSN, roleName, password, schema)
 
 	result := &pkgdb.DatabaseResult{
-		DSN: dsn,
+		DSN:      dsn,
+		AdminDSN: p.AdminDSN,
 		EnvVars: map[string]string{
 			"DATABASE_URL":           dsn,
 			"DIVERGE_PREVIEW_SCHEMA": schema,
 		},
 		SetupSQL: fmt.Sprintf("SET LOCAL search_path TO %s, public;\n", schema) + setupSQL,
 		Ready:    true,
-		Message:  "Schema Provisioned SQL executed",
-	}
-
-	setupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	var exec SQLExecutor
-	if p.Executor != nil {
-		exec = p.Executor
-	} else {
-		db, err := sql.Open("pgx", p.AdminDSN)
-		if err != nil {
-			result.Ready = false
-			result.Message = fmt.Sprintf("failed to open database: %v", err)
-			return result, nil
-		}
-		defer func() { _ = db.Close() }()
-		exec = db
-	}
-
-	_, err = exec.ExecContext(setupCtx, setupSQL)
-	if err != nil {
-		result.Ready = false
-		result.Message = fmt.Sprintf("failed to execute setup SQL: %v", err)
-		return result, nil
+		Message:  "Schema Provisioned SQL generated",
 	}
 
 	return result, nil

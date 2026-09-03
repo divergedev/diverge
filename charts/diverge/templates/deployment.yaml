@@ -62,6 +62,10 @@ spec:
           value: {{ .Values.database.name | quote }}
         - name: DIVERGE_DB_SSLMODE
           value: {{ .Values.database.sslMode | default "disable" | quote }}
+        {{- if .Values.database.setupJob }}
+        - name: DIVERGE_SETUP_JOB_IMAGE
+          value: {{ .Values.database.setupJob.image | quote }}
+        {{- end }}
         {{- if .Values.database.passwordSecretName }}
         - name: DIVERGE_DB_PASSWORD
           valueFrom:
