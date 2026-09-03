@@ -11,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/server/auth"
 )
 
@@ -85,7 +86,7 @@ func AuthorizeAction(ctx context.Context, k8sClient kubernetes.Interface, auditL
 	return checkSAR(ctx, k8sClient, auditLogger, user, &authorizationv1.ResourceAttributes{
 		Namespace: namespace,
 		Verb:      verb,
-		Group:     "diverge.dev",
+		Group:     v1alpha1.GroupVersion.Group,
 		Resource:  resource,
 	}, "permission denied")
 }
