@@ -18,23 +18,47 @@ import (
 var ErrServerNotFound = fmt.Errorf("diverge server not found in cluster")
 var ErrNamedTargetPortNotFound = fmt.Errorf("named target port not found in pod containers")
 
+// serverLabelSelectors are tried in order until one matches a Service.
+//
+// The Helm chart labels the server app.kubernetes.io/name=<fullname> (default
+// "diverge") and distinguishes it with app.kubernetes.io/component=server, so
+// selecting on name=diverge-server alone never matches a chart install. The
+// legacy selector is kept first so hand-rolled manifests keep working.
+//
+// A chart installed with nameOverride set matches neither; pass --server
+// explicitly in that case.
+var serverLabelSelectors = []string{
+	"app.kubernetes.io/name=diverge-server",
+	"app.kubernetes.io/name=diverge,app.kubernetes.io/component=server",
+}
+
 func discoverServer(ctx context.Context, k8sClient kubernetes.Interface, restConfig *rest.Config) (serverAddr string, stopChan chan struct{}, err error) {
 	listCtx, listCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer listCancel()
 
-	svcs, err := k8sClient.CoreV1().Services("").List(listCtx, metav1.ListOptions{
-		LabelSelector: "app.kubernetes.io/name=diverge-server",
-	})
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to list services: %w", err)
+	// Find the server Service, remembering which selector matched so the Pod
+	// lookup below is consistent with it.
+	var svc corev1.Service
+	var matchedSelector string
+	for _, selector := range serverLabelSelectors {
+		svcs, listErr := k8sClient.CoreV1().Services("").List(listCtx, metav1.ListOptions{
+			LabelSelector: selector,
+		})
+		if listErr != nil {
+			return "", nil, fmt.Errorf("failed to list services: %w", listErr)
+		}
+		if len(svcs.Items) > 0 {
+			svc = svcs.Items[0]
+			matchedSelector = selector
+			break
+		}
 	}
-	if len(svcs.Items) == 0 {
+	if matchedSelector == "" {
 		return "", nil, ErrServerNotFound
 	}
-	svc := svcs.Items[0]
 
 	pods, err := k8sClient.CoreV1().Pods(svc.Namespace).List(listCtx, metav1.ListOptions{
-		LabelSelector: "app.kubernetes.io/name=diverge-server",
+		LabelSelector: matchedSelector,
 		FieldSelector: "status.phase=Running",
 	})
 	if err != nil {
