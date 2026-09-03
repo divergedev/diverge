@@ -63,6 +63,8 @@ func setupTunnelTestFixture(t *testing.T) *tunnelTestFixture {
 	proxyServer := httptest.NewServer(proxyMux)
 
 	t.Cleanup(func() {
+		rpcServer.CloseClientConnections()
+		proxyServer.CloseClientConnections()
 		rpcServer.Close()
 		proxyServer.Close()
 	})
