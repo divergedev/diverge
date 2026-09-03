@@ -1,10 +1,7 @@
-//go:build !windows
-
 package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,7 +9,6 @@ import (
 	"os/signal"
 	"sort"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -68,7 +64,7 @@ func NewSupervisor(args []string, envBuilder func() map[string]string) *Supervis
 func (s *Supervisor) Run(ctx context.Context) error {
 	// Own the parent signal loop — no leaking signal.Notify goroutines.
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	notifySupervisorSignals(sigCh)
 	defer signal.Stop(sigCh)
 	defer close(s.done)
 
@@ -177,11 +173,11 @@ func (s *Supervisor) startChild(ctx context.Context) error {
 	childCtx, childCancel := context.WithCancel(ctx)
 
 	cmd := exec.CommandContext(childCtx, s.args[0], s.args[1:]...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.WaitDelay = gracefulTimeout
+	configureSupervisorCmd(cmd)
 
 	// Build clean env — no stale accumulation.
 	env := os.Environ()
@@ -189,18 +185,6 @@ func (s *Supervisor) startChild(ctx context.Context) error {
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
 	}
 	cmd.Env = env
-
-	// Cancel sends SIGTERM to the process group.
-	cmd.Cancel = func() error {
-		pgid := -cmd.Process.Pid
-		if err := syscall.Kill(pgid, syscall.SIGTERM); err != nil {
-			if errors.Is(err, syscall.ESRCH) {
-				return os.ErrProcessDone
-			}
-			return err
-		}
-		return nil
-	}
 
 	if err := cmd.Start(); err != nil {
 		childCancel()
