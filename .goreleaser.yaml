@@ -144,6 +144,7 @@ builds:
 archives:
   - id: full
     format: tar.gz
+    allow_different_binary_count: true
     builds:
       - diverge
       - diverge-controller
@@ -155,6 +156,7 @@ archives:
       - src: LICENSE*
   - id: slim
     format: tar.gz
+    allow_different_binary_count: true
     name_template: "{{ .ProjectName }}_{{ .Version }}_slim_{{ .Os }}_{{ .Arch }}"
     builds:
       - diverge-slim
