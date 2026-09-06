@@ -112,3 +112,77 @@ func TestServiceConfigFetcher_InvalidPorts(t *testing.T) {
 		require.ErrorContains(t, err, "out of valid range 1-65535")
 	}
 }
+
+func TestServiceConfigFetcher_FeatureFlagInjection(t *testing.T) {
+	fetcher := &ServiceConfigFetcher{}
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-42",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Features: &v1alpha1.FeatureSpec{
+				Provider: "configmap",
+				Overrides: map[string]string{
+					"checkout_v2": "true",
+				},
+			},
+			ServiceConfig: &v1alpha1.ServicePreviewConfig{
+				ServiceName: "api",
+				Port:        8080,
+				Image:       "api:latest",
+			},
+		},
+		Status: v1alpha1.EnvironmentStatus{
+			FeatureConfigMap: "diverge-features-pr-42",
+			FeatureEnvVars: map[string]string{
+				"CUSTOM_FLAG_VAR": "val-123",
+			},
+		},
+	}
+
+	objs, err := fetcher.Fetch(context.Background(), env)
+	require.NoError(t, err)
+	require.Len(t, objs, 2)
+
+	deploy := objs[0]
+	spec := deploy.Object["spec"].(map[string]interface{})
+	tmpl := spec["template"].(map[string]interface{})
+	podSpec := tmpl["spec"].(map[string]interface{})
+
+	// Check volume
+	volumes, ok := podSpec["volumes"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, volumes, 1)
+	vol := volumes[0].(map[string]interface{})
+	assert.Equal(t, "diverge-features", vol["name"])
+	cmRef := vol["configMap"].(map[string]interface{})
+	assert.Equal(t, "diverge-features-pr-42", cmRef["name"])
+
+	// Check container
+	containers := podSpec["containers"].([]interface{})
+	require.Len(t, containers, 1)
+	container := containers[0].(map[string]interface{})
+
+	// Check volumeMount
+	mounts, ok := container["volumeMounts"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, mounts, 1)
+	mount := mounts[0].(map[string]interface{})
+	assert.Equal(t, "diverge-features", mount["name"])
+	assert.Equal(t, "/etc/diverge/flags", mount["mountPath"])
+	assert.Equal(t, true, mount["readOnly"])
+
+	// Check env vars
+	envs := container["env"].([]interface{})
+	envMap := make(map[string]string)
+	for _, raw := range envs {
+		entry := raw.(map[string]interface{})
+		if val, ok := entry["value"].(string); ok {
+			envMap[entry["name"].(string)] = val
+		}
+	}
+	assert.Equal(t, "diverge-features-pr-42", envMap["DIVERGE_FEATURE_CONFIGMAP"])
+	assert.Equal(t, "/etc/diverge/flags/flags.json", envMap["FLAGD_FLAG_PATH"])
+	assert.Equal(t, "val-123", envMap["CUSTOM_FLAG_VAR"])
+}

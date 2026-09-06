@@ -306,44 +306,53 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 
 	// 7.7. Ensure features
 	if env.Spec.Features != nil {
-		fp, err := r.getFeatureProvider(env)
-		if err != nil {
+		if meta.IsStatusConditionTrue(env.Status.Conditions, "FeaturesReady") && env.Status.FeatureConfigMap != "" {
+			// Skip re-provisioning if already ready and status recorded
+		} else {
+			fp, err := r.getFeatureProvider(env)
+			if err != nil {
+				meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+					Type:    "FeaturesReady",
+					Status:  metav1.ConditionFalse,
+					Reason:  "FeatureProviderNotFound",
+					Message: err.Error(),
+				})
+				r.Recorder.Event(env, "Warning", "FeatureProvisionFailed", err.Error())
+				res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
+				return res, true, retErr
+			}
+
+			tCtxF, cancelF := context.WithTimeout(ctx, 15*time.Second)
+			featResult, err := fp.Provision(tCtxF, env)
+			cancelF()
+			if err != nil {
+				meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+					Type:    "FeaturesReady",
+					Status:  metav1.ConditionFalse,
+					Reason:  "FeatureProvisionFailed",
+					Message: err.Error(),
+				})
+				r.notifyFailed(ctx, env, err.Error())
+				res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
+				return res, true, retErr
+			}
+
+			if featResult != nil {
+				env.Status.FeatureConfigMap = featResult.ConfigMapName
+				env.Status.FeatureEnvVars = featResult.EnvVars
+			}
+
+			msg := "Features ready"
+			if featResult != nil && featResult.Message != "" {
+				msg = featResult.Message
+			}
 			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 				Type:    "FeaturesReady",
-				Status:  metav1.ConditionFalse,
-				Reason:  "FeatureProviderNotFound",
-				Message: err.Error(),
+				Status:  metav1.ConditionTrue,
+				Reason:  "FeaturesProvisioned",
+				Message: msg,
 			})
-			r.Recorder.Event(env, "Warning", "FeatureProvisionFailed", err.Error())
-			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
-			return res, true, retErr
 		}
-
-		tCtxF, cancelF := context.WithTimeout(ctx, 15*time.Second)
-		featResult, err := fp.Provision(tCtxF, env)
-		cancelF()
-		if err != nil {
-			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
-				Type:    "FeaturesReady",
-				Status:  metav1.ConditionFalse,
-				Reason:  "FeatureProvisionFailed",
-				Message: err.Error(),
-			})
-			r.notifyFailed(ctx, env, err.Error())
-			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
-			return res, true, retErr
-		}
-
-		msg := "Features ready"
-		if featResult != nil && featResult.Message != "" {
-			msg = featResult.Message
-		}
-		meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
-			Type:    "FeaturesReady",
-			Status:  metav1.ConditionTrue,
-			Reason:  "FeaturesProvisioned",
-			Message: msg,
-		})
 	}
 
 	return ctrl.Result{}, false, nil

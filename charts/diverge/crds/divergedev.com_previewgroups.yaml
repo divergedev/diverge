@@ -75,6 +75,19 @@ spec:
                         description: Blocking controls whether the Environment waits
                           for Atlas to report Ready.
                         type: boolean
+                      engine:
+                        default: operator
+                        description: 'Engine selects the execution engine: "operator"
+                          (Atlas CRDs) or "job" (standalone K8s Job).'
+                        enum:
+                        - operator
+                        - job
+                        type: string
+                      image:
+                        description: |-
+                          Image overrides the container image used for standalone Atlas jobs.
+                          Defaults to "arigaio/atlas:latest".
+                        type: string
                       migrationConfigMap:
                         description: MigrationConfigMap references a ConfigMap containing
                           versioned .sql migration files and atlas.sum.
@@ -268,6 +281,19 @@ spec:
                               description: Blocking controls whether the Environment
                                 waits for Atlas to report Ready.
                               type: boolean
+                            engine:
+                              default: operator
+                              description: 'Engine selects the execution engine: "operator"
+                                (Atlas CRDs) or "job" (standalone K8s Job).'
+                              enum:
+                              - operator
+                              - job
+                              type: string
+                            image:
+                              description: |-
+                                Image overrides the container image used for standalone Atlas jobs.
+                                Defaults to "arigaio/atlas:latest".
+                              type: string
                             migrationConfigMap:
                               description: MigrationConfigMap references a ConfigMap
                                 containing versioned .sql migration files and atlas.sum.

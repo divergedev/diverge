@@ -59,6 +59,7 @@ type FlagdFlag struct {
 	State          string                 `json:"state"`
 	Variants       map[string]interface{} `json:"variants"`
 	DefaultVariant string                 `json:"defaultVariant"`
+	Targeting      interface{}            `json:"targeting,omitempty"`
 }
 
 // ConfigMapName returns the ConfigMap resource name for a given environment.
@@ -71,45 +72,94 @@ func ConfigMapName(envName string) string {
 }
 
 // BuildFlagdJSON converts key-value overrides into flagd JSON format.
-func BuildFlagdJSON(overrides map[string]string) ([]byte, error) {
+// When envName is non-empty, JSONLogic targeting rules are generated so that
+// the overrides only apply when diverge.environment matches the environment.
+func BuildFlagdJSON(overrides map[string]string, envName string) ([]byte, error) {
 	flags := make(map[string]FlagdFlag, len(overrides))
 
 	for k, v := range overrides {
 		var flag FlagdFlag
 		flag.State = "ENABLED"
 
+		var targetVariant, fallbackVariant string
+		var variants map[string]interface{}
+
 		switch v {
 		case "true":
-			flag.Variants = map[string]interface{}{
+			variants = map[string]interface{}{
 				"on":  true,
 				"off": false,
 			}
-			flag.DefaultVariant = "on"
+			targetVariant = "on"
+			fallbackVariant = "off"
 		case "false":
-			flag.Variants = map[string]interface{}{
+			variants = map[string]interface{}{
 				"on":  true,
 				"off": false,
 			}
-			flag.DefaultVariant = "off"
+			targetVariant = "off"
+			fallbackVariant = "on"
 		default:
-			// Attempt integer conversion
 			if intVal, err := strconv.ParseInt(v, 10, 64); err == nil {
-				flag.Variants = map[string]interface{}{
-					"value": intVal,
+				if envName != "" {
+					variants = map[string]interface{}{
+						"value":   intVal,
+						"default": int64(0),
+					}
+				} else {
+					variants = map[string]interface{}{
+						"value": intVal,
+					}
 				}
-				flag.DefaultVariant = "value"
+				targetVariant = "value"
+				fallbackVariant = "default"
 			} else if floatVal, err := strconv.ParseFloat(v, 64); err == nil {
-				flag.Variants = map[string]interface{}{
-					"value": floatVal,
+				if envName != "" {
+					variants = map[string]interface{}{
+						"value":   floatVal,
+						"default": float64(0),
+					}
+				} else {
+					variants = map[string]interface{}{
+						"value": floatVal,
+					}
 				}
-				flag.DefaultVariant = "value"
+				targetVariant = "value"
+				fallbackVariant = "default"
 			} else {
-				// String variant
-				flag.Variants = map[string]interface{}{
-					"value": v,
+				if envName != "" {
+					variants = map[string]interface{}{
+						"value":   v,
+						"default": "",
+					}
+				} else {
+					variants = map[string]interface{}{
+						"value": v,
+					}
 				}
-				flag.DefaultVariant = "value"
+				targetVariant = "value"
+				fallbackVariant = "default"
 			}
+		}
+
+		flag.Variants = variants
+
+		if envName != "" {
+			flag.DefaultVariant = fallbackVariant
+			flag.Targeting = map[string]interface{}{
+				"if": []interface{}{
+					map[string]interface{}{
+						"==": []interface{}{
+							map[string]interface{}{"var": "diverge.environment"},
+							envName,
+						},
+					},
+					targetVariant,
+					fallbackVariant,
+				},
+			}
+		} else {
+			flag.DefaultVariant = targetVariant
 		}
 
 		flags[k] = flag
@@ -139,7 +189,7 @@ func (p *ConfigMapProvider) Provision(ctx context.Context, env *v1alpha1.Environ
 		overrides = make(map[string]string)
 	}
 
-	flagdJSON, err := BuildFlagdJSON(overrides)
+	flagdJSON, err := BuildFlagdJSON(overrides, env.Name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build flagd JSON: %w", err)
 	}

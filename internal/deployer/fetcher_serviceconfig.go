@@ -7,6 +7,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/pkg/features"
 )
 
 // ServiceConfigFetcher generates Kubernetes Deployment and Service manifests
@@ -84,6 +85,49 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 		})
 	}
 
+	// Inject feature flag ConfigMap volume and env vars if configured
+	var containerVolumeMounts []interface{}
+	var podVolumes []interface{}
+	if env.Spec.Features != nil {
+		cmName := features.ConfigMapName(env.Name)
+		if !seen["DIVERGE_FEATURE_CONFIGMAP"] {
+			seen["DIVERGE_FEATURE_CONFIGMAP"] = true
+			containerEnv = append(containerEnv, map[string]interface{}{
+				"name":  "DIVERGE_FEATURE_CONFIGMAP",
+				"value": cmName,
+			})
+		}
+		if !seen["FLAGD_FLAG_PATH"] {
+			seen["FLAGD_FLAG_PATH"] = true
+			containerEnv = append(containerEnv, map[string]interface{}{
+				"name":  "FLAGD_FLAG_PATH",
+				"value": "/etc/diverge/flags/flags.json",
+			})
+		}
+		containerVolumeMounts = append(containerVolumeMounts, map[string]interface{}{
+			"name":      "diverge-features",
+			"mountPath": "/etc/diverge/flags",
+			"readOnly":  true,
+		})
+		podVolumes = append(podVolumes, map[string]interface{}{
+			"name": "diverge-features",
+			"configMap": map[string]interface{}{
+				"name": cmName,
+			},
+		})
+	}
+
+	// Inject any feature environment variables from status
+	for k, v := range env.Status.FeatureEnvVars {
+		if !seen[k] {
+			seen[k] = true
+			containerEnv = append(containerEnv, map[string]interface{}{
+				"name":  k,
+				"value": v,
+			})
+		}
+	}
+
 	// Deployment
 	deploy := unstructured.Unstructured{
 		Object: map[string]interface{}{
@@ -150,6 +194,15 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 		containers := deploy.Object["spec"].(map[string]interface{})["template"].(map[string]interface{})["spec"].(map[string]interface{})["containers"].([]interface{})
 		container := containers[0].(map[string]interface{})
 		container["envFrom"] = containerEnvFrom
+	}
+	if len(containerVolumeMounts) > 0 {
+		containers := deploy.Object["spec"].(map[string]interface{})["template"].(map[string]interface{})["spec"].(map[string]interface{})["containers"].([]interface{})
+		container := containers[0].(map[string]interface{})
+		container["volumeMounts"] = containerVolumeMounts
+	}
+	if len(podVolumes) > 0 {
+		podSpec := deploy.Object["spec"].(map[string]interface{})["template"].(map[string]interface{})["spec"].(map[string]interface{})
+		podSpec["volumes"] = podVolumes
 	}
 
 	// Service
