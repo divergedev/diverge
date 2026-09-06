@@ -82,6 +82,15 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		}
 		cancelDB()
 
+		// Teardown features
+		if fp, err := r.getFeatureProvider(env); err == nil && fp != nil {
+			tCtxF, cancelF := context.WithTimeout(ctx, 15*time.Second)
+			if err := fp.Teardown(tCtxF, env); err != nil {
+				errs = append(errs, fmt.Errorf("failed to teardown features: %w", err))
+			}
+			cancelF()
+		}
+
 		// C4: Wait for ArgoCD Applications to be fully deleted before
 		// deleting the namespace, preventing finalizer deadlocks where
 		// the namespace enters Terminating but ArgoCD resources still

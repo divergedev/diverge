@@ -22,6 +22,8 @@ import (
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/config/banner"
 	"github.com/divergedev/diverge/internal/async"
+	"github.com/divergedev/diverge/pkg/features"
+	"github.com/divergedev/diverge/pkg/registry"
 )
 
 func (r *EnvironmentReconciler) notifyFailed(ctx context.Context, env *divergeiov1alpha1.Environment, msg string) {
@@ -302,7 +304,70 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 		}
 	}
 
+	// 7.7. Ensure features
+	if env.Spec.Features != nil {
+		fp, err := r.getFeatureProvider(env)
+		if err != nil {
+			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+				Type:    "FeaturesReady",
+				Status:  metav1.ConditionFalse,
+				Reason:  "FeatureProviderNotFound",
+				Message: err.Error(),
+			})
+			r.Recorder.Event(env, "Warning", "FeatureProvisionFailed", err.Error())
+			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
+			return res, true, retErr
+		}
+
+		tCtxF, cancelF := context.WithTimeout(ctx, 15*time.Second)
+		featResult, err := fp.Provision(tCtxF, env)
+		cancelF()
+		if err != nil {
+			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+				Type:    "FeaturesReady",
+				Status:  metav1.ConditionFalse,
+				Reason:  "FeatureProvisionFailed",
+				Message: err.Error(),
+			})
+			r.notifyFailed(ctx, env, err.Error())
+			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
+			return res, true, retErr
+		}
+
+		msg := "Features ready"
+		if featResult != nil && featResult.Message != "" {
+			msg = featResult.Message
+		}
+		meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+			Type:    "FeaturesReady",
+			Status:  metav1.ConditionTrue,
+			Reason:  "FeaturesProvisioned",
+			Message: msg,
+		})
+	}
+
 	return ctrl.Result{}, false, nil
+}
+
+func (r *EnvironmentReconciler) getFeatureProvider(env *divergeiov1alpha1.Environment) (features.FeatureProvider, error) {
+	providerName := "configmap"
+	if env.Spec.Features != nil && env.Spec.Features.Provider != "" {
+		providerName = env.Spec.Features.Provider
+	}
+	if r.FeatureProvider != nil && r.FeatureProvider.Type() == providerName {
+		return r.FeatureProvider, nil
+	}
+	deps := registry.Deps{
+		Client: r.Client,
+		Scheme: r.Scheme,
+	}
+	if features.Providers.Has(providerName) {
+		return features.Providers.Create(providerName, deps)
+	}
+	if r.FeatureProvider != nil {
+		return r.FeatureProvider, nil
+	}
+	return nil, fmt.Errorf("feature provider %q not registered", providerName)
 }
 
 func (r *EnvironmentReconciler) ensureBannerConfigMap(ctx context.Context, env *divergeiov1alpha1.Environment) error {

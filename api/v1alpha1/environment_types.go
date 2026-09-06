@@ -221,6 +221,21 @@ type EnvironmentLifecycle struct {
 	CleanupOnMerge bool             `json:"cleanupOnMerge,omitempty"`
 }
 
+// FeatureSpec configures feature flag management and remote configuration.
+type FeatureSpec struct {
+	// Provider selects the feature flag provider: "configmap", "flipt", "flagsmith", "unleash".
+	// +kubebuilder:validation:Enum=configmap;flipt;flagsmith;unleash
+	// +kubebuilder:default=configmap
+	// +optional
+	Provider string `json:"provider,omitempty"`
+	// Overrides defines key-value flag overrides for this environment.
+	// +optional
+	Overrides map[string]string `json:"overrides,omitempty"`
+	// ConnectionRef references a Secret containing provider credentials or endpoint details.
+	// +optional
+	ConnectionRef string `json:"connectionRef,omitempty"`
+}
+
 // ManifestSource specifies how pre-rendered manifests are provided
 // to the DirectDeployer.
 type ManifestSource struct {
@@ -377,6 +392,9 @@ type EnvironmentSpec struct {
 	Routing   EnvironmentRouting   `json:"routing,omitempty"`
 	Database  EnvironmentDatabase  `json:"database,omitempty"`
 	Lifecycle EnvironmentLifecycle `json:"lifecycle,omitempty"`
+	// Features configures feature flags and remote configuration.
+	// +optional
+	Features *FeatureSpec `json:"features,omitempty"`
 	// Testing configures automated test integration.
 	// +optional
 	Testing *TestingSpec `json:"testing,omitempty"`

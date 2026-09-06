@@ -116,6 +116,12 @@ message EnvironmentLifecycle {
   bool cleanup_on_merge = 2;
 }
 
+message FeatureSpec {
+  string provider = 1;
+  map<string, string> overrides = 2;
+  string connection_ref = 3;
+}
+
 message TestTriggerSpec {
   string type = 1;
   string project = 2;
@@ -178,6 +184,7 @@ message EnvironmentSpec {
   EnvironmentLifecycle lifecycle = 5;
   TestingSpec testing = 6;
   ServicePreviewConfig service_config = 7;
+  FeatureSpec features = 8;
 }
 
 message Condition {

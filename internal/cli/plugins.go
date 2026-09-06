@@ -15,6 +15,7 @@ import (
 	"github.com/divergedev/diverge/internal/routing"
 	divtesting "github.com/divergedev/diverge/internal/testing"
 	pkgdb "github.com/divergedev/diverge/pkg/database"
+	pkgfeatures "github.com/divergedev/diverge/pkg/features"
 )
 
 // PluginInfo contains details about a single registered plugin provider.
@@ -59,6 +60,7 @@ func newPluginsCmd(app *App) *cobra.Command {
 			addRegistry("previewgroup-notifier", notifier.GroupProviders.Describe())
 			addRegistry("test-runner", divtesting.Providers.Describe())
 			addRegistry("async-provisioner", async.Providers.Describe())
+			addRegistry("feature", pkgfeatures.Providers.Describe())
 
 			// Sort for deterministic output
 			sort.Slice(allPlugins, func(i, j int) bool {

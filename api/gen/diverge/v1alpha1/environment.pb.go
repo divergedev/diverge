@@ -1034,6 +1034,66 @@ func (x *EnvironmentLifecycle) GetCleanupOnMerge() bool {
 	return false
 }
 
+type FeatureSpec struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Provider      string                 `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"`
+	Overrides     map[string]string      `protobuf:"bytes,2,rep,name=overrides,proto3" json:"overrides,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	ConnectionRef string                 `protobuf:"bytes,3,opt,name=connection_ref,json=connectionRef,proto3" json:"connection_ref,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FeatureSpec) Reset() {
+	*x = FeatureSpec{}
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FeatureSpec) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FeatureSpec) ProtoMessage() {}
+
+func (x *FeatureSpec) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FeatureSpec.ProtoReflect.Descriptor instead.
+func (*FeatureSpec) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *FeatureSpec) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *FeatureSpec) GetOverrides() map[string]string {
+	if x != nil {
+		return x.Overrides
+	}
+	return nil
+}
+
+func (x *FeatureSpec) GetConnectionRef() string {
+	if x != nil {
+		return x.ConnectionRef
+	}
+	return ""
+}
+
 type TestTriggerSpec struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Type          string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
@@ -1048,7 +1108,7 @@ type TestTriggerSpec struct {
 
 func (x *TestTriggerSpec) Reset() {
 	*x = TestTriggerSpec{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[14]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1060,7 +1120,7 @@ func (x *TestTriggerSpec) String() string {
 func (*TestTriggerSpec) ProtoMessage() {}
 
 func (x *TestTriggerSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[14]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1073,7 +1133,7 @@ func (x *TestTriggerSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TestTriggerSpec.ProtoReflect.Descriptor instead.
 func (*TestTriggerSpec) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{14}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *TestTriggerSpec) GetType() string {
@@ -1130,7 +1190,7 @@ type TestingSpec struct {
 
 func (x *TestingSpec) Reset() {
 	*x = TestingSpec{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[15]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1142,7 +1202,7 @@ func (x *TestingSpec) String() string {
 func (*TestingSpec) ProtoMessage() {}
 
 func (x *TestingSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[15]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1155,7 +1215,7 @@ func (x *TestingSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TestingSpec.ProtoReflect.Descriptor instead.
 func (*TestingSpec) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{15}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *TestingSpec) GetEnabled() bool {
@@ -1200,7 +1260,7 @@ type TestStatus struct {
 
 func (x *TestStatus) Reset() {
 	*x = TestStatus{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[16]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1212,7 +1272,7 @@ func (x *TestStatus) String() string {
 func (*TestStatus) ProtoMessage() {}
 
 func (x *TestStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[16]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1225,7 +1285,7 @@ func (x *TestStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TestStatus.ProtoReflect.Descriptor instead.
 func (*TestStatus) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{16}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *TestStatus) GetState() string {
@@ -1280,7 +1340,7 @@ type EnvVar struct {
 
 func (x *EnvVar) Reset() {
 	*x = EnvVar{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[17]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1292,7 +1352,7 @@ func (x *EnvVar) String() string {
 func (*EnvVar) ProtoMessage() {}
 
 func (x *EnvVar) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[17]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1305,7 +1365,7 @@ func (x *EnvVar) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnvVar.ProtoReflect.Descriptor instead.
 func (*EnvVar) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{17}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *EnvVar) GetName() string {
@@ -1334,7 +1394,7 @@ type ResourceOverride struct {
 
 func (x *ResourceOverride) Reset() {
 	*x = ResourceOverride{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[18]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1346,7 +1406,7 @@ func (x *ResourceOverride) String() string {
 func (*ResourceOverride) ProtoMessage() {}
 
 func (x *ResourceOverride) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[18]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1359,7 +1419,7 @@ func (x *ResourceOverride) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResourceOverride.ProtoReflect.Descriptor instead.
 func (*ResourceOverride) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{18}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *ResourceOverride) GetCpuRequest() string {
@@ -1412,7 +1472,7 @@ type ServicePreviewConfig struct {
 
 func (x *ServicePreviewConfig) Reset() {
 	*x = ServicePreviewConfig{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[19]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1424,7 +1484,7 @@ func (x *ServicePreviewConfig) String() string {
 func (*ServicePreviewConfig) ProtoMessage() {}
 
 func (x *ServicePreviewConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[19]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1437,7 +1497,7 @@ func (x *ServicePreviewConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServicePreviewConfig.ProtoReflect.Descriptor instead.
 func (*ServicePreviewConfig) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{19}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *ServicePreviewConfig) GetServiceName() string {
@@ -1547,13 +1607,14 @@ type EnvironmentSpec struct {
 	Lifecycle     *EnvironmentLifecycle  `protobuf:"bytes,5,opt,name=lifecycle,proto3" json:"lifecycle,omitempty"`
 	Testing       *TestingSpec           `protobuf:"bytes,6,opt,name=testing,proto3" json:"testing,omitempty"`
 	ServiceConfig *ServicePreviewConfig  `protobuf:"bytes,7,opt,name=service_config,json=serviceConfig,proto3" json:"service_config,omitempty"`
+	Features      *FeatureSpec           `protobuf:"bytes,8,opt,name=features,proto3" json:"features,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *EnvironmentSpec) Reset() {
 	*x = EnvironmentSpec{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[20]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1565,7 +1626,7 @@ func (x *EnvironmentSpec) String() string {
 func (*EnvironmentSpec) ProtoMessage() {}
 
 func (x *EnvironmentSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[20]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1578,7 +1639,7 @@ func (x *EnvironmentSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnvironmentSpec.ProtoReflect.Descriptor instead.
 func (*EnvironmentSpec) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{20}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *EnvironmentSpec) GetSource() *EnvironmentSource {
@@ -1630,6 +1691,13 @@ func (x *EnvironmentSpec) GetServiceConfig() *ServicePreviewConfig {
 	return nil
 }
 
+func (x *EnvironmentSpec) GetFeatures() *FeatureSpec {
+	if x != nil {
+		return x.Features
+	}
+	return nil
+}
+
 type Condition struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	Type               string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
@@ -1644,7 +1712,7 @@ type Condition struct {
 
 func (x *Condition) Reset() {
 	*x = Condition{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[21]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1656,7 +1724,7 @@ func (x *Condition) String() string {
 func (*Condition) ProtoMessage() {}
 
 func (x *Condition) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[21]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1669,7 +1737,7 @@ func (x *Condition) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Condition.ProtoReflect.Descriptor instead.
 func (*Condition) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{21}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *Condition) GetType() string {
@@ -1722,7 +1790,7 @@ type ServiceStatus struct {
 
 func (x *ServiceStatus) Reset() {
 	*x = ServiceStatus{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[22]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1734,7 +1802,7 @@ func (x *ServiceStatus) String() string {
 func (*ServiceStatus) ProtoMessage() {}
 
 func (x *ServiceStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[22]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1747,7 +1815,7 @@ func (x *ServiceStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServiceStatus.ProtoReflect.Descriptor instead.
 func (*ServiceStatus) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{22}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{23}
 }
 
 type EnvironmentStatus struct {
@@ -1773,7 +1841,7 @@ type EnvironmentStatus struct {
 
 func (x *EnvironmentStatus) Reset() {
 	*x = EnvironmentStatus{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[23]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1785,7 +1853,7 @@ func (x *EnvironmentStatus) String() string {
 func (*EnvironmentStatus) ProtoMessage() {}
 
 func (x *EnvironmentStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[23]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1798,7 +1866,7 @@ func (x *EnvironmentStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnvironmentStatus.ProtoReflect.Descriptor instead.
 func (*EnvironmentStatus) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{23}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *EnvironmentStatus) GetPhase() string {
@@ -1922,7 +1990,7 @@ type Environment struct {
 
 func (x *Environment) Reset() {
 	*x = Environment{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[24]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1934,7 +2002,7 @@ func (x *Environment) String() string {
 func (*Environment) ProtoMessage() {}
 
 func (x *Environment) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[24]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1947,7 +2015,7 @@ func (x *Environment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Environment.ProtoReflect.Descriptor instead.
 func (*Environment) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{24}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *Environment) GetName() string {
@@ -2016,7 +2084,7 @@ type CreateEnvironmentRequest struct {
 
 func (x *CreateEnvironmentRequest) Reset() {
 	*x = CreateEnvironmentRequest{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[25]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2028,7 +2096,7 @@ func (x *CreateEnvironmentRequest) String() string {
 func (*CreateEnvironmentRequest) ProtoMessage() {}
 
 func (x *CreateEnvironmentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[25]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2041,7 +2109,7 @@ func (x *CreateEnvironmentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateEnvironmentRequest.ProtoReflect.Descriptor instead.
 func (*CreateEnvironmentRequest) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{25}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *CreateEnvironmentRequest) GetNamespace() string {
@@ -2067,7 +2135,7 @@ type CreateEnvironmentResponse struct {
 
 func (x *CreateEnvironmentResponse) Reset() {
 	*x = CreateEnvironmentResponse{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[26]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2079,7 +2147,7 @@ func (x *CreateEnvironmentResponse) String() string {
 func (*CreateEnvironmentResponse) ProtoMessage() {}
 
 func (x *CreateEnvironmentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[26]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2092,7 +2160,7 @@ func (x *CreateEnvironmentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateEnvironmentResponse.ProtoReflect.Descriptor instead.
 func (*CreateEnvironmentResponse) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{26}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *CreateEnvironmentResponse) GetEnvironment() *Environment {
@@ -2112,7 +2180,7 @@ type GetEnvironmentRequest struct {
 
 func (x *GetEnvironmentRequest) Reset() {
 	*x = GetEnvironmentRequest{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[27]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2124,7 +2192,7 @@ func (x *GetEnvironmentRequest) String() string {
 func (*GetEnvironmentRequest) ProtoMessage() {}
 
 func (x *GetEnvironmentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[27]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2137,7 +2205,7 @@ func (x *GetEnvironmentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetEnvironmentRequest.ProtoReflect.Descriptor instead.
 func (*GetEnvironmentRequest) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{27}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *GetEnvironmentRequest) GetNamespace() string {
@@ -2163,7 +2231,7 @@ type GetEnvironmentResponse struct {
 
 func (x *GetEnvironmentResponse) Reset() {
 	*x = GetEnvironmentResponse{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[28]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2175,7 +2243,7 @@ func (x *GetEnvironmentResponse) String() string {
 func (*GetEnvironmentResponse) ProtoMessage() {}
 
 func (x *GetEnvironmentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[28]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2188,7 +2256,7 @@ func (x *GetEnvironmentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetEnvironmentResponse.ProtoReflect.Descriptor instead.
 func (*GetEnvironmentResponse) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{28}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *GetEnvironmentResponse) GetEnvironment() *Environment {
@@ -2212,7 +2280,7 @@ type ListEnvironmentsRequest struct {
 
 func (x *ListEnvironmentsRequest) Reset() {
 	*x = ListEnvironmentsRequest{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[29]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2224,7 +2292,7 @@ func (x *ListEnvironmentsRequest) String() string {
 func (*ListEnvironmentsRequest) ProtoMessage() {}
 
 func (x *ListEnvironmentsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[29]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2237,7 +2305,7 @@ func (x *ListEnvironmentsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListEnvironmentsRequest.ProtoReflect.Descriptor instead.
 func (*ListEnvironmentsRequest) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{29}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *ListEnvironmentsRequest) GetNamespace() string {
@@ -2293,7 +2361,7 @@ type ListEnvironmentsResponse struct {
 
 func (x *ListEnvironmentsResponse) Reset() {
 	*x = ListEnvironmentsResponse{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[30]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2305,7 +2373,7 @@ func (x *ListEnvironmentsResponse) String() string {
 func (*ListEnvironmentsResponse) ProtoMessage() {}
 
 func (x *ListEnvironmentsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[30]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2318,7 +2386,7 @@ func (x *ListEnvironmentsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListEnvironmentsResponse.ProtoReflect.Descriptor instead.
 func (*ListEnvironmentsResponse) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{30}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *ListEnvironmentsResponse) GetEnvironments() []*Environment {
@@ -2352,7 +2420,7 @@ type UpdateEnvironmentRequest struct {
 
 func (x *UpdateEnvironmentRequest) Reset() {
 	*x = UpdateEnvironmentRequest{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[31]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2364,7 +2432,7 @@ func (x *UpdateEnvironmentRequest) String() string {
 func (*UpdateEnvironmentRequest) ProtoMessage() {}
 
 func (x *UpdateEnvironmentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[31]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2377,7 +2445,7 @@ func (x *UpdateEnvironmentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateEnvironmentRequest.ProtoReflect.Descriptor instead.
 func (*UpdateEnvironmentRequest) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{31}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *UpdateEnvironmentRequest) GetEnvironment() *Environment {
@@ -2403,7 +2471,7 @@ type UpdateEnvironmentResponse struct {
 
 func (x *UpdateEnvironmentResponse) Reset() {
 	*x = UpdateEnvironmentResponse{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[32]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2415,7 +2483,7 @@ func (x *UpdateEnvironmentResponse) String() string {
 func (*UpdateEnvironmentResponse) ProtoMessage() {}
 
 func (x *UpdateEnvironmentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[32]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2428,7 +2496,7 @@ func (x *UpdateEnvironmentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateEnvironmentResponse.ProtoReflect.Descriptor instead.
 func (*UpdateEnvironmentResponse) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{32}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *UpdateEnvironmentResponse) GetEnvironment() *Environment {
@@ -2449,7 +2517,7 @@ type DeleteEnvironmentRequest struct {
 
 func (x *DeleteEnvironmentRequest) Reset() {
 	*x = DeleteEnvironmentRequest{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[33]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2461,7 +2529,7 @@ func (x *DeleteEnvironmentRequest) String() string {
 func (*DeleteEnvironmentRequest) ProtoMessage() {}
 
 func (x *DeleteEnvironmentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[33]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2474,7 +2542,7 @@ func (x *DeleteEnvironmentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteEnvironmentRequest.ProtoReflect.Descriptor instead.
 func (*DeleteEnvironmentRequest) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{33}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *DeleteEnvironmentRequest) GetNamespace() string {
@@ -2506,7 +2574,7 @@ type DeleteEnvironmentResponse struct {
 
 func (x *DeleteEnvironmentResponse) Reset() {
 	*x = DeleteEnvironmentResponse{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[34]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2518,7 +2586,7 @@ func (x *DeleteEnvironmentResponse) String() string {
 func (*DeleteEnvironmentResponse) ProtoMessage() {}
 
 func (x *DeleteEnvironmentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[34]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2531,7 +2599,7 @@ func (x *DeleteEnvironmentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteEnvironmentResponse.ProtoReflect.Descriptor instead.
 func (*DeleteEnvironmentResponse) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{34}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{35}
 }
 
 type ExtendTTLRequest struct {
@@ -2545,7 +2613,7 @@ type ExtendTTLRequest struct {
 
 func (x *ExtendTTLRequest) Reset() {
 	*x = ExtendTTLRequest{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[35]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2557,7 +2625,7 @@ func (x *ExtendTTLRequest) String() string {
 func (*ExtendTTLRequest) ProtoMessage() {}
 
 func (x *ExtendTTLRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[35]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2570,7 +2638,7 @@ func (x *ExtendTTLRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExtendTTLRequest.ProtoReflect.Descriptor instead.
 func (*ExtendTTLRequest) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{35}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *ExtendTTLRequest) GetNamespace() string {
@@ -2603,7 +2671,7 @@ type ExtendTTLResponse struct {
 
 func (x *ExtendTTLResponse) Reset() {
 	*x = ExtendTTLResponse{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[36]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2615,7 +2683,7 @@ func (x *ExtendTTLResponse) String() string {
 func (*ExtendTTLResponse) ProtoMessage() {}
 
 func (x *ExtendTTLResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[36]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2628,7 +2696,7 @@ func (x *ExtendTTLResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExtendTTLResponse.ProtoReflect.Descriptor instead.
 func (*ExtendTTLResponse) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{36}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *ExtendTTLResponse) GetEnvironment() *Environment {
@@ -2649,7 +2717,7 @@ type WatchEnvironmentsRequest struct {
 
 func (x *WatchEnvironmentsRequest) Reset() {
 	*x = WatchEnvironmentsRequest{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[37]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2661,7 +2729,7 @@ func (x *WatchEnvironmentsRequest) String() string {
 func (*WatchEnvironmentsRequest) ProtoMessage() {}
 
 func (x *WatchEnvironmentsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[37]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2674,7 +2742,7 @@ func (x *WatchEnvironmentsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchEnvironmentsRequest.ProtoReflect.Descriptor instead.
 func (*WatchEnvironmentsRequest) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{37}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *WatchEnvironmentsRequest) GetNamespace() string {
@@ -2710,7 +2778,7 @@ type WatchEnvironmentsResponse struct {
 
 func (x *WatchEnvironmentsResponse) Reset() {
 	*x = WatchEnvironmentsResponse{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[38]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2722,7 +2790,7 @@ func (x *WatchEnvironmentsResponse) String() string {
 func (*WatchEnvironmentsResponse) ProtoMessage() {}
 
 func (x *WatchEnvironmentsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[38]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2735,7 +2803,7 @@ func (x *WatchEnvironmentsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchEnvironmentsResponse.ProtoReflect.Descriptor instead.
 func (*WatchEnvironmentsResponse) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{38}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *WatchEnvironmentsResponse) GetType() WatchEventType {
@@ -2786,7 +2854,7 @@ type StreamLogsRequest struct {
 
 func (x *StreamLogsRequest) Reset() {
 	*x = StreamLogsRequest{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[39]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2798,7 +2866,7 @@ func (x *StreamLogsRequest) String() string {
 func (*StreamLogsRequest) ProtoMessage() {}
 
 func (x *StreamLogsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[39]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2811,7 +2879,7 @@ func (x *StreamLogsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamLogsRequest.ProtoReflect.Descriptor instead.
 func (*StreamLogsRequest) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{39}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *StreamLogsRequest) GetNamespace() string {
@@ -2897,7 +2965,7 @@ type StreamLogsResponse struct {
 
 func (x *StreamLogsResponse) Reset() {
 	*x = StreamLogsResponse{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[40]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2909,7 +2977,7 @@ func (x *StreamLogsResponse) String() string {
 func (*StreamLogsResponse) ProtoMessage() {}
 
 func (x *StreamLogsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[40]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2922,7 +2990,7 @@ func (x *StreamLogsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamLogsResponse.ProtoReflect.Descriptor instead.
 func (*StreamLogsResponse) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{40}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *StreamLogsResponse) GetPodName() string {
@@ -2975,7 +3043,7 @@ type HookJob struct {
 
 func (x *HookJob) Reset() {
 	*x = HookJob{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[41]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2987,7 +3055,7 @@ func (x *HookJob) String() string {
 func (*HookJob) ProtoMessage() {}
 
 func (x *HookJob) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[41]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3000,7 +3068,7 @@ func (x *HookJob) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HookJob.ProtoReflect.Descriptor instead.
 func (*HookJob) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{41}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *HookJob) GetName() string {
@@ -3062,7 +3130,7 @@ type ListHookJobsRequest struct {
 
 func (x *ListHookJobsRequest) Reset() {
 	*x = ListHookJobsRequest{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[42]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3074,7 +3142,7 @@ func (x *ListHookJobsRequest) String() string {
 func (*ListHookJobsRequest) ProtoMessage() {}
 
 func (x *ListHookJobsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[42]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3087,7 +3155,7 @@ func (x *ListHookJobsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListHookJobsRequest.ProtoReflect.Descriptor instead.
 func (*ListHookJobsRequest) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{42}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *ListHookJobsRequest) GetNamespace() string {
@@ -3113,7 +3181,7 @@ type ListHookJobsResponse struct {
 
 func (x *ListHookJobsResponse) Reset() {
 	*x = ListHookJobsResponse{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[43]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3125,7 +3193,7 @@ func (x *ListHookJobsResponse) String() string {
 func (*ListHookJobsResponse) ProtoMessage() {}
 
 func (x *ListHookJobsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[43]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3138,7 +3206,7 @@ func (x *ListHookJobsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListHookJobsResponse.ProtoReflect.Descriptor instead.
 func (*ListHookJobsResponse) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{43}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *ListHookJobsResponse) GetJobs() []*HookJob {
@@ -3159,7 +3227,7 @@ type RetryHookRequest struct {
 
 func (x *RetryHookRequest) Reset() {
 	*x = RetryHookRequest{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[44]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3171,7 +3239,7 @@ func (x *RetryHookRequest) String() string {
 func (*RetryHookRequest) ProtoMessage() {}
 
 func (x *RetryHookRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[44]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3184,7 +3252,7 @@ func (x *RetryHookRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RetryHookRequest.ProtoReflect.Descriptor instead.
 func (*RetryHookRequest) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{44}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *RetryHookRequest) GetNamespace() string {
@@ -3217,7 +3285,7 @@ type RetryHookResponse struct {
 
 func (x *RetryHookResponse) Reset() {
 	*x = RetryHookResponse{}
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[45]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3229,7 +3297,7 @@ func (x *RetryHookResponse) String() string {
 func (*RetryHookResponse) ProtoMessage() {}
 
 func (x *RetryHookResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[45]
+	mi := &file_diverge_v1alpha1_environment_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3242,7 +3310,7 @@ func (x *RetryHookResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RetryHookResponse.ProtoReflect.Descriptor instead.
 func (*RetryHookResponse) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{45}
+	return file_diverge_v1alpha1_environment_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *RetryHookResponse) GetJob() *HookJob {
@@ -3351,7 +3419,14 @@ const file_diverge_v1alpha1_environment_proto_rawDesc = "" +
 	"\x12_target_queue_size\"m\n" +
 	"\x14EnvironmentLifecycle\x12+\n" +
 	"\x03ttl\x18\x01 \x01(\v2\x19.google.protobuf.DurationR\x03ttl\x12(\n" +
-	"\x10cleanup_on_merge\x18\x02 \x01(\bR\x0ecleanupOnMerge\"\xb0\x01\n" +
+	"\x10cleanup_on_merge\x18\x02 \x01(\bR\x0ecleanupOnMerge\"\xda\x01\n" +
+	"\vFeatureSpec\x12\x1a\n" +
+	"\bprovider\x18\x01 \x01(\tR\bprovider\x12J\n" +
+	"\toverrides\x18\x02 \x03(\v2,.diverge.v1alpha1.FeatureSpec.OverridesEntryR\toverrides\x12%\n" +
+	"\x0econnection_ref\x18\x03 \x01(\tR\rconnectionRef\x1a<\n" +
+	"\x0eOverridesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb0\x01\n" +
 	"\x0fTestTriggerSpec\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x18\n" +
 	"\aproject\x18\x02 \x01(\tR\aproject\x12\x10\n" +
@@ -3403,7 +3478,7 @@ const file_diverge_v1alpha1_environment_proto_rawDesc = "" +
 	"\bprotocol\x18\v \x01(\tR\bprotocol\x12\x1a\n" +
 	"\bendpoint\x18\f \x01(\tR\bendpoint\x12@\n" +
 	"\tresources\x18\r \x01(\v2\".diverge.v1alpha1.ResourceOverrideR\tresources\x12.\n" +
-	"\x04keda\x18\x0e \x01(\v2\x1a.diverge.v1alpha1.KEDASpecR\x04keda\"\xdc\x03\n" +
+	"\x04keda\x18\x0e \x01(\v2\x1a.diverge.v1alpha1.KEDASpecR\x04keda\"\x97\x04\n" +
 	"\x0fEnvironmentSpec\x12;\n" +
 	"\x06source\x18\x01 \x01(\v2#.diverge.v1alpha1.EnvironmentSourceR\x06source\x12;\n" +
 	"\x06deploy\x18\x02 \x01(\v2#.diverge.v1alpha1.EnvironmentDeployR\x06deploy\x12>\n" +
@@ -3411,7 +3486,8 @@ const file_diverge_v1alpha1_environment_proto_rawDesc = "" +
 	"\bdatabase\x18\x04 \x01(\v2%.diverge.v1alpha1.EnvironmentDatabaseR\bdatabase\x12D\n" +
 	"\tlifecycle\x18\x05 \x01(\v2&.diverge.v1alpha1.EnvironmentLifecycleR\tlifecycle\x127\n" +
 	"\atesting\x18\x06 \x01(\v2\x1d.diverge.v1alpha1.TestingSpecR\atesting\x12M\n" +
-	"\x0eservice_config\x18\a \x01(\v2&.diverge.v1alpha1.ServicePreviewConfigR\rserviceConfig\"\xe8\x01\n" +
+	"\x0eservice_config\x18\a \x01(\v2&.diverge.v1alpha1.ServicePreviewConfigR\rserviceConfig\x129\n" +
+	"\bfeatures\x18\b \x01(\v2\x1d.diverge.v1alpha1.FeatureSpecR\bfeatures\"\xe8\x01\n" +
 	"\tCondition\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12/\n" +
@@ -3576,7 +3652,7 @@ func file_diverge_v1alpha1_environment_proto_rawDescGZIP() []byte {
 	return file_diverge_v1alpha1_environment_proto_rawDescData
 }
 
-var file_diverge_v1alpha1_environment_proto_msgTypes = make([]protoimpl.MessageInfo, 50)
+var file_diverge_v1alpha1_environment_proto_msgTypes = make([]protoimpl.MessageInfo, 52)
 var file_diverge_v1alpha1_environment_proto_goTypes = []any{
 	(*SecretRef)(nil),                 // 0: diverge.v1alpha1.SecretRef
 	(*MigrationJobSpec)(nil),          // 1: diverge.v1alpha1.MigrationJobSpec
@@ -3592,126 +3668,130 @@ var file_diverge_v1alpha1_environment_proto_goTypes = []any{
 	(*PostDeploySpec)(nil),            // 11: diverge.v1alpha1.PostDeploySpec
 	(*KEDASpec)(nil),                  // 12: diverge.v1alpha1.KEDASpec
 	(*EnvironmentLifecycle)(nil),      // 13: diverge.v1alpha1.EnvironmentLifecycle
-	(*TestTriggerSpec)(nil),           // 14: diverge.v1alpha1.TestTriggerSpec
-	(*TestingSpec)(nil),               // 15: diverge.v1alpha1.TestingSpec
-	(*TestStatus)(nil),                // 16: diverge.v1alpha1.TestStatus
-	(*EnvVar)(nil),                    // 17: diverge.v1alpha1.EnvVar
-	(*ResourceOverride)(nil),          // 18: diverge.v1alpha1.ResourceOverride
-	(*ServicePreviewConfig)(nil),      // 19: diverge.v1alpha1.ServicePreviewConfig
-	(*EnvironmentSpec)(nil),           // 20: diverge.v1alpha1.EnvironmentSpec
-	(*Condition)(nil),                 // 21: diverge.v1alpha1.Condition
-	(*ServiceStatus)(nil),             // 22: diverge.v1alpha1.ServiceStatus
-	(*EnvironmentStatus)(nil),         // 23: diverge.v1alpha1.EnvironmentStatus
-	(*Environment)(nil),               // 24: diverge.v1alpha1.Environment
-	(*CreateEnvironmentRequest)(nil),  // 25: diverge.v1alpha1.CreateEnvironmentRequest
-	(*CreateEnvironmentResponse)(nil), // 26: diverge.v1alpha1.CreateEnvironmentResponse
-	(*GetEnvironmentRequest)(nil),     // 27: diverge.v1alpha1.GetEnvironmentRequest
-	(*GetEnvironmentResponse)(nil),    // 28: diverge.v1alpha1.GetEnvironmentResponse
-	(*ListEnvironmentsRequest)(nil),   // 29: diverge.v1alpha1.ListEnvironmentsRequest
-	(*ListEnvironmentsResponse)(nil),  // 30: diverge.v1alpha1.ListEnvironmentsResponse
-	(*UpdateEnvironmentRequest)(nil),  // 31: diverge.v1alpha1.UpdateEnvironmentRequest
-	(*UpdateEnvironmentResponse)(nil), // 32: diverge.v1alpha1.UpdateEnvironmentResponse
-	(*DeleteEnvironmentRequest)(nil),  // 33: diverge.v1alpha1.DeleteEnvironmentRequest
-	(*DeleteEnvironmentResponse)(nil), // 34: diverge.v1alpha1.DeleteEnvironmentResponse
-	(*ExtendTTLRequest)(nil),          // 35: diverge.v1alpha1.ExtendTTLRequest
-	(*ExtendTTLResponse)(nil),         // 36: diverge.v1alpha1.ExtendTTLResponse
-	(*WatchEnvironmentsRequest)(nil),  // 37: diverge.v1alpha1.WatchEnvironmentsRequest
-	(*WatchEnvironmentsResponse)(nil), // 38: diverge.v1alpha1.WatchEnvironmentsResponse
-	(*StreamLogsRequest)(nil),         // 39: diverge.v1alpha1.StreamLogsRequest
-	(*StreamLogsResponse)(nil),        // 40: diverge.v1alpha1.StreamLogsResponse
-	(*HookJob)(nil),                   // 41: diverge.v1alpha1.HookJob
-	(*ListHookJobsRequest)(nil),       // 42: diverge.v1alpha1.ListHookJobsRequest
-	(*ListHookJobsResponse)(nil),      // 43: diverge.v1alpha1.ListHookJobsResponse
-	(*RetryHookRequest)(nil),          // 44: diverge.v1alpha1.RetryHookRequest
-	(*RetryHookResponse)(nil),         // 45: diverge.v1alpha1.RetryHookResponse
-	nil,                               // 46: diverge.v1alpha1.EnvironmentDeploy.NamespaceLabelsEntry
-	nil,                               // 47: diverge.v1alpha1.AsyncRouteSpec.EnvVarMappingEntry
-	nil,                               // 48: diverge.v1alpha1.Environment.LabelsEntry
-	nil,                               // 49: diverge.v1alpha1.Environment.AnnotationsEntry
-	(*durationpb.Duration)(nil),       // 50: google.protobuf.Duration
-	(*timestamppb.Timestamp)(nil),     // 51: google.protobuf.Timestamp
-	(*fieldmaskpb.FieldMask)(nil),     // 52: google.protobuf.FieldMask
-	(WatchEventType)(0),               // 53: diverge.v1alpha1.WatchEventType
+	(*FeatureSpec)(nil),               // 14: diverge.v1alpha1.FeatureSpec
+	(*TestTriggerSpec)(nil),           // 15: diverge.v1alpha1.TestTriggerSpec
+	(*TestingSpec)(nil),               // 16: diverge.v1alpha1.TestingSpec
+	(*TestStatus)(nil),                // 17: diverge.v1alpha1.TestStatus
+	(*EnvVar)(nil),                    // 18: diverge.v1alpha1.EnvVar
+	(*ResourceOverride)(nil),          // 19: diverge.v1alpha1.ResourceOverride
+	(*ServicePreviewConfig)(nil),      // 20: diverge.v1alpha1.ServicePreviewConfig
+	(*EnvironmentSpec)(nil),           // 21: diverge.v1alpha1.EnvironmentSpec
+	(*Condition)(nil),                 // 22: diverge.v1alpha1.Condition
+	(*ServiceStatus)(nil),             // 23: diverge.v1alpha1.ServiceStatus
+	(*EnvironmentStatus)(nil),         // 24: diverge.v1alpha1.EnvironmentStatus
+	(*Environment)(nil),               // 25: diverge.v1alpha1.Environment
+	(*CreateEnvironmentRequest)(nil),  // 26: diverge.v1alpha1.CreateEnvironmentRequest
+	(*CreateEnvironmentResponse)(nil), // 27: diverge.v1alpha1.CreateEnvironmentResponse
+	(*GetEnvironmentRequest)(nil),     // 28: diverge.v1alpha1.GetEnvironmentRequest
+	(*GetEnvironmentResponse)(nil),    // 29: diverge.v1alpha1.GetEnvironmentResponse
+	(*ListEnvironmentsRequest)(nil),   // 30: diverge.v1alpha1.ListEnvironmentsRequest
+	(*ListEnvironmentsResponse)(nil),  // 31: diverge.v1alpha1.ListEnvironmentsResponse
+	(*UpdateEnvironmentRequest)(nil),  // 32: diverge.v1alpha1.UpdateEnvironmentRequest
+	(*UpdateEnvironmentResponse)(nil), // 33: diverge.v1alpha1.UpdateEnvironmentResponse
+	(*DeleteEnvironmentRequest)(nil),  // 34: diverge.v1alpha1.DeleteEnvironmentRequest
+	(*DeleteEnvironmentResponse)(nil), // 35: diverge.v1alpha1.DeleteEnvironmentResponse
+	(*ExtendTTLRequest)(nil),          // 36: diverge.v1alpha1.ExtendTTLRequest
+	(*ExtendTTLResponse)(nil),         // 37: diverge.v1alpha1.ExtendTTLResponse
+	(*WatchEnvironmentsRequest)(nil),  // 38: diverge.v1alpha1.WatchEnvironmentsRequest
+	(*WatchEnvironmentsResponse)(nil), // 39: diverge.v1alpha1.WatchEnvironmentsResponse
+	(*StreamLogsRequest)(nil),         // 40: diverge.v1alpha1.StreamLogsRequest
+	(*StreamLogsResponse)(nil),        // 41: diverge.v1alpha1.StreamLogsResponse
+	(*HookJob)(nil),                   // 42: diverge.v1alpha1.HookJob
+	(*ListHookJobsRequest)(nil),       // 43: diverge.v1alpha1.ListHookJobsRequest
+	(*ListHookJobsResponse)(nil),      // 44: diverge.v1alpha1.ListHookJobsResponse
+	(*RetryHookRequest)(nil),          // 45: diverge.v1alpha1.RetryHookRequest
+	(*RetryHookResponse)(nil),         // 46: diverge.v1alpha1.RetryHookResponse
+	nil,                               // 47: diverge.v1alpha1.EnvironmentDeploy.NamespaceLabelsEntry
+	nil,                               // 48: diverge.v1alpha1.AsyncRouteSpec.EnvVarMappingEntry
+	nil,                               // 49: diverge.v1alpha1.FeatureSpec.OverridesEntry
+	nil,                               // 50: diverge.v1alpha1.Environment.LabelsEntry
+	nil,                               // 51: diverge.v1alpha1.Environment.AnnotationsEntry
+	(*durationpb.Duration)(nil),       // 52: google.protobuf.Duration
+	(*timestamppb.Timestamp)(nil),     // 53: google.protobuf.Timestamp
+	(*fieldmaskpb.FieldMask)(nil),     // 54: google.protobuf.FieldMask
+	(WatchEventType)(0),               // 55: diverge.v1alpha1.WatchEventType
 }
 var file_diverge_v1alpha1_environment_proto_depIdxs = []int32{
 	0,  // 0: diverge.v1alpha1.MigrationJobSpec.env_from:type_name -> diverge.v1alpha1.SecretRef
-	46, // 1: diverge.v1alpha1.EnvironmentDeploy.namespace_labels:type_name -> diverge.v1alpha1.EnvironmentDeploy.NamespaceLabelsEntry
+	47, // 1: diverge.v1alpha1.EnvironmentDeploy.namespace_labels:type_name -> diverge.v1alpha1.EnvironmentDeploy.NamespaceLabelsEntry
 	3,  // 2: diverge.v1alpha1.EnvironmentDeploy.manifests:type_name -> diverge.v1alpha1.ManifestSource
-	47, // 3: diverge.v1alpha1.AsyncRouteSpec.env_var_mapping:type_name -> diverge.v1alpha1.AsyncRouteSpec.EnvVarMappingEntry
+	48, // 3: diverge.v1alpha1.AsyncRouteSpec.env_var_mapping:type_name -> diverge.v1alpha1.AsyncRouteSpec.EnvVarMappingEntry
 	5,  // 4: diverge.v1alpha1.EnvironmentRouting.async_routes:type_name -> diverge.v1alpha1.AsyncRouteSpec
 	6,  // 5: diverge.v1alpha1.EnvironmentRouting.cookie:type_name -> diverge.v1alpha1.CookieSpec
 	1,  // 6: diverge.v1alpha1.EnvironmentDatabase.migration_job:type_name -> diverge.v1alpha1.MigrationJobSpec
 	10, // 7: diverge.v1alpha1.EnvironmentDatabase.atlas:type_name -> diverge.v1alpha1.AtlasSpec
 	9,  // 8: diverge.v1alpha1.AtlasSpec.policy:type_name -> diverge.v1alpha1.AtlasPolicySpec
 	0,  // 9: diverge.v1alpha1.PostDeploySpec.env_from:type_name -> diverge.v1alpha1.SecretRef
-	50, // 10: diverge.v1alpha1.EnvironmentLifecycle.ttl:type_name -> google.protobuf.Duration
-	14, // 11: diverge.v1alpha1.TestingSpec.trigger:type_name -> diverge.v1alpha1.TestTriggerSpec
-	50, // 12: diverge.v1alpha1.TestingSpec.timeout:type_name -> google.protobuf.Duration
-	51, // 13: diverge.v1alpha1.TestStatus.started_at:type_name -> google.protobuf.Timestamp
-	51, // 14: diverge.v1alpha1.TestStatus.completed_at:type_name -> google.protobuf.Timestamp
-	17, // 15: diverge.v1alpha1.ServicePreviewConfig.env:type_name -> diverge.v1alpha1.EnvVar
-	18, // 16: diverge.v1alpha1.ServicePreviewConfig.resources:type_name -> diverge.v1alpha1.ResourceOverride
-	12, // 17: diverge.v1alpha1.ServicePreviewConfig.keda:type_name -> diverge.v1alpha1.KEDASpec
-	2,  // 18: diverge.v1alpha1.EnvironmentSpec.source:type_name -> diverge.v1alpha1.EnvironmentSource
-	4,  // 19: diverge.v1alpha1.EnvironmentSpec.deploy:type_name -> diverge.v1alpha1.EnvironmentDeploy
-	7,  // 20: diverge.v1alpha1.EnvironmentSpec.routing:type_name -> diverge.v1alpha1.EnvironmentRouting
-	8,  // 21: diverge.v1alpha1.EnvironmentSpec.database:type_name -> diverge.v1alpha1.EnvironmentDatabase
-	13, // 22: diverge.v1alpha1.EnvironmentSpec.lifecycle:type_name -> diverge.v1alpha1.EnvironmentLifecycle
-	15, // 23: diverge.v1alpha1.EnvironmentSpec.testing:type_name -> diverge.v1alpha1.TestingSpec
-	19, // 24: diverge.v1alpha1.EnvironmentSpec.service_config:type_name -> diverge.v1alpha1.ServicePreviewConfig
-	51, // 25: diverge.v1alpha1.Condition.last_transition_time:type_name -> google.protobuf.Timestamp
-	51, // 26: diverge.v1alpha1.EnvironmentStatus.created_at:type_name -> google.protobuf.Timestamp
-	51, // 27: diverge.v1alpha1.EnvironmentStatus.expires_at:type_name -> google.protobuf.Timestamp
-	21, // 28: diverge.v1alpha1.EnvironmentStatus.conditions:type_name -> diverge.v1alpha1.Condition
-	16, // 29: diverge.v1alpha1.EnvironmentStatus.test_status:type_name -> diverge.v1alpha1.TestStatus
-	20, // 30: diverge.v1alpha1.Environment.spec:type_name -> diverge.v1alpha1.EnvironmentSpec
-	23, // 31: diverge.v1alpha1.Environment.status:type_name -> diverge.v1alpha1.EnvironmentStatus
-	51, // 32: diverge.v1alpha1.Environment.created_at:type_name -> google.protobuf.Timestamp
-	48, // 33: diverge.v1alpha1.Environment.labels:type_name -> diverge.v1alpha1.Environment.LabelsEntry
-	49, // 34: diverge.v1alpha1.Environment.annotations:type_name -> diverge.v1alpha1.Environment.AnnotationsEntry
-	24, // 35: diverge.v1alpha1.CreateEnvironmentRequest.environment:type_name -> diverge.v1alpha1.Environment
-	24, // 36: diverge.v1alpha1.CreateEnvironmentResponse.environment:type_name -> diverge.v1alpha1.Environment
-	24, // 37: diverge.v1alpha1.GetEnvironmentResponse.environment:type_name -> diverge.v1alpha1.Environment
-	24, // 38: diverge.v1alpha1.ListEnvironmentsResponse.environments:type_name -> diverge.v1alpha1.Environment
-	24, // 39: diverge.v1alpha1.UpdateEnvironmentRequest.environment:type_name -> diverge.v1alpha1.Environment
-	52, // 40: diverge.v1alpha1.UpdateEnvironmentRequest.update_mask:type_name -> google.protobuf.FieldMask
-	24, // 41: diverge.v1alpha1.UpdateEnvironmentResponse.environment:type_name -> diverge.v1alpha1.Environment
-	50, // 42: diverge.v1alpha1.ExtendTTLRequest.extend_by:type_name -> google.protobuf.Duration
-	24, // 43: diverge.v1alpha1.ExtendTTLResponse.environment:type_name -> diverge.v1alpha1.Environment
-	53, // 44: diverge.v1alpha1.WatchEnvironmentsResponse.type:type_name -> diverge.v1alpha1.WatchEventType
-	24, // 45: diverge.v1alpha1.WatchEnvironmentsResponse.environment:type_name -> diverge.v1alpha1.Environment
-	51, // 46: diverge.v1alpha1.WatchEnvironmentsResponse.timestamp:type_name -> google.protobuf.Timestamp
-	51, // 47: diverge.v1alpha1.StreamLogsRequest.since_time:type_name -> google.protobuf.Timestamp
-	51, // 48: diverge.v1alpha1.StreamLogsResponse.timestamp:type_name -> google.protobuf.Timestamp
-	51, // 49: diverge.v1alpha1.HookJob.created_at:type_name -> google.protobuf.Timestamp
-	51, // 50: diverge.v1alpha1.HookJob.completed_at:type_name -> google.protobuf.Timestamp
-	41, // 51: diverge.v1alpha1.ListHookJobsResponse.jobs:type_name -> diverge.v1alpha1.HookJob
-	41, // 52: diverge.v1alpha1.RetryHookResponse.job:type_name -> diverge.v1alpha1.HookJob
-	25, // 53: diverge.v1alpha1.EnvironmentService.CreateEnvironment:input_type -> diverge.v1alpha1.CreateEnvironmentRequest
-	27, // 54: diverge.v1alpha1.EnvironmentService.GetEnvironment:input_type -> diverge.v1alpha1.GetEnvironmentRequest
-	29, // 55: diverge.v1alpha1.EnvironmentService.ListEnvironments:input_type -> diverge.v1alpha1.ListEnvironmentsRequest
-	31, // 56: diverge.v1alpha1.EnvironmentService.UpdateEnvironment:input_type -> diverge.v1alpha1.UpdateEnvironmentRequest
-	33, // 57: diverge.v1alpha1.EnvironmentService.DeleteEnvironment:input_type -> diverge.v1alpha1.DeleteEnvironmentRequest
-	35, // 58: diverge.v1alpha1.EnvironmentService.ExtendTTL:input_type -> diverge.v1alpha1.ExtendTTLRequest
-	37, // 59: diverge.v1alpha1.EnvironmentService.WatchEnvironments:input_type -> diverge.v1alpha1.WatchEnvironmentsRequest
-	39, // 60: diverge.v1alpha1.EnvironmentService.StreamLogs:input_type -> diverge.v1alpha1.StreamLogsRequest
-	42, // 61: diverge.v1alpha1.EnvironmentService.ListHookJobs:input_type -> diverge.v1alpha1.ListHookJobsRequest
-	44, // 62: diverge.v1alpha1.EnvironmentService.RetryHook:input_type -> diverge.v1alpha1.RetryHookRequest
-	26, // 63: diverge.v1alpha1.EnvironmentService.CreateEnvironment:output_type -> diverge.v1alpha1.CreateEnvironmentResponse
-	28, // 64: diverge.v1alpha1.EnvironmentService.GetEnvironment:output_type -> diverge.v1alpha1.GetEnvironmentResponse
-	30, // 65: diverge.v1alpha1.EnvironmentService.ListEnvironments:output_type -> diverge.v1alpha1.ListEnvironmentsResponse
-	32, // 66: diverge.v1alpha1.EnvironmentService.UpdateEnvironment:output_type -> diverge.v1alpha1.UpdateEnvironmentResponse
-	34, // 67: diverge.v1alpha1.EnvironmentService.DeleteEnvironment:output_type -> diverge.v1alpha1.DeleteEnvironmentResponse
-	36, // 68: diverge.v1alpha1.EnvironmentService.ExtendTTL:output_type -> diverge.v1alpha1.ExtendTTLResponse
-	38, // 69: diverge.v1alpha1.EnvironmentService.WatchEnvironments:output_type -> diverge.v1alpha1.WatchEnvironmentsResponse
-	40, // 70: diverge.v1alpha1.EnvironmentService.StreamLogs:output_type -> diverge.v1alpha1.StreamLogsResponse
-	43, // 71: diverge.v1alpha1.EnvironmentService.ListHookJobs:output_type -> diverge.v1alpha1.ListHookJobsResponse
-	45, // 72: diverge.v1alpha1.EnvironmentService.RetryHook:output_type -> diverge.v1alpha1.RetryHookResponse
-	63, // [63:73] is the sub-list for method output_type
-	53, // [53:63] is the sub-list for method input_type
-	53, // [53:53] is the sub-list for extension type_name
-	53, // [53:53] is the sub-list for extension extendee
-	0,  // [0:53] is the sub-list for field type_name
+	52, // 10: diverge.v1alpha1.EnvironmentLifecycle.ttl:type_name -> google.protobuf.Duration
+	49, // 11: diverge.v1alpha1.FeatureSpec.overrides:type_name -> diverge.v1alpha1.FeatureSpec.OverridesEntry
+	15, // 12: diverge.v1alpha1.TestingSpec.trigger:type_name -> diverge.v1alpha1.TestTriggerSpec
+	52, // 13: diverge.v1alpha1.TestingSpec.timeout:type_name -> google.protobuf.Duration
+	53, // 14: diverge.v1alpha1.TestStatus.started_at:type_name -> google.protobuf.Timestamp
+	53, // 15: diverge.v1alpha1.TestStatus.completed_at:type_name -> google.protobuf.Timestamp
+	18, // 16: diverge.v1alpha1.ServicePreviewConfig.env:type_name -> diverge.v1alpha1.EnvVar
+	19, // 17: diverge.v1alpha1.ServicePreviewConfig.resources:type_name -> diverge.v1alpha1.ResourceOverride
+	12, // 18: diverge.v1alpha1.ServicePreviewConfig.keda:type_name -> diverge.v1alpha1.KEDASpec
+	2,  // 19: diverge.v1alpha1.EnvironmentSpec.source:type_name -> diverge.v1alpha1.EnvironmentSource
+	4,  // 20: diverge.v1alpha1.EnvironmentSpec.deploy:type_name -> diverge.v1alpha1.EnvironmentDeploy
+	7,  // 21: diverge.v1alpha1.EnvironmentSpec.routing:type_name -> diverge.v1alpha1.EnvironmentRouting
+	8,  // 22: diverge.v1alpha1.EnvironmentSpec.database:type_name -> diverge.v1alpha1.EnvironmentDatabase
+	13, // 23: diverge.v1alpha1.EnvironmentSpec.lifecycle:type_name -> diverge.v1alpha1.EnvironmentLifecycle
+	16, // 24: diverge.v1alpha1.EnvironmentSpec.testing:type_name -> diverge.v1alpha1.TestingSpec
+	20, // 25: diverge.v1alpha1.EnvironmentSpec.service_config:type_name -> diverge.v1alpha1.ServicePreviewConfig
+	14, // 26: diverge.v1alpha1.EnvironmentSpec.features:type_name -> diverge.v1alpha1.FeatureSpec
+	53, // 27: diverge.v1alpha1.Condition.last_transition_time:type_name -> google.protobuf.Timestamp
+	53, // 28: diverge.v1alpha1.EnvironmentStatus.created_at:type_name -> google.protobuf.Timestamp
+	53, // 29: diverge.v1alpha1.EnvironmentStatus.expires_at:type_name -> google.protobuf.Timestamp
+	22, // 30: diverge.v1alpha1.EnvironmentStatus.conditions:type_name -> diverge.v1alpha1.Condition
+	17, // 31: diverge.v1alpha1.EnvironmentStatus.test_status:type_name -> diverge.v1alpha1.TestStatus
+	21, // 32: diverge.v1alpha1.Environment.spec:type_name -> diverge.v1alpha1.EnvironmentSpec
+	24, // 33: diverge.v1alpha1.Environment.status:type_name -> diverge.v1alpha1.EnvironmentStatus
+	53, // 34: diverge.v1alpha1.Environment.created_at:type_name -> google.protobuf.Timestamp
+	50, // 35: diverge.v1alpha1.Environment.labels:type_name -> diverge.v1alpha1.Environment.LabelsEntry
+	51, // 36: diverge.v1alpha1.Environment.annotations:type_name -> diverge.v1alpha1.Environment.AnnotationsEntry
+	25, // 37: diverge.v1alpha1.CreateEnvironmentRequest.environment:type_name -> diverge.v1alpha1.Environment
+	25, // 38: diverge.v1alpha1.CreateEnvironmentResponse.environment:type_name -> diverge.v1alpha1.Environment
+	25, // 39: diverge.v1alpha1.GetEnvironmentResponse.environment:type_name -> diverge.v1alpha1.Environment
+	25, // 40: diverge.v1alpha1.ListEnvironmentsResponse.environments:type_name -> diverge.v1alpha1.Environment
+	25, // 41: diverge.v1alpha1.UpdateEnvironmentRequest.environment:type_name -> diverge.v1alpha1.Environment
+	54, // 42: diverge.v1alpha1.UpdateEnvironmentRequest.update_mask:type_name -> google.protobuf.FieldMask
+	25, // 43: diverge.v1alpha1.UpdateEnvironmentResponse.environment:type_name -> diverge.v1alpha1.Environment
+	52, // 44: diverge.v1alpha1.ExtendTTLRequest.extend_by:type_name -> google.protobuf.Duration
+	25, // 45: diverge.v1alpha1.ExtendTTLResponse.environment:type_name -> diverge.v1alpha1.Environment
+	55, // 46: diverge.v1alpha1.WatchEnvironmentsResponse.type:type_name -> diverge.v1alpha1.WatchEventType
+	25, // 47: diverge.v1alpha1.WatchEnvironmentsResponse.environment:type_name -> diverge.v1alpha1.Environment
+	53, // 48: diverge.v1alpha1.WatchEnvironmentsResponse.timestamp:type_name -> google.protobuf.Timestamp
+	53, // 49: diverge.v1alpha1.StreamLogsRequest.since_time:type_name -> google.protobuf.Timestamp
+	53, // 50: diverge.v1alpha1.StreamLogsResponse.timestamp:type_name -> google.protobuf.Timestamp
+	53, // 51: diverge.v1alpha1.HookJob.created_at:type_name -> google.protobuf.Timestamp
+	53, // 52: diverge.v1alpha1.HookJob.completed_at:type_name -> google.protobuf.Timestamp
+	42, // 53: diverge.v1alpha1.ListHookJobsResponse.jobs:type_name -> diverge.v1alpha1.HookJob
+	42, // 54: diverge.v1alpha1.RetryHookResponse.job:type_name -> diverge.v1alpha1.HookJob
+	26, // 55: diverge.v1alpha1.EnvironmentService.CreateEnvironment:input_type -> diverge.v1alpha1.CreateEnvironmentRequest
+	28, // 56: diverge.v1alpha1.EnvironmentService.GetEnvironment:input_type -> diverge.v1alpha1.GetEnvironmentRequest
+	30, // 57: diverge.v1alpha1.EnvironmentService.ListEnvironments:input_type -> diverge.v1alpha1.ListEnvironmentsRequest
+	32, // 58: diverge.v1alpha1.EnvironmentService.UpdateEnvironment:input_type -> diverge.v1alpha1.UpdateEnvironmentRequest
+	34, // 59: diverge.v1alpha1.EnvironmentService.DeleteEnvironment:input_type -> diverge.v1alpha1.DeleteEnvironmentRequest
+	36, // 60: diverge.v1alpha1.EnvironmentService.ExtendTTL:input_type -> diverge.v1alpha1.ExtendTTLRequest
+	38, // 61: diverge.v1alpha1.EnvironmentService.WatchEnvironments:input_type -> diverge.v1alpha1.WatchEnvironmentsRequest
+	40, // 62: diverge.v1alpha1.EnvironmentService.StreamLogs:input_type -> diverge.v1alpha1.StreamLogsRequest
+	43, // 63: diverge.v1alpha1.EnvironmentService.ListHookJobs:input_type -> diverge.v1alpha1.ListHookJobsRequest
+	45, // 64: diverge.v1alpha1.EnvironmentService.RetryHook:input_type -> diverge.v1alpha1.RetryHookRequest
+	27, // 65: diverge.v1alpha1.EnvironmentService.CreateEnvironment:output_type -> diverge.v1alpha1.CreateEnvironmentResponse
+	29, // 66: diverge.v1alpha1.EnvironmentService.GetEnvironment:output_type -> diverge.v1alpha1.GetEnvironmentResponse
+	31, // 67: diverge.v1alpha1.EnvironmentService.ListEnvironments:output_type -> diverge.v1alpha1.ListEnvironmentsResponse
+	33, // 68: diverge.v1alpha1.EnvironmentService.UpdateEnvironment:output_type -> diverge.v1alpha1.UpdateEnvironmentResponse
+	35, // 69: diverge.v1alpha1.EnvironmentService.DeleteEnvironment:output_type -> diverge.v1alpha1.DeleteEnvironmentResponse
+	37, // 70: diverge.v1alpha1.EnvironmentService.ExtendTTL:output_type -> diverge.v1alpha1.ExtendTTLResponse
+	39, // 71: diverge.v1alpha1.EnvironmentService.WatchEnvironments:output_type -> diverge.v1alpha1.WatchEnvironmentsResponse
+	41, // 72: diverge.v1alpha1.EnvironmentService.StreamLogs:output_type -> diverge.v1alpha1.StreamLogsResponse
+	44, // 73: diverge.v1alpha1.EnvironmentService.ListHookJobs:output_type -> diverge.v1alpha1.ListHookJobsResponse
+	46, // 74: diverge.v1alpha1.EnvironmentService.RetryHook:output_type -> diverge.v1alpha1.RetryHookResponse
+	65, // [65:75] is the sub-list for method output_type
+	55, // [55:65] is the sub-list for method input_type
+	55, // [55:55] is the sub-list for extension type_name
+	55, // [55:55] is the sub-list for extension extendee
+	0,  // [0:55] is the sub-list for field type_name
 }
 
 func init() { file_diverge_v1alpha1_environment_proto_init() }
@@ -3727,7 +3807,7 @@ func file_diverge_v1alpha1_environment_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_diverge_v1alpha1_environment_proto_rawDesc), len(file_diverge_v1alpha1_environment_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   50,
+			NumMessages:   52,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

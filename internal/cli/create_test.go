@@ -574,3 +574,58 @@ func TestBuildEnvironmentWithInvalidAtlas(t *testing.T) {
 	assert.Nil(t, env)
 	assert.Contains(t, err.Error(), "invalid atlas configuration")
 }
+
+func TestBuildEnvironmentWithFeatures(t *testing.T) {
+	gitCtx := &git.GitContext{
+		Provider: "github",
+		Project:  "divergedev/diverge",
+		Branch:   "feat/features-test",
+	}
+
+	resolved := &config.ResolvedSettings{
+		EnvironmentSettings: config.EnvironmentSettings{
+			Deploy: config.DeploySettings{Mode: "delta"},
+			Features: &config.FeatureSettings{
+				Provider: "configmap",
+				Overrides: map[string]string{
+					"checkout_v2": "true",
+					"beta_badge":  "enabled",
+				},
+				ConnectionRef: "flag-secret",
+			},
+		},
+	}
+
+	app := &App{Namespace: "default"}
+	env, err := buildEnvironment(context.Background(), "preview-mr-12", gitCtx, resolved, nil, app, 12)
+	require.NoError(t, err)
+
+	require.NotNil(t, env.Spec.Features)
+	assert.Equal(t, "configmap", env.Spec.Features.Provider)
+	assert.Equal(t, "flag-secret", env.Spec.Features.ConnectionRef)
+	assert.Equal(t, "true", env.Spec.Features.Overrides["checkout_v2"])
+	assert.Equal(t, "enabled", env.Spec.Features.Overrides["beta_badge"])
+}
+
+func TestBuildEnvironmentWithInvalidFeatures(t *testing.T) {
+	gitCtx := &git.GitContext{
+		Provider: "github",
+		Project:  "divergedev/diverge",
+		Branch:   "feat/invalid-features",
+	}
+
+	resolved := &config.ResolvedSettings{
+		EnvironmentSettings: config.EnvironmentSettings{
+			Deploy: config.DeploySettings{Mode: "delta"},
+			Features: &config.FeatureSettings{
+				Provider: "unknown-provider",
+			},
+		},
+	}
+
+	app := &App{Namespace: "default"}
+	env, err := buildEnvironment(context.Background(), "preview-mr-13", gitCtx, resolved, nil, app, 13)
+	assert.Error(t, err)
+	assert.Nil(t, env)
+	assert.Contains(t, err.Error(), "invalid features configuration")
+}

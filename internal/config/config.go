@@ -54,6 +54,7 @@ type EnvironmentSettings struct {
 	Routing   RoutingSettings   `yaml:"routing"`
 	Database  DatabaseSettings  `yaml:"database"`
 	Lifecycle LifecycleSettings `yaml:"lifecycle"`
+	Features  *FeatureSettings  `yaml:"features,omitempty"`
 }
 
 type DeploySettings struct {
@@ -143,6 +144,22 @@ type LifecycleSettings struct {
 	CleanupOnMerge *bool  `yaml:"cleanup_on_merge,omitempty"`
 }
 
+type FeatureSettings struct {
+	Provider      string            `yaml:"provider,omitempty"`
+	Overrides     map[string]string `yaml:"overrides,omitempty"`
+	ConnectionRef string            `yaml:"connection_ref,omitempty"`
+}
+
+func (f *FeatureSettings) Validate() error {
+	if f == nil {
+		return nil
+	}
+	if f.Provider != "" && f.Provider != "configmap" && f.Provider != "flipt" && f.Provider != "flagsmith" && f.Provider != "unleash" && f.Provider != "noop" && f.Provider != "none" {
+		return fmt.Errorf("feature provider must be one of \"configmap\", \"flipt\", \"flagsmith\", \"unleash\", \"noop\", \"none\", got %q", f.Provider)
+	}
+	return nil
+}
+
 type EnvironmentType struct {
 	EnvironmentSettings `yaml:",inline"`
 	Trigger             string `yaml:"trigger"` // label | auto | manual | branch | schedule
@@ -199,6 +216,11 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("defaults.database.atlas: %w", err)
 		}
 	}
+	if c.Defaults.Features != nil {
+		if err := c.Defaults.Features.Validate(); err != nil {
+			return fmt.Errorf("defaults.features: %w", err)
+		}
+	}
 	for name, env := range c.Environments {
 		if env.Routing.Banner != nil {
 			if err := env.Routing.Banner.Validate(); err != nil {
@@ -208,6 +230,11 @@ func (c *Config) Validate() error {
 		if env.Database.Atlas != nil {
 			if err := env.Database.Atlas.Validate(); err != nil {
 				return fmt.Errorf("environments[%s].database.atlas: %w", name, err)
+			}
+		}
+		if env.Features != nil {
+			if err := env.Features.Validate(); err != nil {
+				return fmt.Errorf("environments[%s].features: %w", name, err)
 			}
 		}
 	}
@@ -220,6 +247,11 @@ func (c *Config) Validate() error {
 		if override.Database.Atlas != nil {
 			if err := override.Database.Atlas.Validate(); err != nil {
 				return fmt.Errorf("label_overrides[%s].database.atlas: %w", label, err)
+			}
+		}
+		if override.Features != nil {
+			if err := override.Features.Validate(); err != nil {
+				return fmt.Errorf("label_overrides[%s].features: %w", label, err)
 			}
 		}
 	}
@@ -238,6 +270,11 @@ func (r *ResolvedSettings) Validate() error {
 	}
 	if r.Database.Atlas != nil {
 		if err := r.Database.Atlas.Validate(); err != nil {
+			return err
+		}
+	}
+	if r.Features != nil {
+		if err := r.Features.Validate(); err != nil {
 			return err
 		}
 	}
@@ -388,5 +425,34 @@ func mergeSettings(dst, src *EnvironmentSettings) {
 	}
 	if src.Lifecycle.CleanupOnMerge != nil {
 		dst.Lifecycle.CleanupOnMerge = src.Lifecycle.CleanupOnMerge
+	}
+
+	// Features
+	if src.Features != nil {
+		f := &FeatureSettings{}
+		if dst.Features != nil {
+			*f = *dst.Features
+			if dst.Features.Overrides != nil {
+				f.Overrides = make(map[string]string, len(dst.Features.Overrides))
+				for k, v := range dst.Features.Overrides {
+					f.Overrides[k] = v
+				}
+			}
+		}
+		if src.Features.Provider != "" {
+			f.Provider = src.Features.Provider
+		}
+		if src.Features.ConnectionRef != "" {
+			f.ConnectionRef = src.Features.ConnectionRef
+		}
+		if len(src.Features.Overrides) > 0 {
+			if f.Overrides == nil {
+				f.Overrides = make(map[string]string, len(src.Features.Overrides))
+			}
+			for k, v := range src.Features.Overrides {
+				f.Overrides[k] = v
+			}
+		}
+		dst.Features = f
 	}
 }

@@ -67,6 +67,7 @@ internal/webhook/config_fetcher_github.go
 internal/webhook/config_fetcher_gitlab.go
 pkg/database/provider.go
 pkg/database/registry.go
+pkg/features/provider.go
 internal/server/auth.go
 internal/server/cluster_auth.go
 internal/server/environment.go

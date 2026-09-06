@@ -520,3 +520,71 @@ func TestAtlasSettings_Validation(t *testing.T) {
 		assert.ErrorContains(t, cfg.Validate(), "atlas policy destructive must be")
 	})
 }
+
+func TestFeatureSettings_ParsingAndMerging(t *testing.T) {
+	yamlContent := "version: \"1\"\n" +
+		"defaults:\n" +
+		"  features:\n" +
+		"    provider: configmap\n" +
+		"    overrides:\n" +
+		"      checkout_v2: \"true\"\n" +
+		"      rate_limit: \"100\"\n" +
+		"environments:\n" +
+		"  preview:\n" +
+		"    features:\n" +
+		"      overrides:\n" +
+		"        checkout_v2: \"false\"\n" +
+		"        new_nav: \"true\"\n" +
+		"label_overrides:\n" +
+		"  flag/fast-checkout:\n" +
+		"    features:\n" +
+		"      overrides:\n" +
+		"        checkout_v2: \"true\"\n" +
+		"        fast_lane: \"enabled\"\n"
+
+	cfg, err := Parse([]byte(yamlContent))
+	require.NoError(t, err)
+	require.NoError(t, cfg.Validate())
+
+	t.Run("defaults only", func(t *testing.T) {
+		res := cfg.Resolve("unknown", nil)
+		require.NotNil(t, res.Features)
+		assert.Equal(t, "configmap", res.Features.Provider)
+		assert.Equal(t, "true", res.Features.Overrides["checkout_v2"])
+		assert.Equal(t, "100", res.Features.Overrides["rate_limit"])
+	})
+
+	t.Run("environment override", func(t *testing.T) {
+		res := cfg.Resolve("preview", nil)
+		require.NotNil(t, res.Features)
+		assert.Equal(t, "configmap", res.Features.Provider)
+		assert.Equal(t, "false", res.Features.Overrides["checkout_v2"])
+		assert.Equal(t, "100", res.Features.Overrides["rate_limit"])
+		assert.Equal(t, "true", res.Features.Overrides["new_nav"])
+	})
+
+	t.Run("label override precedence", func(t *testing.T) {
+		res := cfg.Resolve("preview", []string{"flag/fast-checkout"})
+		require.NotNil(t, res.Features)
+		assert.Equal(t, "true", res.Features.Overrides["checkout_v2"])
+		assert.Equal(t, "enabled", res.Features.Overrides["fast_lane"])
+		assert.Equal(t, "true", res.Features.Overrides["new_nav"])
+		assert.Equal(t, "100", res.Features.Overrides["rate_limit"])
+	})
+}
+
+func TestFeatureSettings_Validation(t *testing.T) {
+	t.Run("valid providers", func(t *testing.T) {
+		for _, p := range []string{"configmap", "flipt", "flagsmith", "unleash", "noop", "none"} {
+			feat := &FeatureSettings{Provider: p}
+			assert.NoError(t, feat.Validate())
+		}
+	})
+
+	t.Run("invalid provider", func(t *testing.T) {
+		yamlContent := "version: \"1\"\ndefaults:\n  features:\n    provider: invalid-flag-provider\n"
+		cfg, err := Parse([]byte(yamlContent))
+		require.NoError(t, err)
+		assert.ErrorContains(t, cfg.Validate(), "feature provider must be one of")
+	})
+}

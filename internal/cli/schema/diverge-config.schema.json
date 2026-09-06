@@ -164,6 +164,21 @@
             "ttl": { "type": "string" },
             "cleanup_on_merge": { "type": "boolean" }
           }
+        },
+        "features": {
+          "type": "object",
+          "description": "Feature flag overrides and remote configuration.",
+          "properties": {
+            "provider": {
+              "type": "string",
+              "enum": ["configmap", "flipt", "flagsmith", "unleash", "noop", "none"]
+            },
+            "overrides": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            },
+            "connection_ref": { "type": "string" }
+          }
         }
       }
     }
