@@ -454,6 +454,13 @@ type EnvironmentStatus struct {
 	// PostDeployStatus tracks the state of the post-deploy hook.
 	// +optional
 	PostDeployStatus string `json:"postDeployStatus,omitempty"`
+
+	// FeatureConfigMap is the name of the ConfigMap provisioned for feature flags.
+	// +optional
+	FeatureConfigMap string `json:"featureConfigMap,omitempty"`
+	// FeatureEnvVars contains environment variables injected by feature providers.
+	// +optional
+	FeatureEnvVars map[string]string `json:"featureEnvVars,omitempty"`
 }
 
 // +kubebuilder:object:root=true

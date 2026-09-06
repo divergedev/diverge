@@ -229,6 +229,8 @@ message EnvironmentStatus {
   string migration_status = 13;
   string migration_message = 14;
   string post_deploy_status = 15;
+  string feature_config_map = 16;
+  map<string, string> feature_env_vars = 17;
 }
 
 message Environment {

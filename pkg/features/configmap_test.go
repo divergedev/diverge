@@ -17,7 +17,7 @@ import (
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
 
-func TestBuildFlagdJSON(t *testing.T) {
+func TestBuildFlagdJSON_Unscoped(t *testing.T) {
 	overrides := map[string]string{
 		"new_checkout": "true",
 		"dark_mode":    "false",
@@ -26,7 +26,7 @@ func TestBuildFlagdJSON(t *testing.T) {
 		"theme":        "obsidian",
 	}
 
-	data, err := BuildFlagdJSON(overrides)
+	data, err := BuildFlagdJSON(overrides, "")
 	require.NoError(t, err)
 
 	var def FlagdDefinition
@@ -40,21 +40,67 @@ func TestBuildFlagdJSON(t *testing.T) {
 	assert.Equal(t, "on", flagBool.DefaultVariant)
 	assert.Equal(t, true, flagBool.Variants["on"])
 	assert.Equal(t, false, flagBool.Variants["off"])
+	assert.Nil(t, flagBool.Targeting)
 
 	flagFalse := def.Flags["dark_mode"]
 	assert.Equal(t, "off", flagFalse.DefaultVariant)
+	assert.Nil(t, flagFalse.Targeting)
 
 	flagInt := def.Flags["rate_limit"]
 	assert.Equal(t, "value", flagInt.DefaultVariant)
 	assert.Equal(t, float64(100), flagInt.Variants["value"])
+	assert.Nil(t, flagInt.Targeting)
 
 	flagFloat := def.Flags["threshold"]
 	assert.Equal(t, "value", flagFloat.DefaultVariant)
 	assert.Equal(t, 99.5, flagFloat.Variants["value"])
+	assert.Nil(t, flagFloat.Targeting)
 
 	flagStr := def.Flags["theme"]
 	assert.Equal(t, "value", flagStr.DefaultVariant)
 	assert.Equal(t, "obsidian", flagStr.Variants["value"])
+	assert.Nil(t, flagStr.Targeting)
+}
+
+func TestBuildFlagdJSON_ScopedTargeting(t *testing.T) {
+	overrides := map[string]string{
+		"new_checkout": "true",
+		"dark_mode":    "false",
+		"rate_limit":   "100",
+		"theme":        "obsidian",
+	}
+
+	data, err := BuildFlagdJSON(overrides, "pr-42")
+	require.NoError(t, err)
+
+	var def FlagdDefinition
+	err = json.Unmarshal(data, &def)
+	require.NoError(t, err)
+
+	flagBool := def.Flags["new_checkout"]
+	assert.Equal(t, "ENABLED", flagBool.State)
+	assert.Equal(t, "off", flagBool.DefaultVariant)
+	assert.NotNil(t, flagBool.Targeting)
+
+	// Check targeting JSON structure
+	targetingMap, ok := flagBool.Targeting.(map[string]interface{})
+	require.True(t, ok)
+	ifList, ok := targetingMap["if"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, ifList, 3)
+	assert.Equal(t, "on", ifList[1])
+	assert.Equal(t, "off", ifList[2])
+
+	flagFalse := def.Flags["dark_mode"]
+	assert.Equal(t, "on", flagFalse.DefaultVariant)
+	targetingFalse := flagFalse.Targeting.(map[string]interface{})["if"].([]interface{})
+	assert.Equal(t, "off", targetingFalse[1])
+	assert.Equal(t, "on", targetingFalse[2])
+
+	flagStr := def.Flags["theme"]
+	assert.Equal(t, "default", flagStr.DefaultVariant)
+	assert.Equal(t, "obsidian", flagStr.Variants["value"])
+	assert.Equal(t, "", flagStr.Variants["default"])
 }
 
 func TestConfigMapProvider_Lifecycle(t *testing.T) {

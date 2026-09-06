@@ -694,6 +694,16 @@ spec:
               expiresAt:
                 format: date-time
                 type: string
+              featureConfigMap:
+                description: FeatureConfigMap is the name of the ConfigMap provisioned
+                  for feature flags.
+                type: string
+              featureEnvVars:
+                additionalProperties:
+                  type: string
+                description: FeatureEnvVars contains environment variables injected
+                  by feature providers.
+                type: object
               migrationMessage:
                 description: MigrationMessage provides details about the migration
                   hook state.

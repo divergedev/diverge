@@ -82,7 +82,22 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		}
 		cancelDB()
 
-		// Teardown features
+		// Wait for preview workloads to be fully terminated before deleting
+		// feature flag ConfigMaps or namespaces, preventing live preview pods
+		// from encountering volume or ConfigMap missing errors during shutdown.
+		if r.Deployer != nil {
+			tCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			status, err := r.Deployer.Status(tCtx, env)
+			cancel()
+			if err != nil {
+				errs = append(errs, fmt.Errorf("failed to check deployer status during teardown: %w", err))
+			} else if len(status) > 0 {
+				log.FromContext(ctx).Info("Waiting for deployer resources to be fully deleted", "remaining", len(status))
+				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+			}
+		}
+
+		// Teardown features (executed only after deployer workloads have terminated)
 		if fp, err := r.getFeatureProvider(env); err == nil && fp != nil {
 			tCtxF, cancelF := context.WithTimeout(ctx, 15*time.Second)
 			if err := fp.Teardown(tCtxF, env); err != nil {
@@ -91,22 +106,10 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 			cancelF()
 		}
 
-		// C4: Wait for ArgoCD Applications to be fully deleted before
-		// deleting the namespace, preventing finalizer deadlocks where
-		// the namespace enters Terminating but ArgoCD resources still
-		// have resources-finalizer.argocd.argoproj.io.
+		// C4: Wait for workloads to be fully deleted before deleting the namespace,
+		// preventing finalizer deadlocks where the namespace enters Terminating
+		// but resources still retain finalizers.
 		if env.Spec.Deploy.Namespace == "create" {
-			if r.Deployer != nil {
-				tCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-				defer cancel()
-				status, err := r.Deployer.Status(tCtx, env)
-				if err != nil {
-					errs = append(errs, fmt.Errorf("failed to check deployer status during teardown: %w", err))
-				} else if len(status) > 0 {
-					log.FromContext(ctx).Info("Waiting for deployer resources to be fully deleted", "remaining", len(status))
-					return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-				}
-			}
 			ns := &corev1.Namespace{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: env.PreviewNamespace(),
