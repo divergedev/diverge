@@ -26,6 +26,7 @@ import (
 	"github.com/divergedev/diverge/internal/routing"
 	divtesting "github.com/divergedev/diverge/internal/testing"
 	"github.com/divergedev/diverge/pkg/database"
+	"github.com/divergedev/diverge/pkg/features"
 )
 
 const environmentFinalizer = "divergedev.com/environment-protection"
@@ -43,6 +44,7 @@ type EnvironmentReconciler struct {
 	Deployer         deployer.Deployer
 	TestRunner       divtesting.TestRunner
 	AsyncProvisioner async.Provisioner
+	FeatureProvider  features.FeatureProvider
 	SetupJobImage    string
 	SetupRunner      SetupRunner
 }

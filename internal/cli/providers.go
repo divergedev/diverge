@@ -15,6 +15,7 @@ import (
 	"github.com/divergedev/diverge/internal/routing"
 	divtesting "github.com/divergedev/diverge/internal/testing"
 	pkgdb "github.com/divergedev/diverge/pkg/database"
+	pkgfeatures "github.com/divergedev/diverge/pkg/features"
 )
 
 // ProviderInfo contains details about a single registered provider.
@@ -60,6 +61,7 @@ func newProvidersCmd(app *App) *cobra.Command {
 			addRegistry("previewgroup-notifier", notifier.GroupProviders.Describe())
 			addRegistry("test-runner", divtesting.Providers.Describe())
 			addRegistry("async-provisioner", async.Providers.Describe())
+			addRegistry("feature", pkgfeatures.Providers.Describe())
 
 			// Sort for deterministic output
 			sort.Slice(allProviders, func(i, j int) bool {

@@ -253,6 +253,19 @@ func buildEnvironment(ctx context.Context, name string, gitCtx *git.GitContext, 
 		env.Spec.Database.Atlas = atlasSpec
 	}
 
+	// Configure feature flags
+	if resolved.Features != nil {
+		if err := resolved.Features.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid features configuration: %w", err)
+		}
+		featCfg := resolved.Features
+		env.Spec.Features = &v1alpha1.FeatureSpec{
+			Provider:      featCfg.Provider,
+			Overrides:     featCfg.Overrides,
+			ConnectionRef: featCfg.ConnectionRef,
+		}
+	}
+
 	// Detect changed services for delta mode
 	if resolved.Deploy.Mode == "delta" && cfg != nil {
 		servicePaths := make(map[string][]string, len(cfg.Services))

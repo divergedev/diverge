@@ -36,6 +36,7 @@ import (
 	divtesting "github.com/divergedev/diverge/internal/testing"
 	"github.com/divergedev/diverge/internal/webhook"
 	pkgdb "github.com/divergedev/diverge/pkg/database"
+	pkgfeatures "github.com/divergedev/diverge/pkg/features"
 	"github.com/divergedev/diverge/pkg/registry"
 )
 
@@ -68,6 +69,7 @@ func main() {
 	var notifierProvider string
 	var defaultNamespace string
 	var asyncProvider string
+	var featureProvider string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -80,6 +82,7 @@ func main() {
 	flag.StringVar(&databaseProvider, "database-provider", "none", "Database provider (schema|none)")
 	flag.StringVar(&notifierProvider, "notifier-provider", "noop", "Notification provider (gitlab|github|noop)")
 	flag.StringVar(&asyncProvider, "async-provider", "noop", "Async provisioning provider (noop, webhook)")
+	flag.StringVar(&featureProvider, "feature-provider", "configmap", "Feature flag provider (configmap, noop)")
 	flag.StringVar(&webhookSecretToken, "webhook-secret-token", "", "The secret token for authenticating webhooks (prefer DIVERGE_WEBHOOK_SECRET env var).")
 	flag.StringVar(&defaultNamespace, "default-namespace", "default", "Default namespace to create environments in")
 
@@ -243,6 +246,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	if featureProvider == "" {
+		featureProvider = "configmap"
+	}
+	featureProviderImpl, err := pkgfeatures.Providers.Create(featureProvider, deps)
+	if err != nil {
+		setupLog.Error(err, "creating feature provider", "provider", featureProvider)
+		os.Exit(1)
+	}
+
 	if err = (&controller.EnvironmentReconciler{
 		Client:           mgr.GetClient(),
 		Scheme:           mgr.GetScheme(),
@@ -255,6 +267,7 @@ func main() {
 		Deployer:         deployerImpl,
 		TestRunner:       testRunnerImpl,
 		AsyncProvisioner: asyncProviderImpl,
+		FeatureProvider:  featureProviderImpl,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Environment")
 		os.Exit(1)
