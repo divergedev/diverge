@@ -393,7 +393,7 @@ func runPreviewStatus(ctx context.Context, app *App, name string, out io.Writer)
 			var jobs batchv1.JobList
 			if err := c.List(ctx, &jobs,
 				client.InNamespace(pg.Namespace),
-				client.MatchingLabels{"diverge.io/environment": truncateLabel(svc.EnvironmentName)},
+				client.MatchingLabels{"divergedev.com/environment": truncateLabel(svc.EnvironmentName)},
 			); err != nil {
 				_, _ = fmt.Fprintf(out, "   ⚠️  Failed to list hooks: %v\n", err)
 			} else {
@@ -408,7 +408,7 @@ func runPreviewStatus(ctx context.Context, app *App, name string, out io.Writer)
 		_, _ = fmt.Fprintf(w, "   HOOK TYPE\tNAME\tSTATUS\tDURATION\tMESSAGE\n")
 		_, _ = fmt.Fprintf(w, "   ─────────\t────\t──────\t────────\t───────\n")
 		for _, job := range hookJobs.Items {
-			hookType := job.Labels["diverge.io/hook-type"]
+			hookType := job.Labels["divergedev.com/hook-type"]
 			status, icon := hookJobStatus(&job)
 			duration := hookDuration(&job)
 			message := hookMessage(&job)

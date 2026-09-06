@@ -17,7 +17,7 @@ type UserInfo struct {
 
 type contextKey string
 
-const userInfoKey contextKey = "diverge.dev/userinfo"
+const userInfoKey contextKey = "divergedev.com/userinfo"
 
 // UserInfoFromContext extracts the authenticated user's identity from the context.
 func UserInfoFromContext(ctx context.Context) (*UserInfo, bool) {

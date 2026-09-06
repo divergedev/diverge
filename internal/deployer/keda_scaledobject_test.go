@@ -37,7 +37,7 @@ func TestBuildTemporalScaledObject(t *testing.T) {
 
 	assert.Equal(t, "pr-42-temporal", so.GetName())
 	assert.Equal(t, "preview-ns", so.GetNamespace())
-	assert.Equal(t, "temporal", so.GetLabels()["diverge.io/async-protocol"])
+	assert.Equal(t, "temporal", so.GetLabels()["divergedev.com/async-protocol"])
 
 	target, _, _ := unstructured.NestedString(so.Object, "spec", "scaleTargetRef", "name")
 	assert.Equal(t, "pr-42", target)

@@ -20,10 +20,10 @@ The server listens on `:8080` (RPC) and `:8081` (Tunnel Proxy):
 ## Security & RBAC
 
 - **Authentication:** Pass a Kubernetes OIDC JWT or ServiceAccount token in `Authorization: Bearer <token>`. Validated via Kubernetes `TokenReview` and cached via in-memory LRU.
-- **Authorization:** Evaluated per request via Kubernetes `SubjectAccessReview` (SAR) against the `diverge.dev` API group.
+- **Authorization:** Evaluated per request via Kubernetes `SubjectAccessReview` (SAR) against the `divergedev.com` API group.
   - *Namespace-scoped:* Verifies `get`, `list`, `watch`, `create`, `update`, `delete` on `environments` or `previewgroups` in the target namespace.
   - *Cluster-scoped:* Verifies permissions at empty namespace `""` (e.g., `GetClusterInfo`, cluster-wide `WatchEnvironments`).
-  - *Pod Logs:* `StreamLogs` requires `get` on `environments.diverge.dev` **and** `get` on `pods/log` (core API group).
+  - *Pod Logs:* `StreamLogs` requires `get` on `environments.divergedev.com` **and** `get` on `pods/log` (core API group).
 - **Validation:** Names and namespaces must conform to DNS-1123 (`^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?$`, max 63 chars). Request namespaces must match payload namespaces.
 - **Audit Logging:** All authentication events, authorization rejections, and mutations are recorded as structured JSON audit logs.
 
@@ -84,7 +84,7 @@ Internal Kubernetes errors are sanitized into standard ConnectRPC codes:
 Manages single-service preview environments.
 
 ### `CreateEnvironment`
-Creates a preview environment. **RBAC:** `create` on `environments.diverge.dev`.
+Creates a preview environment. **RBAC:** `create` on `environments.divergedev.com`.
 
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
@@ -99,7 +99,7 @@ curl -X POST https://diverge.example.com/diverge.v1alpha1.EnvironmentService/Cre
 ```
 
 ### `GetEnvironment`
-Retrieves an environment. **RBAC:** `get` on `environments.diverge.dev`.
+Retrieves an environment. **RBAC:** `get` on `environments.divergedev.com`.
 
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
@@ -114,7 +114,7 @@ curl -X POST https://diverge.example.com/diverge.v1alpha1.EnvironmentService/Get
 ```
 
 ### `ListEnvironments`
-Lists environments with filtering and pagination. **RBAC:** `list` on `environments.diverge.dev`.
+Lists environments with filtering and pagination. **RBAC:** `list` on `environments.divergedev.com`.
 
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
@@ -134,7 +134,7 @@ curl -X POST https://diverge.example.com/diverge.v1alpha1.EnvironmentService/Lis
 ```
 
 ### `UpdateEnvironment`
-Updates an environment with concurrency control. **RBAC:** `update` on `environments.diverge.dev`.
+Updates an environment with concurrency control. **RBAC:** `update` on `environments.divergedev.com`.
 
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
@@ -149,7 +149,7 @@ curl -X POST https://diverge.example.com/diverge.v1alpha1.EnvironmentService/Upd
 ```
 
 ### `DeleteEnvironment`
-Deletes an environment. **RBAC:** `delete` on `environments.diverge.dev`.
+Deletes an environment. **RBAC:** `delete` on `environments.divergedev.com`.
 
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
@@ -174,7 +174,7 @@ Extends environment lifecycle duration. *(Returns `CodeUnimplemented`)*.
 | **Resp:** `environment` | `Environment` | — | Environment with updated expiry status. |
 
 ### `WatchEnvironments`
-Server-streaming event feed. **RBAC:** `watch` on `environments.diverge.dev`.
+Server-streaming event feed. **RBAC:** `watch` on `environments.divergedev.com`.
 
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
@@ -218,7 +218,7 @@ curl -N -X POST https://diverge.example.com/diverge.v1alpha1.EnvironmentService/
 Manages multi-service composite preview groups.
 
 ### `CreatePreviewGroup`
-Creates a PreviewGroup. **RBAC:** `create` on `previewgroups.diverge.dev`.
+Creates a PreviewGroup. **RBAC:** `create` on `previewgroups.divergedev.com`.
 
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
@@ -233,7 +233,7 @@ curl -X POST https://diverge.example.com/diverge.v1alpha1.PreviewGroupService/Cr
 ```
 
 ### `GetPreviewGroup`
-Retrieves a PreviewGroup. **RBAC:** `get` on `previewgroups.diverge.dev`.
+Retrieves a PreviewGroup. **RBAC:** `get` on `previewgroups.divergedev.com`.
 
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
@@ -241,7 +241,7 @@ Retrieves a PreviewGroup. **RBAC:** `get` on `previewgroups.diverge.dev`.
 | **Resp:** `preview_group` | `PreviewGroup` | — | Retrieved PreviewGroup resource. |
 
 ### `ListPreviewGroups`
-Lists PreviewGroups with pagination. **RBAC:** `list` on `previewgroups.diverge.dev`.
+Lists PreviewGroups with pagination. **RBAC:** `list` on `previewgroups.divergedev.com`.
 
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
@@ -252,7 +252,7 @@ Lists PreviewGroups with pagination. **RBAC:** `list` on `previewgroups.diverge.
 | **Resp:** `next_page_token` / `total_size` | `string` / `int32` | — | Next cursor and total item count. |
 
 ### `UpdatePreviewGroup`
-Updates a PreviewGroup with concurrency control. **RBAC:** `update` on `previewgroups.diverge.dev`.
+Updates a PreviewGroup with concurrency control. **RBAC:** `update` on `previewgroups.divergedev.com`.
 
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
@@ -261,7 +261,7 @@ Updates a PreviewGroup with concurrency control. **RBAC:** `update` on `previewg
 | **Resp:** `preview_group` | `PreviewGroup` | — | Updated PreviewGroup object. |
 
 ### `DeletePreviewGroup`
-Deletes a PreviewGroup. **RBAC:** `delete` on `previewgroups.diverge.dev`.
+Deletes a PreviewGroup. **RBAC:** `delete` on `previewgroups.divergedev.com`.
 
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
@@ -269,7 +269,7 @@ Deletes a PreviewGroup. **RBAC:** `delete` on `previewgroups.diverge.dev`.
 | **Resp:** `{}` | — | — | Empty response on success. |
 
 ### `WatchPreviewGroups`
-Server-streaming event feed. **RBAC:** `watch` on `previewgroups.diverge.dev`.
+Server-streaming event feed. **RBAC:** `watch` on `previewgroups.divergedev.com`.
 
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |

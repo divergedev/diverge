@@ -18,12 +18,12 @@ import (
 func (r *EnvironmentReconciler) ensureNamespace(ctx context.Context, env *divergeiov1alpha1.Environment) error {
 	if env.Spec.Deploy.Namespace == "create" {
 		labels := map[string]string{
-			"diverge.io/environment": env.Name,
-			"diverge.io/managed-by":  "diverge",
+			"divergedev.com/environment": env.Name,
+			"divergedev.com/managed-by":  "diverge",
 		}
-		// Merge user-defined labels; diverge.io/* labels take precedence
+		// Merge user-defined labels; divergedev.com/* labels take precedence
 		for k, v := range env.Spec.Deploy.NamespaceLabels {
-			if !strings.HasPrefix(k, "diverge.io/") {
+			if !strings.HasPrefix(k, "divergedev.com/") {
 				labels[k] = v
 			}
 		}
@@ -55,7 +55,7 @@ func (r *EnvironmentReconciler) ensureNamespace(ctx context.Context, env *diverg
 				Name:      "diverge-default-limits",
 				Namespace: env.PreviewNamespace(),
 				Labels: map[string]string{
-					"diverge.io/managed-by": "diverge",
+					"divergedev.com/managed-by": "diverge",
 				},
 			},
 			Spec: corev1.LimitRangeSpec{
@@ -81,7 +81,7 @@ func (r *EnvironmentReconciler) ensureNamespace(ctx context.Context, env *diverg
 				Name:      "diverge-preview-quota",
 				Namespace: env.PreviewNamespace(),
 				Labels: map[string]string{
-					"diverge.io/managed-by": "diverge",
+					"divergedev.com/managed-by": "diverge",
 				},
 			},
 			Spec: corev1.ResourceQuotaSpec{
@@ -102,7 +102,7 @@ func (r *EnvironmentReconciler) ensureNamespace(ctx context.Context, env *diverg
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "diverge-default-netpol",
 				Namespace: env.PreviewNamespace(),
-				Labels:    map[string]string{"diverge.io/managed-by": "diverge"},
+				Labels:    map[string]string{"divergedev.com/managed-by": "diverge"},
 			},
 			Spec: networkingv1.NetworkPolicySpec{
 				PodSelector: metav1.LabelSelector{}, // all pods

@@ -21,7 +21,7 @@ func SetupPreviewGroupWebhookWithManager(mgr ctrl.Manager) error {
 		Complete()
 }
 
-// +kubebuilder:webhook:path=/validate-diverge-io-v1alpha1-previewgroup,mutating=false,failurePolicy=fail,sideEffects=None,groups=diverge.io,resources=previewgroups,verbs=create;update,versions=v1alpha1,name=vpreviewgroup.diverge.io,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/validate-divergedev-com-v1alpha1-previewgroup,mutating=false,failurePolicy=fail,sideEffects=None,groups=divergedev.com,resources=previewgroups,verbs=create;update,versions=v1alpha1,name=vpreviewgroup.divergedev.com,admissionReviewVersions=v1
 
 // previewGroupValidator validates PreviewGroup resources.
 type previewGroupValidator struct{}
@@ -159,5 +159,5 @@ func validateEndpoint(endpoint string) error {
 }
 
 // previewGroupGVR is used for error formatting.
-var _ = schema.GroupResource{Group: "diverge.io", Resource: "previewgroups"}
+var _ = schema.GroupResource{Group: "divergedev.com", Resource: "previewgroups"}
 var _ = apierrors.StatusError{}

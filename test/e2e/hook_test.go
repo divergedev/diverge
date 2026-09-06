@@ -64,8 +64,8 @@ func TestEnvironment_HookReconcile(t *testing.T) {
 		err := f.Client.List(ctx, &jobs,
 			client.InNamespace(f.Namespace),
 			client.MatchingLabels{
-				"diverge.io/hook-type":   "migration",
-				"diverge.io/environment": "hook-success",
+				"divergedev.com/hook-type":   "migration",
+				"divergedev.com/environment": "hook-success",
 			},
 		)
 		return err == nil && len(jobs.Items) > 0
@@ -205,8 +205,8 @@ func TestEnvironment_PostDeployHook(t *testing.T) {
 		err := f.Client.List(ctx, &jobs,
 			client.InNamespace(f.Namespace),
 			client.MatchingLabels{
-				"diverge.io/hook-type":   "migration",
-				"diverge.io/environment": "hook-nonblocking",
+				"divergedev.com/hook-type":   "migration",
+				"divergedev.com/environment": "hook-nonblocking",
 			},
 		)
 		return err == nil && len(jobs.Items) > 0
@@ -214,8 +214,8 @@ func TestEnvironment_PostDeployHook(t *testing.T) {
 
 	// Verify labels are correctly set
 	job := jobs.Items[0]
-	assert.Equal(t, "migration", job.Labels["diverge.io/hook-type"])
-	assert.Equal(t, "hook-nonblocking", job.Labels["diverge.io/environment"])
+	assert.Equal(t, "migration", job.Labels["divergedev.com/hook-type"])
+	assert.Equal(t, "hook-nonblocking", job.Labels["divergedev.com/environment"])
 
 	// Wait for environment Ready (non-blocking migration should not delay readiness)
 	err = f.WaitForCondition(ctx, env.Name, "Ready", metav1.ConditionTrue, 2*time.Minute)
@@ -269,7 +269,7 @@ func TestEnvironment_HookCleanup(t *testing.T) {
 		var jobs batchv1.JobList
 		err := f.Client.List(ctx, &jobs,
 			client.InNamespace(f.Namespace),
-			client.MatchingLabels{"diverge.io/environment": "hook-cleanup"},
+			client.MatchingLabels{"divergedev.com/environment": "hook-cleanup"},
 		)
 		return err == nil && len(jobs.Items) > 0
 	}, 2*time.Minute, 2*time.Second)
@@ -286,7 +286,7 @@ func TestEnvironment_HookCleanup(t *testing.T) {
 		var jobs batchv1.JobList
 		if err := f.Client.List(ctx, &jobs,
 			client.InNamespace(f.Namespace),
-			client.MatchingLabels{"diverge.io/environment": "hook-cleanup"},
+			client.MatchingLabels{"divergedev.com/environment": "hook-cleanup"},
 		); err != nil {
 			return false
 		}

@@ -52,7 +52,7 @@ diverge:preview:
       chmod +x /usr/local/bin/kubectl
 
       cat <<EOF > previewgroup.yaml
-      apiVersion: diverge.io/v1alpha1
+      apiVersion: divergedev.com/v1alpha1
       kind: PreviewGroup
       metadata:
         name: preview-mr-${CI_MERGE_REQUEST_IID}

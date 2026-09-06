@@ -23,7 +23,7 @@ automatically injected via a Secret — never as plaintext.
 
 ### Configuration
 ```yaml
-apiVersion: diverge.io/v1alpha1
+apiVersion: divergedev.com/v1alpha1
 kind: PreviewGroup
 metadata:
   name: api-preview
@@ -100,7 +100,7 @@ directly. The operator handles schema diffing, safety checks, and execution.
 
 ### Versioned Migrations
 ```yaml
-apiVersion: diverge.io/v1alpha1
+apiVersion: divergedev.com/v1alpha1
 kind: PreviewGroup
 metadata:
   name: api-preview
@@ -117,7 +117,7 @@ spec:
 
 ### Declarative Schema
 ```yaml
-apiVersion: diverge.io/v1alpha1
+apiVersion: divergedev.com/v1alpha1
 kind: PreviewGroup
 metadata:
   name: api-preview
@@ -148,7 +148,7 @@ Generic hooks that run after deployment succeeds. Use for seed data, smoke tests
 or cache warming. Configured per-service on `PreviewGroupServiceSpec`:
 
 ```yaml
-apiVersion: diverge.io/v1alpha1
+apiVersion: divergedev.com/v1alpha1
 kind: PreviewGroup
 metadata:
   name: api-preview

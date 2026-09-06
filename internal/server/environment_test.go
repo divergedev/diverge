@@ -88,7 +88,7 @@ func TestUpdateEnvironment_ResourceVersion(t *testing.T) {
 		// Since we're using fake client, let's just make sure the field is passed along.
 
 		// To properly test the conflict, we can inject a real 409 error
-		err409 := apierrors.NewConflict(schema.GroupResource{Group: "diverge.dev", Resource: "environments"}, "test-env", nil)
+		err409 := apierrors.NewConflict(schema.GroupResource{Group: "divergedev.com", Resource: "environments"}, "test-env", nil)
 		sErr := SanitizeK8sError(logger, err409)
 		assert.Error(t, sErr)
 		var cErr *connect.Error

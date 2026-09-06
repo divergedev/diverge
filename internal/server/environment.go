@@ -493,12 +493,12 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 		if err := ValidateDNS1123Label(msg.HookType, "hook_type"); err != nil {
 			return err
 		}
-		// Hook pods use diverge.io/ labels (set by hook_runner.go)
-		labels["diverge.io/environment"] = msg.EnvironmentName
-		labels["diverge.io/hook-type"] = msg.HookType
+		// Hook pods use divergedev.com/ labels (set by hook_runner.go)
+		labels["divergedev.com/environment"] = msg.EnvironmentName
+		labels["divergedev.com/hook-type"] = msg.HookType
 	} else {
-		// Service pods use diverge.dev/ labels (set by deployer)
-		labels["diverge.dev/environment"] = msg.EnvironmentName
+		// Service pods use divergedev.com/ labels (set by deployer)
+		labels["divergedev.com/environment"] = msg.EnvironmentName
 	}
 	opts := []client.ListOption{
 		client.InNamespace(msg.Namespace),

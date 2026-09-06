@@ -109,7 +109,7 @@ If you want to manually test Diverge without a webhook event, you can apply an `
 Create a file named `sample-env.yaml`:
 
 ```yaml
-apiVersion: diverge.io/v1alpha1
+apiVersion: divergedev.com/v1alpha1
 kind: Environment
 metadata:
   name: preview-mr-1

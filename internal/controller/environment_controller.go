@@ -28,7 +28,7 @@ import (
 	"github.com/divergedev/diverge/pkg/database"
 )
 
-const environmentFinalizer = "diverge.io/environment-protection"
+const environmentFinalizer = "divergedev.com/environment-protection"
 
 // EnvironmentReconciler reconciles a Environment object
 type EnvironmentReconciler struct {
@@ -46,9 +46,9 @@ type EnvironmentReconciler struct {
 	SetupJobImage    string
 }
 
-// +kubebuilder:rbac:groups=diverge.io,resources=environments,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=diverge.io,resources=environments/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=diverge.io,resources=environments/finalizers,verbs=update
+// +kubebuilder:rbac:groups=divergedev.com,resources=environments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=divergedev.com,resources=environments/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=divergedev.com,resources=environments/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=namespaces;secrets;services;configmaps;events,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=security.istio.io,resources=authorizationpolicies,verbs=get;list;watch;create;update;patch;delete

@@ -75,7 +75,7 @@ func runLogs(app *App, cmd *cobra.Command, args []string) error {
 	}
 
 	pods, err := clientset.CoreV1().Pods(podNs).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("diverge.io/environment=%s", name),
+		LabelSelector: fmt.Sprintf("divergedev.com/environment=%s", name),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to list pods: %w", err)
@@ -101,7 +101,7 @@ func runLogs(app *App, cmd *cobra.Command, args []string) error {
 	podCount := 0
 
 	for _, pod := range pods.Items {
-		svcName := pod.Labels["diverge.io/service"]
+		svcName := pod.Labels["divergedev.com/service"]
 		if svcName == "" {
 			svcName = pod.Name // fallback
 		}

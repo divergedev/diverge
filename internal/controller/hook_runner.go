@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	labelHookType                  = "diverge.io/hook-type"
-	labelEnvironment               = "diverge.io/environment"
+	labelHookType                  = "divergedev.com/hook-type"
+	labelEnvironment               = "divergedev.com/environment"
 	hookTypeMigration              = "migration"
 	hookTypePostDeploy             = "postdeploy"
 	defaultMigrationTimeout  int32 = 120
@@ -133,7 +133,7 @@ func buildJob(cfg HookJobConfig) *batchv1.Job {
 		// Since we don't pass scheme to buildJob, we'll manually append an OwnerReference.
 		t := true
 		job.OwnerReferences = append(job.OwnerReferences, metav1.OwnerReference{
-			APIVersion:         "diverge.io/v1alpha1", // Wait, need to know owner's APIVersion? We assume it's Environment.
+			APIVersion:         "divergedev.com/v1alpha1", // Wait, need to know owner's APIVersion? We assume it's Environment.
 			Kind:               "Environment",
 			Name:               cfg.Owner.GetName(),
 			UID:                cfg.Owner.GetUID(),
@@ -174,7 +174,7 @@ func createDSNSecret(ctx context.Context, c client.Client, name, namespace, dsn 
 	// Assuming owner is an Environment
 	t := true
 	secret.OwnerReferences = append(secret.OwnerReferences, metav1.OwnerReference{
-		APIVersion:         "diverge.io/v1alpha1",
+		APIVersion:         "divergedev.com/v1alpha1",
 		Kind:               "Environment",
 		Name:               owner.GetName(),
 		UID:                owner.GetUID(),

@@ -8,7 +8,7 @@ echo ""
 
 echo "📝 Creating PreviewGroup for developer alice..."
 kubectl apply --context "$CTX" -f - <<EOF
-apiVersion: diverge.io/v1alpha1
+apiVersion: divergedev.com/v1alpha1
 kind: PreviewGroup
 metadata:
   name: alice-payments
@@ -22,7 +22,7 @@ EOF
 echo ""
 echo "📝 Attempting to create PreviewGroup for developer bob on same service..."
 kubectl apply --context "$CTX" -f - <<EOF
-apiVersion: diverge.io/v1alpha1
+apiVersion: divergedev.com/v1alpha1
 kind: PreviewGroup
 metadata:
   name: bob-payments

@@ -29,7 +29,7 @@ spec:
 ### 3. Configure DevIP for AuthorizationPolicy
 Set the Tailscale IP in your Environment spec:
 ```yaml
-apiVersion: diverge.io/v1alpha1
+apiVersion: divergedev.com/v1alpha1
 kind: Environment
 metadata:
   name: my-preview

@@ -108,15 +108,15 @@ func (g *Generator) Generate(
 					"name":      appName,
 					"namespace": g.ArgoNamespace,
 					"labels": map[string]interface{}{
-						"diverge.io/environment":           envNameLabel,
-						"diverge.io/environment-namespace": envNamespaceLabel,
-						"diverge.io/service":               svcNameLabel,
-						"diverge.io/managed-by":            "diverge",
+						"divergedev.com/environment":           envNameLabel,
+						"divergedev.com/environment-namespace": envNamespaceLabel,
+						"divergedev.com/service":               svcNameLabel,
+						"divergedev.com/managed-by":            "diverge",
 					},
 					"annotations": map[string]interface{}{
-						"diverge.io/environment-namespace": env.Namespace,
-						"diverge.io/source-branch":         env.Spec.Source.Branch,
-						"diverge.io/source-mr":             fmt.Sprintf("%d", env.Spec.Source.MR),
+						"divergedev.com/environment-namespace": env.Namespace,
+						"divergedev.com/source-branch":         env.Spec.Source.Branch,
+						"divergedev.com/source-mr":             fmt.Sprintf("%d", env.Spec.Source.MR),
 					},
 					"finalizers": []interface{}{
 						"resources-finalizer.argocd.argoproj.io",

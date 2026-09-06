@@ -115,8 +115,8 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 	u.SetName(routeName)
 	u.SetNamespace(ns)
 	u.SetLabels(map[string]string{
-		"diverge.io/environment": env.Name,
-		"diverge.io/managed-by":  "diverge",
+		"divergedev.com/environment": env.Name,
+		"divergedev.com/managed-by":  "diverge",
 	})
 
 	var hostnames []interface{}
@@ -360,14 +360,14 @@ func isServiceName(name string) bool {
 }
 
 // Teardown deletes all HTTPRoute and GRPCRoute resources associated with the
-// environment by selecting on the diverge.io/environment label.
+// environment by selecting on the divergedev.com/environment label.
 func (r *GatewayRouter) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
 	logger := log.FromContext(ctx).WithName("gateway-router")
 	ns := r.namespace(env)
 
 	selector := labels.SelectorFromSet(map[string]string{
-		"diverge.io/environment": env.Name,
-		"diverge.io/managed-by":  "diverge",
+		"divergedev.com/environment": env.Name,
+		"divergedev.com/managed-by":  "diverge",
 	})
 
 	deleted := 0

@@ -48,15 +48,15 @@ func TestGenerate(t *testing.T) {
 				assert.Equal(t, "argocd", app.GetNamespace())
 
 				labels := app.GetLabels()
-				assert.Equal(t, "preview-mr-42", labels["diverge.io/environment"])
-				assert.Equal(t, "test-ns", labels["diverge.io/environment-namespace"])
-				assert.Equal(t, "api", labels["diverge.io/service"])
-				assert.Equal(t, "diverge", labels["diverge.io/managed-by"])
+				assert.Equal(t, "preview-mr-42", labels["divergedev.com/environment"])
+				assert.Equal(t, "test-ns", labels["divergedev.com/environment-namespace"])
+				assert.Equal(t, "api", labels["divergedev.com/service"])
+				assert.Equal(t, "diverge", labels["divergedev.com/managed-by"])
 
 				annots := app.GetAnnotations()
-				assert.Equal(t, "test-ns", annots["diverge.io/environment-namespace"])
-				assert.Equal(t, "feature-branch", annots["diverge.io/source-branch"])
-				assert.Equal(t, "42", annots["diverge.io/source-mr"])
+				assert.Equal(t, "test-ns", annots["divergedev.com/environment-namespace"])
+				assert.Equal(t, "feature-branch", annots["divergedev.com/source-branch"])
+				assert.Equal(t, "42", annots["divergedev.com/source-mr"])
 
 				ownerRefs := app.GetOwnerReferences()
 				assert.Empty(t, ownerRefs)
@@ -139,8 +139,8 @@ func TestGenerate(t *testing.T) {
 					name := app.GetName()
 					names[name] = true
 					labels := app.GetLabels()
-					assert.Equal(t, "preview-mr-42", labels["diverge.io/environment"])
-					assert.NotEmpty(t, labels["diverge.io/service"])
+					assert.Equal(t, "preview-mr-42", labels["divergedev.com/environment"])
+					assert.NotEmpty(t, labels["divergedev.com/service"])
 				}
 				assert.True(t, names["diverge-test-ns-preview-mr-42-api"])
 				assert.True(t, names["diverge-test-ns-preview-mr-42-web"])

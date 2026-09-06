@@ -130,7 +130,7 @@ func (c *Client) GetSyncStatus(ctx context.Context, envName, envNamespace string
 
 		statuses = append(statuses, ApplicationStatus{
 			Name:       app.GetName(),
-			Service:    app.GetLabels()["diverge.io/service"],
+			Service:    app.GetLabels()["divergedev.com/service"],
 			SyncStatus: syncStatus,
 			Health:     health,
 		})
@@ -144,11 +144,11 @@ func (c *Client) listApplicationsForEnvironment(ctx context.Context, envName, en
 	appList.SetGroupVersionKind(applicationGVK)
 
 	labels := client.MatchingLabels{
-		"diverge.io/environment": envName,
-		"diverge.io/managed-by":  "diverge",
+		"divergedev.com/environment": envName,
+		"divergedev.com/managed-by":  "diverge",
 	}
 	if envNamespace != "" {
-		labels["diverge.io/environment-namespace"] = envNamespace
+		labels["divergedev.com/environment-namespace"] = envNamespace
 	}
 
 	err := c.k8sClient.List(ctx, appList,

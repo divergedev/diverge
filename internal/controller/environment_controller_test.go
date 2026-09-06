@@ -38,8 +38,8 @@ func TestEnsureNamespace(t *testing.T) {
 		err = client.Get(ctx, types.NamespacedName{Name: env.PreviewNamespace()}, ns)
 		require.NoError(t, err)
 
-		assert.Equal(t, "test-env", ns.Labels["diverge.io/environment"])
-		assert.Equal(t, "diverge", ns.Labels["diverge.io/managed-by"])
+		assert.Equal(t, "test-env", ns.Labels["divergedev.com/environment"])
+		assert.Equal(t, "diverge", ns.Labels["divergedev.com/managed-by"])
 		assert.Equal(t, "restricted", ns.Labels["pod-security.kubernetes.io/enforce"])
 		assert.Equal(t, "latest", ns.Labels["pod-security.kubernetes.io/enforce-version"])
 		assert.Equal(t, "restricted", ns.Labels["pod-security.kubernetes.io/warn"])
@@ -68,13 +68,13 @@ func TestEnsureNamespace(t *testing.T) {
 		limitRange := &corev1.LimitRange{}
 		err = client.Get(ctx, types.NamespacedName{Name: "diverge-default-limits", Namespace: env.PreviewNamespace()}, limitRange)
 		require.NoError(t, err)
-		assert.Equal(t, "diverge", limitRange.Labels["diverge.io/managed-by"])
+		assert.Equal(t, "diverge", limitRange.Labels["divergedev.com/managed-by"])
 		assert.Len(t, limitRange.Spec.Limits, 1)
 
 		quota := &corev1.ResourceQuota{}
 		err = client.Get(ctx, types.NamespacedName{Name: "diverge-preview-quota", Namespace: env.PreviewNamespace()}, quota)
 		require.NoError(t, err)
-		assert.Equal(t, "diverge", quota.Labels["diverge.io/managed-by"])
+		assert.Equal(t, "diverge", quota.Labels["divergedev.com/managed-by"])
 		assert.Equal(t, "5", quota.Spec.Hard.Pods().String())
 	})
 
@@ -149,13 +149,13 @@ func TestEnsureNamespace(t *testing.T) {
 		err = client.Get(ctx, types.NamespacedName{Name: env.PreviewNamespace()}, ns)
 		require.NoError(t, err)
 
-		assert.Equal(t, "test-env", ns.Labels["diverge.io/environment"])
-		assert.Equal(t, "diverge", ns.Labels["diverge.io/managed-by"])
+		assert.Equal(t, "test-env", ns.Labels["divergedev.com/environment"])
+		assert.Equal(t, "diverge", ns.Labels["divergedev.com/managed-by"])
 		assert.Equal(t, "custom-value", ns.Labels["custom-label"])
 		assert.Equal(t, "ambient", ns.Labels["istio.io/dataplane-mode"])
 	})
 
-	t.Run("protects diverge.io labels", func(t *testing.T) {
+	t.Run("protects divergedev.com labels", func(t *testing.T) {
 		client := fake.NewClientBuilder().Build()
 		r := &EnvironmentReconciler{Client: client}
 
@@ -164,7 +164,7 @@ func TestEnsureNamespace(t *testing.T) {
 			Spec: divergeiov1alpha1.EnvironmentSpec{
 				Deploy: divergeiov1alpha1.EnvironmentDeploy{
 					Namespace:       "create",
-					NamespaceLabels: map[string]string{"diverge.io/environment": "hacked", "diverge.io/other": "value"},
+					NamespaceLabels: map[string]string{"divergedev.com/environment": "hacked", "divergedev.com/other": "value"},
 				},
 			},
 		}
@@ -176,8 +176,8 @@ func TestEnsureNamespace(t *testing.T) {
 		err = client.Get(ctx, types.NamespacedName{Name: env.PreviewNamespace()}, ns)
 		require.NoError(t, err)
 
-		assert.Equal(t, "test-env", ns.Labels["diverge.io/environment"])
-		assert.NotContains(t, ns.Labels, "diverge.io/other")
+		assert.Equal(t, "test-env", ns.Labels["divergedev.com/environment"])
+		assert.NotContains(t, ns.Labels, "divergedev.com/other")
 	})
 
 	t.Run("updates labels on re-reconcile", func(t *testing.T) {
@@ -207,7 +207,7 @@ func TestEnsureNamespace(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, "new-value", ns.Labels["updated"])
-		assert.Equal(t, "test-env", ns.Labels["diverge.io/environment"])
+		assert.Equal(t, "test-env", ns.Labels["divergedev.com/environment"])
 		// The old label is removed because CreateOrUpdate rewrites the map in our implementation
 		assert.NotContains(t, ns.Labels, "initial")
 	})

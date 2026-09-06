@@ -53,8 +53,8 @@ func (d *KNativeDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment)
 	if labels == nil {
 		labels = make(map[string]string)
 	}
-	labels["diverge.io/managed-by"] = "diverge"
-	labels["diverge.io/environment"] = env.Name
+	labels["divergedev.com/managed-by"] = "diverge"
+	labels["divergedev.com/environment"] = env.Name
 	labels["networking.knative.dev/visibility"] = "cluster-local"
 	ksvc.SetLabels(labels)
 

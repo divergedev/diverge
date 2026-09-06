@@ -67,7 +67,7 @@ func TestIstioRouter_Reconcile(t *testing.T) {
 
 	policy := policyList.Items[0]
 	assert.Equal(t, "diverge-dev-test-env", policy.GetName())
-	assert.Equal(t, "test-env", policy.GetLabels()["diverge.io/environment"])
+	assert.Equal(t, "test-env", policy.GetLabels()["divergedev.com/environment"])
 
 	owners := policy.GetOwnerReferences()
 	require.Len(t, owners, 1)
@@ -133,8 +133,8 @@ func TestIstioRouter_Teardown(t *testing.T) {
 	policy.SetName("diverge-dev-test-env")
 	policy.SetNamespace("test-ns")
 	policy.SetLabels(map[string]string{
-		"diverge.io/environment": "test-env",
-		"diverge.io/managed-by":  "diverge",
+		"divergedev.com/environment": "test-env",
+		"divergedev.com/managed-by":  "diverge",
 	})
 	err := c.Create(context.Background(), policy)
 	require.NoError(t, err)

@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.3
-  name: environments.diverge.io
+  name: environments.divergedev.com
 spec:
-  group: diverge.io
+  group: divergedev.com
   names:
     kind: Environment
     listKind: EnvironmentList
@@ -51,6 +51,43 @@ spec:
               database:
                 description: EnvironmentDatabase defines the database configuration
                 properties:
+                  atlas:
+                    description: AtlasSpec configures Atlas Operator integration for
+                      database schema management.
+                    properties:
+                      blocking:
+                        default: true
+                        description: Blocking controls whether the Environment waits
+                          for Atlas to report Ready.
+                        type: boolean
+                      migrationConfigMap:
+                        description: MigrationConfigMap references a ConfigMap containing
+                          versioned .sql migration files and atlas.sum.
+                        type: string
+                      mode:
+                        description: Mode selects the Atlas migration paradigm.
+                        enum:
+                        - versioned
+                        - declarative
+                        type: string
+                      policy:
+                        description: Policy configures Atlas safety policies.
+                        properties:
+                          destructive:
+                            default: error
+                            description: Destructive controls how destructive schema
+                              changes are handled.
+                            enum:
+                            - error
+                            - warn
+                            - allow
+                            type: string
+                        type: object
+                      schemaConfigMap:
+                        description: SchemaConfigMap references a ConfigMap containing
+                          the desired schema (SQL or HCL).
+                        type: string
+                    type: object
                   connectionRef:
                     type: string
                   migrationJob:
@@ -63,6 +100,11 @@ spec:
                         items:
                           type: string
                         type: array
+                      blocking:
+                        default: true
+                        description: Blocking controls whether the Environment waits
+                          for the migration to complete.
+                        type: boolean
                       envFrom:
                         description: EnvFrom specifies environment variables to inject
                           from Secrets.
@@ -111,6 +153,24 @@ spec:
                     items:
                       type: string
                     type: array
+                  envFrom:
+                    description: EnvFrom specifies environment variables to inject
+                      from Secrets.
+                    items:
+                      description: SecretRef references a specific key within a Kubernetes
+                        Secret.
+                      properties:
+                        key:
+                          description: Key is the specific key in the Secret to reference.
+                          type: string
+                        name:
+                          description: Name is the name of the Secret.
+                          type: string
+                        namespace:
+                          description: Namespace is the namespace of the Secret.
+                          type: string
+                      type: object
+                    type: array
                   manifests:
                     description: |-
                       Manifests specifies where pre-rendered manifests are stored.
@@ -125,6 +185,7 @@ spec:
                         type: string
                       url:
                         description: URL for HTTP-based manifest fetching (when type=url).
+                        pattern: ^https?://.*
                         type: string
                     required:
                     - type
@@ -145,6 +206,24 @@ spec:
                       type: string
                     type: object
                 type: object
+              envFrom:
+                description: EnvFrom specifies environment variables to inject from
+                  Secrets.
+                items:
+                  description: SecretRef references a specific key within a Kubernetes
+                    Secret.
+                  properties:
+                    key:
+                      description: Key is the specific key in the Secret to reference.
+                      type: string
+                    name:
+                      description: Name is the name of the Secret.
+                      type: string
+                    namespace:
+                      description: Namespace is the namespace of the Secret.
+                      type: string
+                  type: object
+                type: array
               lifecycle:
                 description: EnvironmentLifecycle defines the lifecycle configuration
                 properties:
@@ -181,11 +260,15 @@ spec:
                         target:
                           description: Target is the baseline resource name (e.g.,
                             task queue name or topic name).
+                          maxLength: 249
+                          minLength: 1
+                          pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]*$
                           type: string
                       required:
                       - protocol
                       - target
                       type: object
+                    maxItems: 50
                     type: array
                   banner:
                     description: Banner configures a preview indicator banner to inject
@@ -194,6 +277,7 @@ spec:
                       color:
                         default: '#FF6B00'
                         description: Color is the hex color code for the banner background.
+                        pattern: ^#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$
                         type: string
                       enabled:
                         description: Enabled controls whether the preview banner is
@@ -299,6 +383,47 @@ spec:
                       ImagePullPolicy overrides the container image pull policy.
                       Valid values: Always, Never, IfNotPresent. Defaults to IfNotPresent.
                     type: string
+                  keda:
+                    description: KEDA configures per-service autoscaling. Overrides
+                      controller CLI flags.
+                    properties:
+                      cooldownPeriod:
+                        description: |-
+                          CooldownPeriod is the cooldown period in seconds before scaling down.
+                          When nil, falls back to the controller CLI flag (--keda-cooldown).
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      enabled:
+                        description: Enabled enables KEDA autoscaling for this service.
+                        type: boolean
+                      maxReplicas:
+                        description: |-
+                          MaxReplicas is the maximum number of replicas.
+                          When nil, falls back to the controller CLI flag (--keda-max-replicas).
+                        format: int32
+                        maximum: 100
+                        minimum: 1
+                        type: integer
+                      minReplicas:
+                        description: |-
+                          MinReplicas is the minimum number of replicas. Set to 0 for scale-to-zero.
+                          When nil, falls back to the controller CLI flag (--keda-min-replicas).
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      pollingInterval:
+                        description: 'PollingInterval is the interval in seconds KEDA
+                          checks metrics. Default: 30.'
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      targetQueueSize:
+                        description: 'TargetQueueSize is the target backlog per replica
+                          for queue-based scaling. Default: 5.'
+                        format: int32
+                        type: integer
+                    type: object
                   namespace:
                     description: Namespace is the namespace where the baseline service
                       runs.
@@ -532,12 +657,23 @@ spec:
               expiresAt:
                 format: date-time
                 type: string
+              migrationMessage:
+                description: MigrationMessage provides details about the migration
+                  hook state.
+                type: string
+              migrationStatus:
+                description: MigrationStatus tracks the state of the migration hook.
+                type: string
               observedGeneration:
                 format: int64
                 type: integer
               phase:
                 description: EnvironmentPhase defines the phases an Environment can
                   be in
+                type: string
+              postDeployStatus:
+                description: PostDeployStatus tracks the state of the post-deploy
+                  hook.
                 type: string
               services:
                 items:

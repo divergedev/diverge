@@ -32,9 +32,9 @@ import (
 )
 
 const (
-	previewGroupFinalizer = "diverge.io/previewgroup-protection"
-	labelPreviewGroup     = "diverge.io/previewgroup"
-	labelManagedBy        = "diverge.io/managed-by"
+	previewGroupFinalizer = "divergedev.com/previewgroup-protection"
+	labelPreviewGroup     = "divergedev.com/previewgroup"
+	labelManagedBy        = "divergedev.com/managed-by"
 )
 
 // PreviewGroupReconciler reconciles a PreviewGroup object.
@@ -50,10 +50,10 @@ type PreviewGroupReconciler struct {
 	EnableGAMMA      bool // Enable GAMMA mesh routing (requires Istio Ambient)
 }
 
-// +kubebuilder:rbac:groups=diverge.io,resources=previewgroups,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=diverge.io,resources=previewgroups/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=diverge.io,resources=previewgroups/finalizers,verbs=update
-// +kubebuilder:rbac:groups=diverge.io,resources=environments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=divergedev.com,resources=previewgroups,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=divergedev.com,resources=previewgroups/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=divergedev.com,resources=previewgroups/finalizers,verbs=update
+// +kubebuilder:rbac:groups=divergedev.com,resources=environments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes;grpcroutes,verbs=list;delete
 // +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=list;delete
 
@@ -528,8 +528,8 @@ func (r *PreviewGroupReconciler) listChildEnvironments(ctx context.Context, pg *
 	if err := r.List(ctx, &envList,
 		client.InNamespace(pg.Namespace),
 		client.MatchingLabels{
-			"diverge.io/previewgroup": pg.Name,
-			labelManagedBy:            "diverge-previewgroup",
+			labelPreviewGroup: pg.Name,
+			labelManagedBy:    "diverge-previewgroup",
 		},
 	); err != nil {
 		return nil, err
@@ -622,7 +622,7 @@ func (r *PreviewGroupReconciler) cleanupRoutesAndEndpoints(ctx context.Context, 
 		var httpRouteList unstructured.UnstructuredList
 		httpRouteList.SetAPIVersion("gateway.networking.k8s.io/v1")
 		httpRouteList.SetKind("HTTPRouteList")
-		if err := r.List(cleanupCtx, &httpRouteList, client.MatchingLabels{"diverge.io/previewgroup": pgName}); err != nil {
+		if err := r.List(cleanupCtx, &httpRouteList, client.MatchingLabels{labelPreviewGroup: pgName}); err != nil {
 			return fmt.Errorf("failed to list HTTPRoutes: %w", err)
 		}
 		for i := range httpRouteList.Items {
@@ -643,7 +643,7 @@ func (r *PreviewGroupReconciler) cleanupRoutesAndEndpoints(ctx context.Context, 
 		var grpcRouteList unstructured.UnstructuredList
 		grpcRouteList.SetAPIVersion("gateway.networking.k8s.io/v1alpha2")
 		grpcRouteList.SetKind("GRPCRouteList")
-		if err := r.List(cleanupCtx, &grpcRouteList, client.MatchingLabels{"diverge.io/previewgroup": pgName}); err != nil {
+		if err := r.List(cleanupCtx, &grpcRouteList, client.MatchingLabels{labelPreviewGroup: pgName}); err != nil {
 			return fmt.Errorf("failed to list GRPCRoutes: %w", err)
 		}
 		for i := range grpcRouteList.Items {
@@ -665,7 +665,7 @@ func (r *PreviewGroupReconciler) cleanupRoutesAndEndpoints(ctx context.Context, 
 		endpointSliceList.SetAPIVersion("discovery.k8s.io/v1")
 		endpointSliceList.SetKind("EndpointSliceList")
 		if err := r.List(cleanupCtx, &endpointSliceList, client.MatchingLabels{
-			"diverge.io/previewgroup":                pgName,
+			labelPreviewGroup:                        pgName,
 			"endpointslice.kubernetes.io/managed-by": "diverge",
 		}); err != nil {
 			return fmt.Errorf("failed to list EndpointSlices: %w", err)

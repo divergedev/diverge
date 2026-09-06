@@ -10,7 +10,7 @@ kubectl delete environments --all --context "$CTX" 2>/dev/null || true
 kubectl delete previewgroups --all --context "$CTX" 2>/dev/null || true
 echo ""
 echo "📊 Remaining HTTPRoutes:"
-kubectl get httproute -l diverge.io/managed-by=diverge --context "$CTX" 2>/dev/null || echo "  None — all cleaned up!"
+kubectl get httproute -l divergedev.com/managed-by=diverge --context "$CTX" 2>/dev/null || echo "  None — all cleaned up!"
 echo ""
 echo "✅ Auto-cleanup on disconnect:"
 echo "   When a developer's lease expires (90s without heartbeat):"

@@ -160,7 +160,7 @@ func TestGitHubWebhookWithConfigFetcher(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		// editorconfig-checker-disable
-		_, _ = w.Write([]byte(`apiVersion: diverge.io/v1alpha1
+		_, _ = w.Write([]byte(`apiVersion: divergedev.com/v1alpha1
 kind: ServicePreview
 metadata:
   name: github-api

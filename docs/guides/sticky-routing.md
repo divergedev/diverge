@@ -21,7 +21,7 @@ When sticky routing is enabled:
 You can enable sticky routing by adding the `cookie` section to the `routing` block in your `Environment` specification:
 
 ```yaml
-apiVersion: diverge.io/v1alpha1
+apiVersion: divergedev.com/v1alpha1
 kind: Environment
 metadata:
   name: feat-login

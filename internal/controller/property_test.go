@@ -124,18 +124,18 @@ func TestEnsureNamespaceLabels(t *testing.T) {
 			ht.Fatalf("failed to get namespace: %v", err)
 		}
 
-		// Check diverge.io labels are preserved and correct
-		if ns.Labels["diverge.io/environment"] != "test-env" {
-			ht.Fatalf("expected diverge.io/environment=test-env")
+		// Check divergedev.com labels are preserved and correct
+		if ns.Labels["divergedev.com/environment"] != "test-env" {
+			ht.Fatalf("expected divergedev.com/environment=test-env")
 		}
-		if ns.Labels["diverge.io/managed-by"] != "diverge" {
-			ht.Fatalf("expected diverge.io/managed-by=diverge")
+		if ns.Labels["divergedev.com/managed-by"] != "diverge" {
+			ht.Fatalf("expected divergedev.com/managed-by=diverge")
 		}
 
-		// Check user labels are merged correctly, except diverge.io/* which should be dropped
+		// Check user labels are merged correctly, except divergedev.com/* which should be dropped
 		for k, v := range userLabels {
-			if strings.HasPrefix(k, "diverge.io/") {
-				if k == "diverge.io/environment" || k == "diverge.io/managed-by" {
+			if strings.HasPrefix(k, "divergedev.com/") {
+				if k == "divergedev.com/environment" || k == "divergedev.com/managed-by" {
 					continue
 				}
 				if _, ok := ns.Labels[k]; ok {

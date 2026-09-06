@@ -40,8 +40,8 @@ func TestServiceConfigFetcher_Fetch(t *testing.T) {
 	assert.Equal(t, "Deployment", deploy.GetKind())
 	assert.Equal(t, "mr-42-payments-api", deploy.GetName())
 	labels := deploy.GetLabels()
-	assert.Equal(t, "preview", labels["diverge.io/role"])
-	assert.Equal(t, "mr-42", labels["diverge.io/preview-id"])
+	assert.Equal(t, "preview", labels["divergedev.com/role"])
+	assert.Equal(t, "mr-42", labels["divergedev.com/preview-id"])
 
 	// Check Service
 	svc := objs[1]

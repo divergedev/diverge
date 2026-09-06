@@ -51,8 +51,8 @@ func TestSyncBaselineEnv(t *testing.T) {
 			Name:      "payments-api-abc123",
 			Namespace: "demo-bank",
 			Labels: map[string]string{
-				"app":             "payments-api",
-				"diverge.io/role": "baseline",
+				"app":                 "payments-api",
+				"divergedev.com/role": "baseline",
 			},
 		},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
@@ -162,7 +162,7 @@ func TestSyncBaselineEnv_InvalidServiceName(t *testing.T) {
 func TestSyncBaselineEnv_FallbackLabelSelector(t *testing.T) {
 	ctx := context.Background()
 
-	// Pod without diverge.io/role label — should still be found via "app=svc" selector
+	// Pod without divergedev.com/role label — should still be found via "app=svc" selector
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "gateway-xyz",

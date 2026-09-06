@@ -35,8 +35,8 @@ func TestListHookJobs(t *testing.T) {
 				Name:      "job-pending",
 				Namespace: "default",
 				Labels: map[string]string{
-					"diverge.io/environment": "test-env",
-					"diverge.io/hook-type":   "migration",
+					"divergedev.com/environment": "test-env",
+					"divergedev.com/hook-type":   "migration",
 				},
 				CreationTimestamp: metav1.Time{Time: time.Now().Add(-10 * time.Minute)},
 			},
@@ -46,8 +46,8 @@ func TestListHookJobs(t *testing.T) {
 				Name:      "job-running",
 				Namespace: "default",
 				Labels: map[string]string{
-					"diverge.io/environment": "test-env",
-					"diverge.io/hook-type":   "migration",
+					"divergedev.com/environment": "test-env",
+					"divergedev.com/hook-type":   "migration",
 				},
 				CreationTimestamp: metav1.Time{Time: time.Now().Add(-5 * time.Minute)},
 			},
@@ -60,8 +60,8 @@ func TestListHookJobs(t *testing.T) {
 				Name:      "job-succeeded",
 				Namespace: "default",
 				Labels: map[string]string{
-					"diverge.io/environment": "test-env",
-					"diverge.io/hook-type":   "postdeploy",
+					"divergedev.com/environment": "test-env",
+					"divergedev.com/hook-type":   "postdeploy",
 				},
 				CreationTimestamp: metav1.Time{Time: time.Now().Add(-3 * time.Minute)},
 			},
@@ -76,8 +76,8 @@ func TestListHookJobs(t *testing.T) {
 				Name:      "job-failed",
 				Namespace: "default",
 				Labels: map[string]string{
-					"diverge.io/environment": "test-env",
-					"diverge.io/hook-type":   "migration",
+					"divergedev.com/environment": "test-env",
+					"divergedev.com/hook-type":   "migration",
 				},
 				CreationTimestamp: metav1.Time{Time: time.Now().Add(-1 * time.Minute)},
 			},
@@ -92,8 +92,8 @@ func TestListHookJobs(t *testing.T) {
 				Name:      "job-other-env",
 				Namespace: "default",
 				Labels: map[string]string{
-					"diverge.io/environment": "other-env",
-					"diverge.io/hook-type":   "migration",
+					"divergedev.com/environment": "other-env",
+					"divergedev.com/hook-type":   "migration",
 				},
 			},
 		},
@@ -172,8 +172,8 @@ func TestRetryHook(t *testing.T) {
 				Name:      "job-failed-old",
 				Namespace: "default",
 				Labels: map[string]string{
-					"diverge.io/environment": "test-env",
-					"diverge.io/hook-type":   "migration",
+					"divergedev.com/environment": "test-env",
+					"divergedev.com/hook-type":   "migration",
 				},
 				CreationTimestamp: metav1.Time{Time: time.Now().Add(-10 * time.Minute)},
 			},
@@ -188,8 +188,8 @@ func TestRetryHook(t *testing.T) {
 				Name:      "job-failed-new",
 				Namespace: "default",
 				Labels: map[string]string{
-					"diverge.io/environment": "test-env",
-					"diverge.io/hook-type":   "migration",
+					"divergedev.com/environment": "test-env",
+					"divergedev.com/hook-type":   "migration",
 				},
 				CreationTimestamp: metav1.Time{Time: time.Now().Add(-5 * time.Minute)},
 			},
@@ -243,8 +243,8 @@ func TestRetryHook(t *testing.T) {
 				Name:      "job-orphan",
 				Namespace: "default",
 				Labels: map[string]string{
-					"diverge.io/environment": "gone-env",
-					"diverge.io/hook-type":   "migration",
+					"divergedev.com/environment": "gone-env",
+					"divergedev.com/hook-type":   "migration",
 				},
 				CreationTimestamp: metav1.Time{Time: time.Now().Add(-1 * time.Minute)},
 			},
@@ -296,6 +296,6 @@ func TestRetryHook(t *testing.T) {
 		// Check env is annotated
 		var updatedEnv v1alpha1.Environment
 		require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "test-env", Namespace: "default"}, &updatedEnv))
-		assert.Equal(t, "migration", updatedEnv.Annotations["diverge.io/retry-hook"])
+		assert.Equal(t, "migration", updatedEnv.Annotations["divergedev.com/retry-hook"])
 	})
 }

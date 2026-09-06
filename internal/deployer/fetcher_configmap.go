@@ -18,7 +18,7 @@ import (
 
 // ConfigMapFetcher reads pre-rendered YAML manifests from ConfigMaps
 // created by CI pipelines. It looks for ConfigMaps with the labels
-// diverge.io/manifests=true and diverge.io/environment=<envName>.
+// divergedev.com/manifests=true and divergedev.com/environment=<envName>.
 type ConfigMapFetcher struct {
 	Client client.Client
 }
@@ -34,8 +34,8 @@ func (f *ConfigMapFetcher) Fetch(ctx context.Context, env *v1alpha1.Environment)
 	// List ConfigMaps with manifests labels
 	var cmList corev1.ConfigMapList
 	selector := labels.SelectorFromSet(map[string]string{
-		"diverge.io/manifests":   "true",
-		"diverge.io/environment": env.Name,
+		"divergedev.com/manifests":   "true",
+		"divergedev.com/environment": env.Name,
 	})
 	if err := f.Client.List(ctx, &cmList, client.InNamespace(ns), client.MatchingLabelsSelector{Selector: selector}); err != nil {
 		return nil, fmt.Errorf("failed to list manifest ConfigMaps: %w", err)

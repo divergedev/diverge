@@ -99,9 +99,9 @@ func TestBuildEnvironment(t *testing.T) {
 	// Verify metadata
 	assert.Equal(t, "preview-mr-42", env.Name)
 	assert.Equal(t, "diverge-system", env.Namespace)
-	assert.Equal(t, "preview-mr-42", env.Labels["diverge.dev/environment"])
-	assert.Equal(t, "github", env.Labels["diverge.dev/provider"])
-	assert.Equal(t, "42", env.Labels["diverge.dev/mr"])
+	assert.Equal(t, "preview-mr-42", env.Labels["divergedev.com/environment"])
+	assert.Equal(t, "github", env.Labels["divergedev.com/provider"])
+	assert.Equal(t, "42", env.Labels["divergedev.com/mr"])
 
 	// Verify source
 	assert.Equal(t, "github", env.Spec.Source.Provider)
@@ -248,7 +248,7 @@ func TestBuildEnvironmentNilConfig(t *testing.T) {
 	assert.Equal(t, "full", env.Spec.Deploy.Mode)
 	assert.Empty(t, env.Spec.Deploy.ChangedServices)
 	assert.Equal(t, "subdomain", env.Spec.Routing.Mode)
-	assert.Empty(t, env.Labels["diverge.dev/mr"])
+	assert.Empty(t, env.Labels["divergedev.com/mr"])
 }
 
 func TestBuildEnvironmentLabelOverrides(t *testing.T) {

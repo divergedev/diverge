@@ -47,7 +47,7 @@ func (r *EnvironmentReconciler) runSetupSQLJob(ctx context.Context, env *diverge
 
 	t := true
 	cm.OwnerReferences = append(cm.OwnerReferences, metav1.OwnerReference{
-		APIVersion:         "diverge.io/v1alpha1",
+		APIVersion:         "divergedev.com/v1alpha1",
 		Kind:               "Environment",
 		Name:               env.GetName(),
 		UID:                env.GetUID(),
@@ -136,7 +136,7 @@ func (r *EnvironmentReconciler) runSetupSQLJob(ctx context.Context, env *diverge
 
 	// Set owner reference for GC
 	job.OwnerReferences = append(job.OwnerReferences, metav1.OwnerReference{
-		APIVersion:         "diverge.io/v1alpha1",
+		APIVersion:         "divergedev.com/v1alpha1",
 		Kind:               "Environment",
 		Name:               env.GetName(),
 		UID:                env.GetUID(),

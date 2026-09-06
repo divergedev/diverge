@@ -20,8 +20,8 @@ Apply the CustomResourceDefinitions and install the Diverge Helm chart with the 
 
 ```bash
 # Apply Diverge CRDs
-kubectl apply -f https://raw.githubusercontent.com/divergedev/diverge/main/config/crd/bases/diverge.dev_environments.yaml
-kubectl apply -f https://raw.githubusercontent.com/divergedev/diverge/main/config/crd/bases/diverge.dev_previewgroups.yaml
+kubectl apply -f https://raw.githubusercontent.com/divergedev/diverge/main/config/crd/bases/divergedev.com_environments.yaml
+kubectl apply -f https://raw.githubusercontent.com/divergedev/diverge/main/config/crd/bases/divergedev.com_previewgroups.yaml
 
 # Install Diverge with the API server enabled
 helm upgrade --install diverge charts/diverge \
