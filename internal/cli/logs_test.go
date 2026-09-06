@@ -87,8 +87,8 @@ func TestLogs_ServiceFilter(t *testing.T) {
 			Name:      "frontend-1",
 			Namespace: "default",
 			Labels: map[string]string{
-				"diverge.io/environment": "test-env",
-				"diverge.io/service":     "frontend",
+				"divergedev.com/environment": "test-env",
+				"divergedev.com/service":     "frontend",
 			},
 		},
 		Spec: corev1.PodSpec{
@@ -100,8 +100,8 @@ func TestLogs_ServiceFilter(t *testing.T) {
 			Name:      "backend-1",
 			Namespace: "default",
 			Labels: map[string]string{
-				"diverge.io/environment": "test-env",
-				"diverge.io/service":     "backend",
+				"divergedev.com/environment": "test-env",
+				"divergedev.com/service":     "backend",
 			},
 		},
 		Spec: corev1.PodSpec{
@@ -176,8 +176,8 @@ func TestLogs_HappyPathAndMultiContainer(t *testing.T) {
 			Name:      "frontend-1",
 			Namespace: "default",
 			Labels: map[string]string{
-				"diverge.io/environment": "test-env",
-				"diverge.io/service":     "frontend",
+				"divergedev.com/environment": "test-env",
+				"divergedev.com/service":     "frontend",
 			},
 		},
 		Spec: corev1.PodSpec{
@@ -189,8 +189,8 @@ func TestLogs_HappyPathAndMultiContainer(t *testing.T) {
 			Name:      "backend-1",
 			Namespace: "default",
 			Labels: map[string]string{
-				"diverge.io/environment": "test-env",
-				"diverge.io/service":     "backend",
+				"divergedev.com/environment": "test-env",
+				"divergedev.com/service":     "backend",
 			},
 		},
 		Spec: corev1.PodSpec{

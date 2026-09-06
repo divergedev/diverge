@@ -43,8 +43,8 @@ func TestIstioRouterPropertyTeardown(t *testing.T) {
 		policy.SetName("diverge-" + name)
 		policy.SetNamespace(ns)
 		policy.SetLabels(map[string]string{
-			"diverge.io/managed-by":  "diverge",
-			"diverge.io/environment": name,
+			"divergedev.com/managed-by":  "diverge",
+			"divergedev.com/environment": name,
 		})
 
 		client := fake.NewClientBuilder().

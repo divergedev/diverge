@@ -5,7 +5,7 @@ metadata:
   name: {{ include "diverge.fullname" . }}-controller-role
 rules:
   # Diverge CRDs
-  - apiGroups: ["diverge.io"]
+  - apiGroups: ["divergedev.com"]
     resources: [environments, environments/status, environments/finalizers,
                 previewgroups, previewgroups/status, previewgroups/finalizers]
     verbs: [get, list, watch, create, update, patch, delete]

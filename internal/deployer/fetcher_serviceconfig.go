@@ -92,30 +92,30 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 			"metadata": map[string]interface{}{
 				"name": previewName,
 				"labels": map[string]interface{}{
-					"app":                    previewName,
-					"diverge.io/service":     cfg.ServiceName,
-					"diverge.io/role":        "preview",
-					"diverge.io/preview-id":  previewID,
-					"diverge.io/environment": env.Name,
-					"diverge.io/managed-by":  "diverge",
+					"app":                        previewName,
+					"divergedev.com/service":     cfg.ServiceName,
+					"divergedev.com/role":        "preview",
+					"divergedev.com/preview-id":  previewID,
+					"divergedev.com/environment": env.Name,
+					"divergedev.com/managed-by":  "diverge",
 				},
 			},
 			"spec": map[string]interface{}{
 				"replicas": int64(1),
 				"selector": map[string]interface{}{
 					"matchLabels": map[string]interface{}{
-						"app":                   previewName,
-						"diverge.io/preview-id": previewID,
+						"app":                       previewName,
+						"divergedev.com/preview-id": previewID,
 					},
 				},
 				"template": map[string]interface{}{
 					"metadata": map[string]interface{}{
 						"labels": map[string]interface{}{
-							"app":                    previewName,
-							"diverge.io/service":     cfg.ServiceName,
-							"diverge.io/role":        "preview",
-							"diverge.io/preview-id":  previewID,
-							"diverge.io/environment": env.Name,
+							"app":                        previewName,
+							"divergedev.com/service":     cfg.ServiceName,
+							"divergedev.com/role":        "preview",
+							"divergedev.com/preview-id":  previewID,
+							"divergedev.com/environment": env.Name,
 						},
 					},
 					"spec": map[string]interface{}{
@@ -160,16 +160,16 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 			"metadata": map[string]interface{}{
 				"name": previewName,
 				"labels": map[string]interface{}{
-					"diverge.io/role":        "preview",
-					"diverge.io/preview-id":  previewID,
-					"diverge.io/environment": env.Name,
-					"diverge.io/managed-by":  "diverge",
+					"divergedev.com/role":        "preview",
+					"divergedev.com/preview-id":  previewID,
+					"divergedev.com/environment": env.Name,
+					"divergedev.com/managed-by":  "diverge",
 				},
 			},
 			"spec": map[string]interface{}{
 				"selector": map[string]interface{}{
-					"app":                   previewName,
-					"diverge.io/preview-id": previewID,
+					"app":                       previewName,
+					"divergedev.com/preview-id": previewID,
 				},
 				"ports": []interface{}{
 					map[string]interface{}{

@@ -107,7 +107,7 @@ Diverge consists of 4 main components compiled into a single consolidated Docker
 A minimal `PreviewGroup` Custom Resource managing multiple services for a single MR:
 
 ```yaml
-apiVersion: diverge.io/v1alpha1
+apiVersion: divergedev.com/v1alpha1
 kind: PreviewGroup
 metadata:
   name: mr-42

@@ -23,7 +23,7 @@ wait_for_route() {
   local max_wait=30
   local waited=0
   while [ $waited -lt $max_wait ]; do
-    if kubectl get httproute -l "diverge.io/environment=${env_name}" --context "$CTX" 2>/dev/null | grep -q "$env_name"; then
+    if kubectl get httproute -l "divergedev.com/environment=${env_name}" --context "$CTX" 2>/dev/null | grep -q "$env_name"; then
       return 0
     fi
     sleep 1
@@ -57,7 +57,7 @@ echo ""
 echo -e "  ${YELLOW}▸ Creating preview environment for Alice (mr-42)...${NC}"
 
 kubectl apply --context "$CTX" -f - <<'EOF'
-apiVersion: diverge.io/v1alpha1
+apiVersion: divergedev.com/v1alpha1
 kind: Environment
 metadata:
   name: alice-mr-42
@@ -100,7 +100,7 @@ PREVIEW_RESPONSE=$(curl -s -H 'x-diverge-env: alice-mr-42' "${DEMO_URL}/" 2>/dev
 echo -e "  ${GREEN}→ ${PREVIEW_RESPONSE}${NC}"
 echo ""
 echo -e "  ${CYAN}HTTPRoutes created by controller:${NC}"
-kubectl get httproute -l diverge.io/managed-by=diverge --context "$CTX" -o wide 2>/dev/null || true
+kubectl get httproute -l divergedev.com/managed-by=diverge --context "$CTX" -o wide 2>/dev/null || true
 
 pause
 
@@ -115,7 +115,7 @@ echo ""
 echo -e "  ${YELLOW}▸ Creating Bob's preview on the SAME payments service...${NC}"
 
 kubectl apply --context "$CTX" -f - <<'EOF'
-apiVersion: diverge.io/v1alpha1
+apiVersion: divergedev.com/v1alpha1
 kind: Environment
 metadata:
   name: bob-mr-99
@@ -146,7 +146,7 @@ echo -e "  ${CYAN}All active environments:${NC}"
 kubectl get environments --context "$CTX" -o wide 2>/dev/null || true
 echo ""
 echo -e "  ${CYAN}All HTTPRoutes:${NC}"
-kubectl get httproute -l diverge.io/managed-by=diverge --context "$CTX" 2>/dev/null || true
+kubectl get httproute -l divergedev.com/managed-by=diverge --context "$CTX" 2>/dev/null || true
 echo ""
 echo -e "  ${GREEN}✓ Both developers work independently. Zero interference.${NC}"
 
@@ -162,7 +162,7 @@ echo -e "  ${GREEN}Diverge:${NC}  Gateway API ${CYAN}RequestHeaderModifier${NC} 
 echo -e "           on public ingress. Only the mesh preserves it."
 echo ""
 echo -e "  ${CYAN}Inspecting edge HTTPRoute filter:${NC}"
-kubectl get httproute -l diverge.io/managed-by=diverge --context "$CTX" -o yaml 2>/dev/null | grep -A4 "requestHeaderModifier" | head -8 || echo "  (filter visible in HTTPRoute spec)"
+kubectl get httproute -l divergedev.com/managed-by=diverge --context "$CTX" -o yaml 2>/dev/null | grep -A4 "requestHeaderModifier" | head -8 || echo "  (filter visible in HTTPRoute spec)"
 echo ""
 echo -e "  ${GREEN}✓ External attackers cannot reach preview environments.${NC}"
 
@@ -205,7 +205,7 @@ echo -e "  ${CYAN}Remaining environments (Bob's is gone):${NC}"
 kubectl get environments --context "$CTX" 2>/dev/null || true
 echo ""
 echo -e "  ${CYAN}Bob's routes auto-cleaned by controller:${NC}"
-kubectl get httproute -l diverge.io/environment=bob-mr-99 --context "$CTX" 2>/dev/null || echo "  None — controller cleaned up routes + EndpointSlices!"
+kubectl get httproute -l divergedev.com/environment=bob-mr-99 --context "$CTX" 2>/dev/null || echo "  None — controller cleaned up routes + EndpointSlices!"
 echo ""
 echo -e "  ${GREEN}✓ No stale resources. Ever.${NC}"
 
@@ -224,7 +224,7 @@ echo -e "           Workers poll ${CYAN}<queue>-<env>${NC} instead of production
 echo -e "           ContextPropagator injects env header into workflow headers."
 echo ""
 echo -e "  ${CYAN}Temporal ConfigMap created by controller:${NC}"
-kubectl get configmap -l diverge.io/managed-by=diverge --context "$CTX" 2>/dev/null || echo "  (created when TemporalProvider is enabled)"
+kubectl get configmap -l divergedev.com/managed-by=diverge --context "$CTX" 2>/dev/null || echo "  (created when TemporalProvider is enabled)"
 echo ""
 echo -e "  ${GREEN}✓ Preview environments never touch production messages.${NC}"
 

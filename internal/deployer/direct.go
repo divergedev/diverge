@@ -101,8 +101,8 @@ func (d *DirectDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) 
 		if existingLabels == nil {
 			existingLabels = make(map[string]string)
 		}
-		existingLabels["diverge.io/environment"] = env.Name
-		existingLabels["diverge.io/managed-by"] = "diverge"
+		existingLabels["divergedev.com/environment"] = env.Name
+		existingLabels["divergedev.com/managed-by"] = "diverge"
 		obj.SetLabels(existingLabels)
 
 		// Inject OTel annotations if present
@@ -195,8 +195,8 @@ func (d *DirectDeployer) Status(ctx context.Context, env *v1alpha1.Environment) 
 	}
 
 	selector := labels.SelectorFromSet(map[string]string{
-		"diverge.io/environment": env.Name,
-		"diverge.io/managed-by":  "diverge",
+		"divergedev.com/environment": env.Name,
+		"divergedev.com/managed-by":  "diverge",
 	})
 
 	var result []ServiceStatus
@@ -212,7 +212,7 @@ func (d *DirectDeployer) Status(ctx context.Context, env *v1alpha1.Environment) 
 	for _, dep := range deployList.Items {
 		result = append(result, ServiceStatus{
 			Name:       dep.Name,
-			Service:    dep.Labels["diverge.io/service"],
+			Service:    dep.Labels["divergedev.com/service"],
 			SyncStatus: "Applied",
 			Health:     deploymentHealth(&dep),
 		})
@@ -229,7 +229,7 @@ func (d *DirectDeployer) Status(ctx context.Context, env *v1alpha1.Environment) 
 	for _, sts := range stsList.Items {
 		result = append(result, ServiceStatus{
 			Name:       sts.Name,
-			Service:    sts.Labels["diverge.io/service"],
+			Service:    sts.Labels["divergedev.com/service"],
 			SyncStatus: "Applied",
 			Health:     statefulSetHealth(&sts),
 		})

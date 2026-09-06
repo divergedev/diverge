@@ -31,7 +31,7 @@ func (m *mockFetcher) Fetch(ctx context.Context, env *v1alpha1.Environment) ([]u
 func testEnv(name, namespace, nsMode string) *v1alpha1.Environment {
 	return &v1alpha1.Environment{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: "diverge.io/v1alpha1",
+			APIVersion: "divergedev.com/v1alpha1",
 			Kind:       "Environment",
 		},
 		ObjectMeta: metav1.ObjectMeta{
@@ -114,13 +114,13 @@ func TestDirectDeployer_Deploy_AppliesManifestsWithLabels(t *testing.T) {
 	var dep1 appsv1.Deployment
 	err = c.Get(context.Background(), client.ObjectKey{Name: "dep1", Namespace: "test-ns"}, &dep1)
 	require.NoError(t, err)
-	assert.Equal(t, "test-env", dep1.Labels["diverge.io/environment"])
-	assert.Equal(t, "diverge", dep1.Labels["diverge.io/managed-by"])
+	assert.Equal(t, "test-env", dep1.Labels["divergedev.com/environment"])
+	assert.Equal(t, "diverge", dep1.Labels["divergedev.com/managed-by"])
 
 	var dep2 appsv1.Deployment
 	err = c.Get(context.Background(), client.ObjectKey{Name: "dep2", Namespace: "test-ns"}, &dep2)
 	require.NoError(t, err)
-	assert.Equal(t, "test-env", dep2.Labels["diverge.io/environment"])
+	assert.Equal(t, "test-env", dep2.Labels["divergedev.com/environment"])
 }
 
 func TestDirectDeployer_Deploy_SetsOwnerReference(t *testing.T) {
@@ -149,7 +149,7 @@ func TestDirectDeployer_Deploy_SetsOwnerReference(t *testing.T) {
 	require.Len(t, dep1.OwnerReferences, 1)
 	assert.Equal(t, "test-env", dep1.OwnerReferences[0].Name)
 	assert.Equal(t, "Environment", dep1.OwnerReferences[0].Kind)
-	assert.Equal(t, "diverge.io/v1alpha1", dep1.OwnerReferences[0].APIVersion)
+	assert.Equal(t, "divergedev.com/v1alpha1", dep1.OwnerReferences[0].APIVersion)
 }
 
 func TestDirectDeployer_Deploy_NoOwnerRef_CreateMode(t *testing.T) {
@@ -224,9 +224,9 @@ func TestDirectDeployer_Status_HealthyDeployment(t *testing.T) {
 			Namespace:  "test-ns",
 			Generation: 1,
 			Labels: map[string]string{
-				"diverge.io/environment": "test-env",
-				"diverge.io/managed-by":  "diverge",
-				"diverge.io/service":     "web-service",
+				"divergedev.com/environment": "test-env",
+				"divergedev.com/managed-by":  "diverge",
+				"divergedev.com/service":     "web-service",
 			},
 		},
 		Spec: appsv1.DeploymentSpec{
@@ -264,9 +264,9 @@ func TestDirectDeployer_Status_ProgressingDeployment(t *testing.T) {
 			Name:      "web",
 			Namespace: "test-ns",
 			Labels: map[string]string{
-				"diverge.io/environment": "test-env",
-				"diverge.io/managed-by":  "diverge",
-				"diverge.io/service":     "web-service",
+				"divergedev.com/environment": "test-env",
+				"divergedev.com/managed-by":  "diverge",
+				"divergedev.com/service":     "web-service",
 			},
 		},
 		Spec: appsv1.DeploymentSpec{
@@ -352,8 +352,8 @@ func TestDirectDeployer_Status_UnobservedGeneration(t *testing.T) {
 			Namespace:  "test-ns",
 			Generation: 2,
 			Labels: map[string]string{
-				"diverge.io/environment": "test-env",
-				"diverge.io/managed-by":  "diverge",
+				"divergedev.com/environment": "test-env",
+				"divergedev.com/managed-by":  "diverge",
 			},
 		},
 		Spec: appsv1.DeploymentSpec{
@@ -387,8 +387,8 @@ func TestDirectDeployer_Status_TerminalFailure(t *testing.T) {
 			Namespace:  "test-ns",
 			Generation: 1,
 			Labels: map[string]string{
-				"diverge.io/environment": "test-env",
-				"diverge.io/managed-by":  "diverge",
+				"divergedev.com/environment": "test-env",
+				"divergedev.com/managed-by":  "diverge",
 			},
 		},
 		Spec: appsv1.DeploymentSpec{
@@ -426,8 +426,8 @@ func TestDirectDeployer_Status_StatefulSetHealth(t *testing.T) {
 			Namespace:  "test-ns",
 			Generation: 1,
 			Labels: map[string]string{
-				"diverge.io/environment": "test-env",
-				"diverge.io/managed-by":  "diverge",
+				"divergedev.com/environment": "test-env",
+				"divergedev.com/managed-by":  "diverge",
 			},
 		},
 		Spec: appsv1.StatefulSetSpec{
@@ -446,8 +446,8 @@ func TestDirectDeployer_Status_StatefulSetHealth(t *testing.T) {
 			Namespace:  "test-ns",
 			Generation: 2,
 			Labels: map[string]string{
-				"diverge.io/environment": "test-env",
-				"diverge.io/managed-by":  "diverge",
+				"divergedev.com/environment": "test-env",
+				"divergedev.com/managed-by":  "diverge",
 			},
 		},
 		Spec: appsv1.StatefulSetSpec{
@@ -464,8 +464,8 @@ func TestDirectDeployer_Status_StatefulSetHealth(t *testing.T) {
 			Namespace:  "test-ns",
 			Generation: 2,
 			Labels: map[string]string{
-				"diverge.io/environment": "test-env",
-				"diverge.io/managed-by":  "diverge",
+				"divergedev.com/environment": "test-env",
+				"divergedev.com/managed-by":  "diverge",
 			},
 		},
 		Spec: appsv1.StatefulSetSpec{

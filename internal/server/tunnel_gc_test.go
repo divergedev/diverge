@@ -25,10 +25,10 @@ func TestTunnelGC_SweepsExpiredService(t *testing.T) {
 			Name:      "diverge-tunnel-old",
 			Namespace: "default",
 			Labels: map[string]string{
-				"diverge.dev/tunnel": "true",
+				"divergedev.com/tunnel": "true",
 			},
 			Annotations: map[string]string{
-				"diverge.dev/tunnel-expires": expired,
+				"divergedev.com/tunnel-expires": expired,
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -63,10 +63,10 @@ func TestTunnelGC_KeepsNonExpiredService(t *testing.T) {
 			Name:      "diverge-tunnel-active",
 			Namespace: "default",
 			Labels: map[string]string{
-				"diverge.dev/tunnel": "true",
+				"divergedev.com/tunnel": "true",
 			},
 			Annotations: map[string]string{
-				"diverge.dev/tunnel-expires": future,
+				"divergedev.com/tunnel-expires": future,
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -94,7 +94,7 @@ func TestTunnelGC_IgnoresServicesWithoutAnnotation(t *testing.T) {
 			Name:      "diverge-tunnel-noannot",
 			Namespace: "default",
 			Labels: map[string]string{
-				"diverge.dev/tunnel": "true",
+				"divergedev.com/tunnel": "true",
 			},
 		},
 		Spec: corev1.ServiceSpec{

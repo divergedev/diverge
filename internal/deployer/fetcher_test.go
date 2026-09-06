@@ -36,8 +36,8 @@ metadata:
 			Name:      "manifests-cm",
 			Namespace: "test-ns",
 			Labels: map[string]string{
-				"diverge.io/manifests":   "true",
-				"diverge.io/environment": "test-env",
+				"divergedev.com/manifests":   "true",
+				"divergedev.com/environment": "test-env",
 			},
 		},
 		Data: map[string]string{
@@ -94,7 +94,7 @@ func TestConfigMapFetcher_WrongLabels(t *testing.T) {
 			Name:      "manifests-cm",
 			Namespace: "test-ns",
 			Labels: map[string]string{
-				"diverge.io/environment": "test-env", // missing diverge.io/manifests
+				"divergedev.com/environment": "test-env", // missing divergedev.com/manifests
 			},
 		},
 		Data: map[string]string{

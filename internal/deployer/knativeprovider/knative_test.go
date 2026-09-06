@@ -47,7 +47,7 @@ func TestKNativeDeployer_Deploy(t *testing.T) {
 
 			env := &v1alpha1.Environment{
 				TypeMeta: metav1.TypeMeta{
-					APIVersion: "diverge.io/v1alpha1",
+					APIVersion: "divergedev.com/v1alpha1",
 					Kind:       "Environment",
 				},
 				ObjectMeta: metav1.ObjectMeta{

@@ -167,8 +167,8 @@ func buildEnvironment(ctx context.Context, name string, gitCtx *git.GitContext, 
 			Name:      name,
 			Namespace: app.Namespace,
 			Labels: map[string]string{
-				"diverge.dev/environment": name,
-				"diverge.dev/provider":    gitCtx.Provider,
+				"divergedev.com/environment": name,
+				"divergedev.com/provider":    gitCtx.Provider,
 			},
 		},
 		Spec: divergeiov1alpha1.EnvironmentSpec{
@@ -253,7 +253,7 @@ func buildEnvironment(ctx context.Context, name string, gitCtx *git.GitContext, 
 
 	// Set MR number in labels if available
 	if mrNumber > 0 {
-		env.Labels["diverge.dev/mr"] = strconv.Itoa(mrNumber)
+		env.Labels["divergedev.com/mr"] = strconv.Itoa(mrNumber)
 	}
 
 	return env, nil

@@ -116,7 +116,7 @@ func TestMain(m *testing.M) {
 		ObjectMeta: metav1.ObjectMeta{Name: "diverge-admin"},
 		Rules: []rbacv1.PolicyRule{
 			{
-				APIGroups: []string{"diverge.dev"},
+				APIGroups: []string{"divergedev.com"},
 				Resources: []string{"environments", "previewgroups"},
 				Verbs:     []string{"*"},
 			},
@@ -127,7 +127,7 @@ func TestMain(m *testing.M) {
 		ObjectMeta: metav1.ObjectMeta{Name: "diverge-reader"},
 		Rules: []rbacv1.PolicyRule{
 			{
-				APIGroups: []string{"diverge.dev"},
+				APIGroups: []string{"divergedev.com"},
 				Resources: []string{"environments", "previewgroups"},
 				Verbs:     []string{"get", "list", "watch"},
 			},
@@ -399,7 +399,7 @@ func TestErrorSanitization(t *testing.T) {
 	}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
-	assert.NotContains(t, err.Error(), "environments.diverge.dev") // Should be sanitized
+	assert.NotContains(t, err.Error(), "environments.divergedev.com") // Should be sanitized
 }
 
 func TestCreateEnvironment_Authorized(t *testing.T) {

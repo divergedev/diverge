@@ -329,8 +329,8 @@ func (r *EnvironmentReconciler) ensureBannerConfigMap(ctx context.Context, env *
 			Name:      cmName,
 			Namespace: targetNS,
 			Labels: map[string]string{
-				"diverge.io/environment": env.Name,
-				"diverge.io/managed-by":  "diverge",
+				"divergedev.com/environment": env.Name,
+				"divergedev.com/managed-by":  "diverge",
 			},
 		},
 	}

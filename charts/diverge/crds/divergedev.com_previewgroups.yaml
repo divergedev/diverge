@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.3
-  name: previewgroups.diverge.io
+  name: previewgroups.divergedev.com
 spec:
-  group: diverge.io
+  group: divergedev.com
   names:
     kind: PreviewGroup
     listKind: PreviewGroupList
@@ -66,6 +66,43 @@ spec:
                   Database provides group-level database configuration.
                   Individual services can override this in their own database field.
                 properties:
+                  atlas:
+                    description: AtlasSpec configures Atlas Operator integration for
+                      database schema management.
+                    properties:
+                      blocking:
+                        default: true
+                        description: Blocking controls whether the Environment waits
+                          for Atlas to report Ready.
+                        type: boolean
+                      migrationConfigMap:
+                        description: MigrationConfigMap references a ConfigMap containing
+                          versioned .sql migration files and atlas.sum.
+                        type: string
+                      mode:
+                        description: Mode selects the Atlas migration paradigm.
+                        enum:
+                        - versioned
+                        - declarative
+                        type: string
+                      policy:
+                        description: Policy configures Atlas safety policies.
+                        properties:
+                          destructive:
+                            default: error
+                            description: Destructive controls how destructive schema
+                              changes are handled.
+                            enum:
+                            - error
+                            - warn
+                            - allow
+                            type: string
+                        type: object
+                      schemaConfigMap:
+                        description: SchemaConfigMap references a ConfigMap containing
+                          the desired schema (SQL or HCL).
+                        type: string
+                    type: object
                   connectionRef:
                     type: string
                   migrationJob:
@@ -78,6 +115,11 @@ spec:
                         items:
                           type: string
                         type: array
+                      blocking:
+                        default: true
+                        description: Blocking controls whether the Environment waits
+                          for the migration to complete.
+                        type: boolean
                       envFrom:
                         description: EnvFrom specifies environment variables to inject
                           from Secrets.
@@ -204,6 +246,9 @@ spec:
                           target:
                             description: Target is the baseline resource name (e.g.,
                               task queue name or topic name).
+                            maxLength: 249
+                            minLength: 1
+                            pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]*$
                             type: string
                         required:
                         - protocol
@@ -214,6 +259,43 @@ spec:
                       description: Database overrides the group-level database configuration
                         for this service.
                       properties:
+                        atlas:
+                          description: AtlasSpec configures Atlas Operator integration
+                            for database schema management.
+                          properties:
+                            blocking:
+                              default: true
+                              description: Blocking controls whether the Environment
+                                waits for Atlas to report Ready.
+                              type: boolean
+                            migrationConfigMap:
+                              description: MigrationConfigMap references a ConfigMap
+                                containing versioned .sql migration files and atlas.sum.
+                              type: string
+                            mode:
+                              description: Mode selects the Atlas migration paradigm.
+                              enum:
+                              - versioned
+                              - declarative
+                              type: string
+                            policy:
+                              description: Policy configures Atlas safety policies.
+                              properties:
+                                destructive:
+                                  default: error
+                                  description: Destructive controls how destructive
+                                    schema changes are handled.
+                                  enum:
+                                  - error
+                                  - warn
+                                  - allow
+                                  type: string
+                              type: object
+                            schemaConfigMap:
+                              description: SchemaConfigMap references a ConfigMap
+                                containing the desired schema (SQL or HCL).
+                              type: string
+                          type: object
                         connectionRef:
                           type: string
                         migrationJob:
@@ -226,6 +308,11 @@ spec:
                               items:
                                 type: string
                               type: array
+                            blocking:
+                              default: true
+                              description: Blocking controls whether the Environment
+                                waits for the migration to complete.
+                              type: boolean
                             envFrom:
                               description: EnvFrom specifies environment variables
                                 to inject from Secrets.
@@ -301,6 +388,48 @@ spec:
                       - Never
                       - IfNotPresent
                       type: string
+                    keda:
+                      description: |-
+                        KEDA configures per-service autoscaling and scale-to-zero settings.
+                        Overrides controller-level CLI flags when set.
+                      properties:
+                        cooldownPeriod:
+                          description: |-
+                            CooldownPeriod is the cooldown period in seconds before scaling down.
+                            When nil, falls back to the controller CLI flag (--keda-cooldown).
+                          format: int32
+                          minimum: 0
+                          type: integer
+                        enabled:
+                          description: Enabled enables KEDA autoscaling for this service.
+                          type: boolean
+                        maxReplicas:
+                          description: |-
+                            MaxReplicas is the maximum number of replicas.
+                            When nil, falls back to the controller CLI flag (--keda-max-replicas).
+                          format: int32
+                          maximum: 100
+                          minimum: 1
+                          type: integer
+                        minReplicas:
+                          description: |-
+                            MinReplicas is the minimum number of replicas. Set to 0 for scale-to-zero.
+                            When nil, falls back to the controller CLI flag (--keda-min-replicas).
+                          format: int32
+                          minimum: 0
+                          type: integer
+                        pollingInterval:
+                          description: 'PollingInterval is the interval in seconds
+                            KEDA checks metrics. Default: 30.'
+                          format: int32
+                          minimum: 1
+                          type: integer
+                        targetQueueSize:
+                          description: 'TargetQueueSize is the target backlog per
+                            replica for queue-based scaling. Default: 5.'
+                          format: int32
+                          type: integer
+                      type: object
                     mode:
                       default: image
                       description: Mode defines how this service participates in the
@@ -337,6 +466,50 @@ spec:
                         existing Service if 0.
                       format: int32
                       type: integer
+                    postDeploy:
+                      description: PostDeploy configures a generic post-deployment
+                        Job hook for this service.
+                      properties:
+                        args:
+                          description: Args specifies the arguments to pass to the
+                            post-deploy container.
+                          items:
+                            type: string
+                          type: array
+                        blocking:
+                          default: false
+                          description: Blocking controls whether the Environment waits
+                            for the post-deploy job.
+                          type: boolean
+                        envFrom:
+                          description: EnvFrom specifies environment variables to
+                            inject from Secrets.
+                          items:
+                            description: SecretRef references a specific key within
+                              a Kubernetes Secret.
+                            properties:
+                              key:
+                                description: Key is the specific key in the Secret
+                                  to reference.
+                                type: string
+                              name:
+                                description: Name is the name of the Secret.
+                                type: string
+                              namespace:
+                                description: Namespace is the namespace of the Secret.
+                                type: string
+                            type: object
+                          type: array
+                        image:
+                          description: Image is the container image to use for the
+                            post-deploy job.
+                          type: string
+                        timeoutSeconds:
+                          description: TimeoutSeconds is the maximum duration before
+                            the job is terminated.
+                          format: int32
+                          type: integer
+                      type: object
                     protocol:
                       default: http
                       description: Protocol determines whether to generate an HTTPRoute
@@ -393,6 +566,42 @@ spec:
                 - project
                 - provider
                 type: object
+              topologyOverrides:
+                description: |-
+                  TopologyOverrides provides inline service dependency edges for environments
+                  created via CI/CD or webhooks where .diverge.yaml is not accessible.
+                  These override auto-discovered edges from Gateway API and Prometheus.
+                items:
+                  description: TopologyEdge represents a directed dependency between
+                    two services.
+                  properties:
+                    from:
+                      description: From is the source service name (the caller).
+                      minLength: 1
+                      type: string
+                    protocol:
+                      default: http
+                      description: Protocol is the communication protocol (http, grpc,
+                        async).
+                      enum:
+                      - http
+                      - grpc
+                      - async
+                      type: string
+                    suppress:
+                      description: |-
+                        Suppress removes this edge from the auto-discovered graph (tombstone).
+                        Use to correct false-positive edges from Prometheus metrics.
+                      type: boolean
+                    to:
+                      description: To is the target service name (the callee).
+                      minLength: 1
+                      type: string
+                  required:
+                  - from
+                  - to
+                  type: object
+                type: array
             required:
             - routing
             - services
@@ -469,10 +678,45 @@ spec:
                 description: CreatedAt is when the preview group was first created.
                 format: date-time
                 type: string
+              discoveredIngressPaths:
+                description: |-
+                  DiscoveredIngressPaths contains the resolved ingress routing paths
+                  from gateway entrypoints to the changed services in this group.
+                  Populated by the topology discovery engine during environment creation.
+                items:
+                  description: |-
+                    DiscoveredIngressPath represents a resolved routing path from a gateway
+                    entrypoint to a target service.
+                  properties:
+                    entrypoint:
+                      description: Entrypoint is the gateway service name where the
+                        path originates.
+                      type: string
+                    hops:
+                      description: |-
+                        Hops is the ordered list of services along the path,
+                        from entrypoint to target inclusive.
+                      items:
+                        type: string
+                      type: array
+                    target:
+                      description: Target is the destination service name.
+                      type: string
+                  required:
+                  - entrypoint
+                  - hops
+                  - target
+                  type: object
+                type: array
               expiresAt:
                 description: ExpiresAt is when the preview group will expire (from
                   TTL).
                 format: date-time
+                type: string
+              graphSource:
+                description: |-
+                  GraphSource describes where the topology graph was discovered from
+                  (e.g. "gateway-api+prometheus+static").
                 type: string
               leaseRenewedAt:
                 description: LeaseRenewedAt is the last time the owning CLI heartbeat
@@ -505,6 +749,13 @@ spec:
                     PreviewGroupServiceStatus reports the current state of a single service
                     within a PreviewGroup.
                   properties:
+                    changedServices:
+                      description: |-
+                        ChangedServices lists the services that were modified in this preview,
+                        sourced from the child Environment's spec.deploy.changedServices.
+                      items:
+                        type: string
+                      type: array
                     environmentName:
                       description: EnvironmentName is the name of the child Environment
                         CR created for this service.

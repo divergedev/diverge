@@ -98,8 +98,8 @@ func (d *KEDADeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) er
 	hso.SetName(targetName)
 	hso.SetNamespace(targetNS)
 	hso.SetLabels(map[string]string{
-		"diverge.io/managed-by":  "diverge",
-		"diverge.io/environment": env.Name,
+		"divergedev.com/managed-by":  "diverge",
+		"divergedev.com/environment": env.Name,
 	})
 
 	if err := unstructured.SetNestedField(hso.Object, targetName, "spec", "scaleTargetRef", "name"); err != nil {

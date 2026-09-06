@@ -73,9 +73,9 @@ func TestServiceConfigFetcher_Property(t *testing.T) {
 
 		// All objects have diverge labels
 		expectedLabels := map[string]string{
-			"diverge.io/environment": envName,
-			"diverge.io/managed-by":  "diverge",
-			"diverge.io/role":        "preview",
+			"divergedev.com/environment": envName,
+			"divergedev.com/managed-by":  "diverge",
+			"divergedev.com/role":        "preview",
 		}
 		for objIdx, obj := range objs {
 			labels := obj.GetLabels()

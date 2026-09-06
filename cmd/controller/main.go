@@ -146,7 +146,7 @@ func main() {
 		Metrics:                metricsserver.Options{BindAddress: metricsAddr},
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "diverge.io",
+		LeaderElectionID:       "divergedev.com",
 		WebhookServer:          webhookserver.NewServer(webhookserver.Options{Port: webhookPort}),
 	})
 	if err != nil {

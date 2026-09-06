@@ -21,7 +21,7 @@ func TestBuildKnativeService_Basic(t *testing.T) {
 	assert.Equal(t, "default", svc.Namespace)
 
 	assert.Equal(t, "bar", svc.Labels["foo"])
-	assert.Equal(t, "diverge", svc.Labels["diverge.io/managed-by"])
+	assert.Equal(t, "diverge", svc.Labels["divergedev.com/managed-by"])
 
 	assert.Equal(t, "test", svc.Annotations["anno"])
 	assert.Equal(t, "IgnoreExtraneous", svc.Annotations["argocd.argoproj.io/compare-options"])
@@ -36,7 +36,7 @@ func TestBuildKnativeService_NilLabels(t *testing.T) {
 	svc, err := BuildKnativeService("test-svc", "default", "nginx:latest", 8080, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, svc)
-	assert.Equal(t, "diverge", svc.Labels["diverge.io/managed-by"])
+	assert.Equal(t, "diverge", svc.Labels["divergedev.com/managed-by"])
 }
 
 func TestBuildKnativeService_NilAnnotations(t *testing.T) {

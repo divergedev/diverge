@@ -200,7 +200,7 @@ func TestCheckSAR_ExtraPassthrough_PBT(t *testing.T) {
 
 // TestAuthorizeAction_UsesCRDAPIGroup guards against the SubjectAccessReview
 // being issued for an API group that no Diverge CRD is served under. The
-// installed CRDs are diverge.io; a SAR against any other group can never be
+// installed CRDs are divergedev.com; a SAR against any other group can never be
 // satisfied by RBAC an operator writes against the real resources, and the
 // denial surfaces only as a bare "permission denied".
 func TestAuthorizeAction_UsesCRDAPIGroup(t *testing.T) {
@@ -217,7 +217,7 @@ func TestAuthorizeAction_UsesCRDAPIGroup(t *testing.T) {
 	err := AuthorizeAction(ctx, client, NewAuditLogger(slog.Default()), "get", "default", "environments")
 	require.NoError(t, err)
 	require.NotNil(t, capturedSAR)
-	assert.Equal(t, "diverge.io", capturedSAR.Spec.ResourceAttributes.Group)
+	assert.Equal(t, "divergedev.com", capturedSAR.Spec.ResourceAttributes.Group)
 	assert.Equal(t, v1alpha1.GroupVersion.Group, capturedSAR.Spec.ResourceAttributes.Group)
 	assert.Equal(t, "environments", capturedSAR.Spec.ResourceAttributes.Resource)
 }

@@ -25,8 +25,8 @@ func BuildKnativeService(name, namespace, image string, port int32, labels, anno
 			}
 		}
 	}
-	// Add diverge.io/managed-by labels
-	labels["diverge.io/managed-by"] = "diverge"
+	// Add divergedev.com/managed-by labels
+	labels["divergedev.com/managed-by"] = "diverge"
 
 	if annotations == nil {
 		annotations = make(map[string]string)

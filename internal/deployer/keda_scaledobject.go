@@ -55,9 +55,9 @@ func buildTemporalScaledObject(env *v1alpha1.Environment, kedaSpec *v1alpha1.KED
 	so.SetName(fmt.Sprintf("%s-temporal", targetName))
 	so.SetNamespace(targetNS)
 	so.SetLabels(map[string]string{
-		"diverge.io/managed-by":     "diverge",
-		"diverge.io/environment":    env.Name,
-		"diverge.io/async-protocol": "temporal",
+		"divergedev.com/managed-by":     "diverge",
+		"divergedev.com/environment":    env.Name,
+		"divergedev.com/async-protocol": "temporal",
 	})
 
 	_ = unstructured.SetNestedField(so.Object, targetName, "spec", "scaleTargetRef", "name")
@@ -114,9 +114,9 @@ func buildKafkaScaledObject(env *v1alpha1.Environment, kedaSpec *v1alpha1.KEDASp
 	so.SetName(fmt.Sprintf("%s-kafka", targetName))
 	so.SetNamespace(targetNS)
 	so.SetLabels(map[string]string{
-		"diverge.io/managed-by":     "diverge",
-		"diverge.io/environment":    env.Name,
-		"diverge.io/async-protocol": "kafka",
+		"divergedev.com/managed-by":     "diverge",
+		"divergedev.com/environment":    env.Name,
+		"divergedev.com/async-protocol": "kafka",
 	})
 
 	_ = unstructured.SetNestedField(so.Object, targetName, "spec", "scaleTargetRef", "name")

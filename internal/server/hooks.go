@@ -43,7 +43,7 @@ func (s *EnvironmentService) ListHookJobs(ctx context.Context, req *connect.Requ
 	}
 
 	var jobList batchv1.JobList
-	selector := labels.Set{"diverge.io/environment": req.Msg.EnvironmentName}.AsSelector()
+	selector := labels.Set{"divergedev.com/environment": req.Msg.EnvironmentName}.AsSelector()
 	if err := s.client.List(ctx, &jobList, client.InNamespace(namespace), client.MatchingLabelsSelector{Selector: selector}); err != nil {
 		return nil, SanitizeK8sError(s.logger, err)
 	}
@@ -72,7 +72,7 @@ func (s *EnvironmentService) ListHookJobs(ctx context.Context, req *connect.Requ
 
 		pbJob := &pb.HookJob{
 			Name:      job.Name,
-			Type:      job.Labels["diverge.io/hook-type"],
+			Type:      job.Labels["divergedev.com/hook-type"],
 			Phase:     phase,
 			Message:   message,
 			CreatedAt: timestamppb.New(job.CreationTimestamp.Time),
@@ -124,8 +124,8 @@ func (s *EnvironmentService) RetryHook(ctx context.Context, req *connect.Request
 
 	var jobList batchv1.JobList
 	selector := labels.Set{
-		"diverge.io/environment": req.Msg.EnvironmentName,
-		"diverge.io/hook-type":   req.Msg.HookType,
+		"divergedev.com/environment": req.Msg.EnvironmentName,
+		"divergedev.com/hook-type":   req.Msg.HookType,
 	}.AsSelector()
 	if err := s.client.List(ctx, &jobList, client.InNamespace(namespace), client.MatchingLabelsSelector{Selector: selector}); err != nil {
 		return nil, SanitizeK8sError(s.logger, err)
@@ -168,7 +168,7 @@ func (s *EnvironmentService) RetryHook(ctx context.Context, req *connect.Request
 	if env.Annotations == nil {
 		env.Annotations = make(map[string]string)
 	}
-	env.Annotations["diverge.io/retry-hook"] = req.Msg.HookType
+	env.Annotations["divergedev.com/retry-hook"] = req.Msg.HookType
 
 	if err := s.client.Patch(ctx, &env, patch); err != nil {
 		return nil, SanitizeK8sError(s.logger, err)

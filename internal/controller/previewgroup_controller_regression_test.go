@@ -24,8 +24,8 @@ func TestListChildEnvironments_MatchesLabels(t *testing.T) {
 			Name:      "env-match",
 			Namespace: "default",
 			Labels: map[string]string{
-				"diverge.io/previewgroup": "test-group",
-				"diverge.io/managed-by":   "diverge-previewgroup",
+				"divergedev.com/previewgroup": "test-group",
+				"divergedev.com/managed-by":   "diverge-previewgroup",
 			},
 		},
 	}
@@ -51,7 +51,7 @@ func TestListChildEnvironments_IgnoresUnlabeled(t *testing.T) {
 			Name:      "env-no-managed",
 			Namespace: "default",
 			Labels: map[string]string{
-				"diverge.io/previewgroup": "test-group",
+				"divergedev.com/previewgroup": "test-group",
 			},
 		},
 	}
@@ -76,8 +76,8 @@ func TestDeleteOrphanedEnvironments_CleansUp(t *testing.T) {
 			Name:      "env-1",
 			Namespace: "default",
 			Labels: map[string]string{
-				"diverge.io/previewgroup": "test-group",
-				"diverge.io/managed-by":   "diverge-previewgroup",
+				"divergedev.com/previewgroup": "test-group",
+				"divergedev.com/managed-by":   "diverge-previewgroup",
 			},
 		},
 	}
@@ -86,8 +86,8 @@ func TestDeleteOrphanedEnvironments_CleansUp(t *testing.T) {
 			Name:      "env-2",
 			Namespace: "default",
 			Labels: map[string]string{
-				"diverge.io/previewgroup": "test-group",
-				"diverge.io/managed-by":   "diverge-previewgroup",
+				"divergedev.com/previewgroup": "test-group",
+				"divergedev.com/managed-by":   "diverge-previewgroup",
 			},
 		},
 	}
@@ -96,8 +96,8 @@ func TestDeleteOrphanedEnvironments_CleansUp(t *testing.T) {
 			Name:      "env-3",
 			Namespace: "default",
 			Labels: map[string]string{
-				"diverge.io/previewgroup": "test-group",
-				"diverge.io/managed-by":   "diverge-previewgroup",
+				"divergedev.com/previewgroup": "test-group",
+				"divergedev.com/managed-by":   "diverge-previewgroup",
 			},
 		},
 	}

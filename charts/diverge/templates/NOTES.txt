@@ -4,7 +4,7 @@ To verify the installation:
 1. Check the controller pods:
    kubectl get pods -n {{ .Release.Namespace }} -l control-plane=controller-manager
 2. Check the CRDs:
-   kubectl get crds | grep diverge.io
+   kubectl get crds | grep divergedev.com
 {{- if not .Values.certManager.enabled }}
 
 ⚠️  Webhook TLS: cert-manager is not enabled. You must create the TLS secret manually:

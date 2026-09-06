@@ -151,7 +151,7 @@ func newRouteCmd(app *App) *cobra.Command {
 			}
 
 			_, _ = fmt.Fprintf(out, "\n  \u26A0 Ensure intermediate services propagate the routing header.\n")
-			_, _ = fmt.Fprintf(out, "    See: https://docs.diverge.dev/guides/header-propagation\n")
+			_, _ = fmt.Fprintf(out, "    See: https://docs.divergedev.com/guides/header-propagation\n")
 
 			return nil
 		},

@@ -10,12 +10,12 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /validate-diverge-io-v1alpha1-previewgroup
+      path: /validate-divergedev-com-v1alpha1-previewgroup
   failurePolicy: Fail
-  name: vpreviewgroup.diverge.io
+  name: vpreviewgroup.divergedev.com
   rules:
   - apiGroups:
-    - diverge.io
+    - divergedev.com
     apiVersions:
     - v1alpha1
     operations:

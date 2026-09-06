@@ -197,7 +197,7 @@ func findBaselinePod(ctx context.Context, clientset kubernetes.Interface, namesp
 	}
 
 	labelSelectors := []string{
-		fmt.Sprintf("app=%s,diverge.io/role=baseline", serviceName),
+		fmt.Sprintf("app=%s,divergedev.com/role=baseline", serviceName),
 		fmt.Sprintf("app=%s", serviceName),
 		fmt.Sprintf("app.kubernetes.io/name=%s", serviceName),
 	}

@@ -4,7 +4,7 @@ metadata:
   name: activator-proxy
   namespace: default
   labels:
-    diverge.io/managed-by: diverge
+    divergedev.com/managed-by: diverge
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -37,7 +37,7 @@ metadata:
   namespace: default
   labels:
     app: activator-proxy
-    diverge.io/managed-by: diverge
+    divergedev.com/managed-by: diverge
   annotations:
     argocd.argoproj.io/compare-options: IgnoreExtraneous
 spec:
@@ -49,7 +49,7 @@ spec:
     metadata:
       labels:
         app: activator-proxy
-        diverge.io/managed-by: diverge
+        divergedev.com/managed-by: diverge
     spec:
       serviceAccountName: activator-proxy
       securityContext:
@@ -102,7 +102,7 @@ metadata:
   namespace: default
   labels:
     app: activator-proxy
-    diverge.io/managed-by: diverge
+    divergedev.com/managed-by: diverge
   annotations:
     argocd.argoproj.io/compare-options: IgnoreExtraneous
 spec:

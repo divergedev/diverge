@@ -76,7 +76,7 @@ rules:
   - delete
   - list
 - apiGroups:
-  - diverge.io
+  - divergedev.com
   resources:
   - environments
   - previewgroups
@@ -89,14 +89,14 @@ rules:
   - update
   - watch
 - apiGroups:
-  - diverge.io
+  - divergedev.com
   resources:
   - environments/finalizers
   - previewgroups/finalizers
   verbs:
   - update
 - apiGroups:
-  - diverge.io
+  - divergedev.com
   resources:
   - environments/status
   - previewgroups/status

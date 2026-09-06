@@ -74,7 +74,7 @@ func TestDevLifecycle_EnvSync(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "web-baseline",
 			Namespace: "default",
-			Labels:    map[string]string{"app": "web", "diverge.io/role": "baseline"},
+			Labels:    map[string]string{"app": "web", "divergedev.com/role": "baseline"},
 		},
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{
@@ -150,7 +150,7 @@ func TestDevLifecycle_ChildProcess(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "web-baseline",
 			Namespace: "default",
-			Labels:    map[string]string{"app": "web", "diverge.io/role": "baseline"},
+			Labels:    map[string]string{"app": "web", "divergedev.com/role": "baseline"},
 		},
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{

@@ -138,14 +138,14 @@ func TestChildEnvLabelInvariant_Property(t *testing.T) {
 		env := r.buildChildEnvironment(pg, svc, envName, "default")
 
 		// Verify child env has the exact labels required by listChildEnvironments
-		// labelPreviewGroup = "diverge.io/previewgroup"
-		// labelManagedBy    = "diverge.io/managed-by" (with value "diverge-previewgroup")
+		// labelPreviewGroup = "divergedev.com/previewgroup"
+		// labelManagedBy    = "divergedev.com/managed-by" (with value "diverge-previewgroup")
 		// See internal/controller/previewgroup_controller.go
-		if env.Labels["diverge.io/previewgroup"] != pgName {
-			ht.Fatalf("expected previewgroup label to be %q, got %q", pgName, env.Labels["diverge.io/previewgroup"])
+		if env.Labels["divergedev.com/previewgroup"] != pgName {
+			ht.Fatalf("expected previewgroup label to be %q, got %q", pgName, env.Labels["divergedev.com/previewgroup"])
 		}
-		if env.Labels["diverge.io/managed-by"] != "diverge-previewgroup" {
-			ht.Fatalf("expected managed-by label to be %q, got %q", "diverge-previewgroup", env.Labels["diverge.io/managed-by"])
+		if env.Labels["divergedev.com/managed-by"] != "diverge-previewgroup" {
+			ht.Fatalf("expected managed-by label to be %q, got %q", "diverge-previewgroup", env.Labels["divergedev.com/managed-by"])
 		}
 	})
 }

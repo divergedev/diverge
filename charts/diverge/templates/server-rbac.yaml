@@ -8,7 +8,7 @@ metadata:
     {{- include "diverge.labels" . | nindent 4 }}
     app.kubernetes.io/component: server
 rules:
-  - apiGroups: ["diverge.io"]
+  - apiGroups: ["divergedev.com"]
     resources: ["environments", "previewgroups"]
     verbs: ["get", "list", "watch", "create", "update", "delete"]
 ---

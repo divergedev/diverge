@@ -10,7 +10,7 @@ import (
 )
 
 // TunnelGC periodically garbage-collects expired tunnel K8s resources.
-// Resources are annotated with diverge.dev/tunnel-expires (RFC3339).
+// Resources are annotated with divergedev.com/tunnel-expires (RFC3339).
 // If the annotation is past, the resource is deleted.
 type TunnelGC struct {
 	k8sClient kubernetes.Interface
@@ -48,14 +48,14 @@ func (gc *TunnelGC) sweep(ctx context.Context, namespace string) {
 
 	// Sweep Services
 	svcs, err := gc.k8sClient.CoreV1().Services(namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: "diverge.dev/tunnel=true",
+		LabelSelector: "divergedev.com/tunnel=true",
 	})
 	if err != nil {
 		gc.logger.Warn("tunnel GC: failed to list services", "ns", namespace, "err", err)
 		return
 	}
 	for _, svc := range svcs.Items {
-		expiresStr, ok := svc.Annotations["diverge.dev/tunnel-expires"]
+		expiresStr, ok := svc.Annotations["divergedev.com/tunnel-expires"]
 		if !ok {
 			continue
 		}
@@ -74,14 +74,14 @@ func (gc *TunnelGC) sweep(ctx context.Context, namespace string) {
 
 	// Sweep EndpointSlices
 	eps, err := gc.k8sClient.DiscoveryV1().EndpointSlices(namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: "diverge.dev/tunnel=true",
+		LabelSelector: "divergedev.com/tunnel=true",
 	})
 	if err != nil {
 		gc.logger.Warn("tunnel GC: failed to list endpointslices", "ns", namespace, "err", err)
 		return
 	}
 	for _, ep := range eps.Items {
-		expiresStr, ok := ep.Annotations["diverge.dev/tunnel-expires"]
+		expiresStr, ok := ep.Annotations["divergedev.com/tunnel-expires"]
 		if !ok {
 			continue
 		}
@@ -99,13 +99,13 @@ func (gc *TunnelGC) sweep(ctx context.Context, namespace string) {
 
 	// Sweep Leases
 	leases, err := gc.k8sClient.CoordinationV1().Leases(namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: "diverge.dev/tunnel=true",
+		LabelSelector: "divergedev.com/tunnel=true",
 	})
 	if err != nil {
 		return
 	}
 	for _, lease := range leases.Items {
-		expiresStr, ok := lease.Annotations["diverge.dev/tunnel-expires"]
+		expiresStr, ok := lease.Annotations["divergedev.com/tunnel-expires"]
 		if !ok {
 			continue
 		}

@@ -67,8 +67,8 @@ func (tl *TunnelLease) Acquire(ctx context.Context, namespace, previewID, tunnel
 			Name:      leaseName,
 			Namespace: namespace,
 			Labels: map[string]string{
-				"diverge.dev/tunnel":     "true",
-				"diverge.dev/preview-id": previewID,
+				"divergedev.com/tunnel":     "true",
+				"divergedev.com/preview-id": previewID,
 			},
 		},
 		Spec: coordinationv1.LeaseSpec{

@@ -19,7 +19,7 @@ func TestParseDotDivergeConfig(t *testing.T) {
 		{
 			name: "valid config",
 			input: `
-apiVersion: diverge.io/v1alpha1
+apiVersion: divergedev.com/v1alpha1
 kind: ServicePreview
 metadata:
   name: payments-api
@@ -40,7 +40,7 @@ spec:
 		{
 			name: "default port",
 			input: `
-apiVersion: diverge.io/v1alpha1
+apiVersion: divergedev.com/v1alpha1
 kind: ServicePreview
 metadata:
   name: test-svc
@@ -53,7 +53,7 @@ spec:
 		{
 			name: "missing serviceName",
 			input: `
-apiVersion: diverge.io/v1alpha1
+apiVersion: divergedev.com/v1alpha1
 kind: ServicePreview
 metadata:
   name: test
@@ -70,7 +70,7 @@ spec:
 		{
 			name: "invalid port -1",
 			input: `
-apiVersion: diverge.io/v1alpha1
+apiVersion: divergedev.com/v1alpha1
 kind: ServicePreview
 metadata:
   name: test
@@ -83,7 +83,7 @@ spec:
 		{
 			name: "invalid port 65536",
 			input: `
-apiVersion: diverge.io/v1alpha1
+apiVersion: divergedev.com/v1alpha1
 kind: ServicePreview
 metadata:
   name: test
@@ -113,7 +113,7 @@ spec:
 func TestToServicePreviewConfig(t *testing.T) {
 	// editorconfig-checker-disable
 	cfg, err := ParseDotDivergeConfig([]byte(`
-apiVersion: diverge.io/v1alpha1
+apiVersion: divergedev.com/v1alpha1
 kind: ServicePreview
 metadata:
   name: payments-api
@@ -146,7 +146,7 @@ spec:
 func TestToServicePreviewConfig_WebSocket(t *testing.T) {
 	// editorconfig-checker-disable
 	cfg, err := ParseDotDivergeConfig([]byte(`
-apiVersion: diverge.io/v1alpha1
+apiVersion: divergedev.com/v1alpha1
 kind: ServicePreview
 metadata:
   name: payments-api

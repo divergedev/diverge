@@ -11,7 +11,7 @@ Diverge can create a `ConfigMap` containing a small JavaScript snippet that rend
 To enable the banner, add the `banner` configuration to the `routing` section of your `Environment` specification:
 
 ```yaml
-apiVersion: diverge.io/v1alpha1
+apiVersion: divergedev.com/v1alpha1
 kind: Environment
 metadata:
   name: my-preview

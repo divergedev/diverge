@@ -432,13 +432,13 @@ func (tm *TunnelManager) createTunnelResources(ctx context.Context, reg *pb.Tunn
 			Name:      svcName,
 			Namespace: reg.Namespace,
 			Labels: map[string]string{
-				"diverge.dev/tunnel":     "true",
-				"diverge.dev/preview-id": reg.PreviewId,
+				"divergedev.com/tunnel":     "true",
+				"divergedev.com/preview-id": reg.PreviewId,
 			},
 			Annotations: map[string]string{
-				"diverge.dev/tunnel-id":      tunnelID,
-				"diverge.dev/tunnel-expires": expires,
-				"diverge.dev/tunnel-holder":  tm.podName,
+				"divergedev.com/tunnel-id":      tunnelID,
+				"divergedev.com/tunnel-expires": expires,
+				"divergedev.com/tunnel-holder":  tm.podName,
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -458,12 +458,12 @@ func (tm *TunnelManager) createTunnelResources(ctx context.Context, reg *pb.Tunn
 			Namespace: reg.Namespace,
 			Labels: map[string]string{
 				"kubernetes.io/service-name": svcName,
-				"diverge.dev/tunnel":         "true",
-				"diverge.dev/preview-id":     reg.PreviewId,
+				"divergedev.com/tunnel":      "true",
+				"divergedev.com/preview-id":  reg.PreviewId,
 			},
 			Annotations: map[string]string{
-				"diverge.dev/tunnel-id":      tunnelID,
-				"diverge.dev/tunnel-expires": expires,
+				"divergedev.com/tunnel-id":      tunnelID,
+				"divergedev.com/tunnel-expires": expires,
 			},
 		},
 		AddressType: discoveryv1.AddressTypeIPv4,
@@ -530,7 +530,7 @@ func (tm *TunnelManager) refreshTunnelTTL(ctx context.Context, reg *pb.TunnelReg
 	if svc.Annotations == nil {
 		svc.Annotations = make(map[string]string)
 	}
-	svc.Annotations["diverge.dev/tunnel-expires"] = expires
+	svc.Annotations["divergedev.com/tunnel-expires"] = expires
 	_, _ = tm.k8sClient.CoreV1().Services(reg.Namespace).Update(ctx, svc, metav1.UpdateOptions{})
 }
 

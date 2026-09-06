@@ -54,7 +54,7 @@ When a client sends an HTTP request with an `Authorization: Bearer <token>` head
 
 ### 2. SubjectAccessReview Authorization
 For each API operation (unary RPC or stream), the Diverge server verifies that the authenticated user has appropriate Kubernetes RBAC permissions:
-- **Diverge Resources**: Performs a `SubjectAccessReview` (`authorization.k8s.io/v1`) with `group: "diverge.dev"` (or `"diverge.io"`), the target `resource` (`environments` or `previewgroups`), `verb` (`get`, `list`, `watch`, `create`, `update`, `delete`), and `namespace`.
+- **Diverge Resources**: Performs a `SubjectAccessReview` (`authorization.k8s.io/v1`) with `group: "divergedev.com"`, the target `resource` (`environments` or `previewgroups`), `verb` (`get`, `list`, `watch`, `create`, `update`, `delete`), and `namespace`.
 - **Pod Logs (`StreamLogs`)**: Requires both environment read access and core `pods/log` access (`group: ""`, `resource: "pods"`, `subresource: "log"`, `verb: "get"`).
 - **Namespace Isolation**: `ValidateNamespaceMatch` enforces that the request wrapper namespace strictly matches the metadata namespace in the payload, preventing RBAC bypasses.
 
@@ -132,7 +132,7 @@ metadata:
   name: diverge-viewer
   namespace: team-alpha
 rules:
-  - apiGroups: ["diverge.dev", "diverge.io"]
+  - apiGroups: ["divergedev.com"]
     resources: ["environments", "previewgroups"]
     verbs: ["get", "list", "watch"]
 ---
@@ -161,10 +161,10 @@ metadata:
   name: diverge-developer
   namespace: team-alpha
 rules:
-  - apiGroups: ["diverge.dev", "diverge.io"]
+  - apiGroups: ["divergedev.com"]
     resources: ["environments"]
     verbs: ["get", "list", "watch", "create", "update", "delete"]
-  - apiGroups: ["diverge.dev", "diverge.io"]
+  - apiGroups: ["divergedev.com"]
     resources: ["previewgroups"]
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
@@ -198,7 +198,7 @@ kind: ClusterRole
 metadata:
   name: diverge-admin
 rules:
-  - apiGroups: ["diverge.dev", "diverge.io"]
+  - apiGroups: ["divergedev.com"]
     resources: ["environments", "previewgroups"]
     verbs: ["*"]
   - apiGroups: [""]
@@ -226,7 +226,7 @@ roleRef:
 For the Diverge server to evaluate auth requests and stream logs, its own ServiceAccount requires:
 - `authentication.k8s.io` `tokenreviews`: `create`
 - `authorization.k8s.io` `subjectaccessreviews`: `create`
-- `diverge.io` `environments`, `previewgroups`: `*`
+- `divergedev.com` `environments`, `previewgroups`: `*`
 - Core `pods`, `pods/log`: `get`, `list` (configured cluster-wide via `server.rbac.clusterWidePodAccess` or restricted via `server.rbac.targetNamespaces`).
 
 These permissions are automatically deployed when using the Diverge Helm chart.
@@ -289,7 +289,7 @@ When accessing Diverge from web applications, restrict `--cors-allowed-origins` 
 # Helm values.yaml
 server:
   cors:
-    allowedOrigins: "https://app.diverge.dev,https://dashboard.internal.company.com"
+    allowedOrigins: "https://app.divergedev.com,https://dashboard.internal.company.com"
     maxAge: 86400
 ```
 
@@ -301,7 +301,7 @@ server:
 | :--- | :--- | :--- | :--- |
 | `401 Unauthorized` | `missing or invalid authorization header` | Missing `Authorization` header or prefix is not `Bearer`. | Ensure request header contains `Authorization: Bearer <token>`. |
 | `401 Unauthorized` | `authentication failed` / `token not authenticated` | Token has expired, has invalid signature, or audience mismatch. | Check token expiration. Verify `--audiences` matches the token audience claim (`aud`). |
-| `403 PermissionDenied` | `permission denied` | User authenticated, but lacks RBAC permissions for the verb/resource in the target namespace. | Check RBAC rules with `kubectl auth can-i`: <br>`kubectl auth can-i create environments.diverge.dev -n <ns> --as=<user> --as-group=<group>` |
+| `403 PermissionDenied` | `permission denied` | User authenticated, but lacks RBAC permissions for the verb/resource in the target namespace. | Check RBAC rules with `kubectl auth can-i`: <br>`kubectl auth can-i create environments.divergedev.com -n <ns> --as=<user> --as-group=<group>` |
 | `403 PermissionDenied` | `permission denied: requires get access to pods/log` | User lacks `pods/log` permission, or Diverge server is missing namespace RBAC. | Add `pods/log` to user's Role. If using namespace scoping, ensure namespace is in `server.rbac.targetNamespaces`. |
 | `400 InvalidArgument` | `namespace mismatch: request namespace does not match resource namespace` | `req.Namespace` differs from `req.Environment.Namespace`. | Ensure the namespace in the request envelope matches the resource metadata namespace. |
 | `500 Internal` | `authorization check failed` | Diverge server ServiceAccount cannot create `SubjectAccessReviews`. | Verify the `diverge-server-auth` `ClusterRoleBinding` is active for the server ServiceAccount. |

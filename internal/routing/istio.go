@@ -51,8 +51,8 @@ func (r *IstioRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment) 
 	})
 
 	u.SetLabels(map[string]string{
-		"diverge.io/managed-by":  "diverge",
-		"diverge.io/environment": env.Name,
+		"divergedev.com/managed-by":  "diverge",
+		"divergedev.com/environment": env.Name,
 	})
 
 	ipBlocks := []interface{}{}
@@ -94,7 +94,7 @@ func (r *IstioRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment) 
 		"rules":  rules,
 		"selector": map[string]interface{}{
 			"matchLabels": map[string]interface{}{
-				"diverge.io/environment": env.Name,
+				"divergedev.com/environment": env.Name,
 			},
 		},
 	}
@@ -121,8 +121,8 @@ func (r *IstioRouter) Teardown(ctx context.Context, env *v1alpha1.Environment) e
 	}
 
 	selector := labels.SelectorFromSet(map[string]string{
-		"diverge.io/environment": env.Name,
-		"diverge.io/managed-by":  "diverge",
+		"divergedev.com/environment": env.Name,
+		"divergedev.com/managed-by":  "diverge",
 	})
 
 	var policyList unstructured.UnstructuredList

@@ -77,9 +77,9 @@ func TestClient_DeleteApplicationsForEnvironment(t *testing.T) {
 	app1.SetName("app-1")
 	app1.SetNamespace("argocd")
 	app1.SetLabels(map[string]string{
-		"diverge.io/environment":           "env1",
-		"diverge.io/environment-namespace": "ns1",
-		"diverge.io/managed-by":            "diverge",
+		"divergedev.com/environment":           "env1",
+		"divergedev.com/environment-namespace": "ns1",
+		"divergedev.com/managed-by":            "diverge",
 	})
 
 	app2 := &unstructured.Unstructured{}
@@ -87,9 +87,9 @@ func TestClient_DeleteApplicationsForEnvironment(t *testing.T) {
 	app2.SetName("app-2")
 	app2.SetNamespace("argocd")
 	app2.SetLabels(map[string]string{
-		"diverge.io/environment":           "env2",
-		"diverge.io/environment-namespace": "ns2",
-		"diverge.io/managed-by":            "diverge",
+		"divergedev.com/environment":           "env2",
+		"divergedev.com/environment-namespace": "ns2",
+		"divergedev.com/managed-by":            "diverge",
 	})
 
 	fc := fake.NewClientBuilder().WithObjects(app1, app2).Build()
@@ -116,10 +116,10 @@ func TestClient_GetSyncStatus(t *testing.T) {
 				"name":      "app-1",
 				"namespace": "argocd",
 				"labels": map[string]interface{}{
-					"diverge.io/environment":           "env1",
-					"diverge.io/environment-namespace": "ns1",
-					"diverge.io/managed-by":            "diverge",
-					"diverge.io/service":               "svc1",
+					"divergedev.com/environment":           "env1",
+					"divergedev.com/environment-namespace": "ns1",
+					"divergedev.com/managed-by":            "diverge",
+					"divergedev.com/service":               "svc1",
 				},
 			},
 			"status": map[string]interface{}{
@@ -141,10 +141,10 @@ func TestClient_GetSyncStatus(t *testing.T) {
 				"name":      "app-2",
 				"namespace": "argocd",
 				"labels": map[string]interface{}{
-					"diverge.io/environment":           "env1",
-					"diverge.io/environment-namespace": "ns1",
-					"diverge.io/managed-by":            "diverge",
-					"diverge.io/service":               "svc2",
+					"divergedev.com/environment":           "env1",
+					"divergedev.com/environment-namespace": "ns1",
+					"divergedev.com/managed-by":            "diverge",
+					"divergedev.com/service":               "svc2",
 				},
 			},
 			// No status field to test Unknown

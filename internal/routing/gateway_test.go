@@ -184,8 +184,8 @@ func TestGatewayRouter_Teardown_DeletesHTTPRoutes(t *testing.T) {
 		u.SetName("test-env-" + svc)
 		u.SetNamespace("default")
 		u.SetLabels(map[string]string{
-			"diverge.io/environment": "test-env",
-			"diverge.io/managed-by":  "diverge",
+			"divergedev.com/environment": "test-env",
+			"divergedev.com/managed-by":  "diverge",
 		})
 		require.NoError(t, c.Create(context.Background(), u))
 	}

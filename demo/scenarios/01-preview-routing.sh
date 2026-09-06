@@ -10,7 +10,7 @@ echo ""
 # Create a preview environment
 echo "📝 Creating preview environment 'mr-42'..."
 kubectl apply --context "$CTX" -f - <<EOF
-apiVersion: diverge.io/v1alpha1
+apiVersion: divergedev.com/v1alpha1
 kind: Environment
 metadata:
   name: mr-42
@@ -43,7 +43,7 @@ curl -s -H 'x-diverge-env: mr-42' "${DEMO_URL}/" 2>/dev/null || echo "  → Rout
 
 echo ""
 echo "📊 HTTPRoute created:"
-kubectl get httproute -l diverge.io/environment=mr-42 --context "$CTX" -o wide 2>/dev/null || echo "  (HTTPRoute visible once controller runs)"
+kubectl get httproute -l divergedev.com/environment=mr-42 --context "$CTX" -o wide 2>/dev/null || echo "  (HTTPRoute visible once controller runs)"
 
 echo ""
 echo "✅ Scenario 1 complete!"

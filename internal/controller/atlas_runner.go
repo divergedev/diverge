@@ -51,7 +51,7 @@ func (r *EnvironmentReconciler) ensureAtlasCR(ctx context.Context, env *divergei
 	t := true
 	u.SetOwnerReferences([]metav1.OwnerReference{
 		{
-			APIVersion:         "diverge.io/v1alpha1",
+			APIVersion:         "divergedev.com/v1alpha1",
 			Kind:               "Environment",
 			Name:               env.Name,
 			UID:                env.UID,

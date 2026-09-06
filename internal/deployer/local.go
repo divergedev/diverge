@@ -67,8 +67,8 @@ func (d *LocalDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) e
 	port := int32(portNum)
 
 	labels := map[string]string{
-		"diverge.io/managed-by":  "diverge",
-		"diverge.io/environment": env.Name,
+		"divergedev.com/managed-by":  "diverge",
+		"divergedev.com/environment": env.Name,
 	}
 
 	// Create or Update Headless Service

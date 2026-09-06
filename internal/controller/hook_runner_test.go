@@ -77,7 +77,7 @@ func TestBuildJob(t *testing.T) {
 
 	require.Len(t, job.OwnerReferences, 1)
 	assert.Equal(t, "test-env", job.OwnerReferences[0].Name)
-	assert.Equal(t, "diverge.io/v1alpha1", job.OwnerReferences[0].APIVersion)
+	assert.Equal(t, "divergedev.com/v1alpha1", job.OwnerReferences[0].APIVersion)
 }
 
 func TestCreateDSNSecret(t *testing.T) {

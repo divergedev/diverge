@@ -169,7 +169,7 @@ Request routing for "order-api":
   Header: x-diverge-env propagated at each hop ✓
 
   ⚠ Ensure intermediate services propagate the routing header.
-    See: https://docs.diverge.dev/guides/header-propagation
+    See: https://docs.divergedev.com/guides/header-propagation
 ```
 
 ### 4. Visualize Service Topology (`graph show`)
