@@ -5,9 +5,11 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -20,57 +22,125 @@ var ErrNamedTargetPortNotFound = fmt.Errorf("named target port not found in pod 
 
 // serverLabelSelectors are tried in order until one matches a Service.
 //
-// The Helm chart labels the server app.kubernetes.io/name=<fullname> (default
-// "diverge") and distinguishes it with app.kubernetes.io/component=server, so
-// selecting on name=diverge-server alone never matches a chart install. The
-// legacy selector is kept first so hand-rolled manifests keep working.
-//
-// A chart installed with nameOverride set matches neither; pass --server
-// explicitly in that case.
+//  1. app.kubernetes.io/part-of=diverge,app.kubernetes.io/component=server:
+//     Standard chart label, invariant to nameOverride and release name.
+//  2. app.kubernetes.io/name=diverge-server:
+//     Legacy selector for hand-rolled manifests.
+//  3. app.kubernetes.io/name=diverge,app.kubernetes.io/component=server:
+//     Chart fullname matching default chart install.
+//  4. app.kubernetes.io/component=server:
+//     Fallback matching any server component in Diverge namespaces.
 var serverLabelSelectors = []string{
+	"app.kubernetes.io/part-of=diverge,app.kubernetes.io/component=server",
 	"app.kubernetes.io/name=diverge-server",
 	"app.kubernetes.io/name=diverge,app.kubernetes.io/component=server",
+	"app.kubernetes.io/component=server",
 }
 
-func discoverServer(ctx context.Context, k8sClient kubernetes.Interface, restConfig *rest.Config) (serverAddr string, stopChan chan struct{}, err error) {
-	listCtx, listCancel := context.WithTimeout(ctx, 10*time.Second)
-	defer listCancel()
+// ServerDiscoverer discovers a running Diverge server in Kubernetes and establishes access.
+type ServerDiscoverer interface {
+	Discover(ctx context.Context) (serverAddr string, stopChan chan struct{}, err error)
+}
 
-	// Find the server Service, remembering which selector matched so the Pod
-	// lookup below is consistent with it.
-	var svc corev1.Service
-	var matchedSelector string
+// K8sServerDiscoverer locates the Diverge server in a Kubernetes cluster using label selectors
+// across candidate namespaces and sets up a local port-forward to an active pod.
+type K8sServerDiscoverer struct {
+	K8sClient  kubernetes.Interface
+	RestConfig *rest.Config
+	Namespace  string // Target or active namespace from kubeconfig
+}
+
+// candidateNamespaces returns the ordered list of namespaces to check when
+// cluster-scoped listing is forbidden by RBAC.
+func (d *K8sServerDiscoverer) candidateNamespaces() []string {
+	seen := make(map[string]bool)
+	var list []string
+
+	add := func(ns string) {
+		ns = strings.TrimSpace(ns)
+		if ns != "" && !seen[ns] {
+			seen[ns] = true
+			list = append(list, ns)
+		}
+	}
+
+	add(d.Namespace)
+	add("diverge-system")
+	add("diverge")
+	add("default")
+
+	return list
+}
+
+func (d *K8sServerDiscoverer) findService(ctx context.Context) (*corev1.Service, string, error) {
 	for _, selector := range serverLabelSelectors {
-		svcs, listErr := k8sClient.CoreV1().Services("").List(listCtx, metav1.ListOptions{
+		// 1. Try cluster-wide listing
+		svcs, listErr := d.K8sClient.CoreV1().Services("").List(ctx, metav1.ListOptions{
 			LabelSelector: selector,
 		})
-		if listErr != nil {
-			return "", nil, fmt.Errorf("failed to list services: %w", listErr)
+		if listErr == nil {
+			if len(svcs.Items) > 0 {
+				return &svcs.Items[0], selector, nil
+			}
+			continue
 		}
-		if len(svcs.Items) > 0 {
-			svc = svcs.Items[0]
-			matchedSelector = selector
-			break
+
+		// 2. If cluster-scoped listing is forbidden by RBAC, try candidate namespaces
+		if apierrors.IsForbidden(listErr) {
+			for _, ns := range d.candidateNamespaces() {
+				nsSvcs, nsErr := d.K8sClient.CoreV1().Services(ns).List(ctx, metav1.ListOptions{
+					LabelSelector: selector,
+				})
+				if nsErr == nil && len(nsSvcs.Items) > 0 {
+					return &nsSvcs.Items[0], selector, nil
+				}
+			}
+			continue
 		}
-	}
-	if matchedSelector == "" {
-		return "", nil, ErrServerNotFound
+
+		return nil, "", fmt.Errorf("failed to list services: %w", listErr)
 	}
 
-	pods, err := k8sClient.CoreV1().Pods(svc.Namespace).List(listCtx, metav1.ListOptions{
-		LabelSelector: matchedSelector,
+	return nil, "", ErrServerNotFound
+}
+
+func (d *K8sServerDiscoverer) findActivePod(ctx context.Context, ns, selector string) (*corev1.Pod, error) {
+	pods, err := d.K8sClient.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: selector,
 		FieldSelector: "status.phase=Running",
 	})
 	if err != nil {
-		return "", nil, fmt.Errorf("failed to list pods: %w", err)
+		return nil, fmt.Errorf("failed to list pods: %w", err)
 	}
-	if len(pods.Items) == 0 {
-		return "", nil, fmt.Errorf("diverge server pod not found or not running")
+
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		// Skip terminating pods during rollouts
+		if pod.DeletionTimestamp == nil {
+			return pod, nil
+		}
 	}
-	pod := pods.Items[0]
+
+	return nil, fmt.Errorf("diverge server pod not found or not running")
+}
+
+// Discover locates the Diverge server and starts a port-forward.
+func (d *K8sServerDiscoverer) Discover(ctx context.Context) (serverAddr string, stopChan chan struct{}, err error) {
+	listCtx, listCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer listCancel()
+
+	svc, matchedSelector, err := d.findService(listCtx)
+	if err != nil {
+		return "", nil, err
+	}
+
+	pod, err := d.findActivePod(listCtx, svc.Namespace, matchedSelector)
+	if err != nil {
+		return "", nil, err
+	}
 
 	// Resolve remote port from service spec, handling named TargetPort
-	remotePort, err := resolveRemotePort(svc, pod)
+	remotePort, err := resolveRemotePort(*svc, *pod)
 	if err != nil {
 		return "", nil, err
 	}
@@ -79,12 +149,12 @@ func discoverServer(ctx context.Context, k8sClient kubernetes.Interface, restCon
 	pfCtx, pfCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer pfCancel()
 
-	transport, upgrader, err := spdy.RoundTripperFor(restConfig)
+	transport, upgrader, err := spdy.RoundTripperFor(d.RestConfig)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to create round tripper: %w", err)
 	}
 
-	req := k8sClient.CoreV1().RESTClient().Post().
+	req := d.K8sClient.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Namespace(pod.Namespace).
 		Name(pod.Name).
@@ -129,6 +199,15 @@ func discoverServer(ctx context.Context, k8sClient kubernetes.Interface, restCon
 	}
 
 	return fmt.Sprintf("http://localhost:%d", ports[0].Local), stopCh, nil
+}
+
+// discoverServer is a convenience wrapper around K8sServerDiscoverer for backward compatibility.
+func discoverServer(ctx context.Context, k8sClient kubernetes.Interface, restConfig *rest.Config) (serverAddr string, stopChan chan struct{}, err error) {
+	d := &K8sServerDiscoverer{
+		K8sClient:  k8sClient,
+		RestConfig: restConfig,
+	}
+	return d.Discover(ctx)
 }
 
 // resolveRemotePort determines the remote port to forward to from the service
