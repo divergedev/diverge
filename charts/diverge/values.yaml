@@ -5,7 +5,7 @@ image:
   tag: ""  # defaults to .Chart.AppVersion
   pullPolicy: IfNotPresent
 
-routingProvider: gateway  # gateway or istio
+routingProvider: gateway  # gateway, istio, composite, noop, or comma-separated e.g. "gateway,istio"
 
 resources:
   limits:

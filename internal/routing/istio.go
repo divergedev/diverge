@@ -61,7 +61,8 @@ func (r *IstioRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment) 
 		if err != nil {
 			return fmt.Errorf("invalid DevIP %q: %w", env.Spec.Routing.DevIP, err)
 		}
-		ipBlocks = append(ipBlocks, fmt.Sprintf("%s/32", ip.String()))
+		prefix := netip.PrefixFrom(ip, ip.BitLen())
+		ipBlocks = append(ipBlocks, prefix.String())
 	}
 
 	rules := []interface{}{}
@@ -77,13 +78,20 @@ func (r *IstioRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment) 
 		})
 	}
 
+	principals := []interface{}{
+		fmt.Sprintf("cluster.local/ns/%s/sa/*", targetNS),
+	}
+	if env.Namespace != targetNS && env.Namespace != "" {
+		principals = append(principals, fmt.Sprintf("cluster.local/ns/%s/sa/*", env.Namespace))
+	}
+	// Allow ingress gateway principals to deliver routed traffic into the preview
+	principals = append(principals, "cluster.local/ns/istio-system/sa/*")
+
 	rules = append(rules, map[string]interface{}{
 		"from": []interface{}{
 			map[string]interface{}{
 				"source": map[string]interface{}{
-					"principals": []interface{}{
-						fmt.Sprintf("cluster.local/ns/%s/sa/*", targetNS),
-					},
+					"principals": principals,
 				},
 			},
 		},

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/pkg/registry"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -82,4 +83,50 @@ func TestCompositeRouter_GetExternalURL(t *testing.T) {
 	c := &CompositeRouter{Routers: map[string]Router{"r1": r1, "r2": r2}}
 	url := c.GetExternalURL(nil)
 	assert.Equal(t, "http://test", url)
+}
+
+func TestNewRouter(t *testing.T) {
+	t.Run("default empty spec", func(t *testing.T) {
+		r, err := NewRouter("", registry.Deps{})
+		require.NoError(t, err)
+		_, ok := r.(*GatewayRouter)
+		assert.True(t, ok, "empty spec should default to GatewayRouter")
+	})
+
+	t.Run("single provider", func(t *testing.T) {
+		r, err := NewRouter("noop", registry.Deps{})
+		require.NoError(t, err)
+		_, ok := r.(*NoopRouter)
+		assert.True(t, ok, "spec 'noop' should return NoopRouter directly")
+	})
+
+	t.Run("comma-separated providers", func(t *testing.T) {
+		r, err := NewRouter("gateway,istio", registry.Deps{})
+		require.NoError(t, err)
+		comp, ok := r.(*CompositeRouter)
+		require.True(t, ok, "comma-separated providers should produce CompositeRouter")
+		assert.Len(t, comp.Routers, 2)
+		_, hasGateway := comp.Routers["gateway"].(*GatewayRouter)
+		_, hasIstio := comp.Routers["istio"].(*IstioRouter)
+		assert.True(t, hasGateway, "should contain gateway router")
+		assert.True(t, hasIstio, "should contain istio router")
+	})
+
+	t.Run("comma-separated with whitespace", func(t *testing.T) {
+		r, err := NewRouter(" noop , istio ", registry.Deps{})
+		require.NoError(t, err)
+		comp, ok := r.(*CompositeRouter)
+		require.True(t, ok)
+		assert.Len(t, comp.Routers, 2)
+		_, hasNoop := comp.Routers["noop"].(*NoopRouter)
+		_, hasIstio := comp.Routers["istio"].(*IstioRouter)
+		assert.True(t, hasNoop)
+		assert.True(t, hasIstio)
+	})
+
+	t.Run("invalid sub-router returns error", func(t *testing.T) {
+		_, err := NewRouter("gateway,nonexistent-router", registry.Deps{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "creating composite sub-router \"nonexistent-router\"")
+	})
 }
