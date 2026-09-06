@@ -3,17 +3,19 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "diverge.fullname" . }}-proxy
-  namespace: {{ .Release.Namespace }}
   labels:
+    {{- include "diverge.labels" . | nindent 4 }}
     app.kubernetes.io/component: proxy
 spec:
   replicas: {{ .Values.proxy.replicaCount }}
   selector:
     matchLabels:
+      {{- include "diverge.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: proxy
   template:
     metadata:
       labels:
+        {{- include "diverge.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: proxy
     spec:
       serviceAccountName: {{ .Values.serviceAccount.name | default (include "diverge.fullname" .) }}
@@ -23,8 +25,8 @@ spec:
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
             runAsNonRoot: true
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          image: {{ include "diverge.proxy.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy | default "IfNotPresent" }}
           command: ["/diverge-proxy"]
           args:
             - --port={{ .Values.proxy.port }}

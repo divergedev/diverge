@@ -85,6 +85,9 @@ affinity: {}
 proxy:
   enabled: false
   replicaCount: 1
+  image:
+    repository: ""  # defaults to image.repository
+    tag: ""  # defaults to image.tag, then .Chart.AppVersion
   port: 8090
   previewDomain: ""
   upstream: ""
@@ -103,7 +106,7 @@ proxy:
 
 activatorProxy:
   enabled: false
-  replicas: 1
+  replicaCount: 1
   image:
     repository: ghcr.io/divergedev/activator-proxy
     tag: ""  # defaults to .Chart.AppVersion

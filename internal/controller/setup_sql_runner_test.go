@@ -150,3 +150,31 @@ func TestRunSetupSQLJob_EmptySQL(t *testing.T) {
 	err := r.runSetupSQLJob(context.Background(), env, "", "postgres://admin:pass@localhost/db")
 	assert.NoError(t, err)
 }
+
+func TestDirectSetupRunner_RunSetupSQL(t *testing.T) {
+	mockExec := &mockSQLExecutor{}
+	runner := &DirectSetupRunner{Executor: mockExec}
+	env := &divergeiov1alpha1.Environment{}
+	err := runner.RunSetupSQL(context.Background(), env, "CREATE SCHEMA foo;", "postgres://admin:pass@localhost/db")
+	assert.NoError(t, err)
+	assert.Equal(t, "CREATE SCHEMA foo;", mockExec.executedQuery)
+}
+
+func TestJobSetupRunner_Delegates(t *testing.T) {
+	scheme := setupSQLTestScheme()
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &EnvironmentReconciler{Client: c}
+
+	runner := &JobSetupRunner{Reconciler: r}
+	env := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-env",
+			Namespace: "default",
+			UID:       types.UID("test-uid"),
+		},
+	}
+
+	err := runner.RunSetupSQL(context.Background(), env, "CREATE SCHEMA foo;", "postgres://admin:pass@localhost/db")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrHookInProgress)
+}
