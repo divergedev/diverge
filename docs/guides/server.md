@@ -153,6 +153,7 @@ The server binary ([`cmd/server/main.go`](file:///Users/ab/code/divergedev/diver
 | `--cors-max-age` | `int` | `86400` | CORS preflight cache duration in seconds. |
 | `--tls-cert-file` | `string` | `""` | Optional path to TLS certificate file. |
 | `--tls-key-file` | `string` | `""` | Optional path to TLS private key file. |
+| `--secure-cookies` | `string` | `auto` | Set the `Secure` flag on session cookies: `auto` (when server terminates TLS, or OIDC redirect URL is `https`), `true`, or `false`. |
 
 ### Helm Values Mapping
 

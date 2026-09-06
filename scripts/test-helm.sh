@@ -27,4 +27,12 @@ if ! echo "$output" | grep -A4 '^kind: RoleBinding$' | grep -q 'namespace: test-
   echo 'FAIL: RoleBinding not in expected namespace'
   exit 1
 fi
+
+echo '=== Helm template (server secureCookies flag) ==='
+server_output=$(helm template diverge charts/diverge/ --set server.enabled=true --set server.auth.secureCookies=true)
+if ! echo "$server_output" | grep -q -- '--secure-cookies=true'; then
+  echo 'FAIL: --secure-cookies=true not found in server deployment args'
+  exit 1
+fi
+
 echo '✅ All Helm tests passed'

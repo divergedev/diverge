@@ -248,12 +248,17 @@ func main() {
 		authProvider = composite
 
 		// Create OIDC HTTP handler
-		secureCookies, secErr := server.ResolveSecureCookies(secureCookiesMode, tlsCertFile != "", oidcRedirectURL)
+		cookieResolver := server.CookiePolicyResolver{
+			Mode:       secureCookiesMode,
+			TLSEnabled: tlsCertFile != "",
+			PublicURL:  oidcRedirectURL,
+		}
+		cookiePolicy, secErr := cookieResolver.Resolve()
 		if secErr != nil {
 			logger.Error("invalid secure cookie configuration", "err", secErr)
 			os.Exit(1)
 		}
-		if !secureCookies {
+		if !cookiePolicy.Secure {
 			logger.Warn("session cookies will not have the Secure flag",
 				"hint", "set --secure-cookies=true when TLS is terminated in front of this server")
 		}
@@ -266,7 +271,7 @@ func main() {
 			ProviderName:   oidcProviderName,
 			SessionManager: sessionMgr,
 			SessionMaxAge:  sessionMaxAge,
-			SecureCookies:  secureCookies,
+			SecureCookies:  cookiePolicy.Secure,
 			UsernameClaim:  oidcUsernameClaim,
 			GroupsClaim:    oidcGroupsClaim,
 			Logger:         logger,

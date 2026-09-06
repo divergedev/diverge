@@ -92,10 +92,24 @@ func TestResolveSecureCookies(t *testing.T) {
 			got, err := ResolveSecureCookies(tt.mode, tt.tlsEnabled, tt.redirectURL)
 			if tt.wantErr {
 				require.Error(t, err)
+				_, resolverErr := CookiePolicyResolver{
+					Mode:       tt.mode,
+					TLSEnabled: tt.tlsEnabled,
+					PublicURL:  tt.redirectURL,
+				}.Resolve()
+				require.Error(t, resolverErr)
 				return
 			}
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
+
+			policy, err := CookiePolicyResolver{
+				Mode:       tt.mode,
+				TLSEnabled: tt.tlsEnabled,
+				PublicURL:  tt.redirectURL,
+			}.Resolve()
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, policy.Secure)
 		})
 	}
 }
