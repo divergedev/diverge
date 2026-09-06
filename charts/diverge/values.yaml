@@ -145,6 +145,8 @@ server:
       - diverge-server
     maxStreams: 250
     maxStreamsPerUser: 20
+    # -- Secure flag on session cookies: 'auto' (when server terminates TLS, or OIDC redirect URL is https), 'true', or 'false'.
+    secureCookies: "auto"
     # -- OIDC SSO configuration. When enabled, users can log in via an
     # OpenID Connect provider (Okta, Google, Auth0, Keycloak, etc.)
     oidc:

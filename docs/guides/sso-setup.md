@@ -261,6 +261,18 @@ server:
         key: "session-secret"
 ```
 
+### Secure Cookies
+
+By default (`auto`), session cookies are issued with the `Secure` flag if TLS is configured directly on the server pod or if `redirectUrl` begins with `https://` (which covers TLS termination at an ingress or gateway).
+
+To explicitly override this behavior, configure `secureCookies` in Helm values:
+
+```yaml
+server:
+  auth:
+    secureCookies: "auto"  # "auto" | "true" | "false"
+```
+
 ---
 
 ## Troubleshooting

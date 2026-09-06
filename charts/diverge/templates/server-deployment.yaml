@@ -39,6 +39,9 @@ spec:
             - --max-streams-per-user={{ .Values.server.auth.maxStreamsPerUser }}
             - "--cors-allowed-origins={{ .Values.server.cors.allowedOrigins }}"
             - --cors-max-age={{ .Values.server.cors.maxAge }}
+            {{- if .Values.server.auth.secureCookies }}
+            - --secure-cookies={{ .Values.server.auth.secureCookies }}
+            {{- end }}
             {{- if .Values.server.auth.oidc.enabled }}
             - --oidc-issuer-url={{ .Values.server.auth.oidc.issuerUrl }}
             - --oidc-client-id={{ .Values.server.auth.oidc.clientId }}
