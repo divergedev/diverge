@@ -508,3 +508,69 @@ func TestGenerateEnvNameTruncation(t *testing.T) {
 	// Should not end with a hyphen
 	assert.NotEqual(t, '-', name[len(name)-1])
 }
+
+func TestBuildEnvironmentWithAtlas(t *testing.T) {
+	gitCtx := &git.GitContext{
+		Provider: "github",
+		Project:  "divergedev/diverge",
+		Branch:   "feat/atlas",
+	}
+
+	blocking := true
+	resolved := &config.ResolvedSettings{
+		EnvironmentSettings: config.EnvironmentSettings{
+			Deploy: config.DeploySettings{Mode: "delta"},
+			Database: config.DatabaseSettings{
+				Mode: "schema",
+				Atlas: &config.AtlasSettings{
+					Mode:               "versioned",
+					Engine:             "job",
+					Image:              "custom-atlas:latest",
+					MigrationConfigMap: "app-migrations",
+					Blocking:           &blocking,
+					Policy: &config.AtlasPolicySettings{
+						Destructive: "warn",
+					},
+				},
+			},
+		},
+	}
+
+	app := &App{Namespace: "default"}
+	env, err := buildEnvironment(context.Background(), "preview-mr-10", gitCtx, resolved, nil, app, 10)
+	require.NoError(t, err)
+
+	require.NotNil(t, env.Spec.Database.Atlas)
+	assert.Equal(t, "versioned", env.Spec.Database.Atlas.Mode)
+	assert.Equal(t, "job", env.Spec.Database.Atlas.Engine)
+	assert.Equal(t, "custom-atlas:latest", env.Spec.Database.Atlas.Image)
+	assert.Equal(t, "app-migrations", env.Spec.Database.Atlas.MigrationConfigMap)
+	assert.True(t, *env.Spec.Database.Atlas.Blocking)
+	require.NotNil(t, env.Spec.Database.Atlas.Policy)
+	assert.Equal(t, "warn", env.Spec.Database.Atlas.Policy.Destructive)
+}
+
+func TestBuildEnvironmentWithInvalidAtlas(t *testing.T) {
+	gitCtx := &git.GitContext{
+		Provider: "github",
+		Project:  "divergedev/diverge",
+		Branch:   "feat/invalid-atlas",
+	}
+
+	resolved := &config.ResolvedSettings{
+		EnvironmentSettings: config.EnvironmentSettings{
+			Deploy: config.DeploySettings{Mode: "delta"},
+			Database: config.DatabaseSettings{
+				Atlas: &config.AtlasSettings{
+					Mode: "unsupported-mode",
+				},
+			},
+		},
+	}
+
+	app := &App{Namespace: "default"}
+	env, err := buildEnvironment(context.Background(), "preview-mr-11", gitCtx, resolved, nil, app, 11)
+	assert.Error(t, err)
+	assert.Nil(t, env)
+	assert.Contains(t, err.Error(), "invalid atlas configuration")
+}

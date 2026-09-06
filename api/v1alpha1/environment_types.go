@@ -180,6 +180,15 @@ type AtlasSpec struct {
 	// Policy configures Atlas safety policies.
 	// +optional
 	Policy *AtlasPolicySpec `json:"policy,omitempty"`
+	// Engine selects the execution engine: "operator" (Atlas CRDs) or "job" (standalone K8s Job).
+	// +kubebuilder:validation:Enum=operator;job
+	// +kubebuilder:default=operator
+	// +optional
+	Engine string `json:"engine,omitempty"`
+	// Image overrides the container image used for standalone Atlas jobs.
+	// Defaults to "arigaio/atlas:latest".
+	// +optional
+	Image string `json:"image,omitempty"`
 }
 
 // AtlasPolicySpec configures Atlas Operator safety policies.

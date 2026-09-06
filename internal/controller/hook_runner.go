@@ -27,15 +27,17 @@ const (
 
 // HookJobConfig holds the parameters for creating a hook Job.
 type HookJobConfig struct {
-	JobName   string
-	Namespace string
-	Image     string
-	Args      []string
-	EnvVars   []corev1.EnvVar
-	EnvFrom   []corev1.EnvFromSource
-	Timeout   int32
-	Owner     metav1.Object
-	Labels    map[string]string
+	JobName      string
+	Namespace    string
+	Image        string
+	Args         []string
+	EnvVars      []corev1.EnvVar
+	EnvFrom      []corev1.EnvFromSource
+	Volumes      []corev1.Volume
+	VolumeMounts []corev1.VolumeMount
+	Timeout      int32
+	Owner        metav1.Object
+	Labels       map[string]string
 }
 
 // buildJob creates a K8s Job spec from HookJobConfig.
@@ -79,7 +81,7 @@ func buildJob(cfg HookJobConfig) *batchv1.Job {
 							Type: corev1.SeccompProfileTypeRuntimeDefault,
 						},
 					},
-					Volumes: []corev1.Volume{
+					Volumes: append([]corev1.Volume{
 						{
 							Name: "tmp",
 							VolumeSource: corev1.VolumeSource{
@@ -88,7 +90,7 @@ func buildJob(cfg HookJobConfig) *batchv1.Job {
 								},
 							},
 						},
-					},
+					}, cfg.Volumes...),
 					Containers: []corev1.Container{
 						{
 							Name:    "hook",
@@ -104,12 +106,12 @@ func buildJob(cfg HookJobConfig) *batchv1.Job {
 									Drop: []corev1.Capability{"ALL"},
 								},
 							},
-							VolumeMounts: []corev1.VolumeMount{
+							VolumeMounts: append([]corev1.VolumeMount{
 								{
 									Name:      "tmp",
 									MountPath: "/tmp",
 								},
-							},
+							}, cfg.VolumeMounts...),
 							Resources: corev1.ResourceRequirements{
 								Requests: corev1.ResourceList{
 									corev1.ResourceCPU:    resource.MustParse("100m"),

@@ -427,3 +427,96 @@ func TestResolveBannerSettings_InheritanceAndOverrides(t *testing.T) {
 		assert.NoError(t, res.Validate())
 	})
 }
+
+func TestAtlasSettings_ParseAndResolve(t *testing.T) {
+	yamlContent := "version: \"1\"\n" +
+		"defaults:\n" +
+		"  database:\n" +
+		"    mode: schema\n" +
+		"    atlas:\n" +
+		"      mode: versioned\n" +
+		"      engine: job\n" +
+		"      migration_config_map: base-migrations\n" +
+		"      blocking: true\n" +
+		"      policy:\n" +
+		"        destructive: error\n" +
+		"environments:\n" +
+		"  qa:\n" +
+		"    database:\n" +
+		"      atlas:\n" +
+		"        engine: operator\n" +
+		"        policy:\n" +
+		"          destructive: warn\n" +
+		"  declarative:\n" +
+		"    database:\n" +
+		"      atlas:\n" +
+		"        mode: declarative\n" +
+		"        schema_config_map: my-schema\n" +
+		"        policy:\n" +
+		"          destructive: allow\n" +
+		"label_overrides:\n" +
+		"  \"db/custom-image\":\n" +
+		"    database:\n" +
+		"      atlas:\n" +
+		"        image: custom/atlas:v1\n"
+	cfg, err := Parse([]byte(yamlContent))
+	require.NoError(t, err)
+	require.NoError(t, cfg.Validate())
+
+	t.Run("inherits defaults", func(t *testing.T) {
+		res := cfg.Resolve("preview", nil)
+		require.NotNil(t, res.Database.Atlas)
+		assert.Equal(t, "versioned", res.Database.Atlas.Mode)
+		assert.Equal(t, "job", res.Database.Atlas.Engine)
+		assert.Equal(t, "base-migrations", res.Database.Atlas.MigrationConfigMap)
+		assert.True(t, *res.Database.Atlas.Blocking)
+		assert.Equal(t, "error", res.Database.Atlas.Policy.Destructive)
+	})
+
+	t.Run("environment override", func(t *testing.T) {
+		res := cfg.Resolve("qa", nil)
+		require.NotNil(t, res.Database.Atlas)
+		assert.Equal(t, "versioned", res.Database.Atlas.Mode)
+		assert.Equal(t, "operator", res.Database.Atlas.Engine)
+		assert.Equal(t, "base-migrations", res.Database.Atlas.MigrationConfigMap)
+		assert.Equal(t, "warn", res.Database.Atlas.Policy.Destructive)
+	})
+
+	t.Run("declarative mode override", func(t *testing.T) {
+		res := cfg.Resolve("declarative", nil)
+		require.NotNil(t, res.Database.Atlas)
+		assert.Equal(t, "declarative", res.Database.Atlas.Mode)
+		assert.Equal(t, "my-schema", res.Database.Atlas.SchemaConfigMap)
+		assert.Equal(t, "allow", res.Database.Atlas.Policy.Destructive)
+	})
+
+	t.Run("label override image", func(t *testing.T) {
+		res := cfg.Resolve("qa", []string{"db/custom-image"})
+		require.NotNil(t, res.Database.Atlas)
+		assert.Equal(t, "custom/atlas:v1", res.Database.Atlas.Image)
+		assert.Equal(t, "operator", res.Database.Atlas.Engine)
+	})
+}
+
+func TestAtlasSettings_Validation(t *testing.T) {
+	t.Run("invalid mode", func(t *testing.T) {
+		yamlContent := "version: \"1\"\ndefaults:\n  database:\n    atlas:\n      mode: invalid-mode\n"
+		cfg, err := Parse([]byte(yamlContent))
+		require.NoError(t, err)
+		assert.ErrorContains(t, cfg.Validate(), "atlas mode must be")
+	})
+
+	t.Run("invalid engine", func(t *testing.T) {
+		yamlContent := "version: \"1\"\ndefaults:\n  database:\n    atlas:\n      engine: invalid-engine\n"
+		cfg, err := Parse([]byte(yamlContent))
+		require.NoError(t, err)
+		assert.ErrorContains(t, cfg.Validate(), "atlas engine must be")
+	})
+
+	t.Run("invalid policy destructive", func(t *testing.T) {
+		yamlContent := "version: \"1\"\ndefaults:\n  database:\n    atlas:\n      policy:\n        destructive: invalid-policy\n"
+		cfg, err := Parse([]byte(yamlContent))
+		require.NoError(t, err)
+		assert.ErrorContains(t, cfg.Validate(), "atlas policy destructive must be")
+	})
+}

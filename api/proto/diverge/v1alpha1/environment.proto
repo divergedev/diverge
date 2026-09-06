@@ -90,6 +90,8 @@ message AtlasSpec {
   string schema_config_map = 3;
   bool blocking = 4;
   AtlasPolicySpec policy = 5;
+  string engine = 6;
+  string image = 7;
 }
 
 message PostDeploySpec {
