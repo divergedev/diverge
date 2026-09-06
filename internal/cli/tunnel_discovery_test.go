@@ -2,14 +2,17 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes/fake"
 	coretesting "k8s.io/client-go/testing"
@@ -219,6 +222,7 @@ func chartServerLabels() map[string]string {
 		"app.kubernetes.io/instance":  "diverge",
 		"app.kubernetes.io/component": "server",
 		"app.kubernetes.io/version":   "v0.9.0",
+		"app.kubernetes.io/part-of":   "diverge",
 	}
 }
 
@@ -299,4 +303,149 @@ func TestDiscoverServer_LegacyLabelsStillWork(t *testing.T) {
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, ErrServerNotFound)
 	assert.Contains(t, err.Error(), "pod not found or not running")
+}
+
+func TestDiscoverServer_PartOfLabelWithCustomNameOverride(t *testing.T) {
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "custom-diverge-server",
+			Namespace: "diverge-system",
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      "my-custom-release",
+				"app.kubernetes.io/part-of":   "diverge",
+				"app.kubernetes.io/component": "server",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Ports: []corev1.ServicePort{{Port: 8443, TargetPort: intstr.FromString("grpc")}},
+		},
+	}
+	client := fake.NewSimpleClientset(svc)
+
+	_, _, err := discoverServer(context.Background(), client, nil)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrServerNotFound,
+		"part-of=diverge Service should be discovered despite name override")
+	assert.Contains(t, err.Error(), "pod not found or not running")
+}
+
+func TestDiscoverServer_RBACForbiddenClusterList_FallsBackToCandidateNamespaces(t *testing.T) {
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "diverge-server",
+			Namespace: "diverge-system",
+			Labels:    chartServerLabels(),
+		},
+		Spec: corev1.ServiceSpec{
+			Ports: []corev1.ServicePort{{Port: 8443, TargetPort: intstr.FromString("grpc")}},
+		},
+	}
+	client := fake.NewSimpleClientset(svc)
+
+	// Intercept cluster-wide service list and return 403 Forbidden
+	client.PrependReactor("list", "services", func(action coretesting.Action) (bool, runtime.Object, error) {
+		listAction := action.(coretesting.ListAction)
+		if listAction.GetNamespace() == "" {
+			return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "services"}, "", fmt.Errorf("cluster-wide listing forbidden"))
+		}
+		// Allow namespace-specific listing to pass through
+		return false, nil, nil
+	})
+
+	discoverer := &K8sServerDiscoverer{
+		K8sClient: client,
+		Namespace: "test-ns",
+	}
+
+	_, _, err := discoverer.Discover(context.Background())
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrServerNotFound,
+		"fallback to candidate namespaces should discover service in diverge-system")
+	assert.Contains(t, err.Error(), "pod not found or not running")
+}
+
+func TestDiscoverServer_SkipsTerminatingPod(t *testing.T) {
+	now := metav1.Now()
+	terminatingPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "diverge-server-terminating",
+			Namespace:         "diverge-system",
+			Labels:            chartServerLabels(),
+			DeletionTimestamp: &now,
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+		},
+	}
+	activePod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "diverge-server-active",
+			Namespace: "diverge-system",
+			Labels:    chartServerLabels(),
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+		},
+	}
+
+	discoverer := &K8sServerDiscoverer{
+		K8sClient: fake.NewSimpleClientset(terminatingPod, activePod),
+	}
+
+	pod, err := discoverer.findActivePod(context.Background(), "diverge-system", "app.kubernetes.io/component=server")
+	require.NoError(t, err)
+	assert.Equal(t, "diverge-server-active", pod.Name, "should select active non-terminating pod")
+}
+
+func TestDiscoverServer_AllPodsTerminating_ReturnsError(t *testing.T) {
+	now := metav1.Now()
+	terminatingPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "diverge-server-terminating",
+			Namespace:         "diverge-system",
+			Labels:            chartServerLabels(),
+			DeletionTimestamp: &now,
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+		},
+	}
+
+	discoverer := &K8sServerDiscoverer{
+		K8sClient: fake.NewSimpleClientset(terminatingPod),
+	}
+
+	_, err := discoverer.findActivePod(context.Background(), "diverge-system", "app.kubernetes.io/component=server")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pod not found or not running")
+}
+
+type mockDiscoverer struct {
+	addr    string
+	stopCh  chan struct{}
+	err     error
+	invoked bool
+}
+
+func (m *mockDiscoverer) Discover(ctx context.Context) (string, chan struct{}, error) {
+	m.invoked = true
+	return m.addr, m.stopCh, m.err
+}
+
+func TestDev_WithServerDiscovererOption(t *testing.T) {
+	mock := &mockDiscoverer{
+		addr:   "http://mock-server:8080",
+		stopCh: make(chan struct{}),
+	}
+	defer close(mock.stopCh)
+
+	opt := WithServerDiscoverer(mock)
+	devOpts := &DevOptions{}
+	opt(devOpts)
+
+	assert.Equal(t, mock, devOpts.Discoverer)
+	addr, _, err := devOpts.Discoverer.Discover(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "http://mock-server:8080", addr)
+	assert.True(t, mock.invoked)
 }

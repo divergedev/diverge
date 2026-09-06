@@ -38,6 +38,7 @@ const (
 // DevOptions holds optional configuration for the dev command.
 type DevOptions struct {
 	Detector       EnvironmentDetector
+	Discoverer     ServerDiscoverer
 	resolvedEnvMap map[string]string
 }
 
@@ -47,6 +48,11 @@ type DevOption func(*DevOptions)
 // WithEnvironmentDetector allows injecting a custom EnvironmentDetector for testing.
 func WithEnvironmentDetector(d EnvironmentDetector) DevOption {
 	return func(o *DevOptions) { o.Detector = d }
+}
+
+// WithServerDiscoverer allows injecting a custom ServerDiscoverer for testing.
+func WithServerDiscoverer(d ServerDiscoverer) DevOption {
+	return func(o *DevOptions) { o.Discoverer = d }
 }
 
 func newDevCmd(app *App) *cobra.Command {
@@ -264,7 +270,15 @@ dev:
 
 			var stopCh chan struct{}
 			var dErr error
-			sAddr, stopCh, dErr = discoverServer(ctx, clientset, restCfg)
+			discoverer := devOpts.Discoverer
+			if discoverer == nil {
+				discoverer = &K8sServerDiscoverer{
+					K8sClient:  clientset,
+					RestConfig: restCfg,
+					Namespace:  p.App.Namespace,
+				}
+			}
+			sAddr, stopCh, dErr = discoverer.Discover(ctx)
 			if dErr != nil {
 				return fmt.Errorf("failed to discover server: %w", dErr)
 			}
