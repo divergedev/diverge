@@ -20,8 +20,7 @@
     },
     "routingProvider": {
       "type": "string",
-      "enum": ["gateway", "istio"],
-      "description": "Routing provider to use"
+      "description": "Routing provider to use (gateway, istio, composite, noop, or comma-separated list like gateway,istio)"
     },
     "resources": {
       "type": "object",

@@ -54,4 +54,11 @@ if [ "$controller_matches" -ne 3 ]; then
   exit 1
 fi
 
+echo '=== Helm template (comma-separated routingProvider) ==='
+multi_routing=$(helm template diverge charts/diverge/ --set 'routingProvider=gateway\,istio')
+if ! echo "$multi_routing" | grep -q -- '--routing-provider=gateway,istio'; then
+  echo 'FAIL: --routing-provider=gateway,istio not found in controller deployment args'
+  exit 1
+fi
+
 echo '✅ All Helm tests passed'

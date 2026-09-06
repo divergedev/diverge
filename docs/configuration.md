@@ -171,7 +171,7 @@ Diverge can be configured via CLI flags in the controller `main.go`:
 | Flag | Default | Description |
 |---|---|---|
 | `--deploy-provider` | `noop` | Deployment provider (`direct`, `argocd`, `knative`, `noop`). |
-| `--routing-provider` | `gateway` | Routing provider (`gateway`, `istio`, `composite`, `noop`). |
+| `--routing-provider` | `gateway` | Routing provider (`gateway`, `istio`, `composite`, `noop`, or comma-separated list like `gateway,istio`). |
 | `--database-provider` | `none` | Database provider (`schema`, `none`). |
 | `--notifier-provider` | `noop` | Notification provider (`github`, `gitlab`, `noop`). |
 

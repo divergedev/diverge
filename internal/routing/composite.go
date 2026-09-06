@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
@@ -32,11 +33,22 @@ type CompositeRouter struct {
 	Routers map[string]Router // named routers: "sync", "async", etc.
 }
 
+// sortedNames returns the router names in alphabetical order for deterministic iteration.
+func (r *CompositeRouter) sortedNames() []string {
+	names := make([]string, 0, len(r.Routers))
+	for name := range r.Routers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 // Reconcile reconciles all sub-routers; partial success is possible, returns first error encountered.
 func (r *CompositeRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment) error {
 	var succeeded []string
 	failed := make(map[string]error)
-	for name, router := range r.Routers {
+	for _, name := range r.sortedNames() {
+		router := r.Routers[name]
 		if err := router.Reconcile(ctx, env); err != nil {
 			failed[name] = err
 		} else {
@@ -56,7 +68,8 @@ func (r *CompositeRouter) Reconcile(ctx context.Context, env *v1alpha1.Environme
 // Teardown performs its designated operation.
 func (r *CompositeRouter) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
 	var errs []error
-	for _, router := range r.Routers {
+	for _, name := range r.sortedNames() {
+		router := r.Routers[name]
 		if err := router.Teardown(ctx, env); err != nil {
 			errs = append(errs, err)
 		}
@@ -66,7 +79,8 @@ func (r *CompositeRouter) Teardown(ctx context.Context, env *v1alpha1.Environmen
 
 // GetExternalURL performs its designated operation.
 func (r *CompositeRouter) GetExternalURL(env *v1alpha1.Environment) string {
-	for _, router := range r.Routers {
+	for _, name := range r.sortedNames() {
+		router := r.Routers[name]
 		if url := router.GetExternalURL(env); url != "" {
 			return url
 		}

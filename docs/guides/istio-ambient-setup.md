@@ -5,28 +5,36 @@
 > header, and `GetExternalURL` returns an empty string for it. Header-based
 > preview routing — the mechanism that makes a preview a preview — requires the
 > `gateway` or `composite` provider and Gateway API, whichever mesh is in use.
-> Use `istio` alongside those for access control, not instead of them.
+> To use `istio` alongside `gateway`, specify them as a comma-separated list:
+> `--routing-provider=gateway,istio` (or `routingProvider: "gateway,istio"` in Helm values).
 
 ## Prerequisites
 - Kubernetes 1.28+
 - Istio 1.23+ with Ambient profile
-- Diverge controller deployed
+- Diverge controller deployed with `--routing-provider=gateway,istio`
 
 ## Installation
 
-### 1. Install Istio with Ambient Profile
+### 1. Configure the Controller for Gateway + Istio
+In your Helm values:
+```yaml
+routingProvider: "gateway,istio"
+```
+Or start the controller with `--routing-provider=gateway,istio`. This creates a composite router that manages Gateway API HTTPRoutes for preview traffic routing while maintaining Istio `AuthorizationPolicy` resources for access control.
+
+### 2. Install Istio with Ambient Profile
 ```bash
 istioctl install --set profile=ambient --skip-confirmation
 ```
 
-### 2. Enable Ambient Mode on Preview Namespaces
+### 3. Enable Ambient Mode on Preview Namespaces
 You must configure your `Environment` to set the `istio.io/dataplane-mode: ambient` label on the target namespace:
 ```yaml
 spec:
   namespaceLabels:
     istio.io/dataplane-mode: ambient
 ```
-### 3. Configure DevIP for AuthorizationPolicy
+### 4. Configure DevIP for AuthorizationPolicy
 Set the Tailscale IP in your Environment spec:
 ```yaml
 apiVersion: divergedev.com/v1alpha1
@@ -38,7 +46,7 @@ spec:
     devIP: "100.64.x.x"  # Your Tailscale IP
 ```
 
-### 4. Network Topology Requirements
+### 5. Network Topology Requirements
 
 > ⚠️ **IP Preservation**: The AuthorizationPolicy uses `ipBlocks` to identify
 > developer traffic. This requires source IP preservation:
@@ -46,7 +54,7 @@ spec:
 > - Or use PROXY protocol
 > - Configure `meshConfig.defaultConfig.gatewayTopology.numTrustedProxies`
 
-### 5. Waypoint Proxies
+### 6. Waypoint Proxies
 For L7 traffic management (HTTP method matching, request transformation):
 ```bash
 istioctl waypoint apply -n <preview-namespace>
@@ -57,11 +65,11 @@ waypoint. Header-based preview routing does: in ambient mode, L7 matching
 happens at a waypoint, and ztunnel alone will not do it. If previews are
 selected by header, install a waypoint for the preview namespace.
 
-### 6. Reaching Your Machine
+### 7. Reaching Your Machine
 
 The `devIP` above assumes the cluster can open a connection *to* the developer
 — a tailnet the nodes have joined, plus source IP preservation as described in
-step 4. Where nodes are not tailnet members (most managed clusters, including
+step 5. Where nodes are not tailnet members (most managed clusters, including
 GKE), that will not work. Use the ConnectRPC tunnel instead, which dials
 outward from your machine:
 

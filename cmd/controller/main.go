@@ -75,7 +75,7 @@ func main() {
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
 	flag.IntVar(&webhookPort, "webhook-port", 9443, "The port the webhook server binds to.")
-	flag.StringVar(&routingProvider, "routing-provider", "gateway", "The routing provider to use (istio|gateway|composite).")
+	flag.StringVar(&routingProvider, "routing-provider", "gateway", "The routing provider to use (gateway, istio, composite, noop, or comma-separated list like 'gateway,istio').")
 	flag.StringVar(&deployProvider, "deploy-provider", "noop", "Deployment provider (argocd|noop|direct|knative)")
 	flag.StringVar(&databaseProvider, "database-provider", "none", "Database provider (schema|none)")
 	flag.StringVar(&notifierProvider, "notifier-provider", "noop", "Notification provider (gitlab|github|noop)")
@@ -161,10 +161,7 @@ func main() {
 	}
 
 	var routerImpl routing.Router
-	if routingProvider == "" {
-		routingProvider = "gateway"
-	}
-	routerImpl, err = routing.Providers.Create(routingProvider, deps)
+	routerImpl, err = routing.NewRouter(routingProvider, deps)
 	if err != nil {
 		setupLog.Error(err, "creating router", "provider", routingProvider)
 		os.Exit(1)

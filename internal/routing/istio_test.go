@@ -2,6 +2,7 @@ package routing
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -156,4 +157,72 @@ func TestIstioRouter_GetExternalURL(t *testing.T) {
 	env := &v1alpha1.Environment{}
 	url := router.GetExternalURL(env)
 	assert.Equal(t, "", url)
+}
+
+func TestIstioRouter_Reconcile_IPv6AndSeparateNamespace(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = v1alpha1.AddToScheme(scheme)
+
+	mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{
+		{Group: "security.istio.io", Version: "v1"},
+	})
+	mapper.Add(schema.GroupVersionKind{Group: "security.istio.io", Version: "v1", Kind: "AuthorizationPolicy"}, meta.RESTScopeNamespace)
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithRESTMapper(mapper).WithInterceptorFuncs(interceptor.Funcs{
+		Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if patch.Type() == types.ApplyPatchType {
+				return cl.Create(ctx, obj)
+			}
+			return cl.Patch(ctx, obj, patch, opts...)
+		},
+	}).Build()
+	router := &IstioRouter{Client: c}
+
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ipv6-env",
+			Namespace: "base-ns",
+			UID:       "ipv6-uid",
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Routing: v1alpha1.EnvironmentRouting{
+				DevIP: "2001:db8::1",
+			},
+			Deploy: v1alpha1.EnvironmentDeploy{
+				Namespace: "create",
+			},
+		},
+	}
+
+	err := router.Reconcile(context.Background(), env)
+	require.NoError(t, err)
+
+	var policyList unstructured.UnstructuredList
+	policyList.SetAPIVersion("security.istio.io/v1")
+	policyList.SetKind("AuthorizationPolicyList")
+
+	targetNS := env.PreviewNamespace()
+	err = c.List(context.Background(), &policyList, client.InNamespace(targetNS))
+	require.NoError(t, err)
+	require.Len(t, policyList.Items, 1)
+
+	policy := policyList.Items[0]
+	rules, _, _ := unstructured.NestedSlice(policy.Object, "spec", "rules")
+	require.Len(t, rules, 2)
+
+	// Verify IPv6 gets /128 prefix
+	rule1 := rules[0].(map[string]interface{})
+	from1 := rule1["from"].([]interface{})[0].(map[string]interface{})
+	source1 := from1["source"].(map[string]interface{})
+	ipBlocks := source1["ipBlocks"].([]interface{})
+	assert.Equal(t, "2001:db8::1/128", ipBlocks[0])
+
+	// Verify principals include targetNS, base-ns, and istio-system
+	rule2 := rules[1].(map[string]interface{})
+	from2 := rule2["from"].([]interface{})[0].(map[string]interface{})
+	source2 := from2["source"].(map[string]interface{})
+	principals := source2["principals"].([]interface{})
+	assert.Contains(t, principals, fmt.Sprintf("cluster.local/ns/%s/sa/*", targetNS))
+	assert.Contains(t, principals, "cluster.local/ns/base-ns/sa/*")
+	assert.Contains(t, principals, "cluster.local/ns/istio-system/sa/*")
 }
