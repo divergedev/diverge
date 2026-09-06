@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -178,4 +179,251 @@ func TestResolveBannerSettings(t *testing.T) {
 	require.NotNil(t, silentRes.Routing.Banner)
 	assert.False(t, *silentRes.Routing.Banner.Enabled)
 	assert.Equal(t, "Default Banner", silentRes.Routing.Banner.Text)
+}
+
+func TestBannerSettings_ValidatePosition(t *testing.T) {
+	validPositions := []string{"top", "bottom", ""}
+	for _, pos := range validPositions {
+		b := &BannerSettings{Position: pos}
+		assert.NoError(t, b.Validate(), "expected position %q to be valid", pos)
+	}
+
+	invalidPositions := []string{"center", "middle", "left", "right", "TOP", "BOTTOM", " top"}
+	for _, pos := range invalidPositions {
+		b := &BannerSettings{Position: pos}
+		err := b.Validate()
+		require.Error(t, err, "expected position %q to be invalid", pos)
+		assert.Equal(t, fmt.Sprintf("position must be \"top\" or \"bottom\", got %q", pos), err.Error())
+	}
+}
+
+func TestBannerSettings_ValidateColor(t *testing.T) {
+	validColors := []string{"#00FF00", "#FFF", "#fff", "#000", "#123456", "#aBcDeF", ""}
+	for _, color := range validColors {
+		b := &BannerSettings{Color: color}
+		assert.NoError(t, b.Validate(), "expected color %q to be valid", color)
+	}
+
+	invalidColors := []string{"green", "12345", "blue; background: red", "#12", "#1234", "#12345", "#1234567", "#GGG", "#ff", " #00FF00"}
+	for _, color := range invalidColors {
+		b := &BannerSettings{Color: color}
+		err := b.Validate()
+		require.Error(t, err, "expected color %q to be invalid", color)
+		assert.Equal(t, fmt.Sprintf("color must be a valid hex code (e.g. #00FF00), got %q", color), err.Error())
+	}
+}
+
+func TestBannerSettings_ValidateNil(t *testing.T) {
+	var b *BannerSettings
+	assert.NoError(t, b.Validate())
+}
+
+func TestConfig_Validate(t *testing.T) {
+	t.Run("valid config", func(t *testing.T) {
+		cfg := &Config{
+			Defaults: EnvironmentSettings{
+				Routing: RoutingSettings{
+					Banner: &BannerSettings{
+						Position: "top",
+						Color:    "#00FF00",
+					},
+				},
+			},
+			Environments: map[string]EnvironmentType{
+				"staging": {
+					EnvironmentSettings: EnvironmentSettings{
+						Routing: RoutingSettings{
+							Banner: &BannerSettings{
+								Position: "bottom",
+								Color:    "#FFF",
+							},
+						},
+					},
+				},
+			},
+			LabelOverrides: map[string]LabelOverride{
+				"custom": {
+					EnvironmentSettings: EnvironmentSettings{
+						Routing: RoutingSettings{
+							Banner: &BannerSettings{
+								Position: "top",
+								Color:    "#123456",
+							},
+						},
+					},
+				},
+			},
+		}
+		assert.NoError(t, cfg.Validate())
+	})
+
+	t.Run("invalid defaults banner position", func(t *testing.T) {
+		cfg := &Config{
+			Defaults: EnvironmentSettings{
+				Routing: RoutingSettings{
+					Banner: &BannerSettings{
+						Position: "center",
+					},
+				},
+			},
+		}
+		err := cfg.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "defaults.routing.banner")
+		assert.Contains(t, err.Error(), `position must be "top" or "bottom", got "center"`)
+	})
+
+	t.Run("invalid environment banner color", func(t *testing.T) {
+		cfg := &Config{
+			Environments: map[string]EnvironmentType{
+				"staging": {
+					EnvironmentSettings: EnvironmentSettings{
+						Routing: RoutingSettings{
+							Banner: &BannerSettings{
+								Color: "green",
+							},
+						},
+					},
+				},
+			},
+		}
+		err := cfg.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "environments[staging].routing.banner")
+		assert.Contains(t, err.Error(), `color must be a valid hex code (e.g. #00FF00), got "green"`)
+	})
+
+	t.Run("invalid label override banner", func(t *testing.T) {
+		cfg := &Config{
+			LabelOverrides: map[string]LabelOverride{
+				"diverge/bad": {
+					EnvironmentSettings: EnvironmentSettings{
+						Routing: RoutingSettings{
+							Banner: &BannerSettings{
+								Color: "12345",
+							},
+						},
+					},
+				},
+			},
+		}
+		err := cfg.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "label_overrides[diverge/bad].routing.banner")
+		assert.Contains(t, err.Error(), `color must be a valid hex code (e.g. #00FF00), got "12345"`)
+	})
+
+	t.Run("nil config", func(t *testing.T) {
+		var cfg *Config
+		assert.NoError(t, cfg.Validate())
+	})
+}
+
+func TestResolveBannerSettings_InheritanceAndOverrides(t *testing.T) {
+	enabledTrue := true
+	enabledFalse := false
+
+	cfg := &Config{
+		Defaults: EnvironmentSettings{
+			Routing: RoutingSettings{
+				Banner: &BannerSettings{
+					Enabled:  &enabledTrue,
+					Text:     "Base Preview",
+					Position: "top",
+					Color:    "#00FF00",
+				},
+			},
+		},
+		Environments: map[string]EnvironmentType{
+			"qa": {
+				EnvironmentSettings: EnvironmentSettings{
+					Routing: RoutingSettings{
+						Banner: &BannerSettings{
+							Position: "bottom",
+							Color:    "#FF0000",
+						},
+					},
+				},
+			},
+			"partial": {
+				EnvironmentSettings: EnvironmentSettings{
+					Routing: RoutingSettings{
+						Banner: &BannerSettings{
+							Text: "Partial Override",
+						},
+					},
+				},
+			},
+		},
+		LabelOverrides: map[string]LabelOverride{
+			"label/override-color": {
+				EnvironmentSettings: EnvironmentSettings{
+					Routing: RoutingSettings{
+						Banner: &BannerSettings{
+							Color: "#0000FF",
+						},
+					},
+				},
+			},
+			"label/disable-banner": {
+				EnvironmentSettings: EnvironmentSettings{
+					Routing: RoutingSettings{
+						Banner: &BannerSettings{
+							Enabled: &enabledFalse,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	t.Run("inherits defaults when unconfigured in env", func(t *testing.T) {
+		res := cfg.Resolve("preview", nil)
+		require.NotNil(t, res.Routing.Banner)
+		assert.True(t, *res.Routing.Banner.Enabled)
+		assert.Equal(t, "Base Preview", res.Routing.Banner.Text)
+		assert.Equal(t, "top", res.Routing.Banner.Position)
+		assert.Equal(t, "#00FF00", res.Routing.Banner.Color)
+		assert.NoError(t, res.Validate())
+	})
+
+	t.Run("inherits unchanged fields on partial override", func(t *testing.T) {
+		res := cfg.Resolve("partial", nil)
+		require.NotNil(t, res.Routing.Banner)
+		assert.True(t, *res.Routing.Banner.Enabled)
+		assert.Equal(t, "Partial Override", res.Routing.Banner.Text)
+		assert.Equal(t, "top", res.Routing.Banner.Position)
+		assert.Equal(t, "#00FF00", res.Routing.Banner.Color)
+		assert.NoError(t, res.Validate())
+	})
+
+	t.Run("overrides position and color per environment", func(t *testing.T) {
+		res := cfg.Resolve("qa", nil)
+		require.NotNil(t, res.Routing.Banner)
+		assert.True(t, *res.Routing.Banner.Enabled)
+		assert.Equal(t, "Base Preview", res.Routing.Banner.Text)
+		assert.Equal(t, "bottom", res.Routing.Banner.Position)
+		assert.Equal(t, "#FF0000", res.Routing.Banner.Color)
+		assert.NoError(t, res.Validate())
+	})
+
+	t.Run("label override updates color", func(t *testing.T) {
+		res := cfg.Resolve("qa", []string{"label/override-color"})
+		require.NotNil(t, res.Routing.Banner)
+		assert.True(t, *res.Routing.Banner.Enabled)
+		assert.Equal(t, "Base Preview", res.Routing.Banner.Text)
+		assert.Equal(t, "bottom", res.Routing.Banner.Position)
+		assert.Equal(t, "#0000FF", res.Routing.Banner.Color)
+		assert.NoError(t, res.Validate())
+	})
+
+	t.Run("label override disables banner", func(t *testing.T) {
+		res := cfg.Resolve("qa", []string{"label/disable-banner"})
+		require.NotNil(t, res.Routing.Banner)
+		assert.False(t, *res.Routing.Banner.Enabled)
+		assert.Equal(t, "Base Preview", res.Routing.Banner.Text)
+		assert.Equal(t, "bottom", res.Routing.Banner.Position)
+		assert.Equal(t, "#FF0000", res.Routing.Banner.Color)
+		assert.NoError(t, res.Validate())
+	})
 }

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -223,6 +224,196 @@ func TestBuildEnvironmentWithBannerDisabled(t *testing.T) {
 
 	require.NotNil(t, env.Spec.Routing.Banner)
 	assert.False(t, env.Spec.Routing.Banner.Enabled)
+}
+
+func TestBuildEnvironmentBannerPositions(t *testing.T) {
+	gitCtx := &git.GitContext{
+		Provider: "github",
+		Project:  "divergedev/diverge",
+		Branch:   "feat/banner-pos",
+	}
+	app := &App{Namespace: "default"}
+
+	for _, pos := range []string{"top", "bottom"} {
+		t.Run("valid position "+pos, func(t *testing.T) {
+			resolved := &config.ResolvedSettings{
+				EnvironmentSettings: config.EnvironmentSettings{
+					Deploy: config.DeploySettings{Mode: "full"},
+					Routing: config.RoutingSettings{
+						Mode: "header",
+						Banner: &config.BannerSettings{
+							Position: pos,
+						},
+					},
+				},
+			}
+			env, err := buildEnvironment(context.Background(), "preview-mr-1", gitCtx, resolved, nil, app, 1)
+			require.NoError(t, err)
+			require.NotNil(t, env.Spec.Routing.Banner)
+			assert.Equal(t, pos, env.Spec.Routing.Banner.Position)
+		})
+	}
+
+	t.Run("invalid position center", func(t *testing.T) {
+		resolved := &config.ResolvedSettings{
+			EnvironmentSettings: config.EnvironmentSettings{
+				Deploy: config.DeploySettings{Mode: "full"},
+				Routing: config.RoutingSettings{
+					Mode: "header",
+					Banner: &config.BannerSettings{
+						Position: "center",
+					},
+				},
+			},
+		}
+		env, err := buildEnvironment(context.Background(), "preview-mr-1", gitCtx, resolved, nil, app, 1)
+		require.Error(t, err)
+		assert.Nil(t, env)
+		assert.Contains(t, err.Error(), `position must be "top" or "bottom", got "center"`)
+		assert.Contains(t, err.Error(), "invalid banner configuration")
+	})
+}
+
+func TestBuildEnvironmentBannerColors(t *testing.T) {
+	gitCtx := &git.GitContext{
+		Provider: "github",
+		Project:  "divergedev/diverge",
+		Branch:   "feat/banner-color",
+	}
+	app := &App{Namespace: "default"}
+
+	for _, color := range []string{"#00FF00", "#FFF"} {
+		t.Run("valid color "+color, func(t *testing.T) {
+			resolved := &config.ResolvedSettings{
+				EnvironmentSettings: config.EnvironmentSettings{
+					Deploy: config.DeploySettings{Mode: "full"},
+					Routing: config.RoutingSettings{
+						Mode: "header",
+						Banner: &config.BannerSettings{
+							Color: color,
+						},
+					},
+				},
+			}
+			env, err := buildEnvironment(context.Background(), "preview-mr-1", gitCtx, resolved, nil, app, 1)
+			require.NoError(t, err)
+			require.NotNil(t, env.Spec.Routing.Banner)
+			assert.Equal(t, color, env.Spec.Routing.Banner.Color)
+		})
+	}
+
+	invalidColors := []string{"green", "12345", "blue; background: red"}
+	for _, color := range invalidColors {
+		t.Run("invalid color "+color, func(t *testing.T) {
+			resolved := &config.ResolvedSettings{
+				EnvironmentSettings: config.EnvironmentSettings{
+					Deploy: config.DeploySettings{Mode: "full"},
+					Routing: config.RoutingSettings{
+						Mode: "header",
+						Banner: &config.BannerSettings{
+							Color: color,
+						},
+					},
+				},
+			}
+			env, err := buildEnvironment(context.Background(), "preview-mr-1", gitCtx, resolved, nil, app, 1)
+			require.Error(t, err)
+			assert.Nil(t, env)
+			assert.Contains(t, err.Error(), fmt.Sprintf(`color must be a valid hex code (e.g. #00FF00), got %q`, color))
+			assert.Contains(t, err.Error(), "invalid banner configuration")
+		})
+	}
+}
+
+func TestBuildEnvironmentBannerInheritedAndOverridden(t *testing.T) {
+	gitCtx := &git.GitContext{
+		Provider: "github",
+		Project:  "divergedev/diverge",
+		Branch:   "feat/banner-full",
+	}
+	app := &App{Namespace: "default"}
+
+	enabledTrue := true
+	cfg := &config.Config{
+		Version: "1",
+		Defaults: config.EnvironmentSettings{
+			Deploy: config.DeploySettings{Mode: "full"},
+			Routing: config.RoutingSettings{
+				Mode: "header",
+				Banner: &config.BannerSettings{
+					Enabled:  &enabledTrue,
+					Text:     "Base Preview",
+					Position: "top",
+					Color:    "#FF6B00",
+				},
+			},
+		},
+		Environments: map[string]config.EnvironmentType{
+			"qa": {
+				EnvironmentSettings: config.EnvironmentSettings{
+					Routing: config.RoutingSettings{
+						Banner: &config.BannerSettings{
+							Position: "bottom",
+							Color:    "#00FF00",
+						},
+					},
+				},
+			},
+			"staging": {
+				EnvironmentSettings: config.EnvironmentSettings{
+					Routing: config.RoutingSettings{
+						Banner: &config.BannerSettings{
+							Text: "Staging Preview",
+						},
+					},
+				},
+			},
+		},
+		LabelOverrides: map[string]config.LabelOverride{
+			"theme-light": {
+				EnvironmentSettings: config.EnvironmentSettings{
+					Routing: config.RoutingSettings{
+						Banner: &config.BannerSettings{
+							Color: "#FFF",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	t.Run("staging inherits defaults position and color", func(t *testing.T) {
+		resolved := cfg.Resolve("staging", nil)
+		env, err := buildEnvironment(context.Background(), "staging-env", gitCtx, resolved, cfg, app, 0)
+		require.NoError(t, err)
+		require.NotNil(t, env.Spec.Routing.Banner)
+		assert.True(t, env.Spec.Routing.Banner.Enabled)
+		assert.Equal(t, "Staging Preview", env.Spec.Routing.Banner.Text)
+		assert.Equal(t, "top", env.Spec.Routing.Banner.Position)
+		assert.Equal(t, "#FF6B00", env.Spec.Routing.Banner.Color)
+	})
+
+	t.Run("qa overrides position and color while inheriting text and enabled", func(t *testing.T) {
+		resolved := cfg.Resolve("qa", nil)
+		env, err := buildEnvironment(context.Background(), "qa-env", gitCtx, resolved, cfg, app, 0)
+		require.NoError(t, err)
+		require.NotNil(t, env.Spec.Routing.Banner)
+		assert.True(t, env.Spec.Routing.Banner.Enabled)
+		assert.Equal(t, "Base Preview", env.Spec.Routing.Banner.Text)
+		assert.Equal(t, "bottom", env.Spec.Routing.Banner.Position)
+		assert.Equal(t, "#00FF00", env.Spec.Routing.Banner.Color)
+	})
+
+	t.Run("label override updates color", func(t *testing.T) {
+		resolved := cfg.Resolve("qa", []string{"theme-light"})
+		env, err := buildEnvironment(context.Background(), "qa-label-env", gitCtx, resolved, cfg, app, 0)
+		require.NoError(t, err)
+		require.NotNil(t, env.Spec.Routing.Banner)
+		assert.True(t, env.Spec.Routing.Banner.Enabled)
+		assert.Equal(t, "Base Preview", env.Spec.Routing.Banner.Text)
+		assert.Equal(t, "bottom", env.Spec.Routing.Banner.Position)
+		assert.Equal(t, "#FFF", env.Spec.Routing.Banner.Color)
+	})
 }
 
 func TestBuildEnvironmentNilConfig(t *testing.T) {
