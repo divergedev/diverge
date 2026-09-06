@@ -7,7 +7,7 @@ metadata:
     {{- include "diverge.labels" . | nindent 4 }}
     app.kubernetes.io/component: activator-proxy
 spec:
-  replicas: {{ .Values.activatorProxy.replicas }}
+  replicas: {{ .Values.activatorProxy.replicaCount | default .Values.activatorProxy.replicas | default 1 }}
   selector:
     matchLabels:
       {{- include "diverge.selectorLabels" . | nindent 6 }}
@@ -19,9 +19,15 @@ spec:
         app.kubernetes.io/component: activator-proxy
     spec:
       serviceAccountName: {{ include "diverge.fullname" . }}-activator-proxy
+      securityContext:
+        runAsNonRoot: true
       containers:
         - name: activator-proxy
-          image: "{{ .Values.activatorProxy.image.repository }}:{{ .Values.activatorProxy.image.tag }}"
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+          image: {{ include "diverge.activatorProxy.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy | default "IfNotPresent" }}
           args:
             - "--port={{ .Values.activatorProxy.port }}"
             - "--activator-url={{ required "activatorProxy.activatorUrl is required" .Values.activatorProxy.activatorUrl }}"

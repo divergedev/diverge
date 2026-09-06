@@ -27,4 +27,31 @@ if ! echo "$output" | grep -A4 '^kind: RoleBinding$' | grep -q 'namespace: test-
   echo 'FAIL: RoleBinding not in expected namespace'
   exit 1
 fi
+echo '=== Helm template (all subcomponents: server, proxy, activatorProxy) ==='
+all_components=$(helm template diverge charts/diverge/ \
+  --set server.enabled=true \
+  --set proxy.enabled=true \
+  --set activatorProxy.enabled=true \
+  --set activatorProxy.activatorUrl=http://activator.knative-serving:8012 \
+  --set activatorProxy.targetSelector="app=test")
+
+# Verify no dangling image tag like 'image: "...:"'
+if echo "$all_components" | grep -E 'image:\s*".*:[[:space:]]*"'; then
+  echo 'FAIL: Dangling image tag detected in rendered templates'
+  exit 1
+fi
+
+echo '=== Helm template (image tag precedence) ==='
+# When image.tag is overridden, controller, server, and proxy should all use that tag if component tags are not set
+custom_tag=$(helm template diverge charts/diverge/ \
+  --set image.tag=custom-v1 \
+  --set server.enabled=true \
+  --set proxy.enabled=true)
+
+controller_matches=$(echo "$custom_tag" | grep -c 'image: "ghcr.io/divergedev/diverge:custom-v1"')
+if [ "$controller_matches" -ne 3 ]; then
+  echo "FAIL: Expected 3 containers with image: ghcr.io/divergedev/diverge:custom-v1, found $controller_matches"
+  exit 1
+fi
+
 echo '✅ All Helm tests passed'
