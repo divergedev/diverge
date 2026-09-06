@@ -64,12 +64,16 @@ type DatabaseResult struct {
 	// returns. May be empty if the provider handles setup internally.
 	SetupSQL string
 
+	// SetupSQLExecuted reports whether SetupSQL was already executed in-process
+	// by the provider. If true, external runners (such as K8s Jobs) can be skipped.
+	SetupSQLExecuted bool
+
 	// AdminDSN is the connection string for the admin role, used to execute SetupSQL.
 	AdminDSN string
 
 	// Ready reports that the provider finished its own work. It does not
 	// guarantee that SetupSQL has been executed; callers must run SetupSQL
-	// separately if non-empty.
+	// separately if non-empty and SetupSQLExecuted is false.
 	Ready bool
 
 	// Message is a human-readable status message for logging and MR comments.
