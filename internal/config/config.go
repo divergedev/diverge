@@ -97,10 +97,45 @@ func (b *BannerSettings) Validate() error {
 }
 
 type DatabaseSettings struct {
-	Mode             string `yaml:"mode"` // shared | schema | snapshot | fresh
-	ConnectionRef    string `yaml:"connection_ref"`
-	SeedSource       string `yaml:"seed_source"`
-	MigrationCommand string `yaml:"migration_command"`
+	Mode             string         `yaml:"mode"` // shared | schema | snapshot | fresh
+	ConnectionRef    string         `yaml:"connection_ref"`
+	SeedSource       string         `yaml:"seed_source"`
+	MigrationCommand string         `yaml:"migration_command"`
+	Atlas            *AtlasSettings `yaml:"atlas,omitempty"`
+}
+
+type AtlasSettings struct {
+	Mode               string               `yaml:"mode"`             // versioned | declarative
+	Engine             string               `yaml:"engine,omitempty"` // operator | job
+	Image              string               `yaml:"image,omitempty"`
+	MigrationConfigMap string               `yaml:"migration_config_map,omitempty"`
+	SchemaConfigMap    string               `yaml:"schema_config_map,omitempty"`
+	Blocking           *bool                `yaml:"blocking,omitempty"`
+	Policy             *AtlasPolicySettings `yaml:"policy,omitempty"`
+}
+
+type AtlasPolicySettings struct {
+	Destructive string `yaml:"destructive,omitempty"` // error | warn | allow
+}
+
+// Validate validates the AtlasSettings.
+func (a *AtlasSettings) Validate() error {
+	if a == nil {
+		return nil
+	}
+	if a.Mode != "" && a.Mode != "versioned" && a.Mode != "declarative" {
+		return fmt.Errorf("atlas mode must be \"versioned\" or \"declarative\", got %q", a.Mode)
+	}
+	if a.Engine != "" && a.Engine != "operator" && a.Engine != "job" {
+		return fmt.Errorf("atlas engine must be \"operator\" or \"job\", got %q", a.Engine)
+	}
+	if a.Policy != nil && a.Policy.Destructive != "" {
+		d := a.Policy.Destructive
+		if d != "error" && d != "warn" && d != "allow" {
+			return fmt.Errorf("atlas policy destructive must be \"error\", \"warn\", or \"allow\", got %q", d)
+		}
+	}
+	return nil
 }
 
 type LifecycleSettings struct {
@@ -159,10 +194,20 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("defaults.routing.banner: %w", err)
 		}
 	}
+	if c.Defaults.Database.Atlas != nil {
+		if err := c.Defaults.Database.Atlas.Validate(); err != nil {
+			return fmt.Errorf("defaults.database.atlas: %w", err)
+		}
+	}
 	for name, env := range c.Environments {
 		if env.Routing.Banner != nil {
 			if err := env.Routing.Banner.Validate(); err != nil {
 				return fmt.Errorf("environments[%s].routing.banner: %w", name, err)
+			}
+		}
+		if env.Database.Atlas != nil {
+			if err := env.Database.Atlas.Validate(); err != nil {
+				return fmt.Errorf("environments[%s].database.atlas: %w", name, err)
 			}
 		}
 	}
@@ -170,6 +215,11 @@ func (c *Config) Validate() error {
 		if override.Routing.Banner != nil {
 			if err := override.Routing.Banner.Validate(); err != nil {
 				return fmt.Errorf("label_overrides[%s].routing.banner: %w", label, err)
+			}
+		}
+		if override.Database.Atlas != nil {
+			if err := override.Database.Atlas.Validate(); err != nil {
+				return fmt.Errorf("label_overrides[%s].database.atlas: %w", label, err)
 			}
 		}
 	}
@@ -182,7 +232,14 @@ func (r *ResolvedSettings) Validate() error {
 		return nil
 	}
 	if r.Routing.Banner != nil {
-		return r.Routing.Banner.Validate()
+		if err := r.Routing.Banner.Validate(); err != nil {
+			return err
+		}
+	}
+	if r.Database.Atlas != nil {
+		if err := r.Database.Atlas.Validate(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -288,6 +345,41 @@ func mergeSettings(dst, src *EnvironmentSettings) {
 	}
 	if src.Database.MigrationCommand != "" {
 		dst.Database.MigrationCommand = src.Database.MigrationCommand
+	}
+	if src.Database.Atlas != nil {
+		a := &AtlasSettings{}
+		if dst.Database.Atlas != nil {
+			*a = *dst.Database.Atlas
+		}
+		if src.Database.Atlas.Mode != "" {
+			a.Mode = src.Database.Atlas.Mode
+		}
+		if src.Database.Atlas.Engine != "" {
+			a.Engine = src.Database.Atlas.Engine
+		}
+		if src.Database.Atlas.Image != "" {
+			a.Image = src.Database.Atlas.Image
+		}
+		if src.Database.Atlas.MigrationConfigMap != "" {
+			a.MigrationConfigMap = src.Database.Atlas.MigrationConfigMap
+		}
+		if src.Database.Atlas.SchemaConfigMap != "" {
+			a.SchemaConfigMap = src.Database.Atlas.SchemaConfigMap
+		}
+		if src.Database.Atlas.Blocking != nil {
+			a.Blocking = src.Database.Atlas.Blocking
+		}
+		if src.Database.Atlas.Policy != nil {
+			p := &AtlasPolicySettings{}
+			if a.Policy != nil {
+				*p = *a.Policy
+			}
+			if src.Database.Atlas.Policy.Destructive != "" {
+				p.Destructive = src.Database.Atlas.Policy.Destructive
+			}
+			a.Policy = p
+		}
+		dst.Database.Atlas = a
 	}
 
 	// Lifecycle

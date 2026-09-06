@@ -128,7 +128,34 @@
             },
             "connection_ref": { "type": "string" },
             "seed_source": { "type": "string" },
-            "migration_command": { "type": "string" }
+            "migration_command": { "type": "string" },
+            "atlas": {
+              "type": "object",
+              "description": "Atlas schema management and migration settings.",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": ["versioned", "declarative"]
+                },
+                "engine": {
+                  "type": "string",
+                  "enum": ["operator", "job"]
+                },
+                "image": { "type": "string" },
+                "migration_config_map": { "type": "string" },
+                "schema_config_map": { "type": "string" },
+                "blocking": { "type": "boolean" },
+                "policy": {
+                  "type": "object",
+                  "properties": {
+                    "destructive": {
+                      "type": "string",
+                      "enum": ["error", "warn", "allow"]
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "lifecycle": {

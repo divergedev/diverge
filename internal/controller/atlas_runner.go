@@ -2,9 +2,13 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"reflect"
+	"strings"
 
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -14,6 +18,8 @@ import (
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/pkg/database"
 )
+
+const defaultAtlasJobImage = "arigaio/atlas:latest"
 
 // ensureAtlasCR creates or updates an AtlasMigration or AtlasSchema CR.
 func (r *EnvironmentReconciler) ensureAtlasCR(ctx context.Context, env *divergeiov1alpha1.Environment, dbResult *database.DatabaseResult) error {
@@ -168,4 +174,170 @@ func (r *EnvironmentReconciler) ensureAtlasCR(ctx context.Context, env *divergei
 	}
 
 	return fmt.Errorf("%s %s is still running", kind, crName)
+}
+
+// ensureAtlasJob creates and monitors a standalone Kubernetes Job for Atlas migrations.
+func (r *EnvironmentReconciler) ensureAtlasJob(ctx context.Context, env *divergeiov1alpha1.Environment, dbResult *database.DatabaseResult) error {
+	logger := log.FromContext(ctx)
+	atlasSpec := env.Spec.Database.Atlas
+
+	if atlasSpec == nil {
+		return nil
+	}
+
+	if dbResult == nil || dbResult.DSN == "" {
+		return fmt.Errorf("atlas migration requires a provisioned database with DSN")
+	}
+
+	// 1. Resolve target ConfigMap and migration arguments based on mode
+	var cmName string
+	var volumeName string
+	var mountPath string
+	var args []string
+
+	mode := atlasSpec.Mode
+	if mode == "" {
+		mode = "versioned"
+	}
+
+	switch mode {
+	case "versioned":
+		if atlasSpec.MigrationConfigMap == "" {
+			return fmt.Errorf("atlas versioned mode requires migrationConfigMap")
+		}
+		cmName = atlasSpec.MigrationConfigMap
+		volumeName = "atlas-migrations"
+		mountPath = "/migrations"
+		args = []string{"migrate", "apply", "--url", "$(DATABASE_URL)", "--dir", "file:///migrations"}
+	case "declarative":
+		if atlasSpec.SchemaConfigMap == "" {
+			return fmt.Errorf("atlas declarative mode requires schemaConfigMap")
+		}
+		cmName = atlasSpec.SchemaConfigMap
+		volumeName = "atlas-schema"
+		mountPath = "/schema"
+	default:
+		return fmt.Errorf("unsupported atlas mode: %s", mode)
+	}
+
+	var cm corev1.ConfigMap
+	if err := r.Get(ctx, types.NamespacedName{Name: cmName, Namespace: env.Namespace}, &cm); err != nil {
+		return fmt.Errorf("failed to get atlas configmap %s: %w", cmName, err)
+	}
+
+	if mode == "declarative" {
+		schemaTarget := "file:///schema/schema.sql"
+		if _, ok := cm.Data["schema.hcl"]; ok && cm.Data["schema.sql"] == "" {
+			schemaTarget = "file:///schema/schema.hcl"
+		}
+		args = []string{"schema", "apply", "--url", "$(DATABASE_URL)", "--to", schemaTarget, "--auto-approve"}
+		if atlasSpec.Policy != nil && atlasSpec.Policy.Destructive == "allow" {
+			args = append(args, "--allow-destructive")
+		}
+	}
+
+	// 2. Create DSN Secret
+	secretName, err := createDSNSecret(ctx, r.Client, env.Name, env.Namespace, dbResult.DSN, env)
+	if err != nil {
+		return fmt.Errorf("failed to create DSN secret for atlas: %w", err)
+	}
+
+	image := defaultAtlasJobImage
+	if atlasSpec.Image != "" {
+		image = atlasSpec.Image
+	}
+
+	// 3. Compute unique Job name using Image, Mode, ConfigMap Name, ConfigMap ResourceVersion, and Args
+	hashInput := fmt.Sprintf("%s:%s:%s:%s:%s", image, mode, cmName, cm.ResourceVersion, strings.Join(args, " "))
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(hashInput)))[:8]
+	jobName := generateHookJobName(env.Name, "atlas-"+hash)
+
+	cfg := HookJobConfig{
+		JobName:   jobName,
+		Namespace: env.Namespace,
+		Image:     image,
+		Args:      args,
+		Timeout:   defaultMigrationTimeout,
+		Owner:     env,
+		Labels: map[string]string{
+			labelHookType:               hookTypeMigration,
+			labelEnvironment:            env.Name,
+			"divergedev.com/atlas-mode": mode,
+		},
+		EnvVars: []corev1.EnvVar{
+			{
+				Name:  "HOME",
+				Value: "/tmp",
+			},
+			{
+				Name: "DATABASE_URL",
+				ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: secretName,
+						},
+						Key: "url",
+					},
+				},
+			},
+		},
+		Volumes: []corev1.Volume{
+			{
+				Name: volumeName,
+				VolumeSource: corev1.VolumeSource{
+					ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: corev1.LocalObjectReference{Name: cmName},
+					},
+				},
+			},
+		},
+		VolumeMounts: []corev1.VolumeMount{
+			{
+				Name:      volumeName,
+				MountPath: mountPath,
+				ReadOnly:  true,
+			},
+		},
+	}
+
+	job := buildJob(cfg)
+
+	// 4. Create or get existing Job
+	var existingJob batchv1.Job
+	err = r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: env.Namespace}, &existingJob)
+	if err != nil {
+		if client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to get atlas migration job: %w", err)
+		}
+
+		logger.Info("Creating atlas migration job", "jobName", jobName)
+		if err := r.Create(ctx, job); err != nil {
+			return fmt.Errorf("failed to create atlas migration job: %w", err)
+		}
+		// newly created
+	} else {
+		job = &existingJob
+	}
+
+	isBlocking := true
+	if atlasSpec.Blocking != nil {
+		isBlocking = *atlasSpec.Blocking
+	}
+
+	if !isBlocking {
+		return nil
+	}
+
+	// 5. Monitor Job completion
+	for _, cond := range job.Status.Conditions {
+		if cond.Type == batchv1.JobComplete && cond.Status == corev1.ConditionTrue {
+			logger.Info("Atlas migration job completed successfully", "jobName", jobName)
+			return nil
+		}
+		if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
+			return fmt.Errorf("atlas migration job %s failed: %s: %w", jobName, cond.Reason, ErrHookFailed)
+		}
+	}
+
+	return fmt.Errorf("atlas migration job %s is still running: %w", jobName, ErrHookInProgress)
 }

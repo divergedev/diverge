@@ -30,6 +30,9 @@ func (r *EnvironmentReconciler) runMigrations(ctx context.Context, env *divergei
 		return fmt.Errorf("cannot configure both Atlas and MigrationJob for database hooks")
 	}
 	if env.Spec.Database.Atlas != nil {
+		if env.Spec.Database.Atlas.Engine == "job" {
+			return r.ensureAtlasJob(ctx, env, dbResult)
+		}
 		return r.ensureAtlasCR(ctx, env, dbResult)
 	}
 	if env.Spec.Database.MigrationJob != nil {

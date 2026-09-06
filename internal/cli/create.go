@@ -231,6 +231,28 @@ func buildEnvironment(ctx context.Context, name string, gitCtx *git.GitContext, 
 		}
 	}
 
+	// Configure Atlas database migrations
+	if resolved.Database.Atlas != nil {
+		if err := resolved.Database.Atlas.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid atlas configuration: %w", err)
+		}
+		atlasCfg := resolved.Database.Atlas
+		atlasSpec := &v1alpha1.AtlasSpec{
+			Mode:               atlasCfg.Mode,
+			Engine:             atlasCfg.Engine,
+			Image:              atlasCfg.Image,
+			MigrationConfigMap: atlasCfg.MigrationConfigMap,
+			SchemaConfigMap:    atlasCfg.SchemaConfigMap,
+			Blocking:           atlasCfg.Blocking,
+		}
+		if atlasCfg.Policy != nil {
+			atlasSpec.Policy = &v1alpha1.AtlasPolicySpec{
+				Destructive: atlasCfg.Policy.Destructive,
+			}
+		}
+		env.Spec.Database.Atlas = atlasSpec
+	}
+
 	// Detect changed services for delta mode
 	if resolved.Deploy.Mode == "delta" && cfg != nil {
 		servicePaths := make(map[string][]string, len(cfg.Services))
