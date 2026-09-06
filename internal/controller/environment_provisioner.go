@@ -107,9 +107,13 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 		return res, true, retErr
 	}
 	if dbStatus != nil && dbStatus.Ready {
-		// Run SetupSQL job if configured
-		if dbStatus.SetupSQL != "" {
-			if setupErr := r.runSetupSQLJob(ctx, env, dbStatus.SetupSQL, dbStatus.AdminDSN); setupErr != nil {
+		// Run SetupSQL if configured and not already executed in-process by the provider
+		if dbStatus.SetupSQL != "" && !dbStatus.SetupSQLExecuted {
+			runner := r.SetupRunner
+			if runner == nil {
+				runner = &DirectSetupRunner{}
+			}
+			if setupErr := runner.RunSetupSQL(ctx, env, dbStatus.SetupSQL, dbStatus.AdminDSN); setupErr != nil {
 				if errors.Is(setupErr, ErrHookInProgress) {
 					meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 						Type:    "DatabaseReady",

@@ -4,6 +4,7 @@ package schemaprovider
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +13,25 @@ import (
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+type recordingExecutor struct {
+	called  bool
+	lastSQL string
+}
+
+func (r *recordingExecutor) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	r.called = true
+	r.lastSQL = query
+	return nil, nil
+}
+
+type errorExecutor struct {
+	err error
+}
+
+func (e *errorExecutor) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return nil, e.err
+}
 
 func TestSchemaDatabaseProvider_Sanitize(t *testing.T) {
 	name, err := sanitizeEnvName("my-test-env-123")
@@ -28,7 +48,8 @@ func TestSchemaDatabaseProvider_Sanitize_RejectsSQLInjection(t *testing.T) {
 }
 
 func TestSchemaDatabaseProvider_Provision(t *testing.T) {
-	provider := &SchemaDatabaseProvider{AdminDSN: "postgres://admin@localhost/db"}
+	mockExec := &recordingExecutor{}
+	provider := &SchemaDatabaseProvider{AdminDSN: "postgres://admin@localhost/db", Executor: mockExec}
 	env := &v1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "test-env",
@@ -37,6 +58,9 @@ func TestSchemaDatabaseProvider_Provision(t *testing.T) {
 
 	res, err := provider.Provision(context.Background(), env)
 	assert.NoError(t, err)
+	assert.True(t, res.Ready)
+	assert.True(t, res.SetupSQLExecuted)
+	assert.True(t, mockExec.called)
 	assert.Contains(t, res.SetupSQL, "CREATE SCHEMA IF NOT EXISTS %I")
 	assert.Contains(t, res.SetupSQL, "CREATE TABLE IF NOT EXISTS %I.%I (LIKE public.%I INCLUDING ALL)")
 	assert.Contains(t, res.SetupSQL, "SET LOCAL search_path TO preview_test_env, public;")
@@ -107,13 +131,54 @@ func TestSchemaDatabaseProvider_Provision_DSN_WithQueryParam(t *testing.T) {
 	assert.Contains(t, res.DSN, "sslmode=require")
 }
 
+func TestSchemaDatabaseProvider_Provision_ExecutorHappy(t *testing.T) {
+	mockExec := &recordingExecutor{}
+	provider := &SchemaDatabaseProvider{AdminDSN: "postgres://admin@localhost/db", Executor: mockExec}
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-env"},
+	}
+
+	res, err := provider.Provision(context.Background(), env)
+	assert.NoError(t, err)
+	assert.True(t, mockExec.called)
+	assert.Contains(t, mockExec.lastSQL, "CREATE SCHEMA IF NOT EXISTS")
+	assert.True(t, res.Ready)
+	assert.True(t, res.SetupSQLExecuted)
+}
+
+func TestSchemaDatabaseProvider_Provision_ExecutorError(t *testing.T) {
+	provider := &SchemaDatabaseProvider{AdminDSN: "postgres://admin@localhost/db", Executor: &errorExecutor{err: context.DeadlineExceeded}}
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-env"},
+	}
+
+	res, err := provider.Provision(context.Background(), env)
+	assert.NoError(t, err)
+	assert.False(t, res.Ready)
+	assert.False(t, res.SetupSQLExecuted)
+	assert.Contains(t, res.Message, "failed to execute setup SQL:")
+}
+
+func TestSchemaDatabaseProvider_Teardown(t *testing.T) {
+	mockExec := &recordingExecutor{}
+	provider := &SchemaDatabaseProvider{AdminDSN: "postgres://admin@localhost/db", Executor: mockExec}
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-env"},
+	}
+
+	err := provider.Teardown(context.Background(), env)
+	assert.NoError(t, err)
+	assert.True(t, mockExec.called)
+}
+
 func TestSchemaDatabaseProvider_Provision_Concurrent(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			provider := &SchemaDatabaseProvider{AdminDSN: "postgres://admin@localhost/db"}
+			mockExec := &recordingExecutor{}
+			provider := &SchemaDatabaseProvider{AdminDSN: "postgres://admin@localhost/db", Executor: mockExec}
 			env := &v1alpha1.Environment{
 				ObjectMeta: metav1.ObjectMeta{Name: "test-env"},
 			}
@@ -126,7 +191,8 @@ func TestSchemaDatabaseProvider_Provision_Concurrent(t *testing.T) {
 }
 
 func TestSchemaDatabaseProvider_Provision_Idempotent(t *testing.T) {
-	provider := &SchemaDatabaseProvider{AdminDSN: "postgres://admin@localhost/db"}
+	mockExec := &recordingExecutor{}
+	provider := &SchemaDatabaseProvider{AdminDSN: "postgres://admin@localhost/db", Executor: mockExec}
 	env := &v1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-env"},
 	}

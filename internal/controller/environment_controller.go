@@ -44,6 +44,7 @@ type EnvironmentReconciler struct {
 	TestRunner       divtesting.TestRunner
 	AsyncProvisioner async.Provisioner
 	SetupJobImage    string
+	SetupRunner      SetupRunner
 }
 
 // +kubebuilder:rbac:groups=divergedev.com,resources=environments,verbs=get;list;watch;create;update;patch;delete

@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
 	pkgdb "github.com/divergedev/diverge/pkg/database"
@@ -131,9 +132,34 @@ $diverge_role$;
 		},
 		SetupSQL: fmt.Sprintf("SET LOCAL search_path TO %s, public;\n", schema) + setupSQL,
 		Ready:    true,
-		Message:  "Schema Provisioned SQL generated",
+		Message:  "Schema Provisioned SQL executed",
 	}
 
+	setupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	var exec SQLExecutor
+	if p.Executor != nil {
+		exec = p.Executor
+	} else {
+		db, err := sql.Open("pgx", p.AdminDSN)
+		if err != nil {
+			result.Ready = false
+			result.Message = fmt.Sprintf("failed to open database: %v", err)
+			return result, nil
+		}
+		defer func() { _ = db.Close() }()
+		exec = db
+	}
+
+	_, err = exec.ExecContext(setupCtx, setupSQL)
+	if err != nil {
+		result.Ready = false
+		result.Message = fmt.Sprintf("failed to execute setup SQL: %v", err)
+		return result, nil
+	}
+
+	result.SetupSQLExecuted = true
 	return result, nil
 }
 
@@ -145,15 +171,21 @@ func (p *SchemaDatabaseProvider) Teardown(ctx context.Context, env *v1alpha1.Env
 	}
 	schema := fmt.Sprintf("preview_%s", envName)
 
-	db, err := sql.Open("pgx", p.AdminDSN)
-	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
+	var exec SQLExecutor
+	if p.Executor != nil {
+		exec = p.Executor
+	} else {
+		db, err := sql.Open("pgx", p.AdminDSN)
+		if err != nil {
+			return fmt.Errorf("failed to open database: %w", err)
+		}
+		defer func() { _ = db.Close() }()
+		exec = db
 	}
-	defer func() { _ = db.Close() }()
 
 	schemaIdent := pgx.Identifier{schema}.Sanitize()
 	query := fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", schemaIdent)
-	_, err = db.ExecContext(ctx, query)
+	_, err = exec.ExecContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("failed to drop schema: %w", err)
 	}
@@ -161,7 +193,7 @@ func (p *SchemaDatabaseProvider) Teardown(ctx context.Context, env *v1alpha1.Env
 	roleName := safeRoleName(schema)
 	roleIdent := pgx.Identifier{roleName}.Sanitize()
 	query = fmt.Sprintf("DROP ROLE IF EXISTS %s", roleIdent)
-	_, err = db.ExecContext(ctx, query)
+	_, err = exec.ExecContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("failed to drop role: %w", err)
 	}
