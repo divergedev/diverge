@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
 	"gopkg.in/yaml.v3"
@@ -77,6 +78,24 @@ type BannerSettings struct {
 	Color    string `yaml:"color,omitempty"`    // hex color code
 }
 
+var hexColorRegex = regexp.MustCompile(`^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$`)
+
+// Validate validates the BannerSettings.
+// Position, if specified, must be "top" or "bottom".
+// Color, if specified, must be a valid hex code (e.g. #RGB or #RRGGBB).
+func (b *BannerSettings) Validate() error {
+	if b == nil {
+		return nil
+	}
+	if b.Position != "" && b.Position != "top" && b.Position != "bottom" {
+		return fmt.Errorf("position must be \"top\" or \"bottom\", got %q", b.Position)
+	}
+	if b.Color != "" && !hexColorRegex.MatchString(b.Color) {
+		return fmt.Errorf("color must be a valid hex code (e.g. #00FF00), got %q", b.Color)
+	}
+	return nil
+}
+
 type DatabaseSettings struct {
 	Mode             string `yaml:"mode"` // shared | schema | snapshot | fresh
 	ConnectionRef    string `yaml:"connection_ref"`
@@ -128,6 +147,44 @@ type PrometheusConfig struct {
 // ResolvedSettings represents a fully resolved environment configuration
 type ResolvedSettings struct {
 	EnvironmentSettings
+}
+
+// Validate validates the configuration settings.
+func (c *Config) Validate() error {
+	if c == nil {
+		return nil
+	}
+	if c.Defaults.Routing.Banner != nil {
+		if err := c.Defaults.Routing.Banner.Validate(); err != nil {
+			return fmt.Errorf("defaults.routing.banner: %w", err)
+		}
+	}
+	for name, env := range c.Environments {
+		if env.Routing.Banner != nil {
+			if err := env.Routing.Banner.Validate(); err != nil {
+				return fmt.Errorf("environments[%s].routing.banner: %w", name, err)
+			}
+		}
+	}
+	for label, override := range c.LabelOverrides {
+		if override.Routing.Banner != nil {
+			if err := override.Routing.Banner.Validate(); err != nil {
+				return fmt.Errorf("label_overrides[%s].routing.banner: %w", label, err)
+			}
+		}
+	}
+	return nil
+}
+
+// Validate validates the resolved environment settings.
+func (r *ResolvedSettings) Validate() error {
+	if r == nil {
+		return nil
+	}
+	if r.Routing.Banner != nil {
+		return r.Routing.Banner.Validate()
+	}
+	return nil
 }
 
 func Parse(data []byte) (*Config, error) {

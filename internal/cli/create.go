@@ -13,7 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/yaml"
 
-	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/changeset"
 	"github.com/divergedev/diverge/internal/config"
 	"github.com/divergedev/diverge/internal/git"
@@ -161,8 +161,8 @@ func generateEnvName(envType string, mr int, branch string) string {
 	return name
 }
 
-func buildEnvironment(ctx context.Context, name string, gitCtx *git.GitContext, resolved *config.ResolvedSettings, cfg *config.Config, app *App, mrNumber int) (*divergeiov1alpha1.Environment, error) {
-	env := &divergeiov1alpha1.Environment{
+func buildEnvironment(ctx context.Context, name string, gitCtx *git.GitContext, resolved *config.ResolvedSettings, cfg *config.Config, app *App, mrNumber int) (*v1alpha1.Environment, error) {
+	env := &v1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: app.Namespace,
@@ -171,23 +171,23 @@ func buildEnvironment(ctx context.Context, name string, gitCtx *git.GitContext, 
 				"divergedev.com/provider":    gitCtx.Provider,
 			},
 		},
-		Spec: divergeiov1alpha1.EnvironmentSpec{
-			Source: divergeiov1alpha1.EnvironmentSource{
+		Spec: v1alpha1.EnvironmentSpec{
+			Source: v1alpha1.EnvironmentSource{
 				Provider: gitCtx.Provider,
 				Project:  gitCtx.Project,
 				Branch:   gitCtx.Branch,
 				MR:       mrNumber,
 			},
-			Deploy: divergeiov1alpha1.EnvironmentDeploy{
+			Deploy: v1alpha1.EnvironmentDeploy{
 				Mode:      resolved.Deploy.Mode,
 				Namespace: resolved.Deploy.Namespace,
 			},
-			Routing: divergeiov1alpha1.EnvironmentRouting{
+			Routing: v1alpha1.EnvironmentRouting{
 				Mode:        resolved.Routing.Mode,
 				HeaderKey:   resolved.Routing.HeaderKey,
 				HeaderValue: name,
 			},
-			Database: divergeiov1alpha1.EnvironmentDatabase{
+			Database: v1alpha1.EnvironmentDatabase{
 				Mode:          resolved.Database.Mode,
 				ConnectionRef: resolved.Database.ConnectionRef,
 				SeedSource:    resolved.Database.SeedSource,
@@ -215,12 +215,15 @@ func buildEnvironment(ctx context.Context, name string, gitCtx *git.GitContext, 
 
 	// Configure preview banner
 	if resolved.Routing.Banner != nil {
+		if err := resolved.Routing.Banner.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid banner configuration: %w", err)
+		}
 		bannerCfg := resolved.Routing.Banner
 		enabled := true
 		if bannerCfg.Enabled != nil {
 			enabled = *bannerCfg.Enabled
 		}
-		env.Spec.Routing.Banner = &divergeiov1alpha1.BannerSpec{
+		env.Spec.Routing.Banner = &v1alpha1.BannerSpec{
 			Enabled:  enabled,
 			Text:     bannerCfg.Text,
 			Position: bannerCfg.Position,
@@ -270,7 +273,7 @@ func parseDuration(s string) (*metav1.Duration, error) {
 	return &metav1.Duration{Duration: d}, nil
 }
 
-func printDryRun(env *divergeiov1alpha1.Environment) error {
+func printDryRun(env *v1alpha1.Environment) error {
 	data, err := yaml.Marshal(env)
 	if err != nil {
 		return fmt.Errorf("failed to marshal environment: %w", err)
