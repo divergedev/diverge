@@ -55,6 +55,7 @@ type EnvironmentSettings struct {
 	Database  DatabaseSettings  `yaml:"database"`
 	Lifecycle LifecycleSettings `yaml:"lifecycle"`
 	Features  *FeatureSettings  `yaml:"features,omitempty"`
+	Dev       *DevSettings      `yaml:"dev,omitempty"`
 }
 
 type DeploySettings struct {
@@ -160,6 +161,21 @@ func (f *FeatureSettings) Validate() error {
 	return nil
 }
 
+// DevSettings configures local development behavior (diverge dev).
+type DevSettings struct {
+	OnConflict string `yaml:"on_conflict,omitempty"` // warn | block | allow
+}
+
+func (d *DevSettings) Validate() error {
+	if d == nil || d.OnConflict == "" {
+		return nil
+	}
+	if d.OnConflict != "warn" && d.OnConflict != "block" && d.OnConflict != "allow" {
+		return fmt.Errorf("dev on_conflict must be \"warn\", \"block\", or \"allow\", got %q", d.OnConflict)
+	}
+	return nil
+}
+
 type EnvironmentType struct {
 	EnvironmentSettings `yaml:",inline"`
 	Trigger             string `yaml:"trigger"` // label | auto | manual | branch | schedule
@@ -221,6 +237,11 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("defaults.features: %w", err)
 		}
 	}
+	if c.Defaults.Dev != nil {
+		if err := c.Defaults.Dev.Validate(); err != nil {
+			return fmt.Errorf("defaults.dev: %w", err)
+		}
+	}
 	for name, env := range c.Environments {
 		if env.Routing.Banner != nil {
 			if err := env.Routing.Banner.Validate(); err != nil {
@@ -235,6 +256,11 @@ func (c *Config) Validate() error {
 		if env.Features != nil {
 			if err := env.Features.Validate(); err != nil {
 				return fmt.Errorf("environments[%s].features: %w", name, err)
+			}
+		}
+		if env.Dev != nil {
+			if err := env.Dev.Validate(); err != nil {
+				return fmt.Errorf("environments[%s].dev: %w", name, err)
 			}
 		}
 	}
@@ -252,6 +278,11 @@ func (c *Config) Validate() error {
 		if override.Features != nil {
 			if err := override.Features.Validate(); err != nil {
 				return fmt.Errorf("label_overrides[%s].features: %w", label, err)
+			}
+		}
+		if override.Dev != nil {
+			if err := override.Dev.Validate(); err != nil {
+				return fmt.Errorf("label_overrides[%s].dev: %w", label, err)
 			}
 		}
 	}
@@ -275,6 +306,11 @@ func (r *ResolvedSettings) Validate() error {
 	}
 	if r.Features != nil {
 		if err := r.Features.Validate(); err != nil {
+			return err
+		}
+	}
+	if r.Dev != nil {
+		if err := r.Dev.Validate(); err != nil {
 			return err
 		}
 	}
@@ -454,5 +490,17 @@ func mergeSettings(dst, src *EnvironmentSettings) {
 			}
 		}
 		dst.Features = f
+	}
+
+	// Dev
+	if src.Dev != nil {
+		d := &DevSettings{}
+		if dst.Dev != nil {
+			*d = *dst.Dev
+		}
+		if src.Dev.OnConflict != "" {
+			d.OnConflict = src.Dev.OnConflict
+		}
+		dst.Dev = d
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -17,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/pkg/devsession"
 )
 
 func TestDevCmd_InterceptAndRelease(t *testing.T) {
@@ -114,6 +116,7 @@ func (f fakeDetector) DetectUsername(ctx context.Context) (string, error) {
 func runDevTestSetup(t *testing.T, detector EnvironmentDetector) (*App, client.Client, *cobra.Command, context.CancelFunc) {
 	s := runtime.NewScheme()
 	_ = divergeiov1alpha1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
 	c := fake.NewClientBuilder().WithScheme(s).Build()
 	app := &App{
 		Client:    c,
@@ -417,19 +420,23 @@ func TestRunDev_CleanupTimeout(t *testing.T) {
 
 	s := runtime.NewScheme()
 	_ = divergeiov1alpha1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
 
 	c := fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(interceptor.Funcs{
 		Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
-			if deadline, ok := ctx.Deadline(); ok {
-				remaining := time.Until(deadline)
-				if remaining < 4*time.Second || remaining > 6*time.Second {
-					t.Errorf("expected deadline ~5s from now, got %v", remaining)
+			if _, ok := obj.(*divergeiov1alpha1.PreviewGroup); ok {
+				if deadline, ok := ctx.Deadline(); ok {
+					remaining := time.Until(deadline)
+					if remaining < 4*time.Second || remaining > 6*time.Second {
+						t.Errorf("expected deadline ~5s from now, got %v", remaining)
+					}
+				} else {
+					t.Errorf("expected deadline on context")
 				}
-			} else {
-				t.Errorf("expected deadline on context")
+				<-ctx.Done()
+				return ctx.Err()
 			}
-			<-ctx.Done()
-			return ctx.Err()
+			return cl.Delete(ctx, obj, opts...)
 		},
 	}).Build()
 
@@ -578,4 +585,101 @@ func TestRunChildProcess_EnvInjection(t *testing.T) {
 	require.NoError(t, err)
 	err = cmd.Wait()
 	require.NoError(t, err, "child process failed, env var was not injected")
+}
+
+func TestRunDev_ConflictPolicy_Block(t *testing.T) {
+	detectorAlice := fakeDetector{serviceName: "payments", username: "alice", gitBranch: "feat-a"}
+	app, c, cmdAlice, cancelAlice := runDevTestSetup(t, detectorAlice)
+	defer cancelAlice()
+
+	sessionMgr := devsession.NewSessionManager(c)
+
+	// Alice starts dev session
+	errChAlice := make(chan error, 1)
+	go func() {
+		errChAlice <- runDev(runDevParams{
+			App: app, Service: "payments", Cmd: cmdAlice,
+			NoTunnel: true, NoProxy: true,
+			Options: []DevOption{
+				WithEnvironmentDetector(detectorAlice),
+				WithSessionManager(sessionMgr),
+			},
+		})
+	}()
+
+	// Wait for Alice's session to be established
+	require.Eventually(t, func() bool {
+		sessions, err := sessionMgr.List(context.Background(), "default")
+		return err == nil && len(sessions) == 1 && sessions[0].Developer == "alice"
+	}, 2*time.Second, 20*time.Millisecond)
+
+	// Bob attempts on payments with on-conflict=block
+	detectorBob := fakeDetector{serviceName: "payments", username: "bob", gitBranch: "feat-b"}
+	ctxBob, cancelBob := context.WithCancel(context.Background())
+	defer cancelBob()
+	cmdBob := &cobra.Command{}
+	cmdBob.SetContext(ctxBob)
+
+	errBob := runDev(runDevParams{
+		App: app, Service: "payments", Cmd: cmdBob,
+		NoTunnel: true, NoProxy: true, OnConflict: "block",
+		Options: []DevOption{
+			WithEnvironmentDetector(detectorBob),
+			WithSessionManager(sessionMgr),
+		},
+	})
+	require.Error(t, errBob)
+	assert.Contains(t, errBob.Error(), "dev session blocked")
+
+	cancelAlice()
+	<-errChAlice
+}
+
+func TestRunDev_ConflictPolicy_Force(t *testing.T) {
+	detectorAlice := fakeDetector{serviceName: "payments", username: "alice", gitBranch: "feat-a"}
+	app, c, _, cancelAlice := runDevTestSetup(t, detectorAlice)
+	defer cancelAlice()
+
+	sessionMgr := devsession.NewSessionManager(c)
+
+	// Pre-seed an active session for Alice
+	sessAlice := devsession.DevSession{
+		ID:        "alice-sess",
+		Service:   "payments",
+		Namespace: "default",
+		Developer: "alice",
+		Hostname:  "alice-mac",
+		Branch:    "feat-a",
+		StartedAt: time.Now(),
+		Heartbeat: time.Now(),
+	}
+	_, _, err := sessionMgr.Acquire(context.Background(), sessAlice, devsession.ConflictPolicyBlock, false)
+	require.NoError(t, err)
+
+	// Bob runs with Force=true
+	detectorBob := fakeDetector{serviceName: "payments", username: "bob", gitBranch: "feat-b"}
+	ctxBob, cancelBob := context.WithCancel(context.Background())
+	cmdBob := &cobra.Command{}
+	cmdBob.SetContext(ctxBob)
+
+	errChBob := make(chan error, 1)
+	go func() {
+		errChBob <- runDev(runDevParams{
+			App: app, Service: "payments", Cmd: cmdBob,
+			NoTunnel: true, NoProxy: true, Force: true,
+			Options: []DevOption{
+				WithEnvironmentDetector(detectorBob),
+				WithSessionManager(sessionMgr),
+			},
+		})
+	}()
+
+	// Bob should take over the session
+	require.Eventually(t, func() bool {
+		sessions, err := sessionMgr.List(context.Background(), "default")
+		return err == nil && len(sessions) == 1 && sessions[0].Developer == "bob"
+	}, 2*time.Second, 20*time.Millisecond)
+
+	cancelBob()
+	<-errChBob
 }
