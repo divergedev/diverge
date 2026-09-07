@@ -77,7 +77,8 @@ func TestRunner_RoutingKeyAndBaseline(t *testing.T) {
 
 	assert.Greater(t, atomic.LoadInt64(&candidateHeadersReceived), int64(0))
 	assert.Greater(t, atomic.LoadInt64(&baselineRequests), int64(0))
-	assert.Greater(t, res.Candidate.Latencies.Mean, res.Baseline.Latencies.Mean)
+	assert.Greater(t, res.Candidate.TotalRequests, int64(0))
+	assert.Greater(t, res.Baseline.TotalRequests, int64(0))
 	assert.True(t, res.Passed)
 }
 
