@@ -75,6 +75,36 @@ func TestMulti_RoutesToCorrectResolver(t *testing.T) {
 	assert.Equal(t, "multi-val", val)
 }
 
+func TestMulti_RoutesOpenBaoAndBaoToVault(t *testing.T) {
+	fakeVault := &mockResolver{val: "vault-secret"}
+	m := NewMulti(map[string]Resolver{
+		"vault": fakeVault,
+	})
+
+	// Test "openbao" alias
+	val, err := m.Resolve(context.Background(), SecretRef{Provider: "openbao", Path: "secret/data/foo", Key: "k"})
+	require.NoError(t, err)
+	assert.Equal(t, "vault-secret", val)
+
+	// Test "bao" alias
+	val, err = m.Resolve(context.Background(), SecretRef{Provider: "bao", Path: "secret/data/foo", Key: "k"})
+	require.NoError(t, err)
+	assert.Equal(t, "vault-secret", val)
+
+	// Test case-insensitivity
+	val, err = m.Resolve(context.Background(), SecretRef{Provider: "OpenBao", Path: "secret/data/foo", Key: "k"})
+	require.NoError(t, err)
+	assert.Equal(t, "vault-secret", val)
+}
+
+type mockResolver struct {
+	val string
+}
+
+func (m *mockResolver) Resolve(ctx context.Context, ref SecretRef) (string, error) {
+	return m.val, nil
+}
+
 func TestMulti_UnknownProvider(t *testing.T) {
 	m := NewMulti(map[string]Resolver{})
 	_, err := m.Resolve(context.Background(), SecretRef{Provider: "nope"})

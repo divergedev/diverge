@@ -8,12 +8,21 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"golang.org/x/sync/singleflight"
 )
+
+// OpenBaoResolver is an alias to VaultResolver as OpenBao is wire-compatible.
+type OpenBaoResolver = VaultResolver
+
+// NewOpenBaoResolver creates a resolver targeting an OpenBao (or Vault) instance.
+func NewOpenBaoResolver() *VaultResolver {
+	return NewVaultResolver()
+}
 
 type VaultResolver struct {
 	addr        string
@@ -27,8 +36,14 @@ type VaultResolver struct {
 }
 
 func NewVaultResolver() *VaultResolver {
-	addr := os.Getenv("VAULT_ADDR")
-	token := os.Getenv("VAULT_TOKEN")
+	addr := os.Getenv("BAO_ADDR")
+	if addr == "" {
+		addr = os.Getenv("VAULT_ADDR")
+	}
+	token := os.Getenv("BAO_TOKEN")
+	if token == "" {
+		token = os.Getenv("VAULT_TOKEN")
+	}
 
 	return &VaultResolver{
 		addr:  addr,
@@ -75,6 +90,7 @@ func (r *VaultResolver) Resolve(ctx context.Context, ref SecretRef) (string, err
 		return "", err
 	}
 	req.Header.Set("X-Vault-Token", token)
+	req.Header.Set("X-Bao-Token", token)
 
 	resp, err := r.client.Do(req)
 	if err != nil {
@@ -136,12 +152,32 @@ func (r *VaultResolver) getToken(ctx context.Context) (string, error) {
 	}
 	r.mu.RUnlock()
 
+	// Check token files in user's home directory (~/.bao-token, ~/.vault-token)
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if data, err := os.ReadFile(filepath.Join(home, ".bao-token")); err == nil {
+			if t := strings.TrimSpace(string(data)); t != "" {
+				r.mu.Lock()
+				r.token = t
+				r.mu.Unlock()
+				return t, nil
+			}
+		}
+		if data, err := os.ReadFile(filepath.Join(home, ".vault-token")); err == nil {
+			if t := strings.TrimSpace(string(data)); t != "" {
+				r.mu.Lock()
+				r.token = t
+				r.mu.Unlock()
+				return t, nil
+			}
+		}
+	}
+
 	// Try Kubernetes Auth
 	v, err, _ := r.sfGroup.Do("token", func() (interface{}, error) {
 		jwtBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token")
 		if err != nil {
 			if os.IsNotExist(err) && r.token == "" {
-				return "", fmt.Errorf("no VAULT_TOKEN set and kubernetes token not found")
+				return "", fmt.Errorf("no BAO_TOKEN or VAULT_TOKEN set and kubernetes token not found")
 			} else if os.IsNotExist(err) {
 				// fall back to whatever token we might have
 				return r.token, nil

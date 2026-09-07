@@ -152,6 +152,9 @@ users:
 // so failing here beats reconnecting into that forever.
 func TestRunDev_TunnelNoCredential(t *testing.T) {
 	t.Setenv(tunnelTokenEnvVar, "")
+	t.Setenv("BAO_TOKEN", "")
+	t.Setenv("VAULT_TOKEN", "")
+	t.Setenv("HOME", t.TempDir())
 
 	detector := fakeDetector{
 		tailscaleIP: "100.100.100.100",
@@ -162,7 +165,15 @@ func TestRunDev_TunnelNoCredential(t *testing.T) {
 	app, _, cmd, cancel := runDevTestSetup(t, detector)
 	defer cancel()
 
-	err := runDev(runDevParams{
+	tmpKubeconfig, err := os.CreateTemp("", "kubeconfig-*")
+	require.NoError(t, err)
+	defer func() { _ = os.Remove(tmpKubeconfig.Name()) }()
+	_, err = tmpKubeconfig.WriteString("apiVersion: v1\nkind: Config\nclusters: []\ncontexts: []\nusers: []\n")
+	require.NoError(t, err)
+	require.NoError(t, tmpKubeconfig.Close())
+	app.Kubeconfig = tmpKubeconfig.Name()
+
+	err = runDev(runDevParams{
 		App:      app,
 		Cmd:      cmd,
 		NoTunnel: false,

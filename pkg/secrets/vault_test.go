@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -137,20 +138,97 @@ func TestVaultResolver_GetToken(t *testing.T) {
 
 	t.Run("No VAULT_TOKEN and no SA token", func(t *testing.T) {
 		t.Setenv("VAULT_TOKEN", "")
+		t.Setenv("BAO_TOKEN", "")
+		t.Setenv("HOME", t.TempDir())
 		r := NewVaultResolver()
 		_, err := r.getToken(context.Background())
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "no VAULT_TOKEN set and kubernetes token not found")
+		assert.Contains(t, err.Error(), "no BAO_TOKEN or VAULT_TOKEN set and kubernetes token not found")
 	})
 
 	t.Run("No VAULT_TOKEN, role set, no SA token", func(t *testing.T) {
 		t.Setenv("VAULT_TOKEN", "")
+		t.Setenv("BAO_TOKEN", "")
+		t.Setenv("HOME", t.TempDir())
 		r := NewVaultResolver()
 		r.SetRole("my-role", "")
 		_, err := r.getToken(context.Background())
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "no VAULT_TOKEN set and kubernetes token not found")
+		assert.Contains(t, err.Error(), "no BAO_TOKEN or VAULT_TOKEN set and kubernetes token not found")
 	})
+
+	t.Run("BAO_TOKEN takes precedence over VAULT_TOKEN", func(t *testing.T) {
+		t.Setenv("BAO_TOKEN", "bao-precedence-token")
+		t.Setenv("VAULT_TOKEN", "vault-fallback-token")
+		r := NewVaultResolver()
+		token, err := r.getToken(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, "bao-precedence-token", token)
+	})
+
+	t.Run("reads from ~/.bao-token if env unset", func(t *testing.T) {
+		t.Setenv("BAO_TOKEN", "")
+		t.Setenv("VAULT_TOKEN", "")
+		tempHome := t.TempDir()
+		t.Setenv("HOME", tempHome)
+		err := os.WriteFile(tempHome+"/.bao-token", []byte("file-bao-token\n"), 0o600)
+		require.NoError(t, err)
+
+		r := NewVaultResolver()
+		token, err := r.getToken(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, "file-bao-token", token)
+	})
+
+	t.Run("reads from ~/.vault-token if ~/.bao-token absent and env unset", func(t *testing.T) {
+		t.Setenv("BAO_TOKEN", "")
+		t.Setenv("VAULT_TOKEN", "")
+		tempHome := t.TempDir()
+		t.Setenv("HOME", tempHome)
+		err := os.WriteFile(tempHome+"/.vault-token", []byte("file-vault-token\n"), 0o600)
+		require.NoError(t, err)
+
+		r := NewVaultResolver()
+		token, err := r.getToken(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, "file-vault-token", token)
+	})
+}
+
+func TestOpenBao_Interoperability(t *testing.T) {
+	var gotVaultToken, gotBaoToken string
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotVaultToken = r.Header.Get("X-Vault-Token")
+		gotBaoToken = r.Header.Get("X-Bao-Token")
+		assert.Equal(t, "/v1/secret/data/myapp", r.URL.Path)
+
+		resp := map[string]interface{}{
+			"data": map[string]interface{}{
+				"data": map[string]interface{}{
+					"mykey": "bao-secret-value",
+				},
+				"metadata": map[string]interface{}{},
+			},
+		}
+		require.NoError(t, json.NewEncoder(w).Encode(resp))
+	}))
+	defer srv.Close()
+
+	t.Setenv("BAO_ADDR", srv.URL)
+	t.Setenv("VAULT_ADDR", "https://other-vault:8200")
+	t.Setenv("BAO_TOKEN", "bao-secret-token")
+	t.Setenv("VAULT_TOKEN", "vault-secret-token")
+
+	r := NewOpenBaoResolver()
+	assert.Equal(t, srv.URL, r.addr, "BAO_ADDR must take precedence over VAULT_ADDR")
+	assert.Equal(t, "bao-secret-token", r.token, "BAO_TOKEN must take precedence over VAULT_TOKEN")
+
+	r.client = srv.Client()
+	val, err := r.Resolve(context.Background(), SecretRef{Path: "secret/data/myapp", Key: "mykey"})
+	require.NoError(t, err)
+	assert.Equal(t, "bao-secret-value", val)
+	assert.Equal(t, "bao-secret-token", gotVaultToken, "X-Vault-Token header must be set")
+	assert.Equal(t, "bao-secret-token", gotBaoToken, "X-Bao-Token header must be set")
 }
 
 func TestVaultResolver_MaxRedirectLimit(t *testing.T) {
