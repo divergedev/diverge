@@ -98,9 +98,22 @@ The `Environment` Custom Resource represents a single preview environment in Kub
 | `database.connectionRef` | Reference to a Secret containing the database connection string. |
 | `database.seedSource` | Path or reference to database seeding scripts. |
 | `database.migrationJob` | Configuration for a Kubernetes Job to run migrations against the provisioned DB. |
+| `features.provider` | Feature flag provider: `configmap` (default), `flipt`, `flagsmith`, `unleash`, `noop`, `none`. |
+| `features.overrides` | Map of key-value flag overrides for this environment. |
+| `features.connectionRef` | Reference to a Secret containing remote provider endpoint and auth tokens. |
 | `lifecycle.ttl` | Time-to-Live duration string (e.g., `72h`). Environment is deleted after this duration. |
 | `lifecycle.cleanupOnMerge` | Boolean. If true, the environment is destroyed when the MR is merged. |
 | `serviceConfig` | Configuration for a single preview pod in multi-repo mode. |
+
+### `FeatureSpec`
+
+Diverge includes an OpenFeature-compatible feature flags engine. For details and SDK examples, see the [Feature Flags Guide](guides/feature-flags.md).
+
+| Field | Description |
+|---|---|
+| `provider` | Provider implementation: `configmap` (default, in-cluster flagd format), `flipt` (remote ephemeral namespaces), `flagsmith` (preview stub), `unleash` (preview stub), `noop` / `none` (disabled). |
+| `overrides` | Map of flag key to value string. Values `"true"` and `"false"` map to boolean flags; numeric and string values map to variant flags. |
+| `connectionRef` | Name of Kubernetes Secret containing provider connection details (e.g., `url`, `adminToken`, `clientToken`). Dual-tier resolution checks `env.Namespace` first, falling back to `diverge-system`. |
 
 ### `MigrationJobSpec`
 
@@ -134,6 +147,8 @@ The `Environment` Custom Resource represents a single preview environment in Kub
 | `url` | The primary accessible URL for the environment. |
 | `services` | List of services currently actively deployed in this environment. |
 | `databaseStatus` | Status of the database provisioning step. |
+| `featureConfigMap` | Name of the generated Kubernetes ConfigMap containing flagd definitions (when using `configmap` provider). |
+| `featureEnvVars` | Key-value map of environment variables injected into preview workloads for zero-code OpenFeature SDK configuration. |
 | `createdAt` | Timestamp when the environment was created. |
 | `expiresAt` | Timestamp when the environment will be deleted (if TTL is set). |
 
