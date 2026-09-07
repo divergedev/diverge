@@ -253,7 +253,9 @@ func (r *Runner) doRequest(parentCtx context.Context, cfg Config, routingKey str
 			Error:    err,
 		}
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	return RequestRecord{
 		Duration:   duration,

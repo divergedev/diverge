@@ -54,7 +54,7 @@ interactive HTML visual diff report (with magenta highlight overlays) and Markdo
 			if err != nil {
 				return fmt.Errorf("failed to open baseline image %q: %w", baselineImgPath, err)
 			}
-			defer bFile.Close()
+			defer func() { _ = bFile.Close() }()
 			bImg, _, err := image.Decode(bFile)
 			if err != nil {
 				return fmt.Errorf("failed to decode baseline image: %w", err)
@@ -65,7 +65,7 @@ interactive HTML visual diff report (with magenta highlight overlays) and Markdo
 			if err != nil {
 				return fmt.Errorf("failed to open candidate image %q: %w", candidateImgPath, err)
 			}
-			defer cFile.Close()
+			defer func() { _ = cFile.Close() }()
 			cImg, _, err := image.Decode(cFile)
 			if err != nil {
 				return fmt.Errorf("failed to decode candidate image: %w", err)
@@ -89,10 +89,10 @@ interactive HTML visual diff report (with magenta highlight overlays) and Markdo
 					return fmt.Errorf("failed to create diff image file: %w", err)
 				}
 				if err := png.Encode(df, diffImg); err != nil {
-					df.Close()
+					_ = df.Close()
 					return fmt.Errorf("failed to encode diff image: %w", err)
 				}
-				df.Close()
+				_ = df.Close()
 
 				// HTML report
 				reportPath := filepath.Join(outputDir, "visual-report.html")
@@ -101,10 +101,10 @@ interactive HTML visual diff report (with magenta highlight overlays) and Markdo
 					return fmt.Errorf("failed to create visual report file: %w", err)
 				}
 				if err := visualtest.GenerateHTMLReport(rf, bImg, cImg, diffImg, res); err != nil {
-					rf.Close()
+					_ = rf.Close()
 					return fmt.Errorf("failed to generate HTML report: %w", err)
 				}
-				rf.Close()
+				_ = rf.Close()
 
 				// Markdown summary
 				mdPath := filepath.Join(outputDir, "summary.md")
@@ -113,10 +113,10 @@ interactive HTML visual diff report (with magenta highlight overlays) and Markdo
 					return fmt.Errorf("failed to create markdown summary file: %w", err)
 				}
 				if err := visualtest.GenerateMarkdownSummary(mf, res); err != nil {
-					mf.Close()
+					_ = mf.Close()
 					return fmt.Errorf("failed to generate markdown summary: %w", err)
 				}
-				mf.Close()
+				_ = mf.Close()
 			}
 
 			if outputJSON {

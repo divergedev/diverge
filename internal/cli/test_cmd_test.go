@@ -18,7 +18,7 @@ func writeTestPNG(t *testing.T, path string, img image.Image) {
 	t.Helper()
 	f, err := os.Create(path)
 	require.NoError(t, err)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	err = png.Encode(f, img)
 	require.NoError(t, err)
 }
