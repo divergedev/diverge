@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"text/tabwriter"
@@ -11,8 +12,22 @@ import (
 	"github.com/divergedev/diverge/pkg/devsession"
 )
 
+// DevSessionJSONItem represents a dev session in JSON format compatible with IDE views.
+type DevSessionJSONItem struct {
+	Service   string `json:"service"`
+	Developer string `json:"developer"`
+	Branch    string `json:"branch"`
+	Hostname  string `json:"hostname"`
+	Heartbeat string `json:"heartbeat"`
+	Status    string `json:"status"`
+}
+
 func newDevSessionsCmd(app *App) *cobra.Command {
-	var nsFlag string
+	var (
+		nsFlag       string
+		outputJSON   bool
+		outputFormat string
+	)
 
 	cmd := &cobra.Command{
 		Use:     "sessions",
@@ -36,12 +51,54 @@ func newDevSessionsCmd(app *App) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("listing dev sessions: %w", err)
 			}
+
+			if outputJSON || outputFormat == "json" {
+				return printDevSessionsJSON(cmd.OutOrStdout(), sessions)
+			}
+
 			printDevSessions(cmd.OutOrStdout(), sessions)
 			return nil
 		},
 	}
 	cmd.Flags().StringVarP(&nsFlag, "namespace", "n", "", "Kubernetes namespace (default: from kubeconfig)")
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output in JSON format")
+	cmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "Output format (table, json)")
 	return cmd
+}
+
+func printDevSessionsJSON(w io.Writer, sessions []devsession.DevSession) error {
+	if len(sessions) == 0 {
+		_, err := fmt.Fprintln(w, "[]")
+		return err
+	}
+
+	now := time.Now()
+	items := make([]DevSessionJSONItem, 0, len(sessions))
+	for _, s := range sessions {
+		status := "ACTIVE"
+		if s.IsStale(now) {
+			status = "STALE"
+		}
+		hbStr := "just now"
+		if !s.Heartbeat.IsZero() {
+			hbStr = fmt.Sprintf("%s ago", now.Sub(s.Heartbeat).Round(time.Second))
+		}
+		items = append(items, DevSessionJSONItem{
+			Service:   s.Service,
+			Developer: s.Developer,
+			Branch:    s.Branch,
+			Hostname:  s.Hostname,
+			Heartbeat: hbStr,
+			Status:    status,
+		})
+	}
+
+	data, err := json.MarshalIndent(items, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshalling dev sessions JSON: %w", err)
+	}
+	_, err = fmt.Fprintln(w, string(data))
+	return err
 }
 
 func printDevSessions(w io.Writer, sessions []devsession.DevSession) {

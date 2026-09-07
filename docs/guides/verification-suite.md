@@ -117,13 +117,15 @@ The Diverge IDE extension integrates preview management directly into your edito
 - **CodeLens in `diverge.yaml`**: Inline `▶ Run Load Test` and `🩺 Diagnose with Doctor` buttons above service definitions.
 
 ### OpenCode Agent Integration
-OpenCode AI agents can invoke Diverge tools directly via the native MCP server:
+OpenCode AI agents can invoke Diverge tools directly via the native MCP server configured in `opencode.json`:
 ```json
 {
-  "mcpServers": {
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
     "diverge": {
-      "command": "diverge",
-      "args": ["mcp"]
+      "type": "local",
+      "command": ["diverge", "mcp"],
+      "enabled": true
     }
   }
 }

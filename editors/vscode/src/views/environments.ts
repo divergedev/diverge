@@ -48,9 +48,9 @@ export class EnvironmentsProvider implements vscode.TreeDataProvider<vscode.Tree
   async getChildren(element?: vscode.TreeItem): Promise<vscode.TreeItem[]> {
     if (!element) {
       try {
-        const raw = await this.cli.run(["list", "-o", "json"]);
+        const raw = await this.cli.run(["list", "--output", "json"]);
         const list = JSON.parse(raw);
-        const items = list.items || [];
+        const items = Array.isArray(list) ? list : (list.items || []);
         const envs: EnvironmentItem[] = items.map((item: any) => ({
           name: item.metadata?.name || "unknown",
           namespace: item.metadata?.namespace || "default",
@@ -58,6 +58,8 @@ export class EnvironmentsProvider implements vscode.TreeDataProvider<vscode.Tree
           url: item.status?.url,
           routingKey: item.spec?.routing?.headerValue || item.metadata?.name,
           branch: item.spec?.source?.branch,
+          services: item.status?.services ? Object.keys(item.status.services) : undefined,
+          createdAt: item.metadata?.creationTimestamp,
         }));
         if (!envs || envs.length === 0) {
           return [new vscode.TreeItem("No preview environments found")];
