@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { spawn } from "child_process";
 import { DivergeCLI } from "./cli";
 import { EnvironmentsProvider, EnvironmentTreeItem } from "./views/environments";
 import { SessionsProvider } from "./views/sessions";
@@ -10,6 +11,10 @@ export function activate(context: vscode.ExtensionContext) {
   const cli = new DivergeCLI();
   const statusBar = new DivergeStatusBar();
   context.subscriptions.push(statusBar);
+
+  // Dedicated OutputChannel for secure non-shell command execution
+  const outputChannel = vscode.window.createOutputChannel("Diverge");
+  context.subscriptions.push(outputChannel);
 
   // Tree views
   const envsProvider = new EnvironmentsProvider(cli);
@@ -28,11 +33,50 @@ export function activate(context: vscode.ExtensionContext) {
     )
   );
 
+  async function refreshAll() {
+    envsProvider.refresh();
+    sessionsProvider.refresh();
+    try {
+      const raw = await cli.run(["list", "--output", "json"]);
+      const parsed = JSON.parse(raw);
+      const items = Array.isArray(parsed) ? parsed : (parsed.items || []);
+      if (items.length > 0) {
+        statusBar.updateStatus(`$(rocket) Diverge (${items.length})`, `Diverge: ${items.length} active preview environment(s)`);
+      } else {
+        statusBar.updateStatus(`$(rocket) Diverge`, "Click to open Diverge Preview Actions");
+      }
+    } catch {
+      statusBar.updateStatus(`$(rocket) Diverge`, "Click to open Diverge Preview Actions");
+    }
+  }
+
+  function runCLI(args: string[], title: string) {
+    outputChannel.show(true);
+    outputChannel.appendLine(`\n=== Running: ${title} ===`);
+    const cliPath = cli.getCliPath();
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+    const child = spawn(cliPath, args, { cwd: workspaceRoot });
+    child.stdout.on("data", (data) => outputChannel.append(data.toString()));
+    child.stderr.on("data", (data) => outputChannel.append(data.toString()));
+    child.on("close", (code) => {
+      outputChannel.appendLine(`=== ${title} finished with exit code ${code} ===\n`);
+      if (code === 0) {
+        refreshAll();
+      }
+    });
+    child.on("error", (err) => {
+      outputChannel.appendLine(`Error executing ${cliPath}: ${err.message}\n`);
+    });
+  }
+
+  // Initial load
+  refreshAll();
+
   // Commands
   context.subscriptions.push(
-    vscode.commands.registerCommand("diverge.refresh", () => {
-      envsProvider.refresh();
-      sessionsProvider.refresh();
+    vscode.commands.registerCommand("diverge.refresh", async () => {
+      await refreshAll();
       vscode.window.showInformationMessage("Diverge state refreshed");
     })
   );
@@ -42,10 +86,11 @@ export function activate(context: vscode.ExtensionContext) {
       const envName = item?.env.name || (await vscode.window.showInputBox({
         prompt: "Enter environment name to diagnose (leave empty for all)",
       }));
-      const terminal = vscode.window.createTerminal("Diverge Doctor");
-      terminal.show();
-      const arg = envName ? ` ${envName}` : "";
-      terminal.sendText(`diverge doctor${arg}`);
+      const args = ["doctor"];
+      if (envName) {
+        args.push(envName);
+      }
+      runCLI(args, "Diverge Doctor");
     })
   );
 
@@ -61,10 +106,11 @@ export function activate(context: vscode.ExtensionContext) {
         prompt: "Enter preview routing key (optional)",
       });
 
-      const terminal = vscode.window.createTerminal("Diverge Load Test");
-      terminal.show();
-      const rkArg = routingKey ? ` --routing-key ${routingKey} --baseline` : "";
-      terminal.sendText(`diverge loadtest ${url}${rkArg}`);
+      const args = ["loadtest", url];
+      if (routingKey) {
+        args.push("--routing-key", routingKey, "--baseline");
+      }
+      runCLI(args, "Diverge Load Test");
     })
   );
 
@@ -82,9 +128,7 @@ export function activate(context: vscode.ExtensionContext) {
       });
       if (!candidate) return;
 
-      const terminal = vscode.window.createTerminal("Diverge Visual Diff");
-      terminal.show();
-      terminal.sendText(`diverge test visual --baseline ${baseline} --candidate ${candidate}`);
+      runCLI(["test", "visual", "--baseline", baseline, "--candidate", candidate], "Diverge Visual Diff");
     })
   );
 
@@ -113,10 +157,11 @@ export function activate(context: vscode.ExtensionContext) {
       const service = await vscode.window.showInputBox({
         prompt: "Enter service name to develop locally (leave empty for default)",
       });
-      const terminal = vscode.window.createTerminal("Diverge Dev");
-      terminal.show();
-      const sArg = service ? ` --service ${service}` : "";
-      terminal.sendText(`diverge dev${sArg}`);
+      const args = ["dev"];
+      if (service) {
+        args.push("--service", service);
+      }
+      runCLI(args, "Diverge Dev");
     })
   );
 
@@ -126,17 +171,13 @@ export function activate(context: vscode.ExtensionContext) {
         prompt: "Enter service name to release lock for",
       });
       if (!service) return;
-      const terminal = vscode.window.createTerminal("Diverge Dev Release");
-      terminal.show();
-      terminal.sendText(`diverge dev release ${service}`);
+      runCLI(["dev", "release", service], "Diverge Dev Release");
     })
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("diverge.status", () => {
-      const terminal = vscode.window.createTerminal("Diverge Status");
-      terminal.show();
-      terminal.sendText("diverge status");
+      runCLI(["status"], "Diverge Status");
     })
   );
 
@@ -161,8 +202,7 @@ export function activate(context: vscode.ExtensionContext) {
   const config = vscode.workspace.getConfiguration("diverge");
   const intervalSeconds = config.get<number>("autoRefreshInterval") || 10;
   const interval = setInterval(() => {
-    envsProvider.refresh();
-    sessionsProvider.refresh();
+    refreshAll();
   }, intervalSeconds * 1000);
 
   context.subscriptions.push({

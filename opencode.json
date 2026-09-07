@@ -1,9 +1,24 @@
 {
-  "$schema": "https://opencode.ai/schema.json",
-  "mcpServers": {
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
     "diverge": {
-      "command": "diverge",
-      "args": ["mcp"]
+      "type": "local",
+      "command": ["diverge", "mcp"],
+      "enabled": true
+    }
+  },
+  "commands": {
+    "preview": {
+      "description": "Create or manage a Diverge preview environment for the current branch",
+      "template": "Inspect current git branch, check if a Diverge preview exists via diverge_get_environment, and spin one up with diverge_create_environment if needed."
+    },
+    "doctor": {
+      "description": "Run Diverge Doctor to diagnose failing preview pods or unprogrammed routes",
+      "template": "Call diverge_doctor on the active preview environment and suggest concrete code or configuration remedies."
+    },
+    "loadtest": {
+      "description": "Run an ephemeral load test against the preview candidate and compare with baseline",
+      "template": "Call diverge_loadtest with target URL and current routing key, reporting latency percentiles (p50, p95, p99)."
     }
   }
 }

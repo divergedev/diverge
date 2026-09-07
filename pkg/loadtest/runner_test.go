@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -215,14 +216,19 @@ func TestRunner_RPSRateLimiting(t *testing.T) {
 }
 
 func TestRunner_PostWithBodyAndHeaders(t *testing.T) {
-	var receivedBody []byte
-	var customHeaderVal string
+	var (
+		mu              sync.Mutex
+		receivedBody    []byte
+		customHeaderVal string
+	)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		customHeaderVal = r.Header.Get("X-Custom-Header")
 		var buf bytes.Buffer
 		_, _ = buf.ReadFrom(r.Body)
+		mu.Lock()
+		customHeaderVal = r.Header.Get("X-Custom-Header")
 		receivedBody = buf.Bytes()
+		mu.Unlock()
 		w.WriteHeader(http.StatusCreated)
 	}))
 	defer srv.Close()
@@ -241,8 +247,12 @@ func TestRunner_PostWithBodyAndHeaders(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	assert.True(t, res.Passed)
-	assert.Equal(t, "custom-val", customHeaderVal)
-	assert.JSONEq(t, `{"action":"verify"}`, string(receivedBody))
+	mu.Lock()
+	headerCopy := customHeaderVal
+	bodyCopy := string(receivedBody)
+	mu.Unlock()
+	assert.Equal(t, "custom-val", headerCopy)
+	assert.JSONEq(t, `{"action":"verify"}`, bodyCopy)
 	assert.Equal(t, res.Candidate.TotalRequests, res.Candidate.SuccessCount)
 }
 

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 
 	divergev1alpha1 "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 	divergev1alpha1connect "github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
+	"github.com/divergedev/diverge/pkg/doctor"
 	"github.com/divergedev/diverge/pkg/loadtest"
 )
 
@@ -182,6 +185,52 @@ func containsErrorLevel(line string) bool {
 	return false
 }
 
+// validateTargetURL validates that targetURL has http/https scheme, a non-empty host,
+// and protects against SSRF (disallowing cloud metadata addresses, link-local unicast/multicast,
+// and enforcing DIVERGE_ALLOWED_HOSTS allowlist if configured).
+func validateTargetURL(targetURL string) error {
+	parsedURL, err := url.Parse(targetURL)
+	if err != nil {
+		return fmt.Errorf("invalid target URL: %w", err)
+	}
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return fmt.Errorf("target_url must be a valid http or https URL")
+	}
+	hostname := parsedURL.Hostname()
+	if hostname == "" {
+		return fmt.Errorf("target_url host cannot be empty")
+	}
+
+	lowerHost := strings.ToLower(hostname)
+	if lowerHost == "metadata.google.internal" || lowerHost == "metadata" || lowerHost == "instance-data" {
+		return fmt.Errorf("target_url destination %q is prohibited", hostname)
+	}
+
+	if ip := net.ParseIP(hostname); ip != nil {
+		if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.Equal(net.ParseIP("169.254.169.254")) {
+			return fmt.Errorf("target_url destination IP %s is prohibited", hostname)
+		}
+	}
+
+	if allowed := os.Getenv("DIVERGE_ALLOWED_HOSTS"); allowed != "" {
+		matched := false
+		for _, pattern := range strings.Split(allowed, ",") {
+			pattern = strings.TrimSpace(strings.ToLower(pattern))
+			if pattern == "" {
+				continue
+			}
+			if pattern == "*" || pattern == lowerHost || strings.HasSuffix(lowerHost, "."+pattern) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return fmt.Errorf("target_url host %q is not in the allowed hosts list", hostname)
+		}
+	}
+	return nil
+}
+
 func registerLoadtest(registry mcpruntime.Registry) {
 	registry.Register(mcpruntime.ToolDefinition{
 		Name:        "diverge_loadtest",
@@ -200,10 +249,9 @@ func registerLoadtest(registry mcpruntime.Registry) {
 			return nil, fmt.Errorf("invalid arguments: %w", err)
 		}
 
-		parsedURL, err := url.Parse(params.TargetURL)
-		if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Host == "" {
+		if err := validateTargetURL(params.TargetURL); err != nil {
 			return &mcpruntime.CallToolResult{
-				Content: json.RawMessage(`{"error": "target_url must be a valid http or https URL"}`),
+				Content: json.RawMessage(fmt.Sprintf(`{"error": %q}`, err.Error())),
 				IsError: true,
 			}, nil
 		}
@@ -256,7 +304,12 @@ var doctorSchema = json.RawMessage(`{
 	"required": ["name", "namespace"]
 }`)
 
-func registerDoctor(registry mcpruntime.Registry, client divergev1alpha1connect.EnvironmentServiceClient) {
+func registerDoctor(registry mcpruntime.Registry, client divergev1alpha1connect.EnvironmentServiceClient, diagnoser ...*doctor.Diagnoser) {
+	var diag *doctor.Diagnoser
+	if len(diagnoser) > 0 {
+		diag = diagnoser[0]
+	}
+
 	registry.Register(mcpruntime.ToolDefinition{
 		Name:        "diverge_doctor",
 		Description: "Diagnose an environment or workload failure. Evaluates phase, status conditions, and provides root-cause recommendations.",
@@ -270,28 +323,46 @@ func registerDoctor(registry mcpruntime.Registry, client divergev1alpha1connect.
 			return nil, fmt.Errorf("invalid arguments: %w", err)
 		}
 
-		resp, err := client.GetEnvironment(ctx, connect.NewRequest(&divergev1alpha1.GetEnvironmentRequest{
-			Name:      params.Name,
-			Namespace: params.Namespace,
-		}))
-		if err != nil {
-			return &mcpruntime.CallToolResult{
-				Content: json.RawMessage(fmt.Sprintf(`{"error": %q}`, err.Error())),
-				IsError: true,
-			}, nil
-		}
-
-		env := resp.Msg.Environment
 		healthy := true
 		var issues []string
 		var remedies []string
 
-		if env != nil && env.Status != nil {
-			phase := env.Status.Phase
-			if phase == "Failed" || phase == "Error" {
-				healthy = false
-				issues = append(issues, fmt.Sprintf("Environment phase is %s", phase))
-				remedies = append(remedies, "Inspect logs with diverge_fetch_errors or verify container image tags")
+		if diag != nil {
+			report, err := diag.Diagnose(ctx, params.Namespace, params.Name)
+			if err != nil {
+				return &mcpruntime.CallToolResult{
+					Content: json.RawMessage(fmt.Sprintf(`{"error": %q}`, err.Error())),
+					IsError: true,
+				}, nil
+			}
+			healthy = report.Healthy
+			for _, iss := range report.Issues {
+				issues = append(issues, fmt.Sprintf("[%s] %s: %s", iss.Severity, iss.Component, iss.Summary))
+				if iss.Remediation != "" {
+					remedies = append(remedies, iss.Remediation)
+				}
+			}
+			remedies = append(remedies, report.Suggestions...)
+		} else {
+			resp, err := client.GetEnvironment(ctx, connect.NewRequest(&divergev1alpha1.GetEnvironmentRequest{
+				Name:      params.Name,
+				Namespace: params.Namespace,
+			}))
+			if err != nil {
+				return &mcpruntime.CallToolResult{
+					Content: json.RawMessage(fmt.Sprintf(`{"error": %q}`, err.Error())),
+					IsError: true,
+				}, nil
+			}
+
+			env := resp.Msg.Environment
+			if env != nil && env.Status != nil {
+				phase := env.Status.Phase
+				if phase == "Failed" || phase == "Error" {
+					healthy = false
+					issues = append(issues, fmt.Sprintf("Environment phase is %s", phase))
+					remedies = append(remedies, "Inspect logs with diverge_fetch_errors or verify container image tags")
+				}
 			}
 		}
 

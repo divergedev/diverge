@@ -17,6 +17,7 @@ import (
 
 	divergev1alpha1 "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 	divergev1alpha1connect "github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
+	"github.com/divergedev/diverge/pkg/doctor"
 )
 
 // pascalToSnake converts PascalCase to snake_case.
@@ -184,7 +185,7 @@ func (h *mcpPgHandler) WatchPreviewGroups(ctx context.Context, req *divergev1alp
 	return nil, fmt.Errorf("not implemented")
 }
 
-func newMCPServer(envClient divergev1alpha1connect.EnvironmentServiceClient, pgClient divergev1alpha1connect.PreviewGroupServiceClient, allowDestructive bool) *server.MCPServer {
+func newMCPServer(envClient divergev1alpha1connect.EnvironmentServiceClient, pgClient divergev1alpha1connect.PreviewGroupServiceClient, allowDestructive bool, diagnoser ...*doctor.Diagnoser) *server.MCPServer {
 	registry := mcpruntime.NewToolRegistry()
 
 	envHandler := &mcpEnvHandler{client: envClient}
@@ -196,7 +197,7 @@ func newMCPServer(envClient divergev1alpha1connect.EnvironmentServiceClient, pgC
 	registerWaitForReady(registry, envClient)
 	registerFetchErrors(registry, envClient)
 	registerLoadtest(registry)
-	registerDoctor(registry, envClient)
+	registerDoctor(registry, envClient, diagnoser...)
 
 	mcpServer := server.NewMCPServer("diverge", "1.0.0")
 
@@ -297,7 +298,12 @@ func runMCP(ctx context.Context, app *App, serverURL string, allowDestructive bo
 	envClient := divergev1alpha1connect.NewEnvironmentServiceClient(httpClient, serverURL)
 	pgClient := divergev1alpha1connect.NewPreviewGroupServiceClient(httpClient, serverURL)
 
-	mcpServer := newMCPServer(envClient, pgClient, allowDestructive)
+	var diagnoser *doctor.Diagnoser
+	if c, _, err := app.KubeClient(); err == nil && c != nil {
+		diagnoser = doctor.NewDiagnoser(c)
+	}
+
+	mcpServer := newMCPServer(envClient, pgClient, allowDestructive, diagnoser)
 
 	return server.ServeStdio(mcpServer)
 }
