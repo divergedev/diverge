@@ -109,9 +109,44 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand("diverge.startDev", async () => {
+      const service = await vscode.window.showInputBox({
+        prompt: "Enter service name to develop locally (leave empty for default)",
+      });
+      const terminal = vscode.window.createTerminal("Diverge Dev");
+      terminal.show();
+      const sArg = service ? ` --service ${service}` : "";
+      terminal.sendText(`diverge dev${sArg}`);
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("diverge.stopDev", async () => {
+      const service = await vscode.window.showInputBox({
+        prompt: "Enter service name to release lock for",
+      });
+      if (!service) return;
+      const terminal = vscode.window.createTerminal("Diverge Dev Release");
+      terminal.show();
+      terminal.sendText(`diverge dev release ${service}`);
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("diverge.status", () => {
+      const terminal = vscode.window.createTerminal("Diverge Status");
+      terminal.show();
+      terminal.sendText("diverge status");
+    })
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand("diverge.showQuickMenu", async () => {
       const choice = await vscode.window.showQuickPick([
         { label: "$(refresh) Refresh Diverge State", action: "diverge.refresh" },
+        { label: "$(play) Start Dev Session (diverge dev)", action: "diverge.startDev" },
+        { label: "$(stop) Stop Dev Session (release)", action: "diverge.stopDev" },
+        { label: "$(info) Show Environment Status", action: "diverge.status" },
         { label: "$(pulse) Run Doctor (Diagnostics)", action: "diverge.runDoctor" },
         { label: "$(dashboard) Run Load Benchmark", action: "diverge.runLoadtest" },
         { label: "$(diff) Run Visual Diff", action: "diverge.runVisualDiff" },
