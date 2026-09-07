@@ -3,12 +3,11 @@ package cli
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -16,7 +15,6 @@ import (
 	"connectrpc.com/connect"
 	pb "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 	"github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
-	"k8s.io/client-go/rest"
 )
 
 const (
@@ -27,15 +25,7 @@ const (
 	// tunnelLocalTimeout is the HTTP client timeout for localhost requests.
 	// P1 #11: Prevents goroutine leaks from slow/stuck localhost services.
 	tunnelLocalTimeout = 30 * time.Second
-
-	// tunnelTokenEnvVar overrides the credential used for the tunnel.
-	tunnelTokenEnvVar = "DIVERGE_TOKEN"
 )
-
-// ErrNoTunnelCredential is returned when no credential can be resolved for the
-// tunnel. The server authenticates every Tunnel RPC by Kubernetes TokenReview,
-// so connecting without one only ever yields 401.
-var ErrNoTunnelCredential = errors.New("no credential available for the diverge server")
 
 type TunnelClient struct {
 	serverAddr       string
@@ -50,52 +40,65 @@ type TunnelClient struct {
 	readyOnce        sync.Once
 }
 
-// tunnelAuthTransport attaches the bearer credential to every tunnel request.
+func isLoopbackHost(host string) bool {
+	h := host
+	if strings.Contains(h, ":") {
+		if sh, _, err := net.SplitHostPort(h); err == nil {
+			h = sh
+		}
+	}
+	h = strings.Trim(h, "[]")
+	if strings.EqualFold(h, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(h); ip != nil && ip.IsLoopback() {
+		return true
+	}
+	return false
+}
+
+// tunnelAuthTransport attaches the bearer credential from TokenSource to every tunnel request.
 type tunnelAuthTransport struct {
-	base  http.RoundTripper
-	token string
+	base        http.RoundTripper
+	tokenSource TokenSource
 }
 
 func (t *tunnelAuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// RoundTrippers must not modify the request they are given.
+	if t.tokenSource == nil {
+		return t.base.RoundTrip(req)
+	}
+
+	// Security: Do not transmit credentials in cleartext over non-loopback HTTP.
+	if req.URL != nil && strings.EqualFold(req.URL.Scheme, "http") && !isLoopbackHost(req.URL.Host) {
+		return nil, fmt.Errorf("insecure HTTP scheme is only allowed for loopback addresses, got %q", req.URL.Host)
+	}
+
+	tok, err := t.tokenSource.Token(req.Context())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tunnel auth token: %w", err)
+	}
+
 	clone := req.Clone(req.Context())
-	clone.Header.Set("Authorization", "Bearer "+t.token)
+	if tok != "" {
+		clone.Header.Set("Authorization", "Bearer "+tok)
+	}
 	return t.base.RoundTrip(clone)
 }
 
-// resolveTunnelToken picks the credential to present to the diverge server, in
-// order: an explicit token (--token), the DIVERGE_TOKEN environment variable,
-// then the bearer credential from the kubeconfig the CLI already loaded.
-//
-// The kubeconfig fallback only works where that credential is a Kubernetes
-// token TokenReview accepts for the server's audience; a provider-issued
-// kubeconfig credential (GKE, EKS) generally is not, and needs --token with a
-// token minted for the server audience.
-func resolveTunnelToken(explicit string, restCfg *rest.Config) (string, error) {
-	if token := strings.TrimSpace(explicit); token != "" {
-		return token, nil
+// NewTunnelClientWithTokenSource creates a TunnelClient using a dynamic TokenSource and optional
+// base transport (defaults to http.DefaultTransport).
+func NewTunnelClientWithTokenSource(
+	serverAddr string,
+	localPort int,
+	previewID, service, namespace string,
+	tokenSource TokenSource,
+	baseTransport http.RoundTripper,
+	logger *slog.Logger,
+) *TunnelClient {
+	if baseTransport == nil {
+		baseTransport = http.DefaultTransport
 	}
-	if token := strings.TrimSpace(os.Getenv(tunnelTokenEnvVar)); token != "" {
-		return token, nil
-	}
-	if restCfg != nil {
-		if token := strings.TrimSpace(restCfg.BearerToken); token != "" {
-			return token, nil
-		}
-		if restCfg.BearerTokenFile != "" {
-			data, err := os.ReadFile(restCfg.BearerTokenFile)
-			if err != nil {
-				return "", fmt.Errorf("failed to read bearer token file %s: %w", restCfg.BearerTokenFile, err)
-			}
-			if token := strings.TrimSpace(string(data)); token != "" {
-				return token, nil
-			}
-		}
-	}
-	return "", ErrNoTunnelCredential
-}
 
-func NewTunnelClient(serverAddr string, localPort int, previewID, service, namespace, token string, logger *slog.Logger) *TunnelClient {
 	return &TunnelClient{
 		serverAddr: serverAddr,
 		localPort:  localPort,
@@ -106,12 +109,26 @@ func NewTunnelClient(serverAddr string, localPort int, previewID, service, names
 		httpClient: &http.Client{Timeout: tunnelLocalTimeout}, // P1 #11
 		tunnelHTTPClient: &http.Client{
 			Transport: &tunnelAuthTransport{
-				base:  http.DefaultTransport,
-				token: token,
+				base:        baseTransport,
+				tokenSource: tokenSource,
+			},
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) > 0 {
+					orig := via[0]
+					if !strings.EqualFold(req.URL.Scheme, orig.URL.Scheme) || !strings.EqualFold(req.URL.Host, orig.URL.Host) {
+						return fmt.Errorf("refusing to send credentials across redirects to different scheme or host: %s -> %s", orig.URL, req.URL)
+					}
+				}
+				return nil
 			},
 		},
 		Ready: make(chan struct{}),
 	}
+}
+
+// NewTunnelClient is a backward-compatible wrapper creating a TunnelClient with a static token.
+func NewTunnelClient(serverAddr string, localPort int, previewID, service, namespace, token string, logger *slog.Logger) *TunnelClient {
+	return NewTunnelClientWithTokenSource(serverAddr, localPort, previewID, service, namespace, StaticTokenSource(token), nil, logger)
 }
 
 func (tc *TunnelClient) ConnectWithRetry(ctx context.Context) {

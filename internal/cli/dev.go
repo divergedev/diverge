@@ -295,17 +295,17 @@ dev:
 
 		// The server authenticates every Tunnel RPC by TokenReview. Fail here
 		// with something actionable rather than in a 401 reconnect loop.
-		token, tokenErr := resolveTunnelToken(p.Token, restCfg)
+		tokenSource, tokenErr := resolveTunnelTokenSource(p.Token, restCfg)
 		if tokenErr != nil {
 			if errors.Is(tokenErr, ErrNoTunnelCredential) {
-				return fmt.Errorf("%w: pass --token, set %s, or use a kubeconfig with a bearer token. "+
+				return fmt.Errorf("%w: pass --token, set %s, configure OpenBao/Vault, or use a kubeconfig with a valid bearer or exec credential. "+
 					"The token must be accepted by the server's --audiences (default: diverge-server)",
 					tokenErr, tunnelTokenEnvVar)
 			}
 			return tokenErr
 		}
 
-		tc := NewTunnelClient(sAddr, int(port), headerValue, serviceName, ns, token, slog.Default())
+		tc := NewTunnelClientWithTokenSource(sAddr, int(port), headerValue, serviceName, ns, tokenSource, nil, slog.Default())
 		go tc.ConnectWithRetry(ctx)
 
 		select {

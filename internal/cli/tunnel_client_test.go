@@ -3,13 +3,10 @@ package cli
 import (
 	"context"
 	"fmt"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -19,8 +16,7 @@ import (
 	"github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"k8s.io/client-go/rest"
-	"pgregory.net/rapid"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type mockTunnelServer struct {
@@ -298,7 +294,7 @@ func TestTunnelAuthTransport_DoesNotMutateRequest(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	transport := &tunnelAuthTransport{base: http.DefaultTransport, token: "tok"}
+	transport := &tunnelAuthTransport{base: http.DefaultTransport, tokenSource: StaticTokenSource("tok")}
 	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
 	require.NoError(t, err)
 
@@ -310,110 +306,117 @@ func TestTunnelAuthTransport_DoesNotMutateRequest(t *testing.T) {
 		"RoundTrip must not modify the request it is given")
 }
 
-func TestResolveTunnelToken(t *testing.T) {
-	tokenFile := filepath.Join(t.TempDir(), "token")
-	require.NoError(t, os.WriteFile(tokenFile, []byte("  file-token\n"), 0o600))
+// TestTunnelAuthTransport_DynamicTokenSource verifies that the transport calls
+// TokenSource on every request, allowing dynamically refreshed credentials
+// (such as rotated ServiceAccount tokens) to be used without reconnecting.
+func TestTunnelAuthTransport_DynamicTokenSource(t *testing.T) {
+	var gotAuths []string
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gotAuths = append(gotAuths, r.Header.Get("Authorization"))
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
 
-	tests := []struct {
-		name     string
-		explicit string
-		env      string
-		restCfg  *rest.Config
-		want     string
-		wantErr  error
-	}{
-		{
-			name:     "explicit token wins",
-			explicit: "flag-token",
-			env:      "env-token",
-			restCfg:  &rest.Config{BearerToken: "kube-token"},
-			want:     "flag-token",
-		},
-		{
-			name:    "env var used when no flag",
-			env:     "env-token",
-			restCfg: &rest.Config{BearerToken: "kube-token"},
-			want:    "env-token",
-		},
-		{
-			name:    "kubeconfig bearer token is the fallback",
-			restCfg: &rest.Config{BearerToken: "kube-token"},
-			want:    "kube-token",
-		},
-		{
-			name:    "bearer token file is read",
-			restCfg: &rest.Config{BearerTokenFile: tokenFile},
-			want:    "file-token",
-		},
-		{
-			name:     "surrounding whitespace is trimmed",
-			explicit: "  spaced  ",
-			want:     "spaced",
-		},
-		{
-			name:    "no credential anywhere",
-			restCfg: &rest.Config{},
-			wantErr: ErrNoTunnelCredential,
-		},
-		{
-			name:    "nil rest config",
-			wantErr: ErrNoTunnelCredential,
+	var currentToken string
+	var tokenMu sync.Mutex
+	dynamicTS := &testFuncTokenSource{
+		fn: func(ctx context.Context) (string, error) {
+			tokenMu.Lock()
+			defer tokenMu.Unlock()
+			return currentToken, nil
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv(tunnelTokenEnvVar, tt.env)
-			got, err := resolveTunnelToken(tt.explicit, tt.restCfg)
-			if tt.wantErr != nil {
-				assert.ErrorIs(t, err, tt.wantErr)
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, tt.want, got)
-		})
+	tokenMu.Lock()
+	currentToken = "token-phase-1"
+	tokenMu.Unlock()
+
+	tc := NewTunnelClientWithTokenSource(srv.URL, 8080, "preview-1", "svc", "ns", dynamicTS, nil, slog.Default())
+
+	// First request with phase 1 token
+	req1, err := http.NewRequest(http.MethodPost, srv.URL, nil)
+	require.NoError(t, err)
+	resp1, err := tc.tunnelHTTPClient.Do(req1)
+	require.NoError(t, err)
+	_ = resp1.Body.Close()
+
+	// Rotate token
+	tokenMu.Lock()
+	currentToken = "token-phase-2-rotated"
+	tokenMu.Unlock()
+
+	// Second request should dynamically present phase 2 token
+	req2, err := http.NewRequest(http.MethodPost, srv.URL, nil)
+	require.NoError(t, err)
+	resp2, err := tc.tunnelHTTPClient.Do(req2)
+	require.NoError(t, err)
+	_ = resp2.Body.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, gotAuths, 2)
+	assert.Equal(t, "Bearer token-phase-1", gotAuths[0])
+	assert.Equal(t, "Bearer token-phase-2-rotated", gotAuths[1])
+}
+
+type testFuncTokenSource struct {
+	fn func(ctx context.Context) (string, error)
+}
+
+func (f *testFuncTokenSource) Token(ctx context.Context) (string, error) {
+	return f.fn(ctx)
+}
+
+func TestTunnelAuthTransport_RejectsNonLoopbackHTTP(t *testing.T) {
+	transport := &tunnelAuthTransport{
+		base:        http.DefaultTransport,
+		tokenSource: StaticTokenSource("secret-token"),
+	}
+
+	// Non-loopback HTTP must be rejected without sending credentials
+	req, err := http.NewRequest(http.MethodGet, "http://remote-server.example.com/tunnel", nil)
+	require.NoError(t, err)
+
+	_, err = transport.RoundTrip(req)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "insecure HTTP scheme is only allowed for loopback addresses")
+
+	// Loopback IPv4 HTTP is allowed through transport validation
+	loopbackReq, err := http.NewRequest(http.MethodGet, "http://127.0.0.1:8080/tunnel", nil)
+	require.NoError(t, err)
+	_, err = transport.RoundTrip(loopbackReq)
+	if err != nil {
+		assert.NotContains(t, err.Error(), "insecure HTTP scheme is only allowed for loopback addresses")
+	}
+
+	// Localhost is allowed through transport validation
+	localhostReq, err := http.NewRequest(http.MethodGet, "http://localhost:8080/tunnel", nil)
+	require.NoError(t, err)
+	_, err = transport.RoundTrip(localhostReq)
+	if err != nil {
+		assert.NotContains(t, err.Error(), "insecure HTTP scheme is only allowed for loopback addresses")
 	}
 }
 
-func TestResolveTunnelToken_PBT(t *testing.T) {
-	rapid.Check(t, func(rt *rapid.T) {
-		tokenGen := rapid.StringMatching(`[a-zA-Z0-9_\-\.]{1,40}`)
-		wsGen := rapid.StringMatching(`[ \t\r\n]{0,4}`)
+func TestTunnelClient_RejectsCrossHostRedirect(t *testing.T) {
+	targetSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer targetSrv.Close()
 
-		// Property 1: Explicit non-whitespace token always wins
-		cleanExplicit := tokenGen.Draw(rt, "cleanExplicit")
-		explicit := wsGen.Draw(rt, "wsPre1") + cleanExplicit + wsGen.Draw(rt, "wsPost1")
-		envToken := wsGen.Draw(rt, "wsPre2") + tokenGen.Draw(rt, "cleanEnv") + wsGen.Draw(rt, "wsPost2")
-		kubeToken := wsGen.Draw(rt, "wsPre3") + tokenGen.Draw(rt, "cleanKube") + wsGen.Draw(rt, "wsPost3")
+	redirectSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, targetSrv.URL+"/redirected", http.StatusFound)
+	}))
+	defer redirectSrv.Close()
 
-		t.Setenv(tunnelTokenEnvVar, envToken)
-		restCfg := &rest.Config{BearerToken: kubeToken}
+	tc := NewTunnelClientWithTokenSource(redirectSrv.URL, 8080, "p1", "svc", "ns", StaticTokenSource("tok"), nil, slog.Default())
+	req, err := http.NewRequest(http.MethodGet, redirectSrv.URL, nil)
+	require.NoError(t, err)
 
-		got, err := resolveTunnelToken(explicit, restCfg)
-		require.NoError(t, err)
-		assert.Equal(t, cleanExplicit, got, "explicit token must win over env and kubeconfig")
-		assert.Equal(t, strings.TrimSpace(got), got, "token must never have surrounding whitespace")
-
-		// Property 2: When explicit is whitespace-only, env token wins over kubeconfig
-		onlyWS := wsGen.Draw(rt, "onlyWS")
-		got, err = resolveTunnelToken(onlyWS, restCfg)
-		require.NoError(t, err)
-		assert.Equal(t, strings.TrimSpace(envToken), got, "env token must win when explicit token is whitespace-only")
-		assert.Equal(t, strings.TrimSpace(got), got)
-
-		// Property 3: When explicit and env are empty/whitespace, kubeconfig wins
-		t.Setenv(tunnelTokenEnvVar, onlyWS)
-		got, err = resolveTunnelToken(onlyWS, restCfg)
-		require.NoError(t, err)
-		assert.Equal(t, strings.TrimSpace(kubeToken), got, "kubeconfig token must win when flag and env are absent")
-		assert.Equal(t, strings.TrimSpace(got), got)
-
-		// Property 4: When all sources lack a credential, ErrNoTunnelCredential is returned
-		emptyRestCfg := &rest.Config{BearerToken: onlyWS}
-		_, err = resolveTunnelToken(onlyWS, emptyRestCfg)
-		assert.ErrorIs(t, err, ErrNoTunnelCredential)
-
-		_, err = resolveTunnelToken(onlyWS, nil)
-		assert.ErrorIs(t, err, ErrNoTunnelCredential)
-	})
+	_, err = tc.tunnelHTTPClient.Do(req)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "refusing to send credentials across redirects")
 }
