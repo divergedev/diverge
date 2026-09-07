@@ -7,10 +7,11 @@ import { HooksTab } from '@/components/HooksTab'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
-import { ArrowLeft, ExternalLink, Copy, Trash2, Clock, AlertCircle } from 'lucide-react'
 import { useState } from 'react'
 import { stringify as yamlStringify } from 'yaml'
 import { TopologyView } from '@/components/topology/TopologyView'
+import { FlagsTab } from '@/components/FlagsTab'
+import { ArrowLeft, ExternalLink, Copy, Trash2, Clock, AlertCircle, Flag } from 'lucide-react'
 
 export default function EnvironmentDetail() {
   const { namespace = '', name = '' } = useParams()
@@ -42,6 +43,8 @@ export default function EnvironmentDetail() {
   if (!env) {
     return <div className="text-center py-16"><h2 className="text-xl font-semibold">Environment not found</h2></div>
   }
+
+  const featureFlagCount = Object.keys(env.spec?.features?.overrides ?? {}).length
 
   const handleDelete = async () => {
     if (!confirm(`Delete environment ${namespace}/${name}?`)) return
@@ -121,6 +124,14 @@ export default function EnvironmentDetail() {
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="topology">Topology</TabsTrigger>
+          <TabsTrigger value="features">
+            Features
+            {featureFlagCount > 0 && (
+              <span className="ml-1.5 inline-flex items-center justify-center h-5 min-w-5 px-1 rounded-full bg-primary/10 text-primary text-xs font-medium">
+                {featureFlagCount}
+              </span>
+            )}
+          </TabsTrigger>
           <TabsTrigger value="hooks">
             Hooks
             {failedHookCount > 0 && (
@@ -139,6 +150,10 @@ export default function EnvironmentDetail() {
               <TopologyView environment={env} />
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="features">
+          <FlagsTab environment={env} />
         </TabsContent>
 
         <TabsContent value="overview">
