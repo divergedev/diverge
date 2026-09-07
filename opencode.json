@@ -7,7 +7,7 @@
       "enabled": true
     }
   },
-  "commands": {
+  "command": {
     "preview": {
       "description": "Create or manage a Diverge preview environment for the current branch",
       "template": "Inspect current git branch, check if a Diverge preview exists via diverge_get_environment, and spin one up with diverge_create_environment if needed."

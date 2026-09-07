@@ -22,6 +22,7 @@ type DevSessionJSONItem struct {
 	Status    string `json:"status"`
 }
 
+// newDevSessionsCmd creates the cobra command for listing active developer sessions.
 func newDevSessionsCmd(app *App) *cobra.Command {
 	var (
 		nsFlag       string
@@ -35,6 +36,10 @@ func newDevSessionsCmd(app *App) *cobra.Command {
 		Short:   "List active developer sessions across services",
 		Long:    `Display all currently active local development sessions and their heartbeat leases.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if outputFormat != "table" && outputFormat != "json" {
+				return fmt.Errorf("unsupported output format %q: expected table or json", outputFormat)
+			}
+
 			c, _, err := app.KubeClient()
 			if err != nil {
 				return fmt.Errorf("creating kubernetes client: %w", err)
@@ -66,6 +71,7 @@ func newDevSessionsCmd(app *App) *cobra.Command {
 	return cmd
 }
 
+// printDevSessionsJSON formats the active sessions slice as formatted JSON.
 func printDevSessionsJSON(w io.Writer, sessions []devsession.DevSession) error {
 	if len(sessions) == 0 {
 		_, err := fmt.Fprintln(w, "[]")
@@ -101,6 +107,7 @@ func printDevSessionsJSON(w io.Writer, sessions []devsession.DevSession) error {
 	return err
 }
 
+// printDevSessions formats the active sessions slice as an aligned plain-text table.
 func printDevSessions(w io.Writer, sessions []devsession.DevSession) {
 	if len(sessions) == 0 {
 		_, _ = fmt.Fprintln(w, "No active dev sessions found.")

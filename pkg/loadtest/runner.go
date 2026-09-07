@@ -5,7 +5,11 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -48,13 +52,86 @@ type ComparisonResult struct {
 	FailureReason       string        `json:"failure_reason,omitempty"`
 }
 
+// IsProhibitedHost checks whether a hostname matches known cloud provider metadata endpoints.
+func IsProhibitedHost(hostname string) bool {
+	lowerHost := strings.ToLower(strings.TrimSpace(hostname))
+	return lowerHost == "metadata.google.internal" || lowerHost == "metadata" || lowerHost == "instance-data"
+}
+
+// IsProhibitedIP checks whether an IP address is a link-local address or cloud metadata IP.
+func IsProhibitedIP(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return true
+	}
+	if ip.Equal(net.ParseIP("169.254.169.254")) {
+		return true
+	}
+	if ip.Equal(net.ParseIP("fd00:ec2::254")) {
+		return true
+	}
+	return false
+}
+
+// ValidateTargetURL validates that targetURL has an http or https scheme, a non-empty host,
+// does not target cloud metadata or link-local endpoints, and conforms to DIVERGE_ALLOWED_HOSTS if configured.
+func ValidateTargetURL(targetURL string) error {
+	parsedURL, err := url.Parse(targetURL)
+	if err != nil {
+		return fmt.Errorf("invalid target URL: %w", err)
+	}
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return fmt.Errorf("target_url must be a valid http or https URL")
+	}
+	hostname := parsedURL.Hostname()
+	if hostname == "" {
+		return fmt.Errorf("target_url host cannot be empty")
+	}
+
+	if IsProhibitedHost(hostname) {
+		return fmt.Errorf("target_url destination %q is prohibited", hostname)
+	}
+
+	if ip := net.ParseIP(hostname); ip != nil {
+		if IsProhibitedIP(ip) {
+			return fmt.Errorf("target_url destination IP %s is prohibited", hostname)
+		}
+	}
+
+	if allowed := os.Getenv("DIVERGE_ALLOWED_HOSTS"); allowed != "" {
+		matched := false
+		lowerHost := strings.ToLower(hostname)
+		for _, pattern := range strings.Split(allowed, ",") {
+			pattern = strings.TrimSpace(strings.ToLower(pattern))
+			if pattern == "" {
+				continue
+			}
+			if pattern == "*" || pattern == lowerHost || strings.HasSuffix(lowerHost, "."+pattern) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return fmt.Errorf("target_url host %q is not in the allowed hosts list", hostname)
+		}
+	}
+	return nil
+}
+
 // Runner executes concurrent HTTP load tests.
 type Runner struct {
 	client *http.Client
 }
 
-// NewRunner creates a new Runner with an optimized HTTP transport.
+// NewRunner creates a new Runner with an optimized HTTP transport, dial-time SSRF filtering, and bounded redirects.
 func NewRunner() *Runner {
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+
 	transport := &http.Transport{
 		MaxIdleConns:        1000,
 		MaxIdleConnsPerHost: 200,
@@ -63,13 +140,65 @@ func NewRunner() *Runner {
 			MinVersion: tls.VersionTLS12,
 		},
 		DisableCompression: false,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, fmt.Errorf("splitting host and port %q: %w", addr, err)
+			}
+
+			if IsProhibitedHost(host) {
+				return nil, fmt.Errorf("connection to prohibited destination %s blocked", host)
+			}
+
+			var ips []net.IP
+			if ip := net.ParseIP(host); ip != nil {
+				ips = []net.IP{ip}
+			} else {
+				resolvedIPs, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+				if err != nil {
+					return nil, fmt.Errorf("resolving host %q: %w", host, err)
+				}
+				ips = resolvedIPs
+			}
+
+			if len(ips) == 0 {
+				return nil, fmt.Errorf("no IP addresses found for host %s", host)
+			}
+
+			for _, ip := range ips {
+				if IsProhibitedIP(ip) {
+					return nil, fmt.Errorf("connection to prohibited IP %s (%s) blocked", ip.String(), host)
+				}
+			}
+
+			var lastErr error
+			for _, ip := range ips {
+				conn, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+				if dialErr == nil {
+					return conn, nil
+				}
+				lastErr = dialErr
+			}
+			return nil, lastErr
+		},
+	}
+
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   DefaultTimeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			if err := ValidateTargetURL(req.URL.String()); err != nil {
+				return fmt.Errorf("redirect target prohibited: %w", err)
+			}
+			return nil
+		},
 	}
 
 	return &Runner{
-		client: &http.Client{
-			Transport: transport,
-			Timeout:   DefaultTimeout,
-		},
+		client: client,
 	}
 }
 
@@ -77,6 +206,12 @@ func NewRunner() *Runner {
 func (r *Runner) Run(ctx context.Context, cfg Config) (*ComparisonResult, error) {
 	if cfg.TargetURL == "" {
 		return nil, fmt.Errorf("target URL is required")
+	}
+	if err := ValidateTargetURL(cfg.TargetURL); err != nil {
+		return nil, fmt.Errorf("invalid target URL: %w", err)
+	}
+	if r.client == nil {
+		r.client = NewRunner().client
 	}
 	if cfg.Concurrency <= 0 {
 		cfg.Concurrency = DefaultConcurrency

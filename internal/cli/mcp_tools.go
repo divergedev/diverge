@@ -4,9 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
-	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -51,6 +48,7 @@ var loadtestSchema = json.RawMessage(`{
 	"required": ["target_url"]
 }`)
 
+// registerWaitForReady registers the diverge_wait_for_ready MCP tool handler.
 func registerWaitForReady(registry mcpruntime.Registry, client divergev1alpha1connect.EnvironmentServiceClient) {
 	registry.Register(mcpruntime.ToolDefinition{
 		Name:        "diverge_wait_for_ready",
@@ -121,6 +119,7 @@ func registerWaitForReady(registry mcpruntime.Registry, client divergev1alpha1co
 	})
 }
 
+// registerFetchErrors registers the diverge_fetch_errors MCP tool handler.
 func registerFetchErrors(registry mcpruntime.Registry, client divergev1alpha1connect.EnvironmentServiceClient) {
 	registry.Register(mcpruntime.ToolDefinition{
 		Name:        "diverge_fetch_errors",
@@ -175,6 +174,7 @@ func registerFetchErrors(registry mcpruntime.Registry, client divergev1alpha1con
 	})
 }
 
+// containsErrorLevel checks if a log line indicates an error, fatal, or panic state.
 func containsErrorLevel(line string) bool {
 	lowerLine := strings.ToLower(line)
 	for _, indicator := range []string{"error", "fatal", "panic", "level=error", "level=fatal"} {
@@ -189,48 +189,10 @@ func containsErrorLevel(line string) bool {
 // and protects against SSRF (disallowing cloud metadata addresses, link-local unicast/multicast,
 // and enforcing DIVERGE_ALLOWED_HOSTS allowlist if configured).
 func validateTargetURL(targetURL string) error {
-	parsedURL, err := url.Parse(targetURL)
-	if err != nil {
-		return fmt.Errorf("invalid target URL: %w", err)
-	}
-	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
-		return fmt.Errorf("target_url must be a valid http or https URL")
-	}
-	hostname := parsedURL.Hostname()
-	if hostname == "" {
-		return fmt.Errorf("target_url host cannot be empty")
-	}
-
-	lowerHost := strings.ToLower(hostname)
-	if lowerHost == "metadata.google.internal" || lowerHost == "metadata" || lowerHost == "instance-data" {
-		return fmt.Errorf("target_url destination %q is prohibited", hostname)
-	}
-
-	if ip := net.ParseIP(hostname); ip != nil {
-		if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.Equal(net.ParseIP("169.254.169.254")) {
-			return fmt.Errorf("target_url destination IP %s is prohibited", hostname)
-		}
-	}
-
-	if allowed := os.Getenv("DIVERGE_ALLOWED_HOSTS"); allowed != "" {
-		matched := false
-		for _, pattern := range strings.Split(allowed, ",") {
-			pattern = strings.TrimSpace(strings.ToLower(pattern))
-			if pattern == "" {
-				continue
-			}
-			if pattern == "*" || pattern == lowerHost || strings.HasSuffix(lowerHost, "."+pattern) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return fmt.Errorf("target_url host %q is not in the allowed hosts list", hostname)
-		}
-	}
-	return nil
+	return loadtest.ValidateTargetURL(targetURL)
 }
 
+// registerLoadtest registers the diverge_loadtest MCP tool handler.
 func registerLoadtest(registry mcpruntime.Registry) {
 	registry.Register(mcpruntime.ToolDefinition{
 		Name:        "diverge_loadtest",
@@ -304,6 +266,7 @@ var doctorSchema = json.RawMessage(`{
 	"required": ["name", "namespace"]
 }`)
 
+// registerDoctor registers the diverge_doctor MCP tool handler.
 func registerDoctor(registry mcpruntime.Registry, client divergev1alpha1connect.EnvironmentServiceClient, diagnoser ...*doctor.Diagnoser) {
 	var diag *doctor.Diagnoser
 	if len(diagnoser) > 0 {

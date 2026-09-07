@@ -84,3 +84,12 @@ func TestPrintDevSessionsJSON_Populated(t *testing.T) {
 	assert.Contains(t, out, `"developer": "bob"`)
 	assert.Contains(t, out, `"status": "STALE"`)
 }
+
+func TestDevSessionsCmd_UnsupportedOutputFormat(t *testing.T) {
+	app := &App{}
+	cmd := newDevSessionsCmd(app)
+	cmd.SetArgs([]string{"--output", "yaml"})
+	err := cmd.Execute()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported output format")
+}
