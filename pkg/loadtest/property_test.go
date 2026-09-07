@@ -17,11 +17,9 @@ func TestProperty_PercentileOrdering(t *testing.T) {
 		collector := NewMetricsCollector("http://example.com", "test-key")
 		collector.Start()
 
-		var generated []time.Duration
 		for i := 0; i < n; i++ {
 			micros := rapid.Int64Range(1, 1000000).Draw(t, "durationMicros")
 			d := time.Duration(micros) * time.Microsecond
-			generated = append(generated, d)
 			collector.Record(RequestRecord{
 				Duration:   d,
 				StatusCode: 200,
