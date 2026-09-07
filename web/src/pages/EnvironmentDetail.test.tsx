@@ -151,4 +151,43 @@ describe('EnvironmentDetail', () => {
     await screen.findByText('test-env')
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
+
+  it('renders features tab trigger and displays flags when clicked', async () => {
+    const envWithFlags = {
+      environment: {
+        ...mockEnv.environment,
+        spec: {
+          ...mockEnv.environment.spec,
+          features: {
+            provider: 'flipt',
+            overrides: {
+              beta_mode: 'true',
+            },
+          },
+        },
+      },
+    }
+
+    server.use(
+      http.post('*/diverge.v1alpha1.EnvironmentService/GetEnvironment', () =>
+        HttpResponse.json(envWithFlags),
+      ),
+      http.post('*/diverge.v1alpha1.EnvironmentService/ListHookJobs', () =>
+        HttpResponse.json({ jobs: [] }),
+      ),
+    )
+
+    renderPage()
+
+    const featuresTabTrigger = await screen.findByRole('tab', { name: /features/i })
+    expect(featuresTabTrigger).toBeInTheDocument()
+    expect(screen.getByText('1')).toBeInTheDocument() // count badge
+
+    fireEvent.click(featuresTabTrigger)
+
+    await waitFor(() => {
+      expect(screen.getByText('Flipt Feature Flags')).toBeInTheDocument()
+      expect(screen.getByText('beta_mode')).toBeInTheDocument()
+    })
+  })
 })

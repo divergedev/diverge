@@ -39,4 +39,5 @@ coverage/
 web/node_modules/
 web/dist/
 web/src/api/gen/
+*.tsbuildinfo
 internal/server/dashboard/dist/assets/
