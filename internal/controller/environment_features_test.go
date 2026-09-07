@@ -2,6 +2,11 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -149,4 +154,195 @@ func TestEnvironmentReconciler_InvalidFeatureProvider(t *testing.T) {
 	require.NotNil(t, cond)
 	assert.Equal(t, metav1.ConditionFalse, cond.Status)
 	assert.Equal(t, "FeatureProviderNotFound", cond.Reason)
+}
+
+func TestEnvironmentReconciler_FliptProvider(t *testing.T) {
+	ctx := context.Background()
+
+	var mu sync.Mutex
+	namespaces := make(map[string]bool)
+	flags := make(map[string]map[string]interface{})
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		path := r.URL.Path
+		if path == "/api/v1/namespaces" && r.Method == http.MethodPost {
+			var body map[string]interface{}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			key := body["key"].(string)
+			namespaces[key] = true
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(body)
+			return
+		}
+
+		if strings.HasPrefix(path, "/api/v1/namespaces/") && !strings.Contains(path, "/flags") {
+			nsKey := strings.TrimPrefix(path, "/api/v1/namespaces/")
+			if r.Method == http.MethodGet {
+				if namespaces[nsKey] {
+					w.WriteHeader(http.StatusOK)
+					_ = json.NewEncoder(w).Encode(map[string]string{"key": nsKey})
+					return
+				}
+				http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+				return
+			}
+			if r.Method == http.MethodDelete {
+				delete(namespaces, nsKey)
+				delete(flags, nsKey)
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+		}
+
+		if strings.Contains(path, "/flags") {
+			parts := strings.Split(strings.TrimPrefix(path, "/api/v1/namespaces/"), "/")
+			nsKey := parts[0]
+			if r.Method == http.MethodPost {
+				var body map[string]interface{}
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				if flags[nsKey] == nil {
+					flags[nsKey] = make(map[string]interface{})
+				}
+				flags[nsKey][body["key"].(string)] = body
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(body)
+				return
+			}
+		}
+
+		http.NotFound(w, r)
+	}))
+	defer ts.Close()
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flipt-secret",
+			Namespace: "default",
+		},
+		Data: map[string][]byte{
+			"url":   []byte(ts.URL),
+			"token": []byte("reconciler-token"),
+		},
+	}
+
+	env := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "feat-flipt-env",
+			Namespace:  "default",
+			Finalizers: []string{environmentFinalizer},
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Features: &divergeiov1alpha1.FeatureSpec{
+				Provider:      "flipt",
+				ConnectionRef: "flipt-secret",
+				Overrides: map[string]string{
+					"flag_alpha": "true",
+				},
+			},
+		},
+	}
+
+	dbResult := &database.DatabaseResult{Ready: true, Message: "db ready"}
+	r, client, _, _, _ := newTestReconciler(t, env, dbResult, "https://feat-flipt-env.example.com")
+	err := client.Create(ctx, secret)
+	require.NoError(t, err)
+
+	statusBase := env.DeepCopy()
+	res, done, err := r.reconcileProvisioning(ctx, env, statusBase)
+	require.NoError(t, err)
+	assert.False(t, done)
+	assert.Equal(t, int64(0), res.RequeueAfter.Nanoseconds())
+
+	cond := meta.FindStatusCondition(env.Status.Conditions, "FeaturesReady")
+	require.NotNil(t, cond)
+	assert.Equal(t, metav1.ConditionTrue, cond.Status)
+	assert.Equal(t, "FeaturesProvisioned", cond.Reason)
+
+	assert.Equal(t, ts.URL, env.Status.FeatureEnvVars["FLIPT_URL"])
+	assert.Equal(t, "diverge-feat-flipt-env", env.Status.FeatureEnvVars["FLIPT_NAMESPACE"])
+	assert.Equal(t, "reconciler-token", env.Status.FeatureEnvVars["FLIPT_AUTH_TOKEN"])
+	assert.Equal(t, "", env.Status.FeatureConfigMap)
+
+	mu.Lock()
+	assert.True(t, namespaces["diverge-feat-flipt-env"])
+	assert.NotNil(t, flags["diverge-feat-flipt-env"]["flag_alpha"])
+	mu.Unlock()
+
+	// Teardown deletes the remote namespace
+	_, err = r.handleTeardown(ctx, env)
+	require.NoError(t, err)
+
+	mu.Lock()
+	assert.False(t, namespaces["diverge-feat-flipt-env"])
+	mu.Unlock()
+}
+
+func TestEnvironmentReconciler_FlagsmithStub(t *testing.T) {
+	ctx := context.Background()
+
+	env := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "feat-flagsmith-env",
+			Namespace:  "default",
+			Finalizers: []string{environmentFinalizer},
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Features: &divergeiov1alpha1.FeatureSpec{
+				Provider: "flagsmith",
+			},
+		},
+	}
+
+	dbResult := &database.DatabaseResult{Ready: true, Message: "db ready"}
+	r, _, _, _, _ := newTestReconciler(t, env, dbResult, "https://feat-flagsmith-env.example.com")
+
+	statusBase := env.DeepCopy()
+	_, done, err := r.reconcileProvisioning(ctx, env, statusBase)
+	require.NoError(t, err)
+	assert.False(t, done)
+
+	cond := meta.FindStatusCondition(env.Status.Conditions, "FeaturesReady")
+	require.NotNil(t, cond)
+	assert.Equal(t, metav1.ConditionTrue, cond.Status)
+	assert.Equal(t, "preview-feat-flagsmith-env", env.Status.FeatureEnvVars["FLAGSMITH_ENVIRONMENT_KEY"])
+
+	_, err = r.handleTeardown(ctx, env)
+	require.NoError(t, err)
+}
+
+func TestEnvironmentReconciler_UnleashStub(t *testing.T) {
+	ctx := context.Background()
+
+	env := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "feat-unleash-env",
+			Namespace:  "default",
+			Finalizers: []string{environmentFinalizer},
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Features: &divergeiov1alpha1.FeatureSpec{
+				Provider: "unleash",
+			},
+		},
+	}
+
+	dbResult := &database.DatabaseResult{Ready: true, Message: "db ready"}
+	r, _, _, _, _ := newTestReconciler(t, env, dbResult, "https://feat-unleash-env.example.com")
+
+	statusBase := env.DeepCopy()
+	_, done, err := r.reconcileProvisioning(ctx, env, statusBase)
+	require.NoError(t, err)
+	assert.False(t, done)
+
+	cond := meta.FindStatusCondition(env.Status.Conditions, "FeaturesReady")
+	require.NotNil(t, cond)
+	assert.Equal(t, metav1.ConditionTrue, cond.Status)
+	assert.Equal(t, "diverge-feat-unleash-env", env.Status.FeatureEnvVars["UNLEASH_APP_NAME"])
+	assert.Equal(t, "feat-unleash-env", env.Status.FeatureEnvVars["UNLEASH_ENVIRONMENT"])
+
+	_, err = r.handleTeardown(ctx, env)
+	require.NoError(t, err)
 }
