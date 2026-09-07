@@ -1,0 +1,57 @@
+version: "1"
+
+# Service definitions
+services:
+  web:
+    paths:
+      - "apps/web/**"
+    image:
+      repository: "ghcr.io/example/web"
+      tag_template: "pr-{{.PR}}"
+    entrypoint: true
+    dependsOn:
+      - api
+
+  api:
+    paths:
+      - "services/api/**"
+    image:
+      repository: "ghcr.io/example/api"
+      tag_template: "pr-{{.PR}}"
+
+# Default preview environment settings
+defaults:
+  deploy:
+    mode: delta
+    namespace: same
+  routing:
+    mode: header
+    header_key: x-diverge-env
+    domain: preview.example.com
+  features:
+    # Use in-cluster flagd ConfigMap by default (zero external infra required)
+    provider: configmap
+    overrides:
+      new_nav_bar: "true"
+      recommendations_v2: "false"
+      items_per_page: "25"
+
+# Environment overrides
+environments:
+  # Standard PR preview environments
+  preview:
+    trigger: label
+    label: "diverge/deploy"
+
+  # Production-like staging preview using remote Flipt provider
+  staging-preview:
+    trigger: branch
+    branch: staging
+    features:
+      provider: flipt
+      connection_ref: flipt-credentials
+      overrides:
+        new_nav_bar: "true"
+        recommendations_v2: "true"
+        items_per_page: "50"
+        experiment_tier: "enterprise"
