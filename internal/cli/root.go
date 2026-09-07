@@ -78,17 +78,31 @@ func NewRootCmd(app *App) *cobra.Command {
 		Short: "Diverge CLI manages preview environments",
 		Long:  `The developer's daily driver for interacting with Diverge environments.`,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			if !cmdRequiresKube(cmd) {
+				return nil
+			}
 			return app.ResolveNamespace()
 		},
 	}
 
+	defaultNamespace := app.Namespace
 	rootCmd.PersistentFlags().StringVar(&app.Kubeconfig, "kubeconfig", "", "path to kubeconfig (default: ~/.kube/config)")
-	rootCmd.PersistentFlags().StringVarP(&app.Namespace, "namespace", "n", "", "Kubernetes namespace (default: from kubeconfig context)")
+	rootCmd.PersistentFlags().StringVarP(&app.Namespace, "namespace", "n", defaultNamespace, "Kubernetes namespace (default: from kubeconfig context)")
 	rootCmd.PersistentFlags().StringVar(&app.Context, "context", "", "Kubernetes context")
 	rootCmd.PersistentFlags().BoolVar(&app.NoColor, "no-color", false, "disable color output")
 
 	addCommands(rootCmd, app)
 	return rootCmd
+}
+
+func cmdRequiresKube(cmd *cobra.Command) bool {
+	for c := cmd; c != nil; c = c.Parent() {
+		switch c.Name() {
+		case "loadtest", "test", "version", "diff":
+			return false
+		}
+	}
+	return true
 }
 
 func addCommands(root *cobra.Command, app *App) {

@@ -284,3 +284,51 @@ func TestRunner_NetworkErrors(t *testing.T) {
 	assert.Greater(t, res.Candidate.NetworkErrors, int64(0))
 	assert.NotEmpty(t, res.Candidate.ErrorSample)
 }
+
+func TestRunner_ContextCancellation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(500 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	runner := NewRunner()
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Cancel context after 30ms even though duration is 5s
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	cfg := Config{
+		TargetURL:   srv.URL,
+		Duration:    5 * time.Second,
+		Concurrency: 2,
+		Timeout:     5 * time.Second,
+	}
+
+	res, err := runner.Run(ctx, cfg)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Less(t, time.Since(start), 200*time.Millisecond, "Run must exit promptly when parent context is canceled")
+}
+
+func TestRunner_LargeConcurrencyBounded(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	runner := NewRunner()
+	cfg := Config{
+		TargetURL:   srv.URL,
+		Duration:    50 * time.Millisecond,
+		Concurrency: 50000, // Should be safely clamped to 1000 without crashing
+	}
+
+	res, err := runner.Run(context.Background(), cfg)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+}

@@ -141,14 +141,28 @@ func GenerateMarkdownSummary(w io.Writer, res *DiffResult) error {
 		statusText = "FAILED"
 	}
 
-	_, _ = fmt.Fprintf(w, "### %s Diverge Visual Regression: %s\n\n", statusEmoji, statusText)
-	_, _ = fmt.Fprintf(w, "| Metric | Value |\n")
-	_, _ = fmt.Fprintf(w, "| :--- | :--- |\n")
-	_, _ = fmt.Fprintf(w, "| **Visual Drift** | `%.3f%%` |\n", res.DiffPercent)
-	_, _ = fmt.Fprintf(w, "| **Allowed Threshold** | `%.3f%%` |\n", res.MaxDiffPercent)
-	_, _ = fmt.Fprintf(w, "| **Mismatched Pixels** | `%d / %d` |\n", res.MismatchedPixels, res.TotalPixels)
+	if _, err := fmt.Fprintf(w, "### %s Diverge Visual Regression: %s\n\n", statusEmoji, statusText); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "| Metric | Value |\n"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "| :--- | :--- |\n"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "| **Visual Drift** | `%.3f%%` |\n", res.DiffPercent); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "| **Allowed Threshold** | `%.3f%%` |\n", res.MaxDiffPercent); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "| **Mismatched Pixels** | `%d / %d` |\n", res.MismatchedPixels, res.TotalPixels); err != nil {
+		return err
+	}
 	if !res.Passed {
-		_, _ = fmt.Fprintf(w, "\n> ⚠️ **Visual Regression Detected**: Candidate preview has exceeded the allowed threshold of %.3f%% drift.\n", res.MaxDiffPercent)
+		if _, err := fmt.Fprintf(w, "\n> ⚠️ **Visual Regression Detected**: Candidate preview has exceeded the allowed threshold of %.3f%% drift.\n", res.MaxDiffPercent); err != nil {
+			return err
+		}
 	}
 
 	return nil

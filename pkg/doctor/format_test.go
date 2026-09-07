@@ -35,3 +35,24 @@ func TestFormat_DoctorReport(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, jsonBuf.String(), `"healthy": false`)
 }
+
+type errWriter struct{}
+
+func (errWriter) Write(p []byte) (n int, err error) {
+	return 0, assert.AnError
+}
+
+func TestFormatTable_WriterError(t *testing.T) {
+	report := &Report{Healthy: true}
+	err := FormatTable(errWriter{}, report)
+	require.Error(t, err)
+
+	unhealthyReport := &Report{
+		Healthy: false,
+		Issues: []Issue{
+			{Severity: SeverityCritical, Component: "app", Summary: "err"},
+		},
+	}
+	err = FormatTable(errWriter{}, unhealthyReport)
+	require.Error(t, err)
+}

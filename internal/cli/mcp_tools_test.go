@@ -159,6 +159,23 @@ func TestRegisterLoadtest_InvalidJSON(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid arguments")
 }
 
+func TestRegisterLoadtest_InvalidURL(t *testing.T) {
+	registry := mcpruntime.NewToolRegistry()
+	registerLoadtest(registry)
+
+	handler, ok := registry.Lookup("diverge_loadtest")
+	require.True(t, ok)
+
+	res, err := handler(context.Background(), mcpruntime.ToolRequest{
+		ToolName:  "diverge_loadtest",
+		Arguments: []byte(`{"target_url": "ftp://unsupported.local"}`),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.True(t, res.IsError)
+	assert.Contains(t, string(res.Content), "must be a valid http or https URL")
+}
+
 func TestRegisterDoctor_Error(t *testing.T) {
 	registry := mcpruntime.NewToolRegistry()
 	client := &mockEnvClient{

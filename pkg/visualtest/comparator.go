@@ -29,6 +29,13 @@ var DiffHighlightColor = color.RGBA{R: 255, G: 0, B: 128, A: 255}
 // and produces a diff image highlighting altered regions.
 // colorTolerance defines the per-channel threshold (0.0 to 1.0) before a pixel is considered different.
 func Compare(baseline, candidate image.Image, colorTolerance float64, maxDiffPercent float64) (*DiffResult, image.Image, error) {
+	if math.IsNaN(colorTolerance) || math.IsInf(colorTolerance, 0) || colorTolerance < 0 || colorTolerance > 1 {
+		return nil, nil, fmt.Errorf("color tolerance must be between 0.0 and 1.0")
+	}
+	if math.IsNaN(maxDiffPercent) || math.IsInf(maxDiffPercent, 0) || maxDiffPercent < 0 || maxDiffPercent > 100 {
+		return nil, nil, fmt.Errorf("max diff percent must be between 0 and 100")
+	}
+
 	bBounds := baseline.Bounds()
 	cBounds := candidate.Bounds()
 
@@ -50,8 +57,8 @@ func Compare(baseline, candidate image.Image, colorTolerance float64, maxDiffPer
 
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
-			bIn := image.Pt(x, y).In(bBounds)
-			cIn := image.Pt(x, y).In(cBounds)
+			bIn := x < bBounds.Dx() && y < bBounds.Dy()
+			cIn := x < cBounds.Dx() && y < cBounds.Dy()
 
 			if !bIn && !cIn {
 				continue

@@ -32,3 +32,19 @@ func TestReport_HTMLAndMarkdown(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, jsonBuf.String(), `"diff_percent": 0`)
 }
+
+type errWriter struct{}
+
+func (errWriter) Write(p []byte) (n int, err error) {
+	return 0, assert.AnError
+}
+
+func TestGenerateMarkdownSummary_WriterError(t *testing.T) {
+	resPass := &DiffResult{Passed: true}
+	err := GenerateMarkdownSummary(errWriter{}, resPass)
+	require.Error(t, err)
+
+	resFail := &DiffResult{Passed: false}
+	err = GenerateMarkdownSummary(errWriter{}, resFail)
+	require.Error(t, err)
+}

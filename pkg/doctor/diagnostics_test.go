@@ -10,6 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
@@ -261,4 +262,77 @@ func TestDoctor_PodUnschedulableAndInitContainers(t *testing.T) {
 	assert.Contains(t, buf.String(), "Pod unschedulable")
 	assert.Contains(t, buf.String(), "Container image pull failed")
 	assert.Contains(t, buf.String(), "Container configuration error")
+}
+
+func TestDoctor_RestartedContainerPreviousOOM(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, divergeiov1alpha1.AddToScheme(scheme))
+
+	podRestarted := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "api-restarted",
+			Namespace: "default",
+			Labels: map[string]string{
+				"diverge.io/environment": "pr-oom-restarted",
+			},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name: "api",
+					State: corev1.ContainerState{
+						Running: &corev1.ContainerStateRunning{},
+					},
+					LastTerminationState: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{
+							ExitCode: 137,
+							Reason:   "OOMKilled",
+							Message:  "oom killer terminated container",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(podRestarted).
+		Build()
+
+	diagnoser := NewDiagnoser(client)
+	report, err := diagnoser.Diagnose(context.Background(), "default", "pr-oom-restarted")
+	require.NoError(t, err)
+	assert.False(t, report.Healthy)
+	require.Len(t, report.Issues, 1)
+	assert.Equal(t, SeverityWarning, report.Issues[0].Severity)
+	assert.Contains(t, report.Issues[0].Summary, "OOMKilled")
+	assert.Contains(t, report.Issues[0].Summary, "previously terminated")
+}
+
+type errorClient struct {
+	client.Client
+	err error
+}
+
+func (e *errorClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	return e.err
+}
+
+func (e *errorClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	return e.err
+}
+
+func TestDoctor_APIErrors(t *testing.T) {
+	diagnoserGetErr := NewDiagnoser(&errorClient{err: assert.AnError})
+	_, err := diagnoserGetErr.Diagnose(context.Background(), "default", "my-env")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to get environment")
+
+	diagnoserListErr := NewDiagnoser(&errorClient{err: assert.AnError})
+	_, err = diagnoserListErr.Diagnose(context.Background(), "default", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to list pods")
 }

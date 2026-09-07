@@ -128,3 +128,38 @@ func TestCompare_FailingMarkdownReport(t *testing.T) {
 	assert.Contains(t, jsonBuf.String(), "\"passed\": false")
 	assert.Contains(t, jsonBuf.String(), "\"diff_percent\": 2")
 }
+
+func TestCompare_NonZeroOriginSubImages(t *testing.T) {
+	// Create an image with non-zero bounds, e.g. Rect(15, 20, 65, 70) => Dx: 50, Dy: 50
+	r := image.Rect(15, 20, 65, 70)
+	img1 := image.NewRGBA(r)
+	img2 := image.NewRGBA(r)
+	blue := color.RGBA{0, 0, 255, 255}
+
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		for x := r.Min.X; x < r.Max.X; x++ {
+			img1.Set(x, y, blue)
+			img2.Set(x, y, blue)
+		}
+	}
+
+	res, diffImg, err := Compare(img1, img2, 0.05, 0.1)
+	require.NoError(t, err)
+	require.NotNil(t, diffImg)
+	assert.Equal(t, int64(2500), res.TotalPixels)
+	assert.Equal(t, int64(0), res.MismatchedPixels)
+	assert.Equal(t, 0.0, res.DiffPercent)
+	assert.True(t, res.Passed)
+}
+
+func TestCompare_InvalidThresholds(t *testing.T) {
+	img := CreateSolidImage(10, 10, color.RGBA{255, 255, 255, 255})
+
+	_, _, err := Compare(img, img, -0.1, 1.0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "color tolerance must be between")
+
+	_, _, err = Compare(img, img, 0.1, -1.0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "max diff percent must be between")
+}

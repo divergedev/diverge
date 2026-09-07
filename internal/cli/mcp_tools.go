@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -197,6 +198,14 @@ func registerLoadtest(registry mcpruntime.Registry) {
 		}
 		if err := json.Unmarshal(req.Arguments, &params); err != nil {
 			return nil, fmt.Errorf("invalid arguments: %w", err)
+		}
+
+		parsedURL, err := url.Parse(params.TargetURL)
+		if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Host == "" {
+			return &mcpruntime.CallToolResult{
+				Content: json.RawMessage(`{"error": "target_url must be a valid http or https URL"}`),
+				IsError: true,
+			}, nil
 		}
 
 		duration := time.Duration(params.DurationSeconds) * time.Second

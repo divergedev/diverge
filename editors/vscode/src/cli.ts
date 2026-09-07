@@ -1,8 +1,8 @@
 import * as vscode from "vscode";
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from "util";
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export class DivergeCLI {
   private getCliPath(): string {
@@ -12,15 +12,14 @@ export class DivergeCLI {
 
   public async run(args: string[]): Promise<string> {
     const cli = this.getCliPath();
-    const command = `${cli} ${args.join(" ")}`;
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
     try {
-      const { stdout } = await execAsync(command, { cwd: workspaceRoot });
+      const { stdout } = await execFileAsync(cli, args, { cwd: workspaceRoot });
       return stdout.trim();
     } catch (err: any) {
       const stderr = err.stderr ? err.stderr.toString() : err.message;
-      throw new Error(`Diverge CLI command failed (${command}): ${stderr}`);
+      throw new Error(`Diverge CLI command failed (${cli} ${args.join(" ")}): ${stderr}`);
     }
   }
 

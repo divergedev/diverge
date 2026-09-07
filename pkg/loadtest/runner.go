@@ -60,7 +60,7 @@ func NewRunner() *Runner {
 		MaxIdleConnsPerHost: 200,
 		IdleConnTimeout:     90 * time.Second,
 		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true, // cluster preview endpoints may use self-signed certs
+			MinVersion: tls.VersionTLS12,
 		},
 		DisableCompression: false,
 	}
@@ -152,6 +152,13 @@ func (r *Runner) Run(ctx context.Context, cfg Config) (*ComparisonResult, error)
 }
 
 func (r *Runner) runSingle(ctx context.Context, cfg Config, routingKey string) (*Result, error) {
+	if cfg.Concurrency <= 0 {
+		cfg.Concurrency = DefaultConcurrency
+	}
+	if cfg.Concurrency > 1000 {
+		cfg.Concurrency = 1000
+	}
+
 	collector := NewMetricsCollector(cfg.TargetURL, routingKey)
 	collector.Start()
 
@@ -172,7 +179,7 @@ func (r *Runner) runSingle(ctx context.Context, cfg Config, routingKey string) (
 	var wg sync.WaitGroup
 	var activeWorkers int64
 
-	workChan := make(chan struct{}, cfg.Concurrency*2)
+	workChan := make(chan struct{}, min(cfg.Concurrency*2, 2000))
 
 	// Worker pool
 	for i := 0; i < cfg.Concurrency; i++ {
@@ -188,7 +195,9 @@ func (r *Runner) runSingle(ctx context.Context, cfg Config, routingKey string) (
 						return
 					}
 					rec := r.doRequest(testCtx, cfg, routingKey)
-					collector.Record(rec)
+					if rec.Duration > 0 || rec.StatusCode > 0 || rec.Error != nil {
+						collector.Record(rec)
+					}
 				}
 			}
 		}()
@@ -225,7 +234,7 @@ dispatchLoop:
 }
 
 func (r *Runner) doRequest(parentCtx context.Context, cfg Config, routingKey string) RequestRecord {
-	reqCtx, reqCancel := context.WithTimeout(context.Background(), cfg.Timeout)
+	reqCtx, reqCancel := context.WithTimeout(parentCtx, cfg.Timeout)
 	defer reqCancel()
 
 	var bodyReader *bytes.Reader
@@ -260,6 +269,9 @@ func (r *Runner) doRequest(parentCtx context.Context, cfg Config, routingKey str
 	duration := time.Since(start)
 
 	if err != nil {
+		if parentCtx.Err() != nil {
+			return RequestRecord{}
+		}
 		return RequestRecord{
 			Duration: duration,
 			Error:    err,

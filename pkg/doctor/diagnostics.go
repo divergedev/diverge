@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -30,7 +31,7 @@ type Issue struct {
 	Remediation string   `json:"remediation"`
 }
 
-// Report holds the complete diagnosis from a doctor run.
+// Report holds the full cluster diagnostic summary.
 type Report struct {
 	EnvironmentName string   `json:"environment_name,omitempty"`
 	Namespace       string   `json:"namespace"`
@@ -39,12 +40,12 @@ type Report struct {
 	Suggestions     []string `json:"suggestions"`
 }
 
-// Diagnoser inspects cluster resources to find and explain errors.
+// Diagnoser inspects Kubernetes workloads and Diverge CRDs.
 type Diagnoser struct {
 	client client.Client
 }
 
-// NewDiagnoser creates a new cluster diagnostician.
+// NewDiagnoser creates a fresh Diagnoser instance.
 func NewDiagnoser(c client.Client) *Diagnoser {
 	return &Diagnoser{client: c}
 }
@@ -64,7 +65,11 @@ func (d *Diagnoser) Diagnose(ctx context.Context, namespace, envName string) (*R
 		if envName != "" {
 			var env divergeiov1alpha1.Environment
 			key := client.ObjectKey{Namespace: namespace, Name: envName}
-			if err := d.client.Get(ctx, key, &env); err == nil {
+			if err := d.client.Get(ctx, key, &env); err != nil {
+				if !apierrors.IsNotFound(err) {
+					return nil, fmt.Errorf("failed to get environment %s: %w", envName, err)
+				}
+			} else {
 				d.checkEnvironment(&env, report)
 			}
 		}
@@ -78,10 +83,11 @@ func (d *Diagnoser) Diagnose(ctx context.Context, namespace, envName string) (*R
 			})
 		}
 
-		if err := d.client.List(ctx, &podList, listOpts...); err == nil {
-			for i := range podList.Items {
-				d.checkPod(&podList.Items[i], report)
-			}
+		if err := d.client.List(ctx, &podList, listOpts...); err != nil {
+			return nil, fmt.Errorf("failed to list pods in namespace %s: %w", namespace, err)
+		}
+		for i := range podList.Items {
+			d.checkPod(&podList.Items[i], report)
 		}
 	}
 
@@ -212,6 +218,26 @@ func (d *Diagnoser) checkContainerStatus(podName string, cs corev1.ContainerStat
 
 		report.Issues = append(report.Issues, Issue{
 			Severity:    SeverityCritical,
+			Component:   fmt.Sprintf("%s/%s (%s)", tag, cs.Name, podName),
+			Summary:     summary,
+			Details:     term.Message,
+			Remediation: remediation,
+		})
+	}
+
+	// Check LastTerminationState (previous crashes before restart)
+	if cs.State.Waiting == nil && cs.State.Terminated == nil && cs.LastTerminationState.Terminated != nil && cs.LastTerminationState.Terminated.ExitCode != 0 {
+		term := cs.LastTerminationState.Terminated
+		summary := fmt.Sprintf("Container previously terminated with exit code %d (Reason: %s)", term.ExitCode, term.Reason)
+		remediation := "Check container logs to diagnose unhandled exceptions."
+
+		if term.Reason == "OOMKilled" || strings.Contains(strings.ToLower(term.Message), "oom") {
+			summary = "Container was previously terminated due to Out Of Memory (OOMKilled)"
+			remediation = "Increase container memory limit in diverge.yaml."
+		}
+
+		report.Issues = append(report.Issues, Issue{
+			Severity:    SeverityWarning,
 			Component:   fmt.Sprintf("%s/%s (%s)", tag, cs.Name, podName),
 			Summary:     summary,
 			Details:     term.Message,
