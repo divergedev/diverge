@@ -79,6 +79,21 @@
         "command": "diverge.openPreviewUrl",
         "title": "Open Preview URL in Browser",
         "icon": "$(link-external)"
+      },
+      {
+        "command": "diverge.startDev",
+        "title": "Start Local Dev Session (diverge dev)",
+        "icon": "$(play)"
+      },
+      {
+        "command": "diverge.stopDev",
+        "title": "Stop Dev Session (diverge dev release)",
+        "icon": "$(stop)"
+      },
+      {
+        "command": "diverge.status",
+        "title": "Show Environment Status",
+        "icon": "$(info)"
       }
     ],
     "menus": {
