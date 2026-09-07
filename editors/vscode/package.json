@@ -1,0 +1,136 @@
+{
+  "name": "diverge-vscode",
+  "displayName": "Diverge Preview Environments",
+  "description": "Preview environments, ephemeral load testing, visual diffs, and dev session management for VS Code, Cursor, and OpenCode.",
+  "version": "0.1.0",
+  "publisher": "divergedev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/divergedev/diverge"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Testing",
+    "Debuggers",
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished",
+    "workspaceContains:diverge.yaml",
+    "workspaceContains:.diverge.yaml"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "diverge-explorer",
+          "title": "Diverge",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "diverge-explorer": [
+        {
+          "id": "diverge-environments",
+          "name": "Environments"
+        },
+        {
+          "id": "diverge-sessions",
+          "name": "Dev Session Leases"
+        },
+        {
+          "id": "diverge-verification",
+          "name": "Verification Suite"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "diverge.refresh",
+        "title": "Refresh Diverge State",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "diverge.runDoctor",
+        "title": "Run Diverge Doctor (Diagnostics)",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "diverge.runLoadtest",
+        "title": "Run Ephemeral Load Test",
+        "icon": "$(dashboard)"
+      },
+      {
+        "command": "diverge.runVisualDiff",
+        "title": "Run Visual Regression Test",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "diverge.copyRoutingKey",
+        "title": "Copy Routing Key",
+        "icon": "$(clippy)"
+      },
+      {
+        "command": "diverge.openPreviewUrl",
+        "title": "Open Preview URL in Browser",
+        "icon": "$(link-external)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "diverge.refresh",
+          "when": "view == diverge-environments || view == diverge-sessions",
+          "group": "navigation"
+        },
+        {
+          "command": "diverge.runDoctor",
+          "when": "view == diverge-environments",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "diverge.copyRoutingKey",
+          "when": "view == diverge-environments",
+          "group": "inline"
+        },
+        {
+          "command": "diverge.openPreviewUrl",
+          "when": "view == diverge-environments",
+          "group": "inline"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Diverge",
+      "properties": {
+        "diverge.cliPath": {
+          "type": "string",
+          "default": "diverge",
+          "description": "Path to the diverge CLI executable."
+        },
+        "diverge.autoRefreshInterval": {
+          "type": "number",
+          "default": 10,
+          "description": "Auto refresh interval in seconds for environments and session leases."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.3"
+  }
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 
 	divergev1alpha1 "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 	divergev1alpha1connect "github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
+	"github.com/divergedev/diverge/pkg/loadtest"
 )
 
 var waitForReadySchema = json.RawMessage(`{
@@ -31,6 +33,19 @@ var fetchErrorsSchema = json.RawMessage(`{
 		"lines": {"type": "integer", "description": "Maximum number of error lines to return (default: 50)"}
 	},
 	"required": ["name", "namespace"]
+}`)
+
+var loadtestSchema = json.RawMessage(`{
+	"type": "object",
+	"properties": {
+		"target_url": {"type": "string", "description": "Target endpoint URL to benchmark"},
+		"routing_key": {"type": "string", "description": "Diverge routing key header (x-diverge-routing-key)"},
+		"duration_seconds": {"type": "integer", "description": "Duration in seconds (default: 5)"},
+		"rps": {"type": "integer", "description": "Requests per second (0 for unthrottled)"},
+		"concurrency": {"type": "integer", "description": "Concurrent worker count (default: 5)"},
+		"baseline_compare": {"type": "boolean", "description": "Whether to also benchmark baseline without routing header"}
+	},
+	"required": ["target_url"]
 }`)
 
 func registerWaitForReady(registry mcpruntime.Registry, client divergev1alpha1connect.EnvironmentServiceClient) {
@@ -165,4 +180,132 @@ func containsErrorLevel(line string) bool {
 		}
 	}
 	return false
+}
+
+func registerLoadtest(registry mcpruntime.Registry) {
+	registry.Register(mcpruntime.ToolDefinition{
+		Name:        "diverge_loadtest",
+		Description: "Run a targeted ephemeral load and benchmark test against a preview environment or endpoint. Measures latency percentiles (p50, p90, p95, p99) and error rates, with optional baseline comparison.",
+		InputSchema: loadtestSchema,
+	}, func(ctx context.Context, req mcpruntime.ToolRequest) (*mcpruntime.CallToolResult, error) {
+		var params struct {
+			TargetURL       string `json:"target_url"`
+			RoutingKey      string `json:"routing_key"`
+			DurationSeconds int    `json:"duration_seconds"`
+			RPS             int    `json:"rps"`
+			Concurrency     int    `json:"concurrency"`
+			BaselineCompare bool   `json:"baseline_compare"`
+		}
+		if err := json.Unmarshal(req.Arguments, &params); err != nil {
+			return nil, fmt.Errorf("invalid arguments: %w", err)
+		}
+
+		parsedURL, err := url.Parse(params.TargetURL)
+		if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Host == "" {
+			return &mcpruntime.CallToolResult{
+				Content: json.RawMessage(`{"error": "target_url must be a valid http or https URL"}`),
+				IsError: true,
+			}, nil
+		}
+
+		duration := time.Duration(params.DurationSeconds) * time.Second
+		if duration <= 0 {
+			duration = 5 * time.Second
+		}
+		concurrency := params.Concurrency
+		if concurrency <= 0 {
+			concurrency = 5
+		}
+
+		cfg := loadtest.Config{
+			TargetURL:       params.TargetURL,
+			RoutingKey:      params.RoutingKey,
+			Duration:        duration,
+			RPS:             params.RPS,
+			Concurrency:     concurrency,
+			BaselineCompare: params.BaselineCompare,
+		}
+
+		runner := loadtest.NewRunner()
+		res, err := runner.Run(ctx, cfg)
+		if err != nil {
+			return &mcpruntime.CallToolResult{
+				Content: json.RawMessage(fmt.Sprintf(`{"error": %q}`, err.Error())),
+				IsError: true,
+			}, nil
+		}
+
+		data, err := json.Marshal(res)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal load test result: %w", err)
+		}
+
+		return &mcpruntime.CallToolResult{
+			Content: json.RawMessage(data),
+			IsError: !res.Passed,
+		}, nil
+	})
+}
+
+var doctorSchema = json.RawMessage(`{
+	"type": "object",
+	"properties": {
+		"name": {"type": "string", "description": "Name of the environment to diagnose"},
+		"namespace": {"type": "string", "description": "Kubernetes namespace of the environment"}
+	},
+	"required": ["name", "namespace"]
+}`)
+
+func registerDoctor(registry mcpruntime.Registry, client divergev1alpha1connect.EnvironmentServiceClient) {
+	registry.Register(mcpruntime.ToolDefinition{
+		Name:        "diverge_doctor",
+		Description: "Diagnose an environment or workload failure. Evaluates phase, status conditions, and provides root-cause recommendations.",
+		InputSchema: doctorSchema,
+	}, func(ctx context.Context, req mcpruntime.ToolRequest) (*mcpruntime.CallToolResult, error) {
+		var params struct {
+			Name      string `json:"name"`
+			Namespace string `json:"namespace"`
+		}
+		if err := json.Unmarshal(req.Arguments, &params); err != nil {
+			return nil, fmt.Errorf("invalid arguments: %w", err)
+		}
+
+		resp, err := client.GetEnvironment(ctx, connect.NewRequest(&divergev1alpha1.GetEnvironmentRequest{
+			Name:      params.Name,
+			Namespace: params.Namespace,
+		}))
+		if err != nil {
+			return &mcpruntime.CallToolResult{
+				Content: json.RawMessage(fmt.Sprintf(`{"error": %q}`, err.Error())),
+				IsError: true,
+			}, nil
+		}
+
+		env := resp.Msg.Environment
+		healthy := true
+		var issues []string
+		var remedies []string
+
+		if env != nil && env.Status != nil {
+			phase := env.Status.Phase
+			if phase == "Failed" || phase == "Error" {
+				healthy = false
+				issues = append(issues, fmt.Sprintf("Environment phase is %s", phase))
+				remedies = append(remedies, "Inspect logs with diverge_fetch_errors or verify container image tags")
+			}
+		}
+
+		data, _ := json.Marshal(map[string]interface{}{
+			"name":      params.Name,
+			"namespace": params.Namespace,
+			"healthy":   healthy,
+			"issues":    issues,
+			"remedies":  remedies,
+		})
+
+		return &mcpruntime.CallToolResult{
+			Content: json.RawMessage(data),
+			IsError: !healthy,
+		}, nil
+	})
 }

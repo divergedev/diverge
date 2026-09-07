@@ -195,6 +195,8 @@ func newMCPServer(envClient divergev1alpha1connect.EnvironmentServiceClient, pgC
 
 	registerWaitForReady(registry, envClient)
 	registerFetchErrors(registry, envClient)
+	registerLoadtest(registry)
+	registerDoctor(registry, envClient)
 
 	mcpServer := server.NewMCPServer("diverge", "1.0.0")
 

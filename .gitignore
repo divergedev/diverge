@@ -41,3 +41,4 @@ web/dist/
 web/src/api/gen/
 *.tsbuildinfo
 internal/server/dashboard/dist/assets/
+**/.diverge/

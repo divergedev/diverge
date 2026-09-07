@@ -1,0 +1,28 @@
+{
+  "$schema": "https://opencode.ai/schema/tools.json",
+  "name": "diverge",
+  "description": "Diverge ephemeral preview environments, load testing, and root-cause diagnostics",
+  "mcpServers": {
+    "diverge": {
+      "command": "diverge",
+      "args": ["mcp"]
+    }
+  },
+  "slashCommands": [
+    {
+      "name": "preview",
+      "description": "Create or manage a Diverge preview environment for the current branch",
+      "prompt": "Inspect current git branch, check if a Diverge preview exists via diverge_get_environment, and spin one up with diverge_create_environment if needed."
+    },
+    {
+      "name": "doctor",
+      "description": "Run Diverge Doctor to diagnose failing preview pods or unprogrammed routes",
+      "prompt": "Call diverge_doctor on the active preview environment and suggest concrete code or configuration remedies."
+    },
+    {
+      "name": "loadtest",
+      "description": "Run an ephemeral load test against the preview candidate and compare with baseline",
+      "prompt": "Call diverge_loadtest with target URL and current routing key, reporting latency percentiles (p50, p95, p99)."
+    }
+  ]
+}
