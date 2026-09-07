@@ -9,6 +9,7 @@ The `diverge` CLI manages your local development environments and interacts with
 | `diverge create` | Create an environment from the current branch |
 | `diverge delete <name>` | Delete an environment |
 | `diverge dev` | Route cluster traffic for a service to your local machine |
+| `diverge dev sessions` | List active developer sessions across services |
 | `diverge dev intercept <service>` | Intercept a service in a preview group |
 | `diverge dev release <service>` | Stop intercepting a service |
 | `diverge diff` | Detect which services changed relative to a base branch |
@@ -48,6 +49,8 @@ Route cluster traffic for a service to your local machine.
 - `--proxy-mode` — Proxy mode, either `path` or `host` (default: path)
 - `--server` — Diverge server address for the tunnel (default: auto-detect via port-forward)
 - `--token` — Bearer token for the Diverge server (default: `$DIVERGE_TOKEN`, then the kubeconfig credential)
+- `--on-conflict` — Conflict resolution policy: `warn` (default), `block`, or `allow` (Diverge Pro)
+- `--force` — Force start dev session, overriding any active collision
 
 The server authenticates tunnel connections by Kubernetes TokenReview, so the
 token must be accepted for the server's `--audiences` (default:
@@ -58,6 +61,17 @@ a token; a provider-issued kubeconfig credential (GKE, EKS) needs an explicit
 ```bash
 kubectl create token my-sa --audience diverge-server
 ```
+
+### `diverge dev sessions`
+
+List all active developer sessions and heartbeat leases across services in the cluster.
+
+**Usage:** `diverge dev sessions [flags]` (Alias: `diverge dev list`)
+
+**Flags:**
+- `-n, --namespace` — Kubernetes namespace (default: from kubeconfig)
+
+For full details on multi-user development, see the [Multi-User Dev Guide](multi-user-dev.md).
 
 ### `diverge logs`
 

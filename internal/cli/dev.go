@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -23,6 +24,8 @@ import (
 	"github.com/divergedev/diverge/internal/config"
 	"github.com/divergedev/diverge/internal/git"
 	"github.com/divergedev/diverge/internal/proxy"
+	"github.com/divergedev/diverge/pkg/devsession"
+	"github.com/divergedev/diverge/pkg/license"
 )
 
 // ErrCollision indicates that a preview group with the same name already exists but belongs to a different owner.
@@ -39,6 +42,7 @@ const (
 type DevOptions struct {
 	Detector       EnvironmentDetector
 	Discoverer     ServerDiscoverer
+	SessionManager devsession.Manager
 	resolvedEnvMap map[string]string
 }
 
@@ -55,20 +59,27 @@ func WithServerDiscoverer(d ServerDiscoverer) DevOption {
 	return func(o *DevOptions) { o.Discoverer = d }
 }
 
+// WithSessionManager allows injecting a custom devsession.Manager for testing.
+func WithSessionManager(m devsession.Manager) DevOption {
+	return func(o *DevOptions) { o.SessionManager = m }
+}
+
 func newDevCmd(app *App) *cobra.Command {
 	var (
-		serviceFlag   string
-		portFlag      int32
-		endpointFlag  string
-		devspaceFlag  bool
-		previewIdFlag string
-		noTunnelFlag  bool
-		serverFlag    string
-		tokenFlag     string
-		proxyPortFlag int
-		noProxyFlag   bool
-		proxyModeFlag string
-		watchEnvFlag  bool
+		serviceFlag    string
+		portFlag       int32
+		endpointFlag   string
+		devspaceFlag   bool
+		previewIdFlag  string
+		noTunnelFlag   bool
+		serverFlag     string
+		tokenFlag      string
+		proxyPortFlag  int
+		noProxyFlag    bool
+		proxyModeFlag  string
+		watchEnvFlag   bool
+		onConflictFlag string
+		forceFlag      bool
 	)
 
 	cmd := &cobra.Command{
@@ -83,6 +94,9 @@ traffic for the specified service to your local machine's Tailscale IP or via a 
 			if proxyModeFlag != proxyModePath && proxyModeFlag != proxyModeHost {
 				return fmt.Errorf("--proxy-mode must be %q or %q, got %q", proxyModePath, proxyModeHost, proxyModeFlag)
 			}
+			if onConflictFlag != "" && onConflictFlag != "warn" && onConflictFlag != "block" && onConflictFlag != "allow" {
+				return fmt.Errorf("--on-conflict must be \"warn\", \"block\", or \"allow\", got %q", onConflictFlag)
+			}
 			return runDev(runDevParams{
 				App: app, Service: serviceFlag, Port: portFlag,
 				Endpoint: endpointFlag, Devspace: devspaceFlag,
@@ -90,6 +104,7 @@ traffic for the specified service to your local machine's Tailscale IP or via a 
 				NoTunnel: noTunnelFlag, Server: serverFlag, Token: tokenFlag,
 				ProxyPort: proxyPortFlag, NoProxy: noProxyFlag,
 				ProxyMode: proxyModeFlag, WatchEnv: watchEnvFlag,
+				OnConflict: onConflictFlag, Force: forceFlag,
 			})
 		},
 	}
@@ -105,27 +120,33 @@ traffic for the specified service to your local machine's Tailscale IP or via a 
 	cmd.Flags().BoolVar(&noProxyFlag, "no-proxy", false, "Disable local loopback proxy")
 	cmd.Flags().StringVar(&proxyModeFlag, "proxy-mode", proxyModePath, "Proxy routing mode: 'path' (default) or 'host' (requires *.localhost DNS)")
 	cmd.Flags().BoolVar(&watchEnvFlag, "watch-env", false, "Auto-restart child process when environment configuration changes")
+	cmd.Flags().StringVar(&onConflictFlag, "on-conflict", "", "Conflict resolution policy when another user is developing this service: 'warn' (default), 'block', or 'allow'")
+	cmd.Flags().BoolVar(&forceFlag, "force", false, "Force start dev session, overriding any active collision")
+
+	cmd.AddCommand(newDevSessionsCmd(app))
 
 	return cmd
 }
 
 type runDevParams struct {
-	App       *App
-	Service   string
-	Port      int32
-	Endpoint  string
-	Devspace  bool
-	PreviewID string
-	Args      []string
-	Cmd       *cobra.Command
-	NoTunnel  bool
-	Server    string
-	Token     string
-	Options   []DevOption
-	ProxyPort int
-	NoProxy   bool
-	ProxyMode string
-	WatchEnv  bool
+	App        *App
+	Service    string
+	Port       int32
+	Endpoint   string
+	Devspace   bool
+	PreviewID  string
+	Args       []string
+	Cmd        *cobra.Command
+	NoTunnel   bool
+	Server     string
+	Token      string
+	Options    []DevOption
+	ProxyPort  int
+	NoProxy    bool
+	ProxyMode  string
+	WatchEnv   bool
+	OnConflict string
+	Force      bool
 }
 
 func runDev(p runDevParams) error {
@@ -252,6 +273,62 @@ dev:
 	ns := p.App.Namespace
 	if ns == "" {
 		ns = "default"
+	}
+
+	// 5b. Multi-User Dev Session Conflict Detection (Pro Tier)
+	conflictPolicy := devsession.ConflictPolicyWarn
+	if p.Force {
+		conflictPolicy = devsession.ConflictPolicyAllow
+	} else if p.OnConflict != "" {
+		conflictPolicy = devsession.ConflictPolicy(p.OnConflict)
+	} else if cfg, err := config.Load(".diverge.yaml"); err == nil && cfg != nil {
+		if cfg.Defaults.Dev != nil && cfg.Defaults.Dev.OnConflict != "" {
+			conflictPolicy = devsession.ConflictPolicy(cfg.Defaults.Dev.OnConflict)
+		}
+	}
+
+	licInfo, _ := license.CheckFeature("", nil, license.FeatureConflictDetection)
+	if licInfo.IsTrial {
+		slog.Debug("multi-user conflict detection active (community trial mode)")
+	} else if licInfo.IsGrace {
+		slog.Warn("Diverge Pro license is within 7-day grace period", "graceUntil", licInfo.GraceUntil)
+	}
+
+	sessionMgr := devOpts.SessionManager
+	if sessionMgr == nil {
+		sessionMgr = devsession.NewSessionManager(c)
+	}
+
+	sessionID := uuid.NewString()
+	sess := devsession.DevSession{
+		ID:        sessionID,
+		Service:   serviceName,
+		Namespace: ns,
+		Developer: username,
+		Hostname:  devsession.DetectHostname(),
+		Branch:    headerValue,
+		PreviewID: headerValue,
+		GroupName: groupName,
+		PID:       os.Getpid(),
+	}
+
+	existingSess, conflicted, acquireErr := sessionMgr.Acquire(ctx, sess, conflictPolicy, p.Force)
+	if acquireErr != nil {
+		var confErr *devsession.ConflictError
+		if errors.As(acquireErr, &confErr) {
+			fmt.Print(confErr.FormatWarning(conflictPolicy))
+			return fmt.Errorf("dev session blocked: %w", acquireErr)
+		}
+		return fmt.Errorf("failed to acquire dev session lock: %w", acquireErr)
+	}
+
+	if conflicted && existingSess != nil {
+		confErr := &devsession.ConflictError{
+			Service:          serviceName,
+			ExistingSession:  *existingSess,
+			CurrentDeveloper: username,
+		}
+		fmt.Print(confErr.FormatWarning(conflictPolicy))
 	}
 
 	if !p.NoTunnel {
@@ -484,6 +561,7 @@ dev:
 				return
 			case <-heartbeatTicker.C:
 				hbCallCtx, hbCallCancel := context.WithTimeout(hbCtx, 5*time.Second)
+				_ = sessionMgr.Heartbeat(hbCallCtx, ns, serviceName, sessionID)
 				retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 					var current divergeiov1alpha1.PreviewGroup
 					if err := c.Get(hbCallCtx, types.NamespacedName{Name: groupName}, &current); err != nil {
@@ -502,6 +580,12 @@ dev:
 	}()
 
 	defer func() {
+		sessCtx, sessCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		if err := sessionMgr.Release(sessCtx, ns, serviceName, sessionID); err != nil {
+			slog.Debug("failed to release dev session", "error", err)
+		}
+		sessCancel()
+
 		fmt.Printf("\nCleaning up PreviewGroup %q...\n", groupName)
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

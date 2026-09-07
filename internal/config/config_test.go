@@ -588,3 +588,39 @@ func TestFeatureSettings_Validation(t *testing.T) {
 		assert.ErrorContains(t, cfg.Validate(), "feature provider must be one of")
 	})
 }
+
+func TestDevSettings_ParsingAndValidation(t *testing.T) {
+	t.Run("valid on_conflict policies", func(t *testing.T) {
+		for _, policy := range []string{"warn", "block", "allow"} {
+			d := &DevSettings{OnConflict: policy}
+			assert.NoError(t, d.Validate())
+		}
+	})
+
+	t.Run("invalid on_conflict policy", func(t *testing.T) {
+		d := &DevSettings{OnConflict: "invalid-policy"}
+		assert.ErrorContains(t, d.Validate(), "dev on_conflict must be \"warn\", \"block\", or \"allow\"")
+	})
+
+	t.Run("parsing and resolution", func(t *testing.T) {
+		yamlContent := "version: \"1\"\n" +
+			"defaults:\n" +
+			"  dev:\n" +
+			"    on_conflict: warn\n" +
+			"environments:\n" +
+			"  prod:\n" +
+			"    dev:\n" +
+			"      on_conflict: block\n"
+		cfg, err := Parse([]byte(yamlContent))
+		require.NoError(t, err)
+		require.NoError(t, cfg.Validate())
+
+		resDef := cfg.Resolve("preview", nil)
+		require.NotNil(t, resDef.Dev)
+		assert.Equal(t, "warn", resDef.Dev.OnConflict)
+
+		resProd := cfg.Resolve("prod", nil)
+		require.NotNil(t, resProd.Dev)
+		assert.Equal(t, "block", resProd.Dev.OnConflict)
+	})
+}

@@ -21,6 +21,7 @@ curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/main/install.sh 
 ```
 
 Documentation: [https://divergedev.com](https://divergedev.com)
+- [Multi-User Dev & Conflict Detection (Pro)](docs/guides/multi-user-dev.md)
 - [Feature Flags Guide](docs/guides/feature-flags.md)
 - [Hot Reload Guide](docs/guides/hot-reload.md)
 - [Observability Guide](docs/guides/observability.md)
