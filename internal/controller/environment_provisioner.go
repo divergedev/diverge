@@ -306,7 +306,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 
 	// 7.7. Ensure features
 	if env.Spec.Features != nil {
-		if meta.IsStatusConditionTrue(env.Status.Conditions, "FeaturesReady") && env.Status.FeatureConfigMap != "" {
+		if meta.IsStatusConditionTrue(env.Status.Conditions, "FeaturesReady") && (env.Status.FeatureConfigMap != "" || len(env.Status.FeatureEnvVars) > 0 || len(env.Spec.Features.Overrides) == 0) {
 			// Skip re-provisioning if already ready and status recorded
 		} else {
 			fp, err := r.getFeatureProvider(env)
