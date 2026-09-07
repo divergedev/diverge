@@ -41,6 +41,9 @@ baseline comparison, and automated CI/CD quality gate thresholds.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			targetURL := args[0]
+			if err := loadtest.ValidateTargetURL(targetURL); err != nil {
+				return fmt.Errorf("invalid target URL: %w", err)
+			}
 
 			effectiveRoutingKey := routingKey
 			if effectiveRoutingKey == "" && preview != "" {

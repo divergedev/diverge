@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -215,14 +217,19 @@ func TestRunner_RPSRateLimiting(t *testing.T) {
 }
 
 func TestRunner_PostWithBodyAndHeaders(t *testing.T) {
-	var receivedBody []byte
-	var customHeaderVal string
+	var (
+		mu              sync.Mutex
+		receivedBody    []byte
+		customHeaderVal string
+	)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		customHeaderVal = r.Header.Get("X-Custom-Header")
 		var buf bytes.Buffer
 		_, _ = buf.ReadFrom(r.Body)
+		mu.Lock()
+		customHeaderVal = r.Header.Get("X-Custom-Header")
 		receivedBody = buf.Bytes()
+		mu.Unlock()
 		w.WriteHeader(http.StatusCreated)
 	}))
 	defer srv.Close()
@@ -241,8 +248,12 @@ func TestRunner_PostWithBodyAndHeaders(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	assert.True(t, res.Passed)
-	assert.Equal(t, "custom-val", customHeaderVal)
-	assert.JSONEq(t, `{"action":"verify"}`, string(receivedBody))
+	mu.Lock()
+	headerCopy := customHeaderVal
+	bodyCopy := string(receivedBody)
+	mu.Unlock()
+	assert.Equal(t, "custom-val", headerCopy)
+	assert.JSONEq(t, `{"action":"verify"}`, bodyCopy)
 	assert.Equal(t, res.Candidate.TotalRequests, res.Candidate.SuccessCount)
 }
 
@@ -331,4 +342,136 @@ func TestRunner_LargeConcurrencyBounded(t *testing.T) {
 	res, err := runner.Run(context.Background(), cfg)
 	require.NoError(t, err)
 	require.NotNil(t, res)
+}
+
+func TestValidateTargetURL_Unit(t *testing.T) {
+	// Valid URLs
+	assert.NoError(t, ValidateTargetURL("http://localhost:8080/preview"))
+	assert.NoError(t, ValidateTargetURL("https://preview.diverge.run/app"))
+	assert.NoError(t, ValidateTargetURL("http://127.0.0.1:3000"))
+
+	// Invalid schemes
+	assert.Error(t, ValidateTargetURL("ftp://preview.example.com"))
+	assert.Error(t, ValidateTargetURL("gopher://preview.example.com"))
+	assert.Error(t, ValidateTargetURL("file:///etc/passwd"))
+	assert.Error(t, ValidateTargetURL("://bad-url"))
+	assert.Error(t, ValidateTargetURL("http:///no-host"))
+
+	// Prohibited destinations (cloud metadata & link-local)
+	assert.Error(t, ValidateTargetURL("http://169.254.169.254/latest/meta-data/"))
+	assert.Error(t, ValidateTargetURL("http://metadata.google.internal/computeMetadata/v1/"))
+	assert.Error(t, ValidateTargetURL("http://metadata/computeMetadata/v1/"))
+	assert.Error(t, ValidateTargetURL("http://instance-data/latest/meta-data/"))
+	assert.Error(t, ValidateTargetURL("http://169.254.10.20/service"))
+
+	// Allowlist checking
+	t.Setenv("DIVERGE_ALLOWED_HOSTS", "diverge.run,example.com")
+	assert.NoError(t, ValidateTargetURL("https://preview.diverge.run/test"))
+	assert.NoError(t, ValidateTargetURL("http://example.com/test"))
+	assert.Error(t, ValidateTargetURL("https://unauthorized-domain.org/test"))
+}
+
+func TestIsProhibitedHostAndIP(t *testing.T) {
+	assert.True(t, IsProhibitedHost("metadata.google.internal"))
+	assert.True(t, IsProhibitedHost("metadata"))
+	assert.True(t, IsProhibitedHost("instance-data"))
+	assert.False(t, IsProhibitedHost("localhost"))
+	assert.False(t, IsProhibitedHost("diverge.run"))
+
+	assert.True(t, IsProhibitedIP(net.ParseIP("169.254.169.254")))
+	assert.True(t, IsProhibitedIP(net.ParseIP("169.254.1.1")))
+	assert.True(t, IsProhibitedIP(net.ParseIP("fd00:ec2::254")))
+	assert.False(t, IsProhibitedIP(net.ParseIP("127.0.0.1")))
+	assert.False(t, IsProhibitedIP(net.ParseIP("::1")))
+	assert.False(t, IsProhibitedIP(net.ParseIP("10.0.0.1")))
+	assert.False(t, IsProhibitedIP(nil))
+}
+
+func TestRunner_CheckRedirect_BlocksMetadata(t *testing.T) {
+	// Server that redirects to AWS/GCP metadata endpoint
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://169.254.169.254/latest/meta-data/", http.StatusFound)
+	}))
+	defer srv.Close()
+
+	runner := NewRunner()
+	cfg := Config{
+		TargetURL:   srv.URL,
+		Duration:    50 * time.Millisecond,
+		Concurrency: 1,
+		Timeout:     50 * time.Millisecond,
+	}
+
+	res, err := runner.Run(context.Background(), cfg)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Greater(t, res.Candidate.NetworkErrors, int64(0))
+	require.NotEmpty(t, res.Candidate.ErrorSample)
+	assert.Contains(t, res.Candidate.ErrorSample[0], "redirect target prohibited")
+}
+
+func TestRunner_CheckRedirect_BoundsMaxRedirects(t *testing.T) {
+	// Server that infinitely redirects to itself
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, srv.URL, http.StatusFound)
+	}))
+	defer srv.Close()
+
+	runner := NewRunner()
+	cfg := Config{
+		TargetURL:   srv.URL,
+		Duration:    50 * time.Millisecond,
+		Concurrency: 1,
+		Timeout:     50 * time.Millisecond,
+	}
+
+	res, err := runner.Run(context.Background(), cfg)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Greater(t, res.Candidate.NetworkErrors, int64(0))
+	require.NotEmpty(t, res.Candidate.ErrorSample)
+	assert.Contains(t, res.Candidate.ErrorSample[0], "stopped after 10 redirects")
+}
+
+func TestRunner_DialContext_BlocksProhibitedIP(t *testing.T) {
+	runner := NewRunner()
+	transport, ok := runner.client.Transport.(*http.Transport)
+	require.True(t, ok)
+	require.NotNil(t, transport.DialContext)
+
+	// Direct dial to prohibited IP
+	_, err := transport.DialContext(context.Background(), "tcp", "169.254.169.254:80")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "prohibited")
+
+	// Direct dial to prohibited host
+	_, err = transport.DialContext(context.Background(), "tcp", "metadata.google.internal:80")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "prohibited")
+}
+
+func TestRunner_DialContext_AllowsValidTarget(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	runner := NewRunner()
+	transport, ok := runner.client.Transport.(*http.Transport)
+	require.True(t, ok)
+
+	conn, err := transport.DialContext(context.Background(), "tcp", srv.Listener.Addr().String())
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+}
+
+func TestRunner_InvalidTargetURLRejection(t *testing.T) {
+	runner := NewRunner()
+	cfg := Config{
+		TargetURL: "http://169.254.169.254/latest/meta-data/",
+	}
+	_, err := runner.Run(context.Background(), cfg)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "prohibited")
 }

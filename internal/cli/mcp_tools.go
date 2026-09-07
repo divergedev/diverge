@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"strings"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 
 	divergev1alpha1 "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 	divergev1alpha1connect "github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
+	"github.com/divergedev/diverge/pkg/doctor"
 	"github.com/divergedev/diverge/pkg/loadtest"
 )
 
@@ -48,6 +48,7 @@ var loadtestSchema = json.RawMessage(`{
 	"required": ["target_url"]
 }`)
 
+// registerWaitForReady registers the diverge_wait_for_ready MCP tool handler.
 func registerWaitForReady(registry mcpruntime.Registry, client divergev1alpha1connect.EnvironmentServiceClient) {
 	registry.Register(mcpruntime.ToolDefinition{
 		Name:        "diverge_wait_for_ready",
@@ -118,6 +119,7 @@ func registerWaitForReady(registry mcpruntime.Registry, client divergev1alpha1co
 	})
 }
 
+// registerFetchErrors registers the diverge_fetch_errors MCP tool handler.
 func registerFetchErrors(registry mcpruntime.Registry, client divergev1alpha1connect.EnvironmentServiceClient) {
 	registry.Register(mcpruntime.ToolDefinition{
 		Name:        "diverge_fetch_errors",
@@ -172,6 +174,7 @@ func registerFetchErrors(registry mcpruntime.Registry, client divergev1alpha1con
 	})
 }
 
+// containsErrorLevel checks if a log line indicates an error, fatal, or panic state.
 func containsErrorLevel(line string) bool {
 	lowerLine := strings.ToLower(line)
 	for _, indicator := range []string{"error", "fatal", "panic", "level=error", "level=fatal"} {
@@ -182,6 +185,14 @@ func containsErrorLevel(line string) bool {
 	return false
 }
 
+// validateTargetURL validates that targetURL has http/https scheme, a non-empty host,
+// and protects against SSRF (disallowing cloud metadata addresses, link-local unicast/multicast,
+// and enforcing DIVERGE_ALLOWED_HOSTS allowlist if configured).
+func validateTargetURL(targetURL string) error {
+	return loadtest.ValidateTargetURL(targetURL)
+}
+
+// registerLoadtest registers the diverge_loadtest MCP tool handler.
 func registerLoadtest(registry mcpruntime.Registry) {
 	registry.Register(mcpruntime.ToolDefinition{
 		Name:        "diverge_loadtest",
@@ -200,10 +211,9 @@ func registerLoadtest(registry mcpruntime.Registry) {
 			return nil, fmt.Errorf("invalid arguments: %w", err)
 		}
 
-		parsedURL, err := url.Parse(params.TargetURL)
-		if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Host == "" {
+		if err := validateTargetURL(params.TargetURL); err != nil {
 			return &mcpruntime.CallToolResult{
-				Content: json.RawMessage(`{"error": "target_url must be a valid http or https URL"}`),
+				Content: json.RawMessage(fmt.Sprintf(`{"error": %q}`, err.Error())),
 				IsError: true,
 			}, nil
 		}
@@ -256,7 +266,13 @@ var doctorSchema = json.RawMessage(`{
 	"required": ["name", "namespace"]
 }`)
 
-func registerDoctor(registry mcpruntime.Registry, client divergev1alpha1connect.EnvironmentServiceClient) {
+// registerDoctor registers the diverge_doctor MCP tool handler.
+func registerDoctor(registry mcpruntime.Registry, client divergev1alpha1connect.EnvironmentServiceClient, diagnoser ...*doctor.Diagnoser) {
+	var diag *doctor.Diagnoser
+	if len(diagnoser) > 0 {
+		diag = diagnoser[0]
+	}
+
 	registry.Register(mcpruntime.ToolDefinition{
 		Name:        "diverge_doctor",
 		Description: "Diagnose an environment or workload failure. Evaluates phase, status conditions, and provides root-cause recommendations.",
@@ -270,28 +286,46 @@ func registerDoctor(registry mcpruntime.Registry, client divergev1alpha1connect.
 			return nil, fmt.Errorf("invalid arguments: %w", err)
 		}
 
-		resp, err := client.GetEnvironment(ctx, connect.NewRequest(&divergev1alpha1.GetEnvironmentRequest{
-			Name:      params.Name,
-			Namespace: params.Namespace,
-		}))
-		if err != nil {
-			return &mcpruntime.CallToolResult{
-				Content: json.RawMessage(fmt.Sprintf(`{"error": %q}`, err.Error())),
-				IsError: true,
-			}, nil
-		}
-
-		env := resp.Msg.Environment
 		healthy := true
 		var issues []string
 		var remedies []string
 
-		if env != nil && env.Status != nil {
-			phase := env.Status.Phase
-			if phase == "Failed" || phase == "Error" {
-				healthy = false
-				issues = append(issues, fmt.Sprintf("Environment phase is %s", phase))
-				remedies = append(remedies, "Inspect logs with diverge_fetch_errors or verify container image tags")
+		if diag != nil {
+			report, err := diag.Diagnose(ctx, params.Namespace, params.Name)
+			if err != nil {
+				return &mcpruntime.CallToolResult{
+					Content: json.RawMessage(fmt.Sprintf(`{"error": %q}`, err.Error())),
+					IsError: true,
+				}, nil
+			}
+			healthy = report.Healthy
+			for _, iss := range report.Issues {
+				issues = append(issues, fmt.Sprintf("[%s] %s: %s", iss.Severity, iss.Component, iss.Summary))
+				if iss.Remediation != "" {
+					remedies = append(remedies, iss.Remediation)
+				}
+			}
+			remedies = append(remedies, report.Suggestions...)
+		} else {
+			resp, err := client.GetEnvironment(ctx, connect.NewRequest(&divergev1alpha1.GetEnvironmentRequest{
+				Name:      params.Name,
+				Namespace: params.Namespace,
+			}))
+			if err != nil {
+				return &mcpruntime.CallToolResult{
+					Content: json.RawMessage(fmt.Sprintf(`{"error": %q}`, err.Error())),
+					IsError: true,
+				}, nil
+			}
+
+			env := resp.Msg.Environment
+			if env != nil && env.Status != nil {
+				phase := env.Status.Phase
+				if phase == "Failed" || phase == "Error" {
+					healthy = false
+					issues = append(issues, fmt.Sprintf("Environment phase is %s", phase))
+					remedies = append(remedies, "Inspect logs with diverge_fetch_errors or verify container image tags")
+				}
 			}
 		}
 

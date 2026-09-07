@@ -10,8 +10,14 @@ import (
 	"github.com/protocgen/proto2mcp/pkg/mcpruntime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	divergev1alpha1 "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
+	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/pkg/doctor"
 )
 
 type mockEnvClient struct {
@@ -210,4 +216,104 @@ func TestRegisterDoctor_InvalidJSON(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid arguments")
+}
+
+func TestValidateTargetURL(t *testing.T) {
+	// Valid URLs
+	assert.NoError(t, validateTargetURL("http://localhost:8080/preview"))
+	assert.NoError(t, validateTargetURL("https://preview.diverge.run/app"))
+	assert.NoError(t, validateTargetURL("http://127.0.0.1:3000"))
+
+	// Invalid schemes
+	assert.Error(t, validateTargetURL("ftp://preview.example.com"))
+	assert.Error(t, validateTargetURL("gopher://preview.example.com"))
+	assert.Error(t, validateTargetURL("file:///etc/passwd"))
+
+	// Prohibited destinations (cloud metadata & link-local)
+	assert.Error(t, validateTargetURL("http://169.254.169.254/latest/meta-data/"))
+	assert.Error(t, validateTargetURL("http://metadata.google.internal/computeMetadata/v1/"))
+	assert.Error(t, validateTargetURL("http://metadata/computeMetadata/v1/"))
+	assert.Error(t, validateTargetURL("http://169.254.10.20/service"))
+
+	// Allowlist checking
+	t.Setenv("DIVERGE_ALLOWED_HOSTS", "diverge.run,example.com")
+	assert.NoError(t, validateTargetURL("https://preview.diverge.run/test"))
+	assert.NoError(t, validateTargetURL("http://example.com/test"))
+	assert.Error(t, validateTargetURL("https://unauthorized-domain.org/test"))
+}
+
+func TestRegisterLoadtest_SSRFProtection(t *testing.T) {
+	registry := mcpruntime.NewToolRegistry()
+	registerLoadtest(registry)
+
+	handler, ok := registry.Lookup("diverge_loadtest")
+	require.True(t, ok)
+
+	// Blocked metadata IP
+	args := []byte(`{"target_url": "http://169.254.169.254/latest/meta-data"}`)
+	res, err := handler(context.Background(), mcpruntime.ToolRequest{
+		ToolName:  "diverge_loadtest",
+		Arguments: args,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.True(t, res.IsError)
+	assert.Contains(t, string(res.Content), "prohibited")
+}
+
+func TestRegisterDoctor_WithDiagnoser(t *testing.T) {
+	scheme := k8sruntime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, divergeiov1alpha1.AddToScheme(scheme))
+
+	podCrash := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "api-crash",
+			Namespace: "test-ns",
+			Labels: map[string]string{
+				"diverge.io/environment": "test-env",
+			},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name: "api",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{
+							Reason:  "CrashLoopBackOff",
+							Message: "Back-off 20s restarting failed container",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(podCrash).Build()
+	diagnoser := doctor.NewDiagnoser(fakeClient)
+
+	registry := mcpruntime.NewToolRegistry()
+	mockClient := &mockEnvClient{}
+	registerDoctor(registry, mockClient, diagnoser)
+
+	handler, ok := registry.Lookup("diverge_doctor")
+	require.True(t, ok)
+
+	args := []byte(`{"name": "test-env", "namespace": "test-ns"}`)
+	res, err := handler(context.Background(), mcpruntime.ToolRequest{
+		ToolName:  "diverge_doctor",
+		Arguments: args,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.True(t, res.IsError)
+
+	var data map[string]interface{}
+	err = json.Unmarshal(res.Content, &data)
+	require.NoError(t, err)
+	assert.False(t, data["healthy"].(bool))
+	issues := data["issues"].([]interface{})
+	require.NotEmpty(t, issues)
+	assert.Contains(t, issues[0].(string), "CrashLoopBackOff")
 }

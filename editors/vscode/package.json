@@ -79,6 +79,21 @@
         "command": "diverge.openPreviewUrl",
         "title": "Open Preview URL in Browser",
         "icon": "$(link-external)"
+      },
+      {
+        "command": "diverge.startDev",
+        "title": "Start Local Dev Session (diverge dev)",
+        "icon": "$(play)"
+      },
+      {
+        "command": "diverge.stopDev",
+        "title": "Stop Dev Session (diverge dev release)",
+        "icon": "$(stop)"
+      },
+      {
+        "command": "diverge.status",
+        "title": "Show Environment Status",
+        "icon": "$(info)"
       }
     ],
     "menus": {
@@ -86,12 +101,22 @@
         {
           "command": "diverge.refresh",
           "when": "view == diverge-environments || view == diverge-sessions",
-          "group": "navigation"
+          "group": "navigation@1"
+        },
+        {
+          "command": "diverge.startDev",
+          "when": "view == diverge-environments",
+          "group": "navigation@2"
+        },
+        {
+          "command": "diverge.status",
+          "when": "view == diverge-environments",
+          "group": "navigation@3"
         },
         {
           "command": "diverge.runDoctor",
           "when": "view == diverge-environments",
-          "group": "navigation"
+          "group": "navigation@4"
         }
       ],
       "view/item/context": [
@@ -104,6 +129,21 @@
           "command": "diverge.openPreviewUrl",
           "when": "view == diverge-environments",
           "group": "inline"
+        },
+        {
+          "command": "diverge.startDev",
+          "when": "view == diverge-environments",
+          "group": "2_lifecycle"
+        },
+        {
+          "command": "diverge.stopDev",
+          "when": "view == diverge-environments || view == diverge-sessions",
+          "group": "2_lifecycle"
+        },
+        {
+          "command": "diverge.status",
+          "when": "view == diverge-environments",
+          "group": "3_diagnostics"
         }
       ]
     },

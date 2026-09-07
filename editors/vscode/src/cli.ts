@@ -5,7 +5,7 @@ import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 
 export class DivergeCLI {
-  private getCliPath(): string {
+  public getCliPath(): string {
     const config = vscode.workspace.getConfiguration("diverge");
     return config.get<string>("cliPath") || "diverge";
   }
@@ -19,7 +19,7 @@ export class DivergeCLI {
       return stdout.trim();
     } catch (err: any) {
       const stderr = err.stderr ? err.stderr.toString() : err.message;
-      throw new Error(`Diverge CLI command failed (${cli} ${args.join(" ")}): ${stderr}`);
+      throw new Error(`Diverge CLI command failed: ${stderr}`);
     }
   }
 
