@@ -29,6 +29,8 @@ func TestVaultResolver_KVv2(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	t.Setenv("BAO_ADDR", "")
+	t.Setenv("BAO_TOKEN", "")
 	t.Setenv("VAULT_ADDR", srv.URL)
 	t.Setenv("VAULT_TOKEN", "test-token")
 
@@ -50,6 +52,8 @@ func TestVaultResolver_KVv1(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	t.Setenv("BAO_ADDR", "")
+	t.Setenv("BAO_TOKEN", "")
 	t.Setenv("VAULT_ADDR", srv.URL)
 	t.Setenv("VAULT_TOKEN", "test-token")
 
@@ -71,6 +75,8 @@ func TestVaultResolver_KeyNotFound(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	t.Setenv("BAO_ADDR", "")
+	t.Setenv("BAO_TOKEN", "")
 	t.Setenv("VAULT_ADDR", srv.URL)
 	t.Setenv("VAULT_TOKEN", "test-token")
 
@@ -82,6 +88,8 @@ func TestVaultResolver_KeyNotFound(t *testing.T) {
 }
 
 func TestVaultResolver_RejectsHTTP(t *testing.T) {
+	t.Setenv("BAO_ADDR", "")
+	t.Setenv("BAO_TOKEN", "")
 	t.Setenv("VAULT_ADDR", "http://insecure-vault:8200")
 	t.Setenv("VAULT_TOKEN", "test-token")
 
@@ -104,6 +112,8 @@ func TestVaultResolver_RejectsCrossHostRedirect(t *testing.T) {
 	}))
 	defer redirectSrv.Close()
 
+	t.Setenv("BAO_ADDR", "")
+	t.Setenv("BAO_TOKEN", "")
 	t.Setenv("VAULT_ADDR", redirectSrv.URL)
 	t.Setenv("VAULT_TOKEN", "test-token")
 
@@ -129,6 +139,7 @@ func TestVaultResolver_SetRole(t *testing.T) {
 
 func TestVaultResolver_GetToken(t *testing.T) {
 	t.Run("VAULT_TOKEN set", func(t *testing.T) {
+		t.Setenv("BAO_TOKEN", "")
 		t.Setenv("VAULT_TOKEN", "test-token")
 		r := NewVaultResolver()
 		token, err := r.getToken(context.Background())

@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,6 +40,23 @@ type TunnelClient struct {
 	readyOnce        sync.Once
 }
 
+func isLoopbackHost(host string) bool {
+	h := host
+	if strings.Contains(h, ":") {
+		if sh, _, err := net.SplitHostPort(h); err == nil {
+			h = sh
+		}
+	}
+	h = strings.Trim(h, "[]")
+	if strings.EqualFold(h, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(h); ip != nil && ip.IsLoopback() {
+		return true
+	}
+	return false
+}
+
 // tunnelAuthTransport attaches the bearer credential from TokenSource to every tunnel request.
 type tunnelAuthTransport struct {
 	base        http.RoundTripper
@@ -45,16 +64,23 @@ type tunnelAuthTransport struct {
 }
 
 func (t *tunnelAuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// RoundTrippers must not modify the request they are given.
+	if t.tokenSource == nil {
+		return t.base.RoundTrip(req)
+	}
+
+	// Security: Do not transmit credentials in cleartext over non-loopback HTTP.
+	if req.URL != nil && strings.EqualFold(req.URL.Scheme, "http") && !isLoopbackHost(req.URL.Host) {
+		return nil, fmt.Errorf("insecure HTTP scheme is only allowed for loopback addresses, got %q", req.URL.Host)
+	}
+
+	tok, err := t.tokenSource.Token(req.Context())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tunnel auth token: %w", err)
+	}
+
 	clone := req.Clone(req.Context())
-	if t.tokenSource != nil {
-		tok, err := t.tokenSource.Token(req.Context())
-		if err != nil {
-			return nil, fmt.Errorf("failed to get tunnel auth token: %w", err)
-		}
-		if tok != "" {
-			clone.Header.Set("Authorization", "Bearer "+tok)
-		}
+	if tok != "" {
+		clone.Header.Set("Authorization", "Bearer "+tok)
 	}
 	return t.base.RoundTrip(clone)
 }
@@ -85,6 +111,15 @@ func NewTunnelClientWithTokenSource(
 			Transport: &tunnelAuthTransport{
 				base:        baseTransport,
 				tokenSource: tokenSource,
+			},
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) > 0 {
+					orig := via[0]
+					if !strings.EqualFold(req.URL.Scheme, orig.URL.Scheme) || !strings.EqualFold(req.URL.Host, orig.URL.Host) {
+						return fmt.Errorf("refusing to send credentials across redirects to different scheme or host: %s -> %s", orig.URL, req.URL)
+					}
+				}
+				return nil
 			},
 		},
 		Ready: make(chan struct{}),

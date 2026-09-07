@@ -369,3 +369,54 @@ type testFuncTokenSource struct {
 func (f *testFuncTokenSource) Token(ctx context.Context) (string, error) {
 	return f.fn(ctx)
 }
+
+func TestTunnelAuthTransport_RejectsNonLoopbackHTTP(t *testing.T) {
+	transport := &tunnelAuthTransport{
+		base:        http.DefaultTransport,
+		tokenSource: StaticTokenSource("secret-token"),
+	}
+
+	// Non-loopback HTTP must be rejected without sending credentials
+	req, err := http.NewRequest(http.MethodGet, "http://remote-server.example.com/tunnel", nil)
+	require.NoError(t, err)
+
+	_, err = transport.RoundTrip(req)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "insecure HTTP scheme is only allowed for loopback addresses")
+
+	// Loopback IPv4 HTTP is allowed through transport validation
+	loopbackReq, err := http.NewRequest(http.MethodGet, "http://127.0.0.1:8080/tunnel", nil)
+	require.NoError(t, err)
+	_, err = transport.RoundTrip(loopbackReq)
+	if err != nil {
+		assert.NotContains(t, err.Error(), "insecure HTTP scheme is only allowed for loopback addresses")
+	}
+
+	// Localhost is allowed through transport validation
+	localhostReq, err := http.NewRequest(http.MethodGet, "http://localhost:8080/tunnel", nil)
+	require.NoError(t, err)
+	_, err = transport.RoundTrip(localhostReq)
+	if err != nil {
+		assert.NotContains(t, err.Error(), "insecure HTTP scheme is only allowed for loopback addresses")
+	}
+}
+
+func TestTunnelClient_RejectsCrossHostRedirect(t *testing.T) {
+	targetSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer targetSrv.Close()
+
+	redirectSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, targetSrv.URL+"/redirected", http.StatusFound)
+	}))
+	defer redirectSrv.Close()
+
+	tc := NewTunnelClientWithTokenSource(redirectSrv.URL, 8080, "p1", "svc", "ns", StaticTokenSource("tok"), nil, slog.Default())
+	req, err := http.NewRequest(http.MethodGet, redirectSrv.URL, nil)
+	require.NoError(t, err)
+
+	_, err = tc.tunnelHTTPClient.Do(req)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "refusing to send credentials across redirects")
+}

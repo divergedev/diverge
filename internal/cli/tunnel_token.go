@@ -102,6 +102,8 @@ func (f *FileTokenSource) Token(ctx context.Context) (string, error) {
 
 // OpenBaoTokenSource resolves credentials from OpenBao or HashiCorp Vault environment
 // variables (BAO_TOKEN, VAULT_TOKEN) and home directory token files (~/.bao-token, ~/.vault-token).
+// Note: This source is for application secrets and custom integrations; it is not used in
+// resolveTunnelTokenSource because the Diverge server authenticates tunnels via Kubernetes TokenReview.
 type OpenBaoTokenSource struct{}
 
 // NewOpenBaoTokenSource creates a token source for OpenBao/Vault.
@@ -229,10 +231,12 @@ func (c *ChainTokenSource) Token(ctx context.Context) (string, error) {
 // resolveTunnelTokenSource resolves the credential to present to the diverge server in order:
 // 1. Explicit token flag (--token)
 // 2. DIVERGE_TOKEN environment variable
-// 3. OpenBao / Vault token (BAO_TOKEN, VAULT_TOKEN, ~/.bao-token, ~/.vault-token)
+// 3. Kubeconfig bearer token file (with dynamic reload)
 // 4. Kubeconfig static bearer token
-// 5. Kubeconfig bearer token file (with dynamic reload)
-// 6. Kubeconfig dynamic ExecProvider / AuthProvider
+// 5. Kubeconfig dynamic ExecProvider / AuthProvider
+//
+// Note: OpenBao/Vault tokens are not in this chain because the Diverge server authenticates
+// tunnel connections via Kubernetes TokenReview, which requires Kubernetes credentials.
 func resolveTunnelTokenSource(explicit string, restCfg *rest.Config) (TokenSource, error) {
 	if token := strings.TrimSpace(explicit); token != "" {
 		return StaticTokenSource(token), nil
@@ -241,16 +245,15 @@ func resolveTunnelTokenSource(explicit string, restCfg *rest.Config) (TokenSourc
 		return StaticTokenSource(token), nil
 	}
 
-	sources := []TokenSource{
-		NewOpenBaoTokenSource(),
-	}
+	var sources []TokenSource
 
 	if restCfg != nil {
-		if token := strings.TrimSpace(restCfg.BearerToken); token != "" {
-			sources = append(sources, StaticTokenSource(token))
-		}
+		// File-backed tokens take precedence over static BearerToken to allow dynamic token reload.
 		if restCfg.BearerTokenFile != "" {
 			sources = append(sources, NewFileTokenSource(restCfg.BearerTokenFile))
+		}
+		if token := strings.TrimSpace(restCfg.BearerToken); token != "" {
+			sources = append(sources, StaticTokenSource(token))
 		}
 		if kubeTS, err := NewKubeTokenSource(restCfg); err == nil {
 			sources = append(sources, kubeTS)

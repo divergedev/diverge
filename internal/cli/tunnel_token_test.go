@@ -191,7 +191,6 @@ func TestResolveTunnelTokenSource(t *testing.T) {
 		name     string
 		explicit string
 		env      string
-		baoEnv   string
 		restCfg  *rest.Config
 		want     string
 		wantErr  error
@@ -200,32 +199,24 @@ func TestResolveTunnelTokenSource(t *testing.T) {
 			name:     "explicit token wins over everything",
 			explicit: "flag-token",
 			env:      "env-token",
-			baoEnv:   "bao-token",
 			restCfg:  &rest.Config{BearerToken: "kube-token"},
 			want:     "flag-token",
 		},
 		{
 			name:    "env var used when no flag",
 			env:     "env-token",
-			baoEnv:  "bao-token",
 			restCfg: &rest.Config{BearerToken: "kube-token"},
 			want:    "env-token",
 		},
 		{
-			name:    "openbao token used when no flag or DIVERGE_TOKEN",
-			baoEnv:  "bao-token",
-			restCfg: &rest.Config{BearerToken: "kube-token"},
-			want:    "bao-token",
+			name:    "bearer token file is read and takes precedence over static bearer token",
+			restCfg: &rest.Config{BearerTokenFile: tokenFile, BearerToken: "static-token-ignored"},
+			want:    "file-token",
 		},
 		{
-			name:    "kubeconfig bearer token is fallback",
+			name:    "kubeconfig static bearer token is used when no file",
 			restCfg: &rest.Config{BearerToken: "kube-token"},
 			want:    "kube-token",
-		},
-		{
-			name:    "bearer token file is read",
-			restCfg: &rest.Config{BearerTokenFile: tokenFile},
-			want:    "file-token",
 		},
 		{
 			name:     "surrounding whitespace is trimmed",
@@ -246,8 +237,8 @@ func TestResolveTunnelTokenSource(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv(tunnelTokenEnvVar, tt.env)
-			t.Setenv("BAO_TOKEN", tt.baoEnv)
-			t.Setenv("VAULT_TOKEN", "")
+			t.Setenv("BAO_TOKEN", "ambient-bao")
+			t.Setenv("VAULT_TOKEN", "ambient-vault")
 			tempHome := t.TempDir()
 			t.Setenv("HOME", tempHome)
 
@@ -267,6 +258,29 @@ func TestResolveTunnelTokenSource(t *testing.T) {
 			assert.Equal(t, tt.want, strTok)
 		})
 	}
+
+	t.Run("bearer token file takes precedence over static bearer token when both populated", func(t *testing.T) {
+		tf := filepath.Join(t.TempDir(), "token")
+		require.NoError(t, os.WriteFile(tf, []byte("file-token-wins\n"), 0o600))
+		restCfg := &rest.Config{
+			BearerTokenFile: tf,
+			BearerToken:     "static-token-ignored",
+		}
+		ts, err := resolveTunnelTokenSource("", restCfg)
+		require.NoError(t, err)
+		tok, err := ts.Token(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, "file-token-wins", tok)
+	})
+
+	t.Run("openbao and vault tokens are ignored for tunnel credentials", func(t *testing.T) {
+		t.Setenv(tunnelTokenEnvVar, "")
+		t.Setenv("BAO_TOKEN", "bao-token")
+		t.Setenv("VAULT_TOKEN", "vault-token")
+		t.Setenv("HOME", t.TempDir())
+		_, err := resolveTunnelTokenSource("", &rest.Config{})
+		assert.ErrorIs(t, err, ErrNoTunnelCredential)
+	})
 }
 
 func TestResolveTunnelToken_PBT(t *testing.T) {
@@ -277,43 +291,49 @@ func TestResolveTunnelToken_PBT(t *testing.T) {
 		cleanExplicit := tokenGen.Draw(rt, "cleanExplicit")
 		explicit := wsGen.Draw(rt, "wsPre1") + cleanExplicit + wsGen.Draw(rt, "wsPost1")
 		envToken := wsGen.Draw(rt, "wsPre2") + tokenGen.Draw(rt, "cleanEnv") + wsGen.Draw(rt, "wsPost2")
-		baoToken := wsGen.Draw(rt, "wsPreBao") + tokenGen.Draw(rt, "cleanBao") + wsGen.Draw(rt, "wsPostBao")
+		fileToken := wsGen.Draw(rt, "wsPreFile") + tokenGen.Draw(rt, "cleanFile") + wsGen.Draw(rt, "wsPostFile")
 		kubeToken := wsGen.Draw(rt, "wsPre3") + tokenGen.Draw(rt, "cleanKube") + wsGen.Draw(rt, "wsPost3")
 
-		t.Setenv(tunnelTokenEnvVar, envToken)
-		t.Setenv("BAO_TOKEN", baoToken)
-		t.Setenv("VAULT_TOKEN", "")
-		t.Setenv("HOME", t.TempDir())
-		restCfg := &rest.Config{BearerToken: kubeToken}
+		tokenFile := filepath.Join(t.TempDir(), "token")
+		require.NoError(t, os.WriteFile(tokenFile, []byte(fileToken), 0o600))
 
-		// Property 1: Explicit non-whitespace token always wins
+		t.Setenv(tunnelTokenEnvVar, envToken)
+		t.Setenv("BAO_TOKEN", "ambient-bao-token")
+		t.Setenv("VAULT_TOKEN", "ambient-vault-token")
+		t.Setenv("HOME", t.TempDir())
+		restCfg := &rest.Config{
+			BearerTokenFile: tokenFile,
+			BearerToken:     kubeToken,
+		}
+
+		// Property 1: Explicit non-whitespace token always wins over env, file, and static
 		got, err := resolveTunnelToken(explicit, restCfg)
 		require.NoError(t, err)
 		assert.Equal(t, cleanExplicit, got, "explicit token must win over env and kubeconfig")
 		assert.Equal(t, strings.TrimSpace(got), got, "token must never have surrounding whitespace")
 
-		// Property 2: When explicit is whitespace-only, env token wins over bao and kubeconfig
+		// Property 2: When explicit is whitespace-only, DIVERGE_TOKEN wins over file and static
 		onlyWS := wsGen.Draw(rt, "onlyWS")
 		got, err = resolveTunnelToken(onlyWS, restCfg)
 		require.NoError(t, err)
 		assert.Equal(t, strings.TrimSpace(envToken), got, "env token must win when explicit token is whitespace-only")
 		assert.Equal(t, strings.TrimSpace(got), got)
 
-		// Property 3: When explicit and env are whitespace-only, OpenBao token wins over kubeconfig
+		// Property 3: When explicit and DIVERGE_TOKEN are whitespace-only, BearerTokenFile wins over static BearerToken
 		t.Setenv(tunnelTokenEnvVar, onlyWS)
 		got, err = resolveTunnelToken(onlyWS, restCfg)
 		require.NoError(t, err)
-		assert.Equal(t, strings.TrimSpace(baoToken), got, "bao token must win when flag and DIVERGE_TOKEN are absent")
+		assert.Equal(t, strings.TrimSpace(fileToken), got, "file token must win over static bearer token when flag and DIVERGE_TOKEN are absent")
 		assert.Equal(t, strings.TrimSpace(got), got)
 
-		// Property 4: When explicit, env, and bao are whitespace-only, kubeconfig wins
-		t.Setenv("BAO_TOKEN", onlyWS)
-		got, err = resolveTunnelToken(onlyWS, restCfg)
+		// Property 4: When BearerTokenFile is empty, static BearerToken is used
+		staticOnlyRestCfg := &rest.Config{BearerToken: kubeToken}
+		got, err = resolveTunnelToken(onlyWS, staticOnlyRestCfg)
 		require.NoError(t, err)
-		assert.Equal(t, strings.TrimSpace(kubeToken), got, "kubeconfig token must win when preceding sources are absent")
+		assert.Equal(t, strings.TrimSpace(kubeToken), got, "kubeconfig static token must win when file token is absent")
 		assert.Equal(t, strings.TrimSpace(got), got)
 
-		// Property 5: When all sources lack a credential, ErrNoTunnelCredential is returned
+		// Property 5: When all sources lack a credential (even with ambient BAO_TOKEN), ErrNoTunnelCredential is returned
 		emptyRestCfg := &rest.Config{BearerToken: onlyWS}
 		_, err = resolveTunnelToken(onlyWS, emptyRestCfg)
 		assert.ErrorIs(t, err, ErrNoTunnelCredential)
