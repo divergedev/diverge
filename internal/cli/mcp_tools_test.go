@@ -98,3 +98,48 @@ func TestContainsErrorLevel(t *testing.T) {
 	assert.True(t, containsErrorLevel("panic: runtime error"))
 	assert.False(t, containsErrorLevel("info: starting up"))
 }
+
+func TestRegisterLoadtest(t *testing.T) {
+	registry := mcpruntime.NewToolRegistry()
+	registerLoadtest(registry)
+
+	handler, ok := registry.Lookup("diverge_loadtest")
+	require.True(t, ok)
+
+	args := []byte(`{"target_url": "http://127.0.0.1:0", "duration_seconds": 1, "concurrency": 1}`)
+	res, err := handler(context.Background(), mcpruntime.ToolRequest{
+		ToolName:  "diverge_loadtest",
+		Arguments: args,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.NotEmpty(t, res.Content)
+}
+
+func TestRegisterDoctor(t *testing.T) {
+	registry := mcpruntime.NewToolRegistry()
+	client := &mockEnvClient{
+		getEnvResponse: &divergev1alpha1.GetEnvironmentResponse{
+			Environment: &divergev1alpha1.Environment{
+				Name:      "test-env",
+				Namespace: "default",
+				Status: &divergev1alpha1.EnvironmentStatus{
+					Phase: "Ready",
+				},
+			},
+		},
+	}
+	registerDoctor(registry, client)
+
+	handler, ok := registry.Lookup("diverge_doctor")
+	require.True(t, ok)
+
+	args := []byte(`{"name": "test-env", "namespace": "default"}`)
+	res, err := handler(context.Background(), mcpruntime.ToolRequest{
+		ToolName:  "diverge_doctor",
+		Arguments: args,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.False(t, res.IsError)
+}

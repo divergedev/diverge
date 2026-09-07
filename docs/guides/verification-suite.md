@@ -1,0 +1,136 @@
+# Preview & Verification Suite Guide
+
+Diverge provides a complete **Full-Lifecycle Preview & Verification Suite** to benchmark microservice performance, prevent visual regressions, diagnose cluster anomalies with AI, and manage environments directly within your editor (VS Code, Cursor, and OpenCode).
+
+---
+
+## 1. Targeted Ephemeral Load Testing (`diverge loadtest`)
+
+Diverge isolates preview environments using header-based routing (`x-diverge-routing-key: <preview-id>`). `diverge loadtest` allows you to benchmark candidate workloads in the cluster under realistic traffic conditions and compare latency against baseline staging/production.
+
+### Quick Start
+```bash
+# Benchmark a preview environment at 50 RPS for 10 seconds
+diverge loadtest https://api.preview.example.com --preview pr-42 --rps 50 --duration 10s
+
+# Compare candidate preview against baseline without routing headers
+diverge loadtest https://api.example.com --routing-key pr-42 --baseline
+```
+
+### CI/CD Quality Gates
+You can enforce strict latency and error SLA thresholds in CI/CD pipelines:
+```bash
+# Fail CI if candidate p99 latency exceeds 150ms or is >15% slower than baseline
+diverge loadtest https://api.example.com \
+  --routing-key pr-42 \
+  --baseline \
+  --max-p99 150ms \
+  --fail-on-latency-increase 15.0 \
+  --json
+```
+
+### Output Sample
+```text
+📊 DIVERGE LOAD TEST RESULTS
+=====================================================
+Target URL:    https://api.example.com
+Routing Key:   pr-42
+Test Duration: 10s
+Total Requests:500 (50.0 req/s)
+
+Status Breakdown:
+  2xx Success:  500
+
+Latency Percentiles:
+  Metric   Baseline   Candidate   Delta
+  ------   --------   ---------   -----
+  Min      3.20ms     3.40ms      +0.20ms
+  Mean     6.80ms     7.10ms      +0.30ms
+  p50      5.40ms     5.60ms      +0.20ms
+  p90      9.10ms     9.80ms      +0.70ms
+  p95      11.20ms    12.00ms     +0.80ms
+  p99      14.50ms    15.80ms     +1.30ms (+9.0%)
+  Max      22.10ms    24.00ms     +1.90ms
+
+=====================================================
+✅ Outcome: PASSED quality thresholds
+=====================================================
+```
+
+---
+
+## 2. Visual Regression Testing (`diverge test visual`)
+
+Compare screenshots of baseline staging/production against preview candidates pixel-by-pixel to catch inadvertent UI regressions, css styling bugs, or layout shifts.
+
+### Quick Start
+```bash
+# Compare screenshots and generate interactive visual report
+diverge test visual --baseline ./staging.png --candidate ./preview.png -o .diverge/visual
+
+# Enforce quality gate (max 0.1% drift allowed)
+diverge test visual --baseline ./staging.png --candidate ./preview.png --max-diff-percent 0.1
+```
+
+### Generated Artifacts
+When `-o <dir>` is supplied, Diverge outputs:
+- `visual-report.html`: Self-contained interactive report with visual diff slider and magenta highlight overlays.
+- `diff.png`: High-resolution PNG with changed regions rendered in vibrant magenta.
+- `summary.md`: Markdown report table formatted for GitHub PR comments.
+
+---
+
+## 3. Workload & Cluster Diagnostician (`diverge doctor`)
+
+When an environment or dev session encounters an issue, `diverge doctor` inspects pod statuses, init containers, container exit codes, database migration jobs, and HTTPRoutes.
+
+### Quick Start
+```bash
+# Diagnose all workloads in current namespace
+diverge doctor
+
+# Diagnose a specific preview environment
+diverge doctor pr-42 -n default
+
+# Machine-readable output for AI agents
+diverge doctor pr-42 --json
+```
+
+### Diagnosed Failure Modes
+- **CrashLoopBackOff**: Extracts container logs and highlights unhandled panics and exceptions.
+- **OOMKilled**: Detects Out Of Memory terminations and recommends memory limit adjustments in `diverge.yaml`.
+- **ImagePullBackOff**: Verifies image repository, tag existence, and imagePullSecrets.
+- **CreateContainerConfigError**: Identifies missing ConfigMaps or Secrets.
+- **Database Migration Failure**: Detects failed schema setup jobs.
+
+---
+
+## 4. VS Code, Cursor & OpenCode Extension
+
+The Diverge IDE extension integrates preview management directly into your editor activity bar.
+
+### Features
+- **Status Bar Widget**: `$(rocket) Diverge: Ready` indicator with quick-picker actions.
+- **Environments View**: Lists all active preview environments, endpoints, routing keys, and status icons.
+- **Dev Sessions View**: Real-time view of active multi-user session leases and locks (PR #273).
+- **Verification Suite View**: One-click actions to run `diverge loadtest`, `diverge test visual`, and `diverge doctor`.
+- **CodeLens in `diverge.yaml`**: Inline `▶ Run Load Test` and `🩺 Diagnose with Doctor` buttons above service definitions.
+
+### OpenCode Agent Integration
+OpenCode AI agents can invoke Diverge tools directly via the native MCP server:
+```json
+{
+  "mcpServers": {
+    "diverge": {
+      "command": "diverge",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+Available Agent Tools:
+- `diverge_loadtest`
+- `diverge_doctor`
+- `diverge_create_environment`
+- `diverge_wait_for_ready`
+- `diverge_fetch_errors`
