@@ -95,3 +95,51 @@ func TestLoadtestCmd_ThresholdFailure(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "quality gate threshold failed")
 }
+
+func TestLoadtestCmd_BaselineCompare(t *testing.T) {
+	srvBase := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srvBase.Close()
+
+	srvCand := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srvCand.Close()
+
+	app := &App{}
+	root := NewRootCmd(app)
+
+	var stdout bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetArgs([]string{
+		"loadtest",
+		srvCand.URL,
+		"--routing-key", "candidate-key",
+		"--baseline",
+		"--duration", "50ms",
+		"--concurrency", "1",
+		"--fail-on-latency-increase", "500.0",
+	})
+
+	err := root.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, stdout.String(), "DIVERGE LOAD TEST RESULTS")
+	assert.Contains(t, stdout.String(), "Baseline")
+	assert.Contains(t, stdout.String(), "Candidate")
+	assert.Contains(t, stdout.String(), "Delta")
+}
+
+func TestLoadtestCmd_InvalidArgs(t *testing.T) {
+	app := &App{}
+	root := NewRootCmd(app)
+
+	// Missing URL argument
+	var stdout bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stdout)
+	root.SetArgs([]string{"loadtest"})
+
+	err := root.Execute()
+	require.Error(t, err)
+}

@@ -32,6 +32,7 @@ type Config struct {
 	BaselineCompare           bool              `json:"baseline_compare"`
 	MaxP99                    time.Duration     `json:"max_p99,omitempty"`
 	MaxLatencyIncreasePercent float64           `json:"max_latency_increase_percent,omitempty"`
+	MaxErrorRate              float64           `json:"max_error_rate,omitempty"`
 }
 
 // ComparisonResult represents the outcome of a load test, optionally comparing
@@ -124,12 +125,23 @@ func (r *Runner) Run(ctx context.Context, cfg Config) (*ComparisonResult, error)
 	}
 
 	// 3. Evaluate Thresholds
-	if cfg.MaxP99 > 0 && candidateResult.Latencies.P99 > cfg.MaxP99 {
+	if candidateResult.TotalRequests > 0 && cfg.MaxErrorRate > 0 {
+		errorCount := candidateResult.ServerErrCount + candidateResult.NetworkErrors
+		errorRate := float64(errorCount) / float64(candidateResult.TotalRequests)
+		if errorRate > cfg.MaxErrorRate {
+			comp.Passed = false
+			comp.FailureReason = fmt.Sprintf("error rate %.1f%% exceeded allowed threshold of %.1f%%",
+				errorRate*100.0,
+				cfg.MaxErrorRate*100.0)
+		}
+	}
+
+	if comp.Passed && cfg.MaxP99 > 0 && candidateResult.Latencies.P99 > cfg.MaxP99 {
 		comp.Passed = false
 		comp.FailureReason = fmt.Sprintf("p99 latency %s exceeded threshold %s",
 			candidateResult.Latencies.P99.Round(time.Millisecond),
 			cfg.MaxP99.Round(time.Millisecond))
-	} else if cfg.BaselineCompare && cfg.MaxLatencyIncreasePercent > 0 && comp.P99IncreasePercent > cfg.MaxLatencyIncreasePercent {
+	} else if comp.Passed && cfg.BaselineCompare && cfg.MaxLatencyIncreasePercent > 0 && comp.P99IncreasePercent > cfg.MaxLatencyIncreasePercent {
 		comp.Passed = false
 		comp.FailureReason = fmt.Sprintf("p99 latency increased by %.1f%%, exceeding allowed threshold of %.1f%%",
 			comp.P99IncreasePercent,

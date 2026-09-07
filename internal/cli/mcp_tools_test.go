@@ -143,3 +143,54 @@ func TestRegisterDoctor(t *testing.T) {
 	require.NotNil(t, res)
 	assert.False(t, res.IsError)
 }
+
+func TestRegisterLoadtest_InvalidJSON(t *testing.T) {
+	registry := mcpruntime.NewToolRegistry()
+	registerLoadtest(registry)
+
+	handler, ok := registry.Lookup("diverge_loadtest")
+	require.True(t, ok)
+
+	_, err := handler(context.Background(), mcpruntime.ToolRequest{
+		ToolName:  "diverge_loadtest",
+		Arguments: []byte(`invalid json`),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid arguments")
+}
+
+func TestRegisterDoctor_Error(t *testing.T) {
+	registry := mcpruntime.NewToolRegistry()
+	client := &mockEnvClient{
+		getEnvErr: assert.AnError,
+	}
+	registerDoctor(registry, client)
+
+	handler, ok := registry.Lookup("diverge_doctor")
+	require.True(t, ok)
+
+	args := []byte(`{"name": "nonexistent", "namespace": "default"}`)
+	res, err := handler(context.Background(), mcpruntime.ToolRequest{
+		ToolName:  "diverge_doctor",
+		Arguments: args,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.True(t, res.IsError)
+}
+
+func TestRegisterDoctor_InvalidJSON(t *testing.T) {
+	registry := mcpruntime.NewToolRegistry()
+	client := &mockEnvClient{}
+	registerDoctor(registry, client)
+
+	handler, ok := registry.Lookup("diverge_doctor")
+	require.True(t, ok)
+
+	_, err := handler(context.Background(), mcpruntime.ToolRequest{
+		ToolName:  "diverge_doctor",
+		Arguments: []byte(`bad-json`),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid arguments")
+}

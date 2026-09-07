@@ -188,3 +188,99 @@ func TestReport_FormatTableAndJSON(t *testing.T) {
 	assert.Equal(t, int64(1000), decoded.Candidate.TotalRequests)
 	assert.Equal(t, true, decoded.Passed)
 }
+
+func TestRunner_RPSRateLimiting(t *testing.T) {
+	var count int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&count, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	runner := NewRunner()
+	cfg := Config{
+		TargetURL:   srv.URL,
+		Duration:    150 * time.Millisecond,
+		Concurrency: 2,
+		RPS:         20, // 20 req/s => in 150ms should be roughly 2-5 requests
+	}
+
+	res, err := runner.Run(context.Background(), cfg)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.True(t, res.Passed)
+	total := atomic.LoadInt64(&count)
+	assert.GreaterOrEqual(t, total, int64(1))
+	assert.LessOrEqual(t, total, int64(10))
+}
+
+func TestRunner_PostWithBodyAndHeaders(t *testing.T) {
+	var receivedBody []byte
+	var customHeaderVal string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		customHeaderVal = r.Header.Get("X-Custom-Header")
+		var buf bytes.Buffer
+		_, _ = buf.ReadFrom(r.Body)
+		receivedBody = buf.Bytes()
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	runner := NewRunner()
+	cfg := Config{
+		TargetURL:   srv.URL,
+		Method:      "POST",
+		Body:        []byte(`{"action":"verify"}`),
+		Headers:     map[string]string{"X-Custom-Header": "custom-val"},
+		Duration:    50 * time.Millisecond,
+		Concurrency: 1,
+	}
+
+	res, err := runner.Run(context.Background(), cfg)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.True(t, res.Passed)
+	assert.Equal(t, "custom-val", customHeaderVal)
+	assert.JSONEq(t, `{"action":"verify"}`, string(receivedBody))
+	assert.Equal(t, res.Candidate.TotalRequests, res.Candidate.SuccessCount)
+}
+
+func TestRunner_MaxErrorRateExceeded(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	runner := NewRunner()
+	cfg := Config{
+		TargetURL:    srv.URL,
+		Duration:     50 * time.Millisecond,
+		Concurrency:  2,
+		MaxErrorRate: 0.05, // 5% max error rate
+	}
+
+	res, err := runner.Run(context.Background(), cfg)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.False(t, res.Passed)
+	assert.Contains(t, res.FailureReason, "error rate")
+	assert.Equal(t, res.Candidate.TotalRequests, res.Candidate.ServerErrCount)
+}
+
+func TestRunner_NetworkErrors(t *testing.T) {
+	runner := NewRunner()
+	// Deliberately target an unreachable port
+	cfg := Config{
+		TargetURL:   "http://127.0.0.1:59999",
+		Duration:    50 * time.Millisecond,
+		Concurrency: 1,
+		Timeout:     20 * time.Millisecond,
+	}
+
+	res, err := runner.Run(context.Background(), cfg)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Greater(t, res.Candidate.NetworkErrors, int64(0))
+	assert.NotEmpty(t, res.Candidate.ErrorSample)
+}

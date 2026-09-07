@@ -93,3 +93,35 @@ func TestTestVisualCmd(t *testing.T) {
 	assert.Contains(t, stdoutJSON.String(), `"total_pixels": 10000`)
 	assert.Contains(t, stdoutJSON.String(), `"passed": true`)
 }
+
+func TestTestVisualCmd_MissingFlags(t *testing.T) {
+	app := &App{}
+	root := NewRootCmd(app)
+
+	// Missing candidate flag
+	var stdout bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stdout)
+	root.SetArgs([]string{"test", "visual", "--baseline", "base.png"})
+
+	err := root.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "both --baseline and --candidate image paths are required")
+}
+
+func TestTestVisualCmd_NonExistentFiles(t *testing.T) {
+	app := &App{}
+	root := NewRootCmd(app)
+
+	var stdout bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stdout)
+	root.SetArgs([]string{
+		"test", "visual",
+		"--baseline", "nonexistent-baseline.png",
+		"--candidate", "nonexistent-cand.png",
+	})
+
+	err := root.Execute()
+	require.Error(t, err)
+}

@@ -113,3 +113,152 @@ func TestDoctor_CrashLoopAndOOM(t *testing.T) {
 	assert.Contains(t, buf.String(), "Detected Issues (2)")
 	assert.Contains(t, buf.String(), "CRIT")
 }
+
+func TestDoctor_EnvironmentDegradedAndMigrationFailed(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, divergeiov1alpha1.AddToScheme(scheme))
+
+	env := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-failed",
+			Namespace: "default",
+		},
+		Status: divergeiov1alpha1.EnvironmentStatus{
+			Phase:           divergeiov1alpha1.PhaseFailed,
+			MigrationStatus: "Failed",
+			Conditions: []metav1.Condition{
+				{
+					Type:    "Ready",
+					Status:  metav1.ConditionFalse,
+					Reason:  "DeploymentFailed",
+					Message: "Workload replicas did not become healthy within timeout",
+				},
+				{
+					Type:    "DatabaseReady",
+					Status:  metav1.ConditionFalse,
+					Reason:  "MigrationError",
+					Message: "Failed to apply schema migration 003_add_index.sql",
+				},
+			},
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(env).
+		Build()
+
+	diagnoser := NewDiagnoser(client)
+	report, err := diagnoser.Diagnose(context.Background(), "default", "pr-failed")
+	require.NoError(t, err)
+	assert.False(t, report.Healthy)
+
+	// Issues expected:
+	// 1. Phase is Failed (CRIT)
+	// 2. MigrationStatus is Failed (CRIT)
+	// 3. Ready is False (WARN)
+	// 4. DatabaseReady is False (WARN)
+	assert.Len(t, report.Issues, 4)
+
+	var jsonBuf bytes.Buffer
+	err = FormatJSON(&jsonBuf, report)
+	require.NoError(t, err)
+	assert.Contains(t, jsonBuf.String(), "\"healthy\": false")
+	assert.Contains(t, jsonBuf.String(), "Database migration hook failed")
+}
+
+func TestDoctor_PodUnschedulableAndInitContainers(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, divergeiov1alpha1.AddToScheme(scheme))
+
+	podPending := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "api-pending",
+			Namespace: "default",
+			Labels: map[string]string{
+				"diverge.io/environment": "pr-stuck",
+			},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			Conditions: []corev1.PodCondition{
+				{
+					Type:    corev1.PodScheduled,
+					Status:  corev1.ConditionFalse,
+					Reason:  corev1.PodReasonUnschedulable,
+					Message: "0/5 nodes are available: 5 Insufficient cpu",
+				},
+			},
+		},
+	}
+
+	podInitFail := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "api-init-fail",
+			Namespace: "default",
+			Labels: map[string]string{
+				"diverge.io/environment": "pr-stuck",
+			},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			InitContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name: "migration-init",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{
+							Reason:  "CrashLoopBackOff",
+							Message: "migration init failed with exit code 1",
+						},
+					},
+				},
+			},
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name: "api",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{
+							Reason:  "ImagePullBackOff",
+							Message: "Back-off pulling image registry.internal/app:nonexistent",
+						},
+					},
+				},
+				{
+					Name: "sidecar",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{
+							Reason:  "CreateContainerConfigError",
+							Message: "secret \"db-credentials\" not found",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(podPending, podInitFail).
+		Build()
+
+	diagnoser := NewDiagnoser(client)
+	report, err := diagnoser.Diagnose(context.Background(), "default", "pr-stuck")
+	require.NoError(t, err)
+	assert.False(t, report.Healthy)
+
+	// Issues:
+	// 1. Pod unschedulable
+	// 2. Init container CrashLoopBackOff
+	// 3. ImagePullBackOff
+	// 4. CreateContainerConfigError
+	assert.Len(t, report.Issues, 4)
+
+	var buf bytes.Buffer
+	err = FormatTable(&buf, report)
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "Pod unschedulable")
+	assert.Contains(t, buf.String(), "Container image pull failed")
+	assert.Contains(t, buf.String(), "Container configuration error")
+}

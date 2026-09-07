@@ -76,3 +76,55 @@ func TestReports(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, mdBuf.String(), "Diverge Visual Regression: PASSED")
 }
+
+func TestCompare_DimensionMismatch(t *testing.T) {
+	white := color.RGBA{255, 255, 255, 255}
+	// base is 50x50 = 2,500 pixels
+	base := CreateSolidImage(50, 50, white)
+	// cand is 100x100 = 10,000 pixels
+	cand := CreateSolidImage(100, 100, white)
+
+	// In the 100x100 union, the top-left 50x50 matches (2500 pixels),
+	// and the remaining 7500 pixels exist only in cand => mismatched.
+	res, diffImg, err := Compare(base, cand, 0.05, 5.0)
+	require.NoError(t, err)
+	require.NotNil(t, diffImg)
+
+	assert.Equal(t, int64(10000), res.TotalPixels)
+	assert.Equal(t, int64(7500), res.MismatchedPixels)
+	assert.InDelta(t, 75.0, res.DiffPercent, 0.01)
+	assert.False(t, res.Passed)
+}
+
+func TestCompare_ZeroDimensions(t *testing.T) {
+	empty1 := image.NewRGBA(image.Rect(0, 0, 0, 0))
+	empty2 := image.NewRGBA(image.Rect(0, 0, 0, 0))
+
+	_, _, err := Compare(empty1, empty2, 0.05, 1.0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "zero dimensions")
+}
+
+func TestCompare_FailingMarkdownReport(t *testing.T) {
+	res := &DiffResult{
+		TotalPixels:      10000,
+		MismatchedPixels: 200,
+		DiffPercent:      2.0,
+		Passed:           false,
+		MaxDiffPercent:   0.5,
+		DiffBounds:       image.Rect(10, 10, 30, 30),
+	}
+
+	var mdBuf bytes.Buffer
+	err := GenerateMarkdownSummary(&mdBuf, res)
+	require.NoError(t, err)
+	assert.Contains(t, mdBuf.String(), "Diverge Visual Regression: FAILED")
+	assert.Contains(t, mdBuf.String(), "0.500%")
+	assert.Contains(t, mdBuf.String(), "200 / 10000")
+
+	var jsonBuf bytes.Buffer
+	err = FormatJSON(&jsonBuf, res)
+	require.NoError(t, err)
+	assert.Contains(t, jsonBuf.String(), "\"passed\": false")
+	assert.Contains(t, jsonBuf.String(), "\"diff_percent\": 2")
+}

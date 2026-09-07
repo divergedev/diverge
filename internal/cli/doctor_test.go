@@ -86,3 +86,26 @@ func TestDoctorCmd_FailingPod(t *testing.T) {
 	assert.Contains(t, stdout.String(), "CrashLoopBackOff")
 	assert.Contains(t, stdout.String(), "diverge logs")
 }
+
+func TestDoctorCmd_JSONOutput(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, divergeiov1alpha1.AddToScheme(scheme))
+
+	mockClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	app := &App{
+		Namespace: "default",
+		Client:    mockClient,
+	}
+
+	root := NewRootCmd(app)
+	var stdout bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetArgs([]string{"doctor", "my-env", "--json"})
+
+	err := root.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, stdout.String(), `"healthy": true`)
+	assert.Contains(t, stdout.String(), `"environment_name": "my-env"`)
+}
