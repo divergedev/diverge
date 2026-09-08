@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/deployer"
 	"github.com/divergedev/diverge/pkg/database"
+	"github.com/divergedev/diverge/pkg/features"
 )
 
 func TestEnvironmentReconciler_FeaturesProvisioning(t *testing.T) {
@@ -280,8 +282,63 @@ func TestEnvironmentReconciler_FliptProvider(t *testing.T) {
 	mu.Unlock()
 }
 
-func TestEnvironmentReconciler_FlagsmithStub(t *testing.T) {
+// TestEnvironmentReconciler_Flagsmith tests end-to-end reconciliation, identity provisioning, and teardown for Flagsmith.
+func TestEnvironmentReconciler_Flagsmith(t *testing.T) {
 	ctx := context.Background()
+
+	var (
+		mu         sync.Mutex
+		identities = make(map[string]bool)
+	)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		if strings.Contains(r.URL.Path, "/featurestates/") {
+			assert.Equal(t, http.MethodPost, r.Method)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"enabled":true}`))
+			return
+		}
+		if strings.Contains(r.URL.Path, "/identities/") {
+			if r.Method == http.MethodPost {
+				var body struct {
+					Identifier string `json:"identifier"`
+				}
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				if body.Identifier != "" {
+					identities[body.Identifier] = true
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprintf(w, `{"identifier":%q}`, body.Identifier)
+				return
+			}
+			if r.Method == http.MethodDelete {
+				for id := range identities {
+					if strings.Contains(r.URL.Path, id) {
+						delete(identities, id)
+						break
+					}
+				}
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer ts.Close()
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flagsmith-secret",
+			Namespace: "default",
+		},
+		Data: map[string][]byte{
+			"url":            []byte(ts.URL),
+			"environmentKey": []byte("flagsmith-env-key"),
+		},
+	}
 
 	env := &divergeiov1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -291,13 +348,19 @@ func TestEnvironmentReconciler_FlagsmithStub(t *testing.T) {
 		},
 		Spec: divergeiov1alpha1.EnvironmentSpec{
 			Features: &divergeiov1alpha1.FeatureSpec{
-				Provider: "flagsmith",
+				Provider:      "flagsmith",
+				ConnectionRef: "flagsmith-secret",
+				Overrides: map[string]string{
+					"checkout_v2": "true",
+				},
 			},
 		},
 	}
 
 	dbResult := &database.DatabaseResult{Ready: true, Message: "db ready"}
-	r, _, _, _, _ := newTestReconciler(t, env, dbResult, "https://feat-flagsmith-env.example.com")
+	r, client, _, _, _ := newTestReconciler(t, env, dbResult, "https://feat-flagsmith-env.example.com")
+	err := client.Create(ctx, secret)
+	require.NoError(t, err)
 
 	statusBase := env.DeepCopy()
 	_, done, err := r.reconcileProvisioning(ctx, env, statusBase)
@@ -307,10 +370,20 @@ func TestEnvironmentReconciler_FlagsmithStub(t *testing.T) {
 	cond := meta.FindStatusCondition(env.Status.Conditions, "FeaturesReady")
 	require.NotNil(t, cond)
 	assert.Equal(t, metav1.ConditionTrue, cond.Status)
-	assert.Equal(t, "preview-feat-flagsmith-env", env.Status.FeatureEnvVars["FLAGSMITH_ENVIRONMENT_KEY"])
+	assert.Equal(t, "flagsmith-env-key", env.Status.FeatureEnvVars["FLAGSMITH_ENVIRONMENT_KEY"])
+	assert.Equal(t, features.FlagsmithIdentityName(env.Namespace, env.Name), env.Status.FeatureEnvVars["FLAGSMITH_IDENTITY"])
+	assert.Equal(t, ts.URL, env.Status.FeatureEnvVars["FLAGSMITH_API_URL"])
+
+	mu.Lock()
+	assert.Len(t, identities, 1)
+	mu.Unlock()
 
 	_, err = r.handleTeardown(ctx, env)
 	require.NoError(t, err)
+
+	mu.Lock()
+	assert.Empty(t, identities)
+	mu.Unlock()
 }
 
 func TestEnvironmentReconciler_UnleashStub(t *testing.T) {
