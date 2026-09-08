@@ -95,6 +95,27 @@ func NewFlagsmithClient(baseURL, environmentKey, masterAPIKey string, customHTTP
 		}
 	}
 
+	// Protect against credential leakage on cross-origin redirects
+	clientCopy := *client
+	origCheckRedirect := client.CheckRedirect
+	clientCopy.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) > 0 {
+			initial := via[0]
+			if req.URL.Scheme != initial.URL.Scheme || req.URL.Host != initial.URL.Host {
+				req.Header.Del("X-Environment-Key")
+				req.Header.Del("Authorization")
+			}
+		}
+		if origCheckRedirect != nil {
+			return origCheckRedirect(req, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+	client = &clientCopy
+
 	return &FlagsmithClient{
 		baseURL:        trimmed,
 		environmentKey: strings.TrimSpace(environmentKey),

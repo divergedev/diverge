@@ -41,7 +41,7 @@ flowchart LR
 |---|---|---|
 | `configmap` *(default)* | Generates an in-cluster Kubernetes ConfigMap formatted for the OpenFeature `flagd` provider. | Zero external infrastructure; lightweight, standalone preview clusters. |
 | `flipt` | Provisions an ephemeral namespace (`diverge-<envName>`) in a remote or in-cluster [Flipt](https://flipt.io) instance. | Teams already using Flipt for feature flags or requiring advanced rollout strategies and audit logs. |
-| `flagsmith` | Provisions an ephemeral identity (`diverge-<envName>`) and standard traits (`diverge_environment`, `diverge_namespace`, `diverge_preview`) in remote or self-hosted Flagsmith. | Teams using Flagsmith for feature flag management with identity and trait targeting. |
+| `flagsmith` | Provisions an ephemeral identity (`diverge-[<namespace>-]<envName>-<hash8>`) and standard traits (`diverge_environment`, `diverge_namespace`, `diverge_preview`) in remote or self-hosted Flagsmith. | Teams using Flagsmith for feature flag management with identity and trait targeting. |
 | `unleash` | Preview stub. Planned full synchronization with Unleash strategies and contexts. | Tracked in [Issue #268](https://github.com/divergedev/diverge/issues/268). |
 | `noop` / `none` | Disables feature flag synchronization for this environment. | Environments where feature flag synchronization is intentionally skipped. |
 
@@ -123,7 +123,7 @@ Injected Pod environment variables:
 
 ### 3. Flagsmith Provider
 
-The `flagsmith` provider creates an ephemeral identity (`diverge-<envName>`) in Flagsmith with standard preview traits and applies identity-level feature flag overrides. When the environment is deleted, the ephemeral identity and its overrides are automatically cleaned up:
+The `flagsmith` provider creates an ephemeral identity (`diverge-[<namespace>-]<envName>-<hash8>`) in Flagsmith with standard preview traits and applies identity-level feature flag overrides. The identity incorporates the environment's namespace and name with a stable hash to prevent cross-namespace collisions. When the environment is deleted, the ephemeral identity and its overrides are automatically cleaned up:
 
 ```yaml
 apiVersion: divergedev.com/v1alpha1
@@ -162,10 +162,10 @@ stringData:
 Injected Pod environment variables:
 - `FLAGSMITH_ENVIRONMENT_KEY`: Client environment key for flag evaluation.
 - `FLAGSMITH_API_URL`: Base API URL for Flagsmith.
-- `FLAGSMITH_IDENTITY`: `diverge-<envName>`
+- `FLAGSMITH_IDENTITY`: `diverge-[<namespace>-]<envName>-<hash8>`
 - `OPENFEATURE_FLAGSMITH_ENVIRONMENT_KEY`: Standard OpenFeature client key.
 - `OPENFEATURE_FLAGSMITH_API_URL`: Standard OpenFeature Flagsmith URL.
-- `OPENFEATURE_TARGET_KEY`: `diverge-<envName>` (evaluates against the ephemeral identity)
+- `OPENFEATURE_TARGET_KEY`: `diverge-[<namespace>-]<envName>-<hash8>` (evaluates against the ephemeral identity)
 
 Standard traits automatically injected for identity targeting:
 - `diverge_environment`: `<envName>`

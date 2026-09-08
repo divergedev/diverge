@@ -31,12 +31,41 @@ func TestNewFlagsmithClient_DirectValidation(t *testing.T) {
 	assert.Equal(t, "https://flagsmith.example.com/api/v1", fc.baseURL)
 	assert.Equal(t, "env-key", fc.environmentKey)
 	assert.Equal(t, "master-key", fc.masterAPIKey)
-	assert.Equal(t, custom, fc.httpClient)
+	assert.Equal(t, custom.Timeout, fc.httpClient.Timeout)
+	assert.NotNil(t, fc.httpClient.CheckRedirect)
 
 	// Default client timeout
 	fcDefault, err := NewFlagsmithClient("http://flagsmith:8000", "", "", nil)
 	require.NoError(t, err)
 	assert.Equal(t, 10*time.Second, fcDefault.httpClient.Timeout)
+	assert.NotNil(t, fcDefault.httpClient.CheckRedirect)
+}
+
+// TestFlagsmithClient_CrossOriginRedirect verifies that credentials are not leaked during cross-origin redirects.
+func TestFlagsmithClient_CrossOriginRedirect(t *testing.T) {
+	var targetReceivedEnvKey, targetReceivedAuth string
+	targetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetReceivedEnvKey = r.Header.Get("X-Environment-Key")
+		targetReceivedAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer targetServer.Close()
+
+	redirectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, targetServer.URL+"/api/v1/flags/", http.StatusFound)
+	}))
+	defer redirectServer.Close()
+
+	fc, err := NewFlagsmithClient(redirectServer.URL, "secret-env-key", "secret-master-key", nil)
+	require.NoError(t, err)
+
+	err = fc.HealthCheck(context.Background())
+	require.NoError(t, err)
+
+	// Credentials must be stripped when redirected to a different origin
+	assert.Empty(t, targetReceivedEnvKey)
+	assert.Empty(t, targetReceivedAuth)
 }
 
 // TestFlagsmithClient_Methods verifies FlagsmithClient HTTP request generation, headers, and response parsing.

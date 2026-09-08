@@ -295,6 +295,7 @@ func TestEnvironmentReconciler_Flagsmith(t *testing.T) {
 		defer mu.Unlock()
 
 		if strings.Contains(r.URL.Path, "/featurestates/") {
+			assert.Equal(t, http.MethodPost, r.Method)
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"enabled":true}`))
 			return
