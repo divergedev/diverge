@@ -2,7 +2,6 @@ package features
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -28,8 +27,13 @@ func TestFlagsmithIdentityName_Property(t *testing.T) {
 		for i := 0; i < nameLen; i++ {
 			envName += hegel.Draw(ht, hegel.SampledFrom(alphabet))
 		}
+		nsLen := hegel.Draw(ht, hegel.Integers(0, 30))
+		nsName := ""
+		for i := 0; i < nsLen; i++ {
+			nsName += hegel.Draw(ht, hegel.SampledFrom(alphabet))
+		}
 
-		id := FlagsmithIdentityName(envName)
+		id := FlagsmithIdentityName(nsName, envName)
 
 		// Property 1: Must always start with "diverge-"
 		if !strings.HasPrefix(id, "diverge-") {
@@ -41,12 +45,10 @@ func TestFlagsmithIdentityName_Property(t *testing.T) {
 			ht.Fatalf("expected identity length <= 63, got %d (%s)", len(id), id)
 		}
 
-		// Property 3: If original was short enough, contains entire name
-		if len(envName)+8 <= 63 {
-			expected := fmt.Sprintf("diverge-%s", envName)
-			if id != expected {
-				ht.Fatalf("expected %s, got %s", expected, id)
-			}
+		// Property 3: Distinct namespaces produce distinct identities
+		idAlt := FlagsmithIdentityName(nsName+"-diff", envName)
+		if id == idAlt {
+			ht.Fatalf("expected different identities for different namespaces")
 		}
 	})
 }
@@ -118,11 +120,11 @@ func TestFlagsmithProvision_Property(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "flagsmith", res.ProviderType)
 		assert.Equal(t, ts.URL, res.EnvVars["FLAGSMITH_API_URL"])
-		assert.Equal(t, FlagsmithIdentityName(envName), res.EnvVars["FLAGSMITH_IDENTITY"])
+		assert.Equal(t, FlagsmithIdentityName(env.Namespace, envName), res.EnvVars["FLAGSMITH_IDENTITY"])
 
 		// Verify on mock server
 		mock.mu.Lock()
-		identityKey := FlagsmithIdentityName(envName)
+		identityKey := FlagsmithIdentityName(env.Namespace, envName)
 		assert.Contains(t, mock.identities, identityKey)
 		states := mock.featureStates[identityKey]
 		for k, v := range overrides {

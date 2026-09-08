@@ -2,6 +2,7 @@ package features
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net/http"
@@ -58,13 +59,28 @@ func (p *FlagsmithProvider) Type() string {
 	return "flagsmith"
 }
 
-// FlagsmithIdentityName generates an RFC 1123 compliant identity name capped at 63 chars.
-func FlagsmithIdentityName(envName string) string {
-	id := fmt.Sprintf("diverge-%s", envName)
-	if len(id) > 63 {
-		id = id[:63]
+// FlagsmithIdentityName generates an RFC 1123 compliant identity name scoped to the environment's namespace and name,
+// incorporating a stable hash so environments with identical or long name prefixes remain distinct (capped at 63 chars).
+func FlagsmithIdentityName(namespace, envName string) string {
+	var input string
+	if namespace != "" {
+		input = namespace + "/" + envName
+	} else {
+		input = envName
 	}
-	return id
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(input)))[:8]
+
+	base := fmt.Sprintf("diverge-%s", envName)
+	if namespace != "" && namespace != "default" {
+		base = fmt.Sprintf("diverge-%s-%s", namespace, envName)
+	}
+
+	maxBaseLen := 63 - 9 // leave room for '-' and 8-char hash
+	if len(base) > maxBaseLen {
+		base = base[:maxBaseLen]
+	}
+	base = strings.TrimRight(base, "-")
+	return fmt.Sprintf("%s-%s", base, hash)
 }
 
 // resolveConnection resolves Flagsmith endpoint and authentication tokens using dual-tier Secret resolution.
@@ -188,7 +204,7 @@ func (p *FlagsmithProvider) Provision(ctx context.Context, env *v1alpha1.Environ
 		return nil, fmt.Errorf("failed to initialize flagsmith client: %w", err)
 	}
 
-	identity := FlagsmithIdentityName(env.Name)
+	identity := FlagsmithIdentityName(env.Namespace, env.Name)
 
 	// Standard traits for Diverge preview environments
 	traits := map[string]interface{}{
@@ -263,20 +279,20 @@ func (p *FlagsmithProvider) Teardown(ctx context.Context, env *v1alpha1.Environm
 
 	flagsmithURL, envKey, masterAPIKey, err := p.resolveConnection(ctx, env)
 	if err != nil {
-		p.logger.Info("Skipping flagsmith teardown due to unresolvable connection", "error", err.Error())
-		return nil
+		p.logger.Error(err, "Failed to resolve flagsmith connection for teardown", "environment", env.Name)
+		return fmt.Errorf("failed to resolve flagsmith connection for teardown: %w", err)
 	}
 
 	flagsmithClient, err := NewFlagsmithClient(flagsmithURL, envKey, masterAPIKey, p.httpClient)
 	if err != nil {
-		p.logger.Info("Skipping flagsmith teardown due to invalid client config", "error", err.Error())
-		return nil
+		p.logger.Error(err, "Failed to initialize flagsmith client for teardown", "environment", env.Name)
+		return fmt.Errorf("failed to initialize flagsmith client for teardown: %w", err)
 	}
 
-	identity := FlagsmithIdentityName(env.Name)
-	if err := flagsmithClient.DeleteIdentity(ctx, identity); err != nil {
+	identity := FlagsmithIdentityName(env.Namespace, env.Name)
+	if err := flagsmithClient.DeleteIdentity(ctx, identity); err != nil && !errors.Is(err, ErrFlagsmithNotFound) {
 		p.logger.Error(err, "Failed to delete ephemeral flagsmith identity", "identity", identity)
-		// Non-fatal during teardown
+		return fmt.Errorf("failed to delete flagsmith identity %s: %w", identity, err)
 	}
 
 	p.logger.Info("Flagsmith ephemeral identity deleted", "identity", identity)

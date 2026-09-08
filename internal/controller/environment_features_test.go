@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/deployer"
 	"github.com/divergedev/diverge/pkg/database"
+	"github.com/divergedev/diverge/pkg/features"
 )
 
 func TestEnvironmentReconciler_FeaturesProvisioning(t *testing.T) {
@@ -292,23 +294,34 @@ func TestEnvironmentReconciler_Flagsmith(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 
-		if strings.Contains(r.URL.Path, "/identities/") {
-			if r.Method == http.MethodPost {
-				identities["diverge-feat-flagsmith-env"] = true
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(`{"identifier":"diverge-feat-flagsmith-env"}`))
-				return
-			}
-			if r.Method == http.MethodDelete {
-				delete(identities, "diverge-feat-flagsmith-env")
-				w.WriteHeader(http.StatusNoContent)
-				return
-			}
-		}
 		if strings.Contains(r.URL.Path, "/featurestates/") {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"enabled":true}`))
 			return
+		}
+		if strings.Contains(r.URL.Path, "/identities/") {
+			if r.Method == http.MethodPost {
+				var body struct {
+					Identifier string `json:"identifier"`
+				}
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				if body.Identifier != "" {
+					identities[body.Identifier] = true
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprintf(w, `{"identifier":%q}`, body.Identifier)
+				return
+			}
+			if r.Method == http.MethodDelete {
+				for id := range identities {
+					if strings.Contains(r.URL.Path, id) {
+						delete(identities, id)
+						break
+					}
+				}
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
@@ -357,18 +370,18 @@ func TestEnvironmentReconciler_Flagsmith(t *testing.T) {
 	require.NotNil(t, cond)
 	assert.Equal(t, metav1.ConditionTrue, cond.Status)
 	assert.Equal(t, "flagsmith-env-key", env.Status.FeatureEnvVars["FLAGSMITH_ENVIRONMENT_KEY"])
-	assert.Equal(t, "diverge-feat-flagsmith-env", env.Status.FeatureEnvVars["FLAGSMITH_IDENTITY"])
+	assert.Equal(t, features.FlagsmithIdentityName(env.Namespace, env.Name), env.Status.FeatureEnvVars["FLAGSMITH_IDENTITY"])
 	assert.Equal(t, ts.URL, env.Status.FeatureEnvVars["FLAGSMITH_API_URL"])
 
 	mu.Lock()
-	assert.True(t, identities["diverge-feat-flagsmith-env"])
+	assert.Len(t, identities, 1)
 	mu.Unlock()
 
 	_, err = r.handleTeardown(ctx, env)
 	require.NoError(t, err)
 
 	mu.Lock()
-	assert.False(t, identities["diverge-feat-flagsmith-env"])
+	assert.Empty(t, identities)
 	mu.Unlock()
 }
 

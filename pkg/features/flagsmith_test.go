@@ -180,12 +180,17 @@ func TestFlagsmithProvider_Type(t *testing.T) {
 
 // TestFlagsmithIdentityName verifies RFC 1123 compliant naming and length capping.
 func TestFlagsmithIdentityName(t *testing.T) {
-	assert.Equal(t, "diverge-my-preview", FlagsmithIdentityName("my-preview"))
-	assert.Equal(t, "diverge-feature-1", FlagsmithIdentityName("feature-1"))
+	assert.Contains(t, FlagsmithIdentityName("default", "my-preview"), "diverge-my-preview-")
+	assert.Contains(t, FlagsmithIdentityName("tenant-a", "feature-1"), "diverge-tenant-a-feature-1-")
+
+	// Distinct namespaces produce distinct identities even with same env name
+	id1 := FlagsmithIdentityName("ns1", "my-env")
+	id2 := FlagsmithIdentityName("ns2", "my-env")
+	assert.NotEqual(t, id1, id2)
 
 	// Length bounds check
 	longName := strings.Repeat("a", 100)
-	id := FlagsmithIdentityName(longName)
+	id := FlagsmithIdentityName("long-namespace", longName)
 	assert.True(t, strings.HasPrefix(id, "diverge-"))
 	assert.LessOrEqual(t, len(id), 63)
 }
@@ -286,15 +291,16 @@ func TestFlagsmithProvider_Provision_Tier1Secret(t *testing.T) {
 	res, err := provider.Provision(ctx, env)
 	require.NoError(t, err)
 	require.NotNil(t, res)
+	expectedIdentity := FlagsmithIdentityName(env.Namespace, env.Name)
 	assert.Equal(t, "flagsmith", res.ProviderType)
 	assert.Equal(t, "tier1-key", res.EnvVars["FLAGSMITH_ENVIRONMENT_KEY"])
 	assert.Equal(t, ts.URL, res.EnvVars["FLAGSMITH_API_URL"])
-	assert.Equal(t, "diverge-pr-42", res.EnvVars["FLAGSMITH_IDENTITY"])
-	assert.Equal(t, "diverge-pr-42", res.EnvVars["OPENFEATURE_TARGET_KEY"])
+	assert.Equal(t, expectedIdentity, res.EnvVars["FLAGSMITH_IDENTITY"])
+	assert.Equal(t, expectedIdentity, res.EnvVars["OPENFEATURE_TARGET_KEY"])
 
 	// Verify traits in mock server
 	mock.mu.Lock()
-	identity, ok := mock.identities["diverge-pr-42"]
+	identity, ok := mock.identities[expectedIdentity]
 	mock.mu.Unlock()
 	require.True(t, ok)
 	require.NotNil(t, identity)
@@ -309,7 +315,7 @@ func TestFlagsmithProvider_Provision_Tier1Secret(t *testing.T) {
 
 	// Verify flag overrides in mock server
 	mock.mu.Lock()
-	states := mock.featureStates["diverge-pr-42"]
+	states := mock.featureStates[expectedIdentity]
 	mock.mu.Unlock()
 	require.NotNil(t, states)
 
@@ -339,7 +345,7 @@ func TestFlagsmithProvider_Provision_Tier1Secret(t *testing.T) {
 	require.NoError(t, err)
 
 	mock.mu.Lock()
-	_, stillExists := mock.identities["diverge-pr-42"]
+	_, stillExists := mock.identities[expectedIdentity]
 	mock.mu.Unlock()
 	assert.False(t, stillExists)
 }
@@ -384,7 +390,7 @@ func TestFlagsmithProvider_Provision_Tier2Fallback(t *testing.T) {
 	res, err := provider.Provision(context.Background(), env)
 	require.NoError(t, err)
 	assert.Equal(t, "tier2-key", res.EnvVars["FLAGSMITH_ENVIRONMENT_KEY"])
-	assert.Equal(t, "diverge-feat-x", res.EnvVars["FLAGSMITH_IDENTITY"])
+	assert.Equal(t, FlagsmithIdentityName(env.Namespace, env.Name), res.EnvVars["FLAGSMITH_IDENTITY"])
 }
 
 // TestFlagsmithProvider_Provision_DefaultSecrets tests default secret name discovery when connectionRef is omitted.
@@ -457,7 +463,7 @@ func TestFlagsmithProvider_Provision_EnvVarFallback(t *testing.T) {
 	res, err := provider.Provision(context.Background(), env)
 	require.NoError(t, err)
 	assert.Equal(t, "envvar-key", res.EnvVars["FLAGSMITH_ENVIRONMENT_KEY"])
-	assert.Equal(t, "diverge-env-envvar", res.EnvVars["FLAGSMITH_IDENTITY"])
+	assert.Equal(t, FlagsmithIdentityName(env.Namespace, env.Name), res.EnvVars["FLAGSMITH_IDENTITY"])
 }
 
 // TestFlagsmithProvider_SSRFRejection tests rejection of cloud metadata IP addresses.
@@ -669,4 +675,67 @@ func TestFlagsmithProvider_SecretNotFound(t *testing.T) {
 	_, err := provider.Provision(context.Background(), env)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
+}
+
+// TestFlagsmithProvider_Teardown_ErrorPropagation tests that teardown propagates errors from connection resolution or identity deletion.
+func TestFlagsmithProvider_Teardown_ErrorPropagation(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = v1alpha1.AddToScheme(scheme)
+
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	provider := NewFlagsmithProvider(c, scheme, logr.Discard())
+
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-env",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Features: &v1alpha1.FeatureSpec{
+				Provider:      "flagsmith",
+				ConnectionRef: "non-existent-secret",
+			},
+		},
+	}
+
+	err := provider.Teardown(context.Background(), env)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to resolve flagsmith connection for teardown")
+
+	// Server returning 500 error on DELETE
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	sec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flagsmith-sec",
+			Namespace: "default",
+		},
+		Data: map[string][]byte{
+			"url":            []byte(srv.URL),
+			"environmentKey": []byte("env-key"),
+		},
+	}
+
+	c2 := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sec).Build()
+	provider2 := NewFlagsmithProvider(c2, scheme, logr.Discard())
+	env2 := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-env-fail",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Features: &v1alpha1.FeatureSpec{
+				Provider:      "flagsmith",
+				ConnectionRef: "flagsmith-sec",
+			},
+		},
+	}
+
+	err2 := provider2.Teardown(context.Background(), env2)
+	assert.Error(t, err2)
+	assert.Contains(t, err2.Error(), "failed to delete flagsmith identity")
 }
