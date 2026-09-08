@@ -634,14 +634,15 @@ func (p *PreviewGroupSpec) Equal(other *PreviewGroupSpec) bool {
 
 // PreviewGroupServiceStatus is the domain representation of diverge.v1alpha1.PreviewGroupServiceStatus.
 type PreviewGroupServiceStatus struct {
-	Name            string `json:"name,omitempty"`
-	EnvironmentName string `json:"environment_name,omitempty"`
-	Namespace       string `json:"namespace,omitempty"`
-	Phase           string `json:"phase,omitempty"`
-	URL             string `json:"url,omitempty"`
-	Message         string `json:"message,omitempty"`
-	Reason          string `json:"reason,omitempty"`
-	LastLogSnippet  string `json:"last_log_snippet,omitempty"`
+	Name            string   `json:"name,omitempty"`
+	EnvironmentName string   `json:"environment_name,omitempty"`
+	Namespace       string   `json:"namespace,omitempty"`
+	Phase           string   `json:"phase,omitempty"`
+	URL             string   `json:"url,omitempty"`
+	Message         string   `json:"message,omitempty"`
+	Reason          string   `json:"reason,omitempty"`
+	LastLogSnippet  string   `json:"last_log_snippet,omitempty"`
+	ChangedServices []string `json:"changed_services,omitempty"`
 }
 
 // ToProto converts to the protobuf message.
@@ -658,6 +659,7 @@ func (p *PreviewGroupServiceStatus) ToProto() *v1alpha1.PreviewGroupServiceStatu
 		Message:         p.Message,
 		Reason:          p.Reason,
 		LastLogSnippet:  p.LastLogSnippet,
+		ChangedServices: p.ChangedServices,
 	}
 	return out
 }
@@ -675,6 +677,11 @@ func (p *PreviewGroupServiceStatus) FromProto(msg *v1alpha1.PreviewGroupServiceS
 	p.Message = msg.Message
 	p.Reason = msg.Reason
 	p.LastLogSnippet = msg.LastLogSnippet
+	p.ChangedServices = nil
+	if len(msg.ChangedServices) > 0 {
+		p.ChangedServices = make([]string, len(msg.ChangedServices))
+		copy(p.ChangedServices, msg.ChangedServices)
+	}
 }
 
 // ApplyFieldMaskPreviewGroupServiceStatus copies fields from src to dst based on the given paths.
@@ -700,6 +707,8 @@ func ApplyFieldMaskPreviewGroupServiceStatus(dst, src *PreviewGroupServiceStatus
 			dst.Reason = src.Reason
 		case "last_log_snippet":
 			dst.LastLogSnippet = src.LastLogSnippet
+		case "changed_services":
+			dst.ChangedServices = src.ChangedServices
 		}
 	}
 }
@@ -718,6 +727,10 @@ func (p *PreviewGroupServiceStatus) Clone() *PreviewGroupServiceStatus {
 		Message:         p.Message,
 		Reason:          p.Reason,
 		LastLogSnippet:  p.LastLogSnippet,
+	}
+	if p.ChangedServices != nil {
+		clone.ChangedServices = make([]string, len(p.ChangedServices))
+		copy(clone.ChangedServices, p.ChangedServices)
 	}
 	return clone
 }
@@ -753,6 +766,14 @@ func (p *PreviewGroupServiceStatus) Equal(other *PreviewGroupServiceStatus) bool
 	}
 	if p.LastLogSnippet != other.LastLogSnippet {
 		return false
+	}
+	if len(p.ChangedServices) != len(other.ChangedServices) {
+		return false
+	}
+	for i := range p.ChangedServices {
+		if p.ChangedServices[i] != other.ChangedServices[i] {
+			return false
+		}
 	}
 	return true
 }

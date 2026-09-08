@@ -43,7 +43,22 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
           ) : (
             <span className="font-medium text-sm truncate">{data.name}</span>
           )}
-          <div className="ml-auto shrink-0">
+          <div className="ml-auto shrink-0 flex items-center gap-1.5">
+            {data.isChanged ? (
+              <span
+                className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/30 tracking-wider"
+                data-testid="diff-badge-changed"
+              >
+                Changed
+              </span>
+            ) : data.mode === 'baseline' ? (
+              <span
+                className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-slate-500/15 text-slate-400 border border-slate-500/30 tracking-wider"
+                data-testid="diff-badge-baseline"
+              >
+                Baseline
+              </span>
+            ) : null}
             <StatusBadge phase={data.phase} />
           </div>
         </div>

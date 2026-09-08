@@ -55,6 +55,9 @@ export function TopologyView({ previewGroup, environment, className }: TopologyV
     )
   }
 
+  const changedCount = graph.services.filter((s) => s.isChanged).length
+  const baselineCount = graph.services.filter((s) => s.mode === 'baseline').length
+
   return (
     <div ref={containerRef} className={cn('relative', className)}>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-8 p-4">
@@ -70,7 +73,25 @@ export function TopologyView({ previewGroup, environment, className }: TopologyV
         </TopologyColumn>
 
         {/* Column 2: Services */}
-        <TopologyColumn title="Services">
+        <TopologyColumn
+          title="Services"
+          badge={
+            graph.services.length > 0 && (changedCount > 0 || baselineCount > 0) ? (
+              <div
+                className="flex items-center gap-1.5 text-[10px] text-muted-foreground font-mono"
+                data-testid="services-diff-summary"
+              >
+                {changedCount > 0 && (
+                  <span className="text-amber-400 font-semibold">{changedCount} changed</span>
+                )}
+                {changedCount > 0 && baselineCount > 0 && <span>•</span>}
+                {baselineCount > 0 && (
+                  <span>{baselineCount} baseline</span>
+                )}
+              </div>
+            ) : undefined
+          }
+        >
           {graph.services.map((svc) => (
             <ServiceNode key={svc.id} data={svc} />
           ))}

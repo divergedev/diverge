@@ -38,13 +38,14 @@ describe('ServiceNode', () => {
     expect(screen.getByText('→ proxied from local machine')).toBeInTheDocument()
   })
 
-  it('renders baseline mode', () => {
+  it('renders baseline mode with diff badge', () => {
     render(<ServiceNode data={makeServiceData({ mode: 'baseline' })} />)
-    expect(screen.getByText('Baseline')).toBeInTheDocument()
+    expect(screen.getByTestId('diff-badge-baseline')).toHaveTextContent('Baseline')
   })
 
-  it('shows modified badge when isChanged is true', () => {
+  it('shows modified badge and changed diff badge when isChanged is true', () => {
     render(<ServiceNode data={makeServiceData({ isChanged: true })} />)
+    expect(screen.getByTestId('diff-badge-changed')).toHaveTextContent('Changed')
     expect(screen.getByText('modified')).toBeInTheDocument()
   })
 

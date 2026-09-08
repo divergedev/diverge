@@ -404,7 +404,7 @@ func TestCilium_CookieRouting(t *testing.T) {
 				Project:  "divergedev/test-app",
 				Branch:   "feat/cilium-cookie",
 			},
-			Routing: &v1alpha1.EnvironmentRouting{
+			Routing: v1alpha1.EnvironmentRouting{
 				Mode: "header",
 				Cookie: &v1alpha1.CookieSpec{
 					Enabled: true,

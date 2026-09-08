@@ -189,6 +189,7 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		if svc.Mode == divergeiov1alpha1.ServiceModeBaseline {
 			svcStatus.Phase = divergeiov1alpha1.PhaseRunning
 			svcStatus.Message = "Using baseline service"
+			svcStatus.ChangedServices = []string{}
 			serviceStatuses = append(serviceStatuses, svcStatus)
 			continue
 		}
