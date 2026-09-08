@@ -280,8 +280,51 @@ func TestEnvironmentReconciler_FliptProvider(t *testing.T) {
 	mu.Unlock()
 }
 
-func TestEnvironmentReconciler_FlagsmithStub(t *testing.T) {
+// TestEnvironmentReconciler_Flagsmith tests end-to-end reconciliation, identity provisioning, and teardown for Flagsmith.
+func TestEnvironmentReconciler_Flagsmith(t *testing.T) {
 	ctx := context.Background()
+
+	var (
+		mu         sync.Mutex
+		identities = make(map[string]bool)
+	)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		if strings.Contains(r.URL.Path, "/identities/") {
+			if r.Method == http.MethodPost {
+				identities["diverge-feat-flagsmith-env"] = true
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"identifier":"diverge-feat-flagsmith-env"}`))
+				return
+			}
+			if r.Method == http.MethodDelete {
+				delete(identities, "diverge-feat-flagsmith-env")
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}
+		if strings.Contains(r.URL.Path, "/featurestates/") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"enabled":true}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer ts.Close()
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flagsmith-secret",
+			Namespace: "default",
+		},
+		Data: map[string][]byte{
+			"url":            []byte(ts.URL),
+			"environmentKey": []byte("flagsmith-env-key"),
+		},
+	}
 
 	env := &divergeiov1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -291,13 +334,19 @@ func TestEnvironmentReconciler_FlagsmithStub(t *testing.T) {
 		},
 		Spec: divergeiov1alpha1.EnvironmentSpec{
 			Features: &divergeiov1alpha1.FeatureSpec{
-				Provider: "flagsmith",
+				Provider:      "flagsmith",
+				ConnectionRef: "flagsmith-secret",
+				Overrides: map[string]string{
+					"checkout_v2": "true",
+				},
 			},
 		},
 	}
 
 	dbResult := &database.DatabaseResult{Ready: true, Message: "db ready"}
-	r, _, _, _, _ := newTestReconciler(t, env, dbResult, "https://feat-flagsmith-env.example.com")
+	r, client, _, _, _ := newTestReconciler(t, env, dbResult, "https://feat-flagsmith-env.example.com")
+	err := client.Create(ctx, secret)
+	require.NoError(t, err)
 
 	statusBase := env.DeepCopy()
 	_, done, err := r.reconcileProvisioning(ctx, env, statusBase)
@@ -307,10 +356,20 @@ func TestEnvironmentReconciler_FlagsmithStub(t *testing.T) {
 	cond := meta.FindStatusCondition(env.Status.Conditions, "FeaturesReady")
 	require.NotNil(t, cond)
 	assert.Equal(t, metav1.ConditionTrue, cond.Status)
-	assert.Equal(t, "preview-feat-flagsmith-env", env.Status.FeatureEnvVars["FLAGSMITH_ENVIRONMENT_KEY"])
+	assert.Equal(t, "flagsmith-env-key", env.Status.FeatureEnvVars["FLAGSMITH_ENVIRONMENT_KEY"])
+	assert.Equal(t, "diverge-feat-flagsmith-env", env.Status.FeatureEnvVars["FLAGSMITH_IDENTITY"])
+	assert.Equal(t, ts.URL, env.Status.FeatureEnvVars["FLAGSMITH_API_URL"])
+
+	mu.Lock()
+	assert.True(t, identities["diverge-feat-flagsmith-env"])
+	mu.Unlock()
 
 	_, err = r.handleTeardown(ctx, env)
 	require.NoError(t, err)
+
+	mu.Lock()
+	assert.False(t, identities["diverge-feat-flagsmith-env"])
+	mu.Unlock()
 }
 
 func TestEnvironmentReconciler_UnleashStub(t *testing.T) {
