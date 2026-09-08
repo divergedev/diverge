@@ -277,3 +277,51 @@ func TestPreviewGroup_RoundTrip_Proto_To_CRD_To_Proto(t *testing.T) {
 		t.Errorf("expected proto.CreatedAt to be %v, got %v", now, proto.CreatedAt)
 	}
 }
+
+func TestPreviewGroup_ChangedServices_RoundTrip(t *testing.T) {
+	crd := &v1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pg",
+			Namespace: "default",
+		},
+		Status: v1alpha1.PreviewGroupStatus{
+			Phase: v1alpha1.PreviewGroupPhaseRunning,
+			Services: []v1alpha1.PreviewGroupServiceStatus{
+				{
+					Name:            "orders-svc",
+					Phase:           v1alpha1.PhaseRunning,
+					ChangedServices: []string{"orders-svc", "cart-svc"},
+				},
+				{
+					Name:            "auth-svc",
+					Phase:           v1alpha1.PhaseRunning,
+					ChangedServices: []string{},
+				},
+			},
+		},
+	}
+
+	proto, err := CRDPgToProto(crd)
+	if err != nil {
+		t.Fatalf("CRDPgToProto failed: %v", err)
+	}
+
+	if len(proto.Status.Services) != 2 {
+		t.Fatalf("expected 2 services, got %d", len(proto.Status.Services))
+	}
+	if len(proto.Status.Services[0].ChangedServices) != 2 || proto.Status.Services[0].ChangedServices[0] != "orders-svc" {
+		t.Errorf("expected changedServices ['orders-svc', 'cart-svc'], got %v", proto.Status.Services[0].ChangedServices)
+	}
+
+	roundTripped, err := ProtoPgToCRD(proto)
+	if err != nil {
+		t.Fatalf("ProtoPgToCRD failed: %v", err)
+	}
+
+	if len(roundTripped.Status.Services) != 2 {
+		t.Fatalf("expected 2 roundtripped services, got %d", len(roundTripped.Status.Services))
+	}
+	if len(roundTripped.Status.Services[0].ChangedServices) != 2 || roundTripped.Status.Services[0].ChangedServices[0] != "orders-svc" {
+		t.Errorf("expected roundtripped changedServices ['orders-svc', 'cart-svc'], got %v", roundTripped.Status.Services[0].ChangedServices)
+	}
+}

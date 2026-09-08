@@ -141,4 +141,30 @@ describe('TopologyView', () => {
     const docsLink = screen.getByText('View docs')
     expect(docsLink).toHaveAttribute('href', '/docs/guides/otel-setup')
   })
+
+  it('shows changed vs baseline summary badge in services column', () => {
+    const pg = new PreviewGroup({
+      name: 'diff-summary-pg',
+      namespace: 'default',
+      spec: {
+        services: [
+          { name: 'frontend', mode: 'image' },
+          { name: 'api', mode: 'image' },
+          { name: 'worker', mode: 'baseline' },
+        ],
+      },
+      status: {
+        services: [
+          { name: 'frontend', phase: 'Running', changedServices: ['frontend'] },
+          { name: 'api', phase: 'Running', changedServices: ['api'] },
+          { name: 'worker', phase: 'Running', changedServices: [] },
+        ],
+      },
+    })
+
+    render(<TopologyView previewGroup={pg} />)
+    const summary = screen.getByTestId('services-diff-summary')
+    expect(summary).toHaveTextContent('2 changed')
+    expect(summary).toHaveTextContent('1 baseline')
+  })
 })
