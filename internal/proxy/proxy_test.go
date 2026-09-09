@@ -247,3 +247,24 @@ func TestReadyEndpointNoChecker(t *testing.T) {
 	server.ServeHTTP(rr, req)
 	assert.Equal(t, http.StatusOK, rr.Code)
 }
+
+func TestProxyMigratingEnvironment(t *testing.T) {
+	lister := &mockEnvironmentLister{
+		envs: map[string]*EnvironmentInfo{
+			"mr-migrate": {
+				Name:  "mr-migrate",
+				Phase: string(v1alpha1.PhaseMigrating),
+			},
+		},
+	}
+	server, _ := setupTestServer(t, lister)
+
+	req := httptest.NewRequest(http.MethodGet, "http://mr-migrate.preview.example.com/", nil)
+	w := httptest.NewRecorder()
+
+	server.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	assert.Contains(t, w.Body.String(), "mr-migrate")
+	assert.Nil(t, w.Header().Values(ResponseHeaderEnvironment))
+}

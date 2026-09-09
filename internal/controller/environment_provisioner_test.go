@@ -384,3 +384,103 @@ func TestReconcileProvisioning_AtlasMigration_NonBlocking(t *testing.T) {
 	assert.False(t, done, "reconcileProvisioning should NOT block when blocking is false")
 	require.NoError(t, err)
 }
+
+func TestReconcileProvisioning_AtlasMigration_UnexpectedError(t *testing.T) {
+	// Does NOT create ConfigMap in fake client
+	tTrue := true
+	env := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-env", Namespace: "default", UID: "test-uid",
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Database: divergeiov1alpha1.EnvironmentDatabase{
+				Atlas: &divergeiov1alpha1.AtlasSpec{
+					Mode: "versioned", Engine: "job",
+					MigrationConfigMap: "atlas-cm",
+					Blocking:           &tTrue,
+				},
+			},
+		},
+	}
+	dbResult := &database.DatabaseResult{Ready: true, DSN: "postgres://user:pass@host/db"}
+	r, _, _, _, _ := newTestReconciler(t, env, dbResult, "https://test.com")
+
+	statusBase := env.DeepCopy()
+	_, done, err := r.reconcileProvisioning(context.Background(), env, statusBase)
+
+	assert.True(t, done, "provisioning must be halted on unexpected error")
+	require.Error(t, err)
+	assert.Equal(t, "Failed", env.Status.MigrationStatus)
+	assert.Equal(t, divergeiov1alpha1.PhaseFailed, env.Status.Phase)
+
+	var foundCond bool
+	for _, cond := range env.Status.Conditions {
+		if cond.Type == "MigrationReady" {
+			foundCond = true
+			assert.Equal(t, metav1.ConditionFalse, cond.Status)
+			assert.Equal(t, "MigrationError", cond.Reason)
+		}
+	}
+	assert.True(t, foundCond, "MigrationReady condition must be set")
+}
+
+func TestReconcileProvisioning_AtlasMigration_NonBlocking_Failure(t *testing.T) {
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "atlas-cm",
+			Namespace: "default",
+		},
+	}
+	tFalse := false
+	env := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-env",
+			Namespace: "default",
+			UID:       "test-uid",
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Database: divergeiov1alpha1.EnvironmentDatabase{
+				Atlas: &divergeiov1alpha1.AtlasSpec{
+					Mode:               "versioned",
+					Engine:             "job",
+					MigrationConfigMap: "atlas-cm",
+					Blocking:           &tFalse,
+				},
+			},
+		},
+	}
+	dbResult := &database.DatabaseResult{
+		Ready: true,
+		DSN:   "postgres://user:pass@host/db",
+	}
+	r, c, _, _, _ := newTestReconciler(t, env, dbResult, "https://test.com")
+	require.NoError(t, c.Create(context.Background(), cm))
+
+	// First execution creates the Job
+	statusBase := env.DeepCopy()
+	_, _, _ = r.reconcileProvisioning(context.Background(), env, statusBase)
+
+	// Fetch Job and mark Failed
+	var jobList batchv1.JobList
+	require.NoError(t, c.List(context.Background(), &jobList, client.InNamespace("default")))
+	require.Len(t, jobList.Items, 1)
+	job := &jobList.Items[0]
+	job.Status.Conditions = []batchv1.JobCondition{
+		{
+			Type:   batchv1.JobFailed,
+			Status: corev1.ConditionTrue,
+			Reason: "MigrationError",
+		},
+	}
+	require.NoError(t, c.Status().Update(context.Background(), job))
+
+	// Second execution detects failure (or rather, ignores it because it's non-blocking)
+	statusBase2 := env.DeepCopy()
+	_, done, err := r.reconcileProvisioning(context.Background(), env, statusBase2)
+
+	// Since Blocking is false, done should be false
+	assert.False(t, done, "reconcileProvisioning should not return done=true for non-blocking migration failure")
+	require.NoError(t, err)
+	assert.Equal(t, "Succeeded", env.Status.MigrationStatus)
+	assert.NotEqual(t, divergeiov1alpha1.PhaseFailed, env.Status.Phase)
+}
