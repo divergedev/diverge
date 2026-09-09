@@ -565,3 +565,204 @@ func TestRunMigrations_AtlasDispatch(t *testing.T) {
 	u.SetKind("AtlasMigration")
 	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: crName, Namespace: "default"}, u))
 }
+
+func TestEnsureAtlasJob_ExtraArgs(t *testing.T) {
+	s := runtime.NewScheme()
+	require.NoError(t, divergeiov1alpha1.AddToScheme(s))
+	require.NoError(t, corev1.AddToScheme(s))
+	require.NoError(t, batchv1.AddToScheme(s))
+
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            "my-migrations",
+			Namespace:       "default",
+			ResourceVersion: "1",
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(cm).Build()
+	r := &EnvironmentReconciler{Client: c}
+	ctx := context.Background()
+
+	tFalse := false
+	env := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-extra",
+			Namespace: "default",
+			UID:       "uid-extra",
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Database: divergeiov1alpha1.EnvironmentDatabase{
+				Atlas: &divergeiov1alpha1.AtlasSpec{
+					Mode:               "versioned",
+					Engine:             "job",
+					MigrationConfigMap: "my-migrations",
+					Blocking:           &tFalse,
+					ExtraArgs:          []string{"--log", "{{ .Files }}", "--var", "tenant=preview"},
+				},
+			},
+		},
+	}
+
+	dbResult := &database.DatabaseResult{DSN: "postgres://user:pass@host/db"}
+	require.NoError(t, r.ensureAtlasJob(ctx, env, dbResult))
+
+	var jobList batchv1.JobList
+	require.NoError(t, c.List(ctx, &jobList, client.InNamespace("default")))
+	require.Len(t, jobList.Items, 1)
+
+	job1 := jobList.Items[0]
+	expectedArgs := []string{
+		"migrate", "apply", "--url", "$(DATABASE_URL)", "--dir", "file:///migrations",
+		"--log", "{{ .Files }}", "--var", "tenant=preview",
+	}
+	assert.Equal(t, expectedArgs, job1.Spec.Template.Spec.Containers[0].Args)
+
+	// Changing ExtraArgs generates a different job name hash
+	env.Spec.Database.Atlas.ExtraArgs = []string{"--log", "json"}
+	require.NoError(t, r.ensureAtlasJob(ctx, env, dbResult))
+
+	require.NoError(t, c.List(ctx, &jobList, client.InNamespace("default")))
+	require.Len(t, jobList.Items, 2)
+	var foundNewJob bool
+	for _, j := range jobList.Items {
+		if j.Name != job1.Name {
+			foundNewJob = true
+		}
+	}
+	assert.True(t, foundNewJob, "New Job must be created when ExtraArgs change")
+}
+
+func TestEnsureAtlas_OwnerReference(t *testing.T) {
+	s := runtime.NewScheme()
+	require.NoError(t, divergeiov1alpha1.AddToScheme(s))
+	require.NoError(t, corev1.AddToScheme(s))
+	require.NoError(t, batchv1.AddToScheme(s))
+
+	// ConfigMap managed by Diverge CLI
+	managedCM := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            "atlas-managed-mig-12345678",
+			Namespace:       "default",
+			ResourceVersion: "1",
+			Labels: map[string]string{
+				"divergedev.com/managed-by":  "diverge",
+				"divergedev.com/environment": "test-env",
+			},
+		},
+	}
+
+	// External unmanaged ConfigMap
+	unmanagedCM := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            "external-migrations",
+			Namespace:       "default",
+			ResourceVersion: "1",
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(managedCM, unmanagedCM).Build()
+	r := &EnvironmentReconciler{Client: c, Scheme: s}
+	ctx := context.Background()
+
+	tFalse := false
+	env := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-env",
+			Namespace: "default",
+			UID:       "uid-12345",
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Database: divergeiov1alpha1.EnvironmentDatabase{
+				Atlas: &divergeiov1alpha1.AtlasSpec{
+					Mode:               "versioned",
+					Engine:             "job",
+					MigrationConfigMap: "atlas-managed-mig-12345678",
+					Blocking:           &tFalse,
+				},
+			},
+		},
+	}
+
+	dbResult := &database.DatabaseResult{DSN: "postgres://user:pass@host/db"}
+	require.NoError(t, r.ensureAtlasJob(ctx, env, dbResult))
+
+	var checkManaged corev1.ConfigMap
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "atlas-managed-mig-12345678", Namespace: "default"}, &checkManaged))
+	require.Len(t, checkManaged.OwnerReferences, 1)
+	assert.Equal(t, "test-env", checkManaged.OwnerReferences[0].Name)
+	assert.Equal(t, "Environment", checkManaged.OwnerReferences[0].Kind)
+
+	// Unmanaged should NOT get OwnerReference
+	env.Spec.Database.Atlas.MigrationConfigMap = "external-migrations"
+	require.NoError(t, r.ensureAtlasJob(ctx, env, dbResult))
+
+	var checkUnmanaged corev1.ConfigMap
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "external-migrations", Namespace: "default"}, &checkUnmanaged))
+	assert.Empty(t, checkUnmanaged.OwnerReferences)
+}
+
+func TestEnsureAtlasCR_StatusConditions(t *testing.T) {
+	s := runtime.NewScheme()
+	require.NoError(t, divergeiov1alpha1.AddToScheme(s))
+	require.NoError(t, corev1.AddToScheme(s))
+
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+	r := &EnvironmentReconciler{Client: c, Scheme: s}
+	ctx := context.Background()
+
+	tTrue := true
+	env := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cr-status",
+			Namespace: "default",
+			UID:       "uid-status",
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Database: divergeiov1alpha1.EnvironmentDatabase{
+				Atlas: &divergeiov1alpha1.AtlasSpec{
+					Mode:               "versioned",
+					Engine:             "operator",
+					MigrationConfigMap: "some-cm",
+					Blocking:           &tTrue,
+				},
+			},
+		},
+	}
+	dbResult := &database.DatabaseResult{DSN: "postgres://user:pass@host/db"}
+
+	// 1. Initial run creates CR and returns ErrHookInProgress
+	err := r.ensureAtlasCR(ctx, env, dbResult)
+	assert.ErrorIs(t, err, ErrHookInProgress)
+
+	crName := generateHookJobName("test-cr-status", "atlas")
+	u := &unstructured.Unstructured{}
+	u.SetAPIVersion("db.atlasgo.io/v1alpha1")
+	u.SetKind("AtlasMigration")
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: crName, Namespace: "default"}, u))
+
+	// 2. Set condition Ready: True -> returns nil
+	conditions := []interface{}{
+		map[string]interface{}{
+			"type":   "Ready",
+			"status": "True",
+		},
+	}
+	require.NoError(t, unstructured.SetNestedSlice(u.Object, conditions, "status", "conditions"))
+	require.NoError(t, c.Update(ctx, u))
+
+	assert.NoError(t, r.ensureAtlasCR(ctx, env, dbResult))
+
+	// 3. Set condition Ready: False with Reason: Failed -> returns ErrHookFailed
+	failConditions := []interface{}{
+		map[string]interface{}{
+			"type":   "Ready",
+			"status": "False",
+			"reason": "Failed",
+		},
+	}
+	require.NoError(t, unstructured.SetNestedSlice(u.Object, failConditions, "status", "conditions"))
+	require.NoError(t, c.Update(ctx, u))
+
+	assert.ErrorIs(t, r.ensureAtlasCR(ctx, env, dbResult), ErrHookFailed)
+}

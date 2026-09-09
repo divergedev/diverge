@@ -68,6 +68,12 @@ spec:
                         - operator
                         - job
                         type: string
+                      extraArgs:
+                        description: ExtraArgs specifies additional command-line arguments
+                          to pass to the Atlas CLI.
+                        items:
+                          type: string
+                        type: array
                       image:
                         description: |-
                           Image overrides the container image used for standalone Atlas jobs.

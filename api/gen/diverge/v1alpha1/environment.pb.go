@@ -739,6 +739,7 @@ type AtlasSpec struct {
 	Policy             *AtlasPolicySpec       `protobuf:"bytes,5,opt,name=policy,proto3" json:"policy,omitempty"`
 	Engine             string                 `protobuf:"bytes,6,opt,name=engine,proto3" json:"engine,omitempty"`
 	Image              string                 `protobuf:"bytes,7,opt,name=image,proto3" json:"image,omitempty"`
+	ExtraArgs          []string               `protobuf:"bytes,8,rep,name=extra_args,json=extraArgs,proto3" json:"extra_args,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -820,6 +821,13 @@ func (x *AtlasSpec) GetImage() string {
 		return x.Image
 	}
 	return ""
+}
+
+func (x *AtlasSpec) GetExtraArgs() []string {
+	if x != nil {
+		return x.ExtraArgs
+	}
+	return nil
 }
 
 type PostDeploySpec struct {
@@ -3404,7 +3412,7 @@ const file_diverge_v1alpha1_environment_proto_rawDesc = "" +
 	"\rmigration_job\x18\x04 \x01(\v2\".diverge.v1alpha1.MigrationJobSpecR\fmigrationJob\x121\n" +
 	"\x05atlas\x18\x05 \x01(\v2\x1b.diverge.v1alpha1.AtlasSpecR\x05atlas\"3\n" +
 	"\x0fAtlasPolicySpec\x12 \n" +
-	"\vdestructive\x18\x01 \x01(\tR\vdestructive\"\x82\x02\n" +
+	"\vdestructive\x18\x01 \x01(\tR\vdestructive\"\xa1\x02\n" +
 	"\tAtlasSpec\x12\x12\n" +
 	"\x04mode\x18\x01 \x01(\tR\x04mode\x120\n" +
 	"\x14migration_config_map\x18\x02 \x01(\tR\x12migrationConfigMap\x12*\n" +
@@ -3412,7 +3420,9 @@ const file_diverge_v1alpha1_environment_proto_rawDesc = "" +
 	"\bblocking\x18\x04 \x01(\bR\bblocking\x129\n" +
 	"\x06policy\x18\x05 \x01(\v2!.diverge.v1alpha1.AtlasPolicySpecR\x06policy\x12\x16\n" +
 	"\x06engine\x18\x06 \x01(\tR\x06engine\x12\x14\n" +
-	"\x05image\x18\a \x01(\tR\x05image\"\xb7\x01\n" +
+	"\x05image\x18\a \x01(\tR\x05image\x12\x1d\n" +
+	"\n" +
+	"extra_args\x18\b \x03(\tR\textraArgs\"\xb7\x01\n" +
 	"\x0ePostDeploySpec\x12\x14\n" +
 	"\x05image\x18\x01 \x01(\tR\x05image\x12\x12\n" +
 	"\x04args\x18\x02 \x03(\tR\x04args\x126\n" +

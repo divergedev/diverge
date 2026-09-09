@@ -110,10 +110,13 @@ type AtlasSettings struct {
 	Mode               string               `yaml:"mode"`             // versioned | declarative
 	Engine             string               `yaml:"engine,omitempty"` // operator | job
 	Image              string               `yaml:"image,omitempty"`
+	Dir                string               `yaml:"dir,omitempty"`
+	Schema             string               `yaml:"schema,omitempty"`
 	MigrationConfigMap string               `yaml:"migration_config_map,omitempty"`
 	SchemaConfigMap    string               `yaml:"schema_config_map,omitempty"`
 	Blocking           *bool                `yaml:"blocking,omitempty"`
 	Policy             *AtlasPolicySettings `yaml:"policy,omitempty"`
+	ExtraArgs          []string             `yaml:"extra_args,omitempty"`
 }
 
 type AtlasPolicySettings struct {
@@ -130,6 +133,18 @@ func (a *AtlasSettings) Validate() error {
 	}
 	if a.Engine != "" && a.Engine != "operator" && a.Engine != "job" {
 		return fmt.Errorf("atlas engine must be \"operator\" or \"job\", got %q", a.Engine)
+	}
+	if a.Dir != "" && a.Mode == "declarative" {
+		return fmt.Errorf("atlas dir is only supported in \"versioned\" mode, got %q", a.Mode)
+	}
+	if a.Schema != "" && a.Mode == "versioned" {
+		return fmt.Errorf("atlas schema is only supported in \"declarative\" mode, got %q", a.Mode)
+	}
+	if a.Dir != "" && a.MigrationConfigMap != "" {
+		return fmt.Errorf("cannot configure both atlas dir and migration_config_map")
+	}
+	if a.Schema != "" && a.SchemaConfigMap != "" {
+		return fmt.Errorf("cannot configure both atlas schema and schema_config_map")
 	}
 	if a.Policy != nil && a.Policy.Destructive != "" {
 		d := a.Policy.Destructive
@@ -433,6 +448,12 @@ func mergeSettings(dst, src *EnvironmentSettings) {
 		if src.Database.Atlas.Image != "" {
 			a.Image = src.Database.Atlas.Image
 		}
+		if src.Database.Atlas.Dir != "" {
+			a.Dir = src.Database.Atlas.Dir
+		}
+		if src.Database.Atlas.Schema != "" {
+			a.Schema = src.Database.Atlas.Schema
+		}
 		if src.Database.Atlas.MigrationConfigMap != "" {
 			a.MigrationConfigMap = src.Database.Atlas.MigrationConfigMap
 		}
@@ -441,6 +462,9 @@ func mergeSettings(dst, src *EnvironmentSettings) {
 		}
 		if src.Database.Atlas.Blocking != nil {
 			a.Blocking = src.Database.Atlas.Blocking
+		}
+		if len(src.Database.Atlas.ExtraArgs) > 0 {
+			a.ExtraArgs = append([]string(nil), src.Database.Atlas.ExtraArgs...)
 		}
 		if src.Database.Atlas.Policy != nil {
 			p := &AtlasPolicySettings{}

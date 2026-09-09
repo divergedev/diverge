@@ -15,7 +15,7 @@ describe('StatusBadge Properties', () => {
   })
 
   it('unknown phases always produce gray CSS classes', () => {
-    const knownPhases = ['Ready', 'Running', 'Provisioning', 'Pending', 'Error', 'Failed', 'Terminating', 'Deleting']
+    const knownPhases = ['Ready', 'Running', 'Provisioning', 'Pending', 'Migrating', 'Deploying', 'Error', 'Failed', 'Terminating', 'Deleting']
     fc.assert(
       fc.property(
         fc.string().filter(s => !knownPhases.includes(s) && s.length > 0),

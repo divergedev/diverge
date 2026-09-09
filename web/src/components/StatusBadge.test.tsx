@@ -18,6 +18,13 @@ describe('StatusBadge', () => {
     expect(badge).toHaveClass('bg-green-500/20')
   })
 
+  it('renders pulsing amber for Migrating phase', () => {
+    render(<StatusBadge phase="Migrating" />)
+    const badge = screen.getByText('Migrating')
+    expect(badge).toHaveClass('bg-amber-500/20')
+    expect(badge).toHaveClass('animate-pulse')
+  })
+
   it('unknown phases get gray styling', () => {
     render(<StatusBadge phase="Blah" />)
     const badge = screen.getByText('Blah')

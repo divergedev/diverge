@@ -88,7 +88,7 @@ func newListCmd(app *App) *cobra.Command {
 					switch env.Status.Phase {
 					case divergeiov1alpha1.PhaseRunning:
 						phase = color.GreenString(phase)
-					case divergeiov1alpha1.PhaseDeploying:
+					case divergeiov1alpha1.PhaseDeploying, divergeiov1alpha1.PhaseMigrating:
 						phase = color.YellowString(phase)
 					case divergeiov1alpha1.PhaseFailed:
 						phase = color.RedString(phase)

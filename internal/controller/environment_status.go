@@ -72,6 +72,10 @@ func derivePhase(conditions []metav1.Condition) divergeiov1alpha1.EnvironmentPha
 	for _, c := range conditions {
 		switch c.Status {
 		case metav1.ConditionFalse:
+			if c.Type == "MigrationReady" && c.Reason == "MigrationRunning" {
+				allReady = false
+				continue
+			}
 			return divergeiov1alpha1.PhaseFailed
 		case metav1.ConditionTrue:
 			// continue checking
