@@ -142,9 +142,16 @@
                   "enum": ["operator", "job"]
                 },
                 "image": { "type": "string" },
+                "dir": { "type": "string", "description": "Local path to migrations directory for versioned mode." },
+                "schema": { "type": "string", "description": "Local path to schema file (SQL or HCL) for declarative mode." },
                 "migration_config_map": { "type": "string" },
                 "schema_config_map": { "type": "string" },
                 "blocking": { "type": "boolean" },
+                "extra_args": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Additional command-line arguments to pass to the Atlas CLI."
+                },
                 "policy": {
                   "type": "object",
                   "properties": {

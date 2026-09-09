@@ -143,7 +143,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch envInfo.Phase {
-	case string(v1alpha1.PhaseDeploying), string(v1alpha1.PhasePending):
+	case string(v1alpha1.PhaseDeploying), string(v1alpha1.PhasePending), string(v1alpha1.PhaseMigrating):
 		renderLoading(w, envInfo)
 		return
 	case string(v1alpha1.PhaseFailed):

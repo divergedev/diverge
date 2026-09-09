@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/config"
 	"github.com/divergedev/diverge/internal/git"
 )
 
@@ -54,16 +55,25 @@ Examples:
 
 func newPreviewCreateCmd(app *App) *cobra.Command {
 	var (
-		name           string
-		services       []string
-		headerKey      string
-		headerValue    string
-		ttl            string
-		dryRun         bool
-		mrNumber       int
-		migrationImage string
-		migrationArgs  []string
-		migrationBlock bool
+		name             string
+		services         []string
+		headerKey        string
+		headerValue      string
+		ttl              string
+		dryRun           bool
+		mrNumber         int
+		migrationImage   string
+		migrationArgs    []string
+		migrationBlock   bool
+		atlasMode        string
+		atlasEngine      string
+		atlasDir         string
+		atlasSchema      string
+		atlasConfigMap   string
+		atlasImage       string
+		atlasBlocking    bool
+		atlasDestructive string
+		atlasArgs        []string
 	)
 
 	cmd := &cobra.Command{
@@ -82,12 +92,28 @@ Migration hooks:
   --migration-args  ARGS    Arguments to pass to the migration container
   --migration-blocking=false  Don't block deployment on migration success
 
+Atlas schema management:
+  --atlas-mode MODE         Atlas migration mode: versioned (default) or declarative
+  --atlas-engine ENGINE     Atlas engine: job (default) or operator
+  --atlas-dir DIR           Local directory containing versioned migrations (.sql + atlas.sum)
+  --atlas-schema FILE       Local schema file for declarative migrations (.sql or .hcl)
+  --atlas-configmap NAME    Pre-existing ConfigMap for migrations or schema
+  --atlas-image IMAGE       Container image for Atlas job (default: arigaio/atlas:latest)
+  --atlas-blocking=false    Don't block preview deployment on migration completion
+  --atlas-destructive POL   Destructive policy: error (default), warn, or allow
+  --atlas-args ARGS         Extra arguments to pass to Atlas CLI
+
 Examples:
   # Preview payments-api with a new image, baseline everything else
   diverge preview create \
     --service payments-api=registry.azra-ai.com/payments:mr-42 \
     --service consent-mgr \
     --mr 42
+
+  # With Atlas versioned migrations bundled from local dir
+  diverge preview create \
+    --service payments-api=img:8080 \
+    --atlas-dir ./migrations
 
   # With a migration hook
   diverge preview create \
@@ -99,7 +125,8 @@ Examples:
   diverge preview create --service payments-api=img:8080 --dry-run`,
 		// editorconfig-checker-enable
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPreviewCreate(cmd, app, name, services, headerKey, headerValue, ttl, mrNumber, dryRun, migrationImage, migrationArgs, migrationBlock)
+			return runPreviewCreate(cmd, app, name, services, headerKey, headerValue, ttl, mrNumber, dryRun, migrationImage, migrationArgs, migrationBlock,
+				atlasMode, atlasEngine, atlasDir, atlasSchema, atlasConfigMap, atlasImage, atlasBlocking, atlasDestructive, atlasArgs)
 		},
 	}
 
@@ -113,12 +140,23 @@ Examples:
 	cmd.Flags().StringVar(&migrationImage, "migration-image", "", "container image for database migration Job")
 	cmd.Flags().StringSliceVar(&migrationArgs, "migration-args", nil, "arguments for the migration container")
 	cmd.Flags().BoolVar(&migrationBlock, "migration-blocking", true, "block deployment until migration completes")
+
+	cmd.Flags().StringVar(&atlasMode, "atlas-mode", "versioned", "atlas migration mode: versioned or declarative")
+	cmd.Flags().StringVar(&atlasEngine, "atlas-engine", "job", "atlas engine: job or operator")
+	cmd.Flags().StringVar(&atlasDir, "atlas-dir", "", "local directory containing atlas migrations")
+	cmd.Flags().StringVar(&atlasSchema, "atlas-schema", "", "local schema file for declarative atlas migrations (.sql or .hcl)")
+	cmd.Flags().StringVar(&atlasConfigMap, "atlas-configmap", "", "pre-existing ConfigMap for migrations or schema")
+	cmd.Flags().StringVar(&atlasImage, "atlas-image", "", "container image for atlas job (default: arigaio/atlas:latest)")
+	cmd.Flags().BoolVar(&atlasBlocking, "atlas-blocking", true, "block deployment until atlas migration completes")
+	cmd.Flags().StringVar(&atlasDestructive, "atlas-destructive", "error", "destructive changes policy: error, warn, allow")
+	cmd.Flags().StringSliceVar(&atlasArgs, "atlas-args", nil, "extra arguments to pass to Atlas CLI")
 	_ = cmd.MarkFlagRequired("service")
 
 	return cmd
 }
 
-func runPreviewCreate(cmd *cobra.Command, app *App, name string, services []string, headerKey, headerValue, ttl string, mrNumber int, dryRun bool, migrationImage string, migrationArgs []string, migrationBlock bool) error {
+func runPreviewCreate(cmd *cobra.Command, app *App, name string, services []string, headerKey, headerValue, ttl string, mrNumber int, dryRun bool, migrationImage string, migrationArgs []string, migrationBlock bool,
+	atlasMode, atlasEngine, atlasDir, atlasSchema, atlasConfigMap, atlasImage string, atlasBlocking bool, atlasDestructive string, atlasArgs []string) error {
 	// Detect git context
 	gitCtx, err := git.Detect()
 	if err != nil {
@@ -171,6 +209,11 @@ func runPreviewCreate(cmd *cobra.Command, app *App, name string, services []stri
 		}
 	}
 
+	hasAtlas := cmd.Flags().Changed("atlas-dir") || cmd.Flags().Changed("atlas-schema") || cmd.Flags().Changed("atlas-configmap") || cmd.Flags().Changed("atlas-mode") || cmd.Flags().Changed("atlas-engine") || cmd.Flags().Changed("atlas-image") || cmd.Flags().Changed("atlas-args")
+	if migrationImage != "" && hasAtlas {
+		return fmt.Errorf("cannot configure both --migration-image and Atlas flags for database hooks")
+	}
+
 	// Migration hook
 	if migrationImage == "" {
 		if cmd.Flags().Changed("migration-args") || cmd.Flags().Changed("migration-blocking") {
@@ -187,7 +230,83 @@ func runPreviewCreate(cmd *cobra.Command, app *App, name string, services []stri
 		}
 	}
 
+	var bundledCM *corev1.ConfigMap
+	if hasAtlas {
+		atlasCfg := &config.AtlasSettings{
+			Mode:               atlasMode,
+			Engine:             atlasEngine,
+			Image:              atlasImage,
+			Dir:                atlasDir,
+			Schema:             atlasSchema,
+			MigrationConfigMap: atlasConfigMap,
+			Blocking:           &atlasBlocking,
+			ExtraArgs:          atlasArgs,
+		}
+		if atlasDestructive != "" {
+			atlasCfg.Policy = &config.AtlasPolicySettings{Destructive: atlasDestructive}
+		}
+		if atlasMode == "declarative" && atlasConfigMap != "" {
+			atlasCfg.SchemaConfigMap = atlasConfigMap
+			atlasCfg.MigrationConfigMap = ""
+		}
+		if err := atlasCfg.Validate(); err != nil {
+			return fmt.Errorf("invalid atlas configuration: %w", err)
+		}
+
+		if atlasDir != "" || atlasSchema != "" {
+			var kubeClient client.Client
+			if !dryRun {
+				var kErr error
+				kubeClient, _, kErr = app.KubeClient()
+				if kErr != nil {
+					return fmt.Errorf("failed to create Kubernetes client: %w", kErr)
+				}
+			}
+			var cmName string
+			var bundleErr error
+			bundledCM, cmName, bundleErr = BundleAtlasConfigMap(cmd.Context(), kubeClient, app.Namespace, name, "", atlasCfg, dryRun)
+			if bundleErr != nil {
+				return fmt.Errorf("failed to bundle atlas files: %w", bundleErr)
+			}
+			if atlasMode == "declarative" {
+				atlasCfg.SchemaConfigMap = cmName
+			} else {
+				atlasCfg.MigrationConfigMap = cmName
+			}
+			if !dryRun && bundledCM != nil {
+				fmt.Printf("📦 Bundled %d migration file(s) into ConfigMap %s\n", len(bundledCM.Data), cmName)
+			}
+		}
+
+		if pg.Spec.Database == nil {
+			pg.Spec.Database = &divergeiov1alpha1.EnvironmentDatabase{}
+		}
+		pg.Spec.Database.Atlas = &divergeiov1alpha1.AtlasSpec{
+			Mode:               atlasCfg.Mode,
+			Engine:             atlasCfg.Engine,
+			Image:              atlasCfg.Image,
+			MigrationConfigMap: atlasCfg.MigrationConfigMap,
+			SchemaConfigMap:    atlasCfg.SchemaConfigMap,
+			Blocking:           atlasCfg.Blocking,
+			ExtraArgs:          atlasCfg.ExtraArgs,
+		}
+		if atlasCfg.Policy != nil {
+			pg.Spec.Database.Atlas.Policy = &divergeiov1alpha1.AtlasPolicySpec{
+				Destructive: atlasCfg.Policy.Destructive,
+			}
+		}
+	}
+
 	if dryRun {
+		if bundledCM != nil {
+			cmData, err := yaml.Marshal(bundledCM)
+			if err != nil {
+				return fmt.Errorf("failed to marshal ConfigMap: %w", err)
+			}
+			fmt.Println("---")
+			fmt.Printf("# dry-run: would create ConfigMap %q in namespace %q\n", bundledCM.Name, bundledCM.Namespace)
+			fmt.Print(string(cmData))
+		}
 		data, err := yaml.Marshal(pg)
 		if err != nil {
 			return fmt.Errorf("failed to marshal PreviewGroup: %w", err)

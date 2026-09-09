@@ -92,6 +92,7 @@ message AtlasSpec {
   AtlasPolicySpec policy = 5;
   string engine = 6;
   string image = 7;
+  repeated string extra_args = 8;
 }
 
 message PostDeploySpec {

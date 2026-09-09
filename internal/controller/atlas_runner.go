@@ -11,8 +11,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
@@ -76,8 +78,10 @@ func (r *EnvironmentReconciler) ensureAtlasCR(ctx context.Context, env *divergei
 	}
 
 	// Set dir or schema based on type
+	var cmRefName string
 	if kind == "AtlasMigration" {
 		if atlasSpec.MigrationConfigMap != "" {
+			cmRefName = atlasSpec.MigrationConfigMap
 			spec["dir"] = map[string]interface{}{
 				"configMapRef": map[string]interface{}{
 					"name": atlasSpec.MigrationConfigMap,
@@ -86,12 +90,16 @@ func (r *EnvironmentReconciler) ensureAtlasCR(ctx context.Context, env *divergei
 		}
 	} else {
 		if atlasSpec.SchemaConfigMap != "" {
+			cmRefName = atlasSpec.SchemaConfigMap
 			spec["schema"] = map[string]interface{}{
 				"configMapRef": map[string]interface{}{
 					"name": atlasSpec.SchemaConfigMap,
 				},
 			}
 		}
+	}
+	if cmRefName != "" {
+		r.ensureConfigMapOwner(ctx, env, cmRefName)
 	}
 
 	if atlasSpec.Policy != nil {
@@ -166,14 +174,14 @@ func (r *EnvironmentReconciler) ensureAtlasCR(ctx context.Context, env *divergei
 					// If it's ready false, wait or fail based on reason. We'll wait.
 					creason, _ := cond["reason"].(string)
 					if creason == "Failed" {
-						return fmt.Errorf("%s %s failed", kind, crName)
+						return fmt.Errorf("%s %s failed: %w", kind, crName, ErrHookFailed)
 					}
 				}
 			}
 		}
 	}
 
-	return fmt.Errorf("%s %s is still running", kind, crName)
+	return fmt.Errorf("%s %s is still running: %w", kind, crName, ErrHookInProgress)
 }
 
 // ensureAtlasJob creates and monitors a standalone Kubernetes Job for Atlas migrations.
@@ -224,6 +232,7 @@ func (r *EnvironmentReconciler) ensureAtlasJob(ctx context.Context, env *diverge
 	if err := r.Get(ctx, types.NamespacedName{Name: cmName, Namespace: env.Namespace}, &cm); err != nil {
 		return fmt.Errorf("failed to get atlas configmap %s: %w", cmName, err)
 	}
+	r.ensureConfigMapOwner(ctx, env, cmName)
 
 	if mode == "declarative" {
 		schemaTarget := "file:///schema/schema.sql"
@@ -234,6 +243,10 @@ func (r *EnvironmentReconciler) ensureAtlasJob(ctx context.Context, env *diverge
 		if atlasSpec.Policy != nil && atlasSpec.Policy.Destructive == "allow" {
 			args = append(args, "--allow-destructive")
 		}
+	}
+
+	if len(atlasSpec.ExtraArgs) > 0 {
+		args = append(args, atlasSpec.ExtraArgs...)
 	}
 
 	// 2. Create DSN Secret
@@ -340,4 +353,47 @@ func (r *EnvironmentReconciler) ensureAtlasJob(ctx context.Context, env *diverge
 	}
 
 	return fmt.Errorf("atlas migration job %s is still running: %w", jobName, ErrHookInProgress)
+}
+
+// ensureConfigMapOwner attaches the Environment as an OwnerReference to the ConfigMap
+// if it was created and managed by Diverge CLI (labeled divergedev.com/managed-by: diverge).
+func (r *EnvironmentReconciler) ensureConfigMapOwner(ctx context.Context, env *divergeiov1alpha1.Environment, cmName string) {
+	if cmName == "" {
+		return
+	}
+	var cm corev1.ConfigMap
+	if err := r.Get(ctx, types.NamespacedName{Name: cmName, Namespace: env.Namespace}, &cm); err != nil {
+		return
+	}
+	if cm.Namespace != env.Namespace || cm.Labels == nil || cm.Labels["divergedev.com/managed-by"] != "diverge" {
+		return
+	}
+	for _, owner := range cm.OwnerReferences {
+		if owner.UID == env.UID {
+			return
+		}
+	}
+	var scheme *runtime.Scheme
+	if r.Scheme != nil {
+		scheme = r.Scheme
+	} else if r.Client != nil {
+		scheme = r.Client.Scheme()
+	}
+	if scheme != nil {
+		if err := controllerutil.SetOwnerReference(env, &cm, scheme); err == nil {
+			_ = r.Update(ctx, &cm)
+		}
+	} else {
+		isController := false
+		blockOwnerDeletion := true
+		cm.OwnerReferences = append(cm.OwnerReferences, metav1.OwnerReference{
+			APIVersion:         divergeiov1alpha1.GroupVersion.String(),
+			Kind:               "Environment",
+			Name:               env.Name,
+			UID:                env.UID,
+			Controller:         &isController,
+			BlockOwnerDeletion: &blockOwnerDeletion,
+		})
+		_ = r.Update(ctx, &cm)
+	}
 }

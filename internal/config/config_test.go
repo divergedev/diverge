@@ -519,6 +519,45 @@ func TestAtlasSettings_Validation(t *testing.T) {
 		require.NoError(t, err)
 		assert.ErrorContains(t, cfg.Validate(), "atlas policy destructive must be")
 	})
+
+	t.Run("dir with declarative mode invalid", func(t *testing.T) {
+		yamlContent := "version: \"1\"\ndefaults:\n  database:\n    atlas:\n      mode: declarative\n      dir: ./migrations\n"
+		cfg, err := Parse([]byte(yamlContent))
+		require.NoError(t, err)
+		assert.ErrorContains(t, cfg.Validate(), "atlas dir is only supported in \"versioned\" mode")
+	})
+
+	t.Run("schema with versioned mode invalid", func(t *testing.T) {
+		yamlContent := "version: \"1\"\ndefaults:\n  database:\n    atlas:\n      mode: versioned\n      schema: ./schema.sql\n"
+		cfg, err := Parse([]byte(yamlContent))
+		require.NoError(t, err)
+		assert.ErrorContains(t, cfg.Validate(), "atlas schema is only supported in \"declarative\" mode")
+	})
+
+	t.Run("dir and migration_config_map conflict", func(t *testing.T) {
+		yamlContent := "version: \"1\"\ndefaults:\n  database:\n    atlas:\n      dir: ./migrations\n      migration_config_map: my-cm\n"
+		cfg, err := Parse([]byte(yamlContent))
+		require.NoError(t, err)
+		assert.ErrorContains(t, cfg.Validate(), "cannot configure both atlas dir and migration_config_map")
+	})
+
+	t.Run("schema and schema_config_map conflict", func(t *testing.T) {
+		yamlContent := "version: \"1\"\ndefaults:\n  database:\n    atlas:\n      mode: declarative\n      schema: ./schema.sql\n      schema_config_map: my-cm\n"
+		cfg, err := Parse([]byte(yamlContent))
+		require.NoError(t, err)
+		assert.ErrorContains(t, cfg.Validate(), "cannot configure both atlas schema and schema_config_map")
+	})
+
+	t.Run("dir schema and extra_args resolution", func(t *testing.T) {
+		yamlContent := "version: \"1\"\ndefaults:\n  database:\n    atlas:\n      dir: ./migrations\n      extra_args: [\"--baseline\", \"20260101000000\"]\n"
+		cfg, err := Parse([]byte(yamlContent))
+		require.NoError(t, err)
+		require.NoError(t, cfg.Validate())
+		res := cfg.Resolve("preview", nil)
+		require.NotNil(t, res.Database.Atlas)
+		assert.Equal(t, "./migrations", res.Database.Atlas.Dir)
+		assert.Equal(t, []string{"--baseline", "20260101000000"}, res.Database.Atlas.ExtraArgs)
+	})
 }
 
 func TestFeatureSettings_ParsingAndMerging(t *testing.T) {

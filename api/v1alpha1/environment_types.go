@@ -189,6 +189,9 @@ type AtlasSpec struct {
 	// Defaults to "arigaio/atlas:latest".
 	// +optional
 	Image string `json:"image,omitempty"`
+	// ExtraArgs specifies additional command-line arguments to pass to the Atlas CLI.
+	// +optional
+	ExtraArgs []string `json:"extraArgs,omitempty"`
 }
 
 // AtlasPolicySpec configures Atlas Operator safety policies.
@@ -416,6 +419,8 @@ const (
 	PhasePending EnvironmentPhase = "Pending"
 	// PhaseDeploying ...
 	PhaseDeploying EnvironmentPhase = "Deploying"
+	// PhaseMigrating indicates database schema migrations are currently in progress.
+	PhaseMigrating EnvironmentPhase = "Migrating"
 	// PhaseRunning ...
 	PhaseRunning EnvironmentPhase = "Running"
 	// PhaseFailed ...

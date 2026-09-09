@@ -148,11 +148,73 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 
 		// Run migrations (Atlas / MigrationJob) if configured
 		if env.Spec.Database.Atlas != nil || env.Spec.Database.MigrationJob != nil {
+			isBlocking := true
+			if env.Spec.Database.Atlas != nil && env.Spec.Database.Atlas.Blocking != nil {
+				isBlocking = *env.Spec.Database.Atlas.Blocking
+			} else if env.Spec.Database.MigrationJob != nil && env.Spec.Database.MigrationJob.Blocking != nil {
+				isBlocking = *env.Spec.Database.MigrationJob.Blocking
+			}
+
 			migCtx, migCancel := context.WithTimeout(ctx, 60*time.Second)
 			defer migCancel()
-			if migErr := r.runMigrations(migCtx, env, dbStatus); migErr != nil {
-				logger.Error(migErr, "database migration failed")
-				r.Recorder.Event(env, "Warning", "MigrationFailed", migErr.Error())
+			migErr := r.runMigrations(migCtx, env, dbStatus)
+			if errors.Is(migErr, ErrHookInProgress) {
+				env.Status.MigrationStatus = "Running"
+				env.Status.MigrationMessage = migErr.Error()
+				meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+					Type:    "MigrationReady",
+					Status:  metav1.ConditionFalse,
+					Reason:  "MigrationRunning",
+					Message: migErr.Error(),
+				})
+				if isBlocking {
+					env.Status.Phase = divergeiov1alpha1.PhaseMigrating
+					r.Recorder.Event(env, "Normal", "MigrationInProgress", migErr.Error())
+					res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, nil, 3*time.Second)
+					return res, true, retErr
+				}
+			} else if errors.Is(migErr, ErrHookFailed) {
+				env.Status.MigrationStatus = "Failed"
+				env.Status.MigrationMessage = migErr.Error()
+				meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+					Type:    "MigrationReady",
+					Status:  metav1.ConditionFalse,
+					Reason:  "MigrationFailed",
+					Message: migErr.Error(),
+				})
+				if isBlocking {
+					env.Status.Phase = divergeiov1alpha1.PhaseFailed
+					r.Recorder.Event(env, "Warning", "MigrationFailed", migErr.Error())
+					r.notifyFailed(ctx, env, migErr.Error())
+					res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, migErr, 0)
+					return res, true, retErr
+				}
+			} else if migErr != nil {
+				logger.Error(migErr, "unexpected migration error")
+				env.Status.MigrationStatus = "Failed"
+				env.Status.MigrationMessage = migErr.Error()
+				meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+					Type:    "MigrationReady",
+					Status:  metav1.ConditionFalse,
+					Reason:  "MigrationError",
+					Message: migErr.Error(),
+				})
+				if isBlocking {
+					env.Status.Phase = divergeiov1alpha1.PhaseFailed
+					r.Recorder.Event(env, "Warning", "MigrationFailed", migErr.Error())
+					r.notifyFailed(ctx, env, migErr.Error())
+					res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, migErr, 0)
+					return res, true, retErr
+				}
+			} else {
+				env.Status.MigrationStatus = "Succeeded"
+				env.Status.MigrationMessage = "Migrations applied successfully"
+				meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+					Type:    "MigrationReady",
+					Status:  metav1.ConditionTrue,
+					Reason:  "MigrationSucceeded",
+					Message: "Migrations applied successfully",
+				})
 			}
 		}
 	} else {

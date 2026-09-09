@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
@@ -125,8 +127,34 @@ func runCreate(cmd *cobra.Command, _ []string, app *App, configPath, envName, en
 		_, _ = fmt.Fprintf(stderr, "ℹ Downstream services handled by mesh routing\n")
 	}
 
+	var bundledCM *corev1.ConfigMap
+	if resolved.Database.Atlas != nil && (resolved.Database.Atlas.Dir != "" || resolved.Database.Atlas.Schema != "") {
+		var kubeClient client.Client
+		if !dryRun {
+			var kErr error
+			kubeClient, _, kErr = app.KubeClient()
+			if kErr != nil {
+				return fmt.Errorf("failed to create Kubernetes client: %w", kErr)
+			}
+		}
+		var cmName string
+		var bundleErr error
+		bundledCM, cmName, bundleErr = BundleAtlasConfigMap(cmd.Context(), kubeClient, app.Namespace, name, "", resolved.Database.Atlas, dryRun)
+		if bundleErr != nil {
+			return fmt.Errorf("failed to bundle atlas files: %w", bundleErr)
+		}
+		if resolved.Database.Atlas.Schema != "" {
+			env.Spec.Database.Atlas.SchemaConfigMap = cmName
+		} else {
+			env.Spec.Database.Atlas.MigrationConfigMap = cmName
+		}
+		if !dryRun && bundledCM != nil {
+			fmt.Printf("📦 Bundled %d migration file(s) into ConfigMap %s\n", len(bundledCM.Data), cmName)
+		}
+	}
+
 	if dryRun {
-		return printDryRun(env)
+		return printDryRun(env, bundledCM)
 	}
 
 	// Create via K8s client
@@ -244,6 +272,7 @@ func buildEnvironment(ctx context.Context, name string, gitCtx *git.GitContext, 
 			MigrationConfigMap: atlasCfg.MigrationConfigMap,
 			SchemaConfigMap:    atlasCfg.SchemaConfigMap,
 			Blocking:           atlasCfg.Blocking,
+			ExtraArgs:          atlasCfg.ExtraArgs,
 		}
 		if atlasCfg.Policy != nil {
 			atlasSpec.Policy = &v1alpha1.AtlasPolicySpec{
@@ -308,7 +337,16 @@ func parseDuration(s string) (*metav1.Duration, error) {
 	return &metav1.Duration{Duration: d}, nil
 }
 
-func printDryRun(env *v1alpha1.Environment) error {
+func printDryRun(env *v1alpha1.Environment, cm *corev1.ConfigMap) error {
+	if cm != nil {
+		cmData, err := yaml.Marshal(cm)
+		if err != nil {
+			return fmt.Errorf("failed to marshal configmap: %w", err)
+		}
+		fmt.Println("---")
+		fmt.Printf("# dry-run: would create ConfigMap %q in namespace %q\n", cm.Name, cm.Namespace)
+		fmt.Print(string(cmData))
+	}
 	data, err := yaml.Marshal(env)
 	if err != nil {
 		return fmt.Errorf("failed to marshal environment: %w", err)
