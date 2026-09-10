@@ -7,6 +7,7 @@ class DivergeSession(requests.Session):
         self.propagation_context = propagation_context
 
     def prepare_request(self, request):
+        request.headers = request.headers or {}
         env = get_environment()
         if env:
             request.headers[get_header_key()] = env

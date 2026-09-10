@@ -6,6 +6,8 @@ Cross-language context propagation SDK for the diverge platform.
 
 ```bash
 pip install diverge-sdk
+# With requests support (for DivergeSession):
+pip install diverge-sdk[requests]
 ```
 
 ## Features
