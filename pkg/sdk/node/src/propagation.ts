@@ -29,13 +29,18 @@ function encodeVarint(value: number): Buffer {
 function decodeVarint(buffer: Buffer, offset: number): { value: number, offset: number } {
   let result = 0;
   let shift = 0;
+  let bytesRead = 0;
   while (true) {
     if (offset >= buffer.length) {
       throw new Error("Truncated varint");
     }
+    if (bytesRead >= 5) {
+      throw new Error("Varint too long");
+    }
     const byte = buffer[offset];
     offset++;
-    result |= (byte & 0x7F) << shift;
+    bytesRead++;
+    result = (result + ((byte & 0x7F) * Math.pow(2, shift))) >>> 0;
     if (!(byte & 0x80)) {
       break;
     }
@@ -107,6 +112,9 @@ export function decodePropagationContext(encoded: string): PropagationContext {
 
     if (fieldNum === 1 && wireType === 2) {
       const { value: strLen, offset: next } = decodeVarint(buffer, offset);
+      if (strLen < 0 || next + strLen > buffer.length) {
+        throw new Error("Invalid field length");
+      }
       ctx.environment = buffer.toString('utf-8', next, next + strLen);
       offset = next + strLen;
     } else if (fieldNum === 2 && wireType === 0) {
@@ -115,6 +123,9 @@ export function decodePropagationContext(encoded: string): PropagationContext {
       offset = next;
     } else if (fieldNum === 3 && wireType === 2) {
       const { value: entryLen, offset: next } = decodeVarint(buffer, offset);
+      if (entryLen < 0 || next + entryLen > buffer.length) {
+        throw new Error("Invalid field length");
+      }
       offset = next;
       const entryEnd = offset + entryLen;
       let k = "";
@@ -126,10 +137,16 @@ export function decodePropagationContext(encoded: string): PropagationContext {
 
         if (entryField === 1) {
           const { value: strLen, offset: next2 } = decodeVarint(buffer, offset);
+          if (strLen < 0 || next2 + strLen > buffer.length) {
+            throw new Error("Invalid field length");
+          }
           k = buffer.toString('utf-8', next2, next2 + strLen);
           offset = next2 + strLen;
         } else if (entryField === 2) {
           const { value: strLen, offset: next2 } = decodeVarint(buffer, offset);
+          if (strLen < 0 || next2 + strLen > buffer.length) {
+            throw new Error("Invalid field length");
+          }
           v = buffer.toString('utf-8', next2, next2 + strLen);
           offset = next2 + strLen;
         } else {
@@ -140,6 +157,9 @@ export function decodePropagationContext(encoded: string): PropagationContext {
             offset = next2;
           } else if (et === 2) {
             const { value: skipLen, offset: next2 } = decodeVarint(buffer, offset);
+            if (skipLen < 0 || next2 + skipLen > buffer.length) {
+              throw new Error("Invalid field length");
+            }
             offset = next2 + skipLen;
           } else if (et === 1) {
             offset += 8;
@@ -156,6 +176,9 @@ export function decodePropagationContext(encoded: string): PropagationContext {
         offset = next;
       } else if (wireType === 2) {
         const { value: skipLen, offset: next } = decodeVarint(buffer, offset);
+        if (skipLen < 0 || next + skipLen > buffer.length) {
+          throw new Error("Invalid field length");
+        }
         offset = next + skipLen;
       } else if (wireType === 1) {
         offset += 8;

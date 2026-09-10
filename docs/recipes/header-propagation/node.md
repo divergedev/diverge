@@ -30,8 +30,9 @@ The SDK wraps native `fetch()` to automatically inject the `x-diverge-env` heade
 ```typescript
 import { divergeFetch } from '@divergedev/sdk';
 
-// x-diverge-env header is automatically added from the current async context
-const response = await divergeFetch('http://payments-api/charge');
+// Create a fetch wrapper that auto-injects diverge headers
+const fetcher = divergeFetch();
+const response = await fetcher('http://payments-api/charge');
 ```
 
 ### Full Binary Context (Advanced)
@@ -48,7 +49,7 @@ import {
 
 const ctx: PropagationContext = {
   environment: 'pr-42',
-  routingMode: RoutingMode.HEADER,
+  routing_mode: RoutingMode.HEADER,
   metadata: { team: 'payments' },
 };
 const encoded = encodePropagationContext(ctx);

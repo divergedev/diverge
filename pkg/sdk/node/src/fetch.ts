@@ -6,7 +6,8 @@ export function divergeFetch(propagationContext?: PropagationContext) {
     const env = getEnvironment();
 
     // Create new headers object
-    const headers = new Headers(init?.headers);
+    const existingHeaders = init?.headers ?? (input instanceof Request ? input.headers : undefined);
+    const headers = new Headers(existingHeaders);
 
     if (env) {
       headers.set(getHeaderKey(), env);

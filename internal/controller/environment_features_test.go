@@ -413,7 +413,7 @@ func TestEnvironmentReconciler_UnleashStub(t *testing.T) {
 	cond := meta.FindStatusCondition(env.Status.Conditions, "FeaturesReady")
 	require.NotNil(t, cond)
 	assert.Equal(t, metav1.ConditionTrue, cond.Status)
-	assert.Equal(t, "diverge-feat-unleash-env", env.Status.FeatureEnvVars["UNLEASH_APP_NAME"])
+	assert.Equal(t, features.UnleashEnvironmentName("default", "feat-unleash-env"), env.Status.FeatureEnvVars["UNLEASH_APP_NAME"])
 	assert.Equal(t, "feat-unleash-env", env.Status.FeatureEnvVars["UNLEASH_ENVIRONMENT"])
 
 	_, err = r.handleTeardown(ctx, env)

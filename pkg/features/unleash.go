@@ -2,6 +2,7 @@ package features
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net/http"
@@ -57,18 +58,33 @@ func (p *UnleashProvider) Type() string {
 	return "unleash"
 }
 
-// UnleashEnvironmentName safely generates an Unleash-compatible environment name.
-func UnleashEnvironmentName(envName string) string {
-	name := fmt.Sprintf("diverge-%s", envName)
-	if len(name) > 63 {
-		return name[:63]
+// UnleashEnvironmentName safely generates an Unleash-compatible environment name
+// scoped to namespace and name, with a hash suffix for uniqueness (capped at 63 chars).
+func UnleashEnvironmentName(namespace, envName string) string {
+	var input string
+	if namespace != "" {
+		input = namespace + "/" + envName
+	} else {
+		input = envName
 	}
-	return name
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(input)))[:8]
+
+	base := fmt.Sprintf("diverge-%s", envName)
+	if namespace != "" && namespace != "default" {
+		base = fmt.Sprintf("diverge-%s-%s", namespace, envName)
+	}
+
+	maxBaseLen := 63 - 9 // leave room for '-' and 8-char hash
+	if len(base) > maxBaseLen {
+		base = base[:maxBaseLen]
+	}
+	base = strings.TrimRight(base, "-")
+	return fmt.Sprintf("%s-%s", base, hash)
 }
 
-func (p *UnleashProvider) resolveConnection(ctx context.Context, env *v1alpha1.Environment) (unleashURL, adminToken string, err error) {
+func (p *UnleashProvider) resolveConnection(ctx context.Context, env *v1alpha1.Environment) (unleashURL, adminToken, clientToken string, err error) {
 	if env == nil {
-		return "", "", errors.New("environment cannot be nil")
+		return "", "", "", errors.New("environment cannot be nil")
 	}
 
 	secretName := ""
@@ -89,14 +105,14 @@ func (p *UnleashProvider) resolveConnection(ctx context.Context, env *v1alpha1.E
 			if sysErr := p.client.Get(ctx, types.NamespacedName{Name: secretName, Namespace: "diverge-system"}, secSystem); sysErr == nil {
 				secret = secSystem
 			} else if !apierrors.IsNotFound(sysErr) {
-				return "", "", fmt.Errorf("failed looking up unleash secret %q in diverge-system: %w", secretName, sysErr)
+				return "", "", "", fmt.Errorf("failed looking up unleash secret %q in diverge-system: %w", secretName, sysErr)
 			}
 		} else if !apierrors.IsNotFound(getErr) {
-			return "", "", fmt.Errorf("failed looking up unleash secret %q in %s: %w", secretName, env.Namespace, getErr)
+			return "", "", "", fmt.Errorf("failed looking up unleash secret %q in %s: %w", secretName, env.Namespace, getErr)
 		}
 
 		if secret == nil {
-			return "", "", fmt.Errorf("unleash secret %q not found in namespace %q or %q", secretName, env.Namespace, "diverge-system")
+			return "", "", "", fmt.Errorf("unleash secret %q not found in namespace %q or %q", secretName, env.Namespace, "diverge-system")
 		}
 	} else if p.client != nil {
 		// ConnectionRef was empty; check default secret names "unleash-connection" or "unleash-credentials"
@@ -119,6 +135,10 @@ func (p *UnleashProvider) resolveConnection(ctx context.Context, env *v1alpha1.E
 	if secret != nil {
 		unleashURL = extractSecretValue(secret, "url", "UNLEASH_URL", "endpoint", "UNLEASH_ENDPOINT")
 		adminToken = extractSecretValue(secret, "adminToken", "UNLEASH_ADMIN_TOKEN", "token", "UNLEASH_TOKEN", "UNLEASH_API_TOKEN")
+		clientToken = extractSecretValue(secret, "clientToken", "UNLEASH_CLIENT_TOKEN")
+		if clientToken == "" {
+			clientToken = adminToken
+		}
 	}
 
 	// Fallback to environment variables if URL is still empty
@@ -140,29 +160,42 @@ func (p *UnleashProvider) resolveConnection(ctx context.Context, env *v1alpha1.E
 		}
 	}
 
+	if clientToken == "" {
+		if t := os.Getenv("DIVERGE_UNLEASH_CLIENT_TOKEN"); t != "" {
+			clientToken = t
+		} else if t := os.Getenv("UNLEASH_CLIENT_TOKEN"); t != "" {
+			clientToken = t
+		} else {
+			clientToken = adminToken
+		}
+	}
+
 	// SSRF validation
 	parsed, err := url.Parse(unleashURL)
 	if err != nil {
-		return "", "", fmt.Errorf("invalid unleash URL: %w", err)
+		return "", "", "", fmt.Errorf("invalid unleash URL: %w", err)
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return "", "", fmt.Errorf("invalid unleash url scheme %q (must be http or https)", parsed.Scheme)
+		return "", "", "", fmt.Errorf("invalid unleash url scheme %q (must be http or https)", parsed.Scheme)
 	}
 	if parsed.Host == "" {
-		return "", "", errors.New("invalid unleash url host cannot be empty")
+		return "", "", "", errors.New("invalid unleash url host cannot be empty")
 	}
 
-	return unleashURL, adminToken, nil
+	return unleashURL, adminToken, clientToken, nil
 }
 
 // Provision sets up preview configuration for Unleash.
+// NOTE: Unleash OSS does not support environment CRUD via the Admin API.
+// Environments must be pre-configured in Unleash. We use strategy constraints
+// scoped to the diverge environment name for isolation instead.
 func (p *UnleashProvider) Provision(ctx context.Context, env *v1alpha1.Environment) (*FeatureResult, error) {
-	unleashURL, adminToken, err := p.resolveConnection(ctx, env)
+	unleashURL, adminToken, clientToken, err := p.resolveConnection(ctx, env)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve unleash connection: %w", err)
 	}
 
-	unleashEnvName := UnleashEnvironmentName(env.Name)
+	unleashEnvName := UnleashEnvironmentName(env.Namespace, env.Name)
 
 	if len(env.Spec.Features.Overrides) > 0 {
 		client, err := NewUnleashClient(unleashURL, adminToken, p.httpClient)
@@ -172,8 +205,16 @@ func (p *UnleashProvider) Provision(ctx context.Context, env *v1alpha1.Environme
 
 		for key, value := range env.Spec.Features.Overrides {
 			enabled := true
-			if strings.ToLower(value) == "false" {
+			switch strings.ToLower(value) {
+			case "false":
 				enabled = false
+			case "true":
+				// already true
+			default:
+				// Unleash OSS strategy constraints only support boolean toggles.
+				// Variant values are treated as enabled but the value is not preserved.
+				p.logger.Info("Unleash override value is not boolean; treating as enabled",
+					"feature", key, "value", value)
 			}
 
 			// Add constraint
@@ -197,8 +238,8 @@ func (p *UnleashProvider) Provision(ctx context.Context, env *v1alpha1.Environme
 		"UNLEASH_INSTANCE_ID": unleashEnvName,
 	}
 
-	if adminToken != "" {
-		envVars["UNLEASH_API_TOKEN"] = adminToken
+	if clientToken != "" {
+		envVars["UNLEASH_API_TOKEN"] = clientToken
 	}
 
 	p.logger.Info("Unleash feature provider provisioned", "environment", env.Name, "appName", unleashEnvName)
@@ -211,8 +252,11 @@ func (p *UnleashProvider) Provision(ctx context.Context, env *v1alpha1.Environme
 }
 
 // Teardown cleans up Unleash ephemeral resources.
+// NOTE: Unleash OSS does not support environment CRUD via the Admin API.
+// Environments must be pre-configured in Unleash. We use strategy constraints
+// scoped to the diverge environment name for isolation instead.
 func (p *UnleashProvider) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
-	_, _, err := p.resolveConnection(ctx, env)
+	_, _, _, err := p.resolveConnection(ctx, env)
 	if err != nil {
 		p.logger.Error(err, "failed to resolve unleash connection during teardown, skipping cleanup")
 		return nil
@@ -232,7 +276,7 @@ func (p *UnleashProvider) Status(ctx context.Context, env *v1alpha1.Environment)
 		}, nil
 	}
 
-	unleashURL, adminToken, err := p.resolveConnection(ctx, env)
+	unleashURL, adminToken, _, err := p.resolveConnection(ctx, env)
 	if err != nil {
 		return &FeatureStatus{
 			Ready:   false,

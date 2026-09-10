@@ -15,5 +15,8 @@ def get_environment() -> str:
 def set_environment(name: str) -> contextvars.Token:
     return _current_env.set(name)
 
+def reset_environment(token: contextvars.Token) -> None:
+    _current_env.reset(token)
+
 def get_header_key() -> str:
     return os.environ.get("DIVERGE_HEADER_KEY", DEFAULT_HEADER_KEY)

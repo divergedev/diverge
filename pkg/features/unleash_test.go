@@ -69,7 +69,7 @@ func TestUnleashProvision_WithOverrides(t *testing.T) {
 
 	assert.Equal(t, "unleash", result.ProviderType)
 	assert.Equal(t, server.URL, result.EnvVars["UNLEASH_URL"])
-	assert.Equal(t, "diverge-my-env", result.EnvVars["UNLEASH_APP_NAME"])
+	assert.Equal(t, UnleashEnvironmentName("default", "my-env"), result.EnvVars["UNLEASH_APP_NAME"])
 	assert.Equal(t, "my-env", result.EnvVars["UNLEASH_ENVIRONMENT"])
 	assert.Equal(t, "test-token", result.EnvVars["UNLEASH_API_TOKEN"])
 }

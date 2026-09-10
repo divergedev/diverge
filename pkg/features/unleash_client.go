@@ -24,6 +24,10 @@ type UnleashClient struct {
 }
 
 // NewUnleashClient creates a new UnleashClient with a bounded HTTP timeout.
+// NOTE: SSRF validation and scheme checking is performed in
+// resolveConnection before NewUnleashClient is called.
+// Callers should avoid passing tokens with plain HTTP URLs
+// in production environments.
 func NewUnleashClient(baseURL, token string, customHTTPClient *http.Client) (*UnleashClient, error) {
 	trimmed := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	parsed, err := url.Parse(trimmed)

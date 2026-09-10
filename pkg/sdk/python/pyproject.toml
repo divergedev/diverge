@@ -9,6 +9,7 @@ dependencies = []
 [project.optional-dependencies]
 web = ["starlette"]
 requests = ["requests"]
+dev = ["pytest", "pytest-asyncio"]
 
 [build-system]
 requires = ["setuptools>=61.0"]
