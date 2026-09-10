@@ -42,7 +42,7 @@ flowchart LR
 | `configmap` *(default)* | Generates an in-cluster Kubernetes ConfigMap formatted for the OpenFeature `flagd` provider. | Zero external infrastructure; lightweight, standalone preview clusters. |
 | `flipt` | Provisions an ephemeral namespace (`diverge-<envName>`) in a remote or in-cluster [Flipt](https://flipt.io) instance. | Teams already using Flipt for feature flags or requiring advanced rollout strategies and audit logs. |
 | `flagsmith` | Provisions an ephemeral identity (`diverge-[<namespace>-]<envName>-<hash8>`) and standard traits (`diverge_environment`, `diverge_namespace`, `diverge_preview`) in remote or self-hosted Flagsmith. | Teams using Flagsmith for feature flag management with identity and trait targeting. |
-| `unleash` | Preview stub. Planned full synchronization with Unleash strategies and contexts. | Tracked in [Issue #268](https://github.com/divergedev/diverge/issues/268). |
+| `unleash` | Creates ephemeral strategy constraints scoped to `diverge-<envName>` in a remote or self-hosted [Unleash](https://getunleash.io) instance. OSS-compatible. | Teams using Unleash for feature flag management with strategy-based targeting. |
 | `noop` / `none` | Disables feature flag synchronization for this environment. | Environments where feature flag synchronization is intentionally skipped. |
 
 ---
@@ -171,6 +171,53 @@ Standard traits automatically injected for identity targeting:
 - `diverge_environment`: `<envName>`
 - `diverge_namespace`: `<namespace>`
 - `diverge_preview`: `true`
+
+### 4. Unleash Provider
+
+The `unleash` provider manages ephemeral strategy constraints in an Unleash instance. Diverge uses the Unleash Admin API to enable/disable feature toggles and add environment-scoped constraints. This approach is compatible with both Unleash OSS and Pro/Enterprise:
+
+```yaml
+apiVersion: divergedev.com/v1alpha1
+kind: Environment
+metadata:
+  name: pr-1234
+  namespace: diverge-previews
+spec:
+  features:
+    provider: unleash
+    connectionRef: unleash-credentials
+    overrides:
+      new_checkout_flow: "true"
+      beta_recommendations: "false"
+      experiment_tier: "enterprise"
+```
+
+#### Secret Configuration (`connectionRef`)
+
+Diverge looks up the secret in the Environment's namespace first, falling back to the `diverge-system` controller namespace:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: unleash-credentials
+  namespace: diverge-previews # Or diverge-system
+type: Opaque
+stringData:
+  url: "https://unleash.internal.example.com"
+  token: "unleash_admin_token..."      # Admin API token for provisioning
+```
+
+If no secret is configured, Diverge falls back to environment variables:
+- `DIVERGE_UNLEASH_URL` / `UNLEASH_URL` (default: `http://unleash.diverge-system.svc.cluster.local:4242`)
+- `DIVERGE_UNLEASH_TOKEN` / `UNLEASH_API_TOKEN`
+
+Injected Pod environment variables:
+- `UNLEASH_URL`: URL of the Unleash server.
+- `UNLEASH_APP_NAME`: `diverge-<envName>`
+- `UNLEASH_ENVIRONMENT`: `<envName>`
+- `UNLEASH_INSTANCE_ID`: `diverge-<envName>`
+- `UNLEASH_API_TOKEN`: API token (if configured).
 
 ---
 
@@ -366,3 +413,11 @@ The Diverge Dashboard provides an interactive **Flags** tab for every preview en
 ### Flag Evaluation Returning Default Value
 - Check that the flag key matches exactly between your code and `spec.features.overrides`. Flag keys are case-sensitive.
 - For `configmap` provider, verify that your pod has mounted the ConfigMap or is passing the correct path in `FLAGD_FLAG_PATH`.
+
+### Unleash Connection Failing
+- Verify that `connectionRef` points to a valid Secret containing `url` and `token`.
+- Ensure the Unleash Admin API is accessible from the controller:
+  ```bash
+  kubectl logs -n diverge-system deploy/diverge-controller-manager -c manager | grep -i unleash
+  ```
+- The default in-cluster URL is `http://unleash.diverge-system.svc.cluster.local:4242`. Override with `DIVERGE_UNLEASH_URL` if your Unleash instance is elsewhere.

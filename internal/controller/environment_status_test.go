@@ -80,3 +80,22 @@ func TestValidateEnvVarMapping_SafeVars(t *testing.T) {
 	err := validateEnvVarMapping(mapping)
 	assert.NoError(t, err)
 }
+
+func TestDerivePhase_MigrationRunningNotFatal(t *testing.T) {
+	conditions := []metav1.Condition{
+		{Type: "DatabaseReady", Status: metav1.ConditionTrue},
+		{Type: "MigrationReady", Status: metav1.ConditionFalse, Reason: "MigrationRunning"},
+		{Type: "RoutingReady", Status: metav1.ConditionTrue},
+	}
+	phase := derivePhase(conditions)
+	assert.Equal(t, divergeiov1alpha1.PhaseDeploying, phase)
+}
+
+func TestDerivePhase_MigrationRunningWithOtherFalse(t *testing.T) {
+	conditions := []metav1.Condition{
+		{Type: "DatabaseReady", Status: metav1.ConditionFalse},
+		{Type: "MigrationReady", Status: metav1.ConditionFalse, Reason: "MigrationRunning"},
+	}
+	phase := derivePhase(conditions)
+	assert.Equal(t, divergeiov1alpha1.PhaseFailed, phase)
+}

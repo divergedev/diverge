@@ -1,0 +1,16 @@
+[project]
+name = "diverge-sdk"
+version = "0.1.0"
+description = "Cross-language context propagation SDK for the diverge platform"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+web = ["starlette"]
+requests = ["requests"]
+dev = ["pytest", "pytest-asyncio"]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"

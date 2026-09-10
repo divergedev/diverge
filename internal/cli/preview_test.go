@@ -286,3 +286,27 @@ func TestPreviewStatusCmd_AsyncRoutes(t *testing.T) {
 		t.Error("output doesn't contain provisioned status")
 	}
 }
+
+func TestPreviewCreate_AtlasFlagConflict(t *testing.T) {
+	s := runtime.NewScheme()
+	_ = divergeiov1alpha1.AddToScheme(s)
+
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+	app := &App{Client: c}
+
+	cmd := newPreviewCreateCmd(app)
+	cmd.SetArgs([]string{
+		"--name", "test-env",
+		"--service", "test-svc=test-image",
+		"--migration-image", "someimg",
+		"--atlas-dir", "./migrations",
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error when using both --migration-image and --atlas-dir")
+	}
+	if !bytes.Contains([]byte(err.Error()), []byte("cannot configure both --migration-image and Atlas flags")) {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
