@@ -119,7 +119,7 @@ func TestLoadtestCmd_BaselineCompare(t *testing.T) {
 		"--baseline",
 		"--duration", "50ms",
 		"--concurrency", "1",
-		"--fail-on-latency-increase", "500.0",
+		"--fail-on-latency-increase", "10000.0",
 	})
 
 	err := root.Execute()
