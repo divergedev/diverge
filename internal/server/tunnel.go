@@ -16,6 +16,7 @@ import (
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -442,11 +443,20 @@ func (tm *TunnelManager) createTunnelResources(ctx context.Context, reg *pb.Tunn
 			},
 		},
 		Spec: corev1.ServiceSpec{
-			Type:      corev1.ServiceTypeClusterIP,
-			ClusterIP: "None",
+			// A REAL ClusterIP, NOT headless. A headless Service does no port
+			// remapping: a caller resolves it to the backing pod IP and
+			// connects on whatever port it names, so publishing reg.Port
+			// (8099, the developer's LOCAL port) sent every consumer to a port
+			// nothing listens on — the proxy is on TunnelProxyPort. A real
+			// ClusterIP lets kube-proxy DNAT Port -> TargetPort, so the name
+			// consumers already use reaches the proxy. It also resolves under
+			// kube-dns from the Service's own ClusterIP, without depending on
+			// the resolver reading endpoints at all.
+			Type: corev1.ServiceTypeClusterIP,
 			Ports: []corev1.ServicePort{{
-				Port:     reg.Port,
-				Protocol: corev1.ProtocolTCP,
+				Port:       reg.Port,
+				TargetPort: intstr.FromInt32(TunnelProxyPort),
+				Protocol:   corev1.ProtocolTCP,
 			}},
 		},
 	}
@@ -470,6 +480,17 @@ func (tm *TunnelManager) createTunnelResources(ctx context.Context, reg *pb.Tunn
 		Endpoints: []discoveryv1.Endpoint{
 			{
 				Addresses: []string{podIP},
+				// Ready MUST be set true. This backs a HEADLESS Service, and
+				// CoreDNS only publishes A records for headless-Service
+				// endpoints whose Ready condition is true — a nil condition is
+				// treated as not-ready, so the tunnel's DNS name resolves to
+				// NOTHING (NXDOMAIN) and a caller reaching it by Service name
+				// gets "no such host". Left nil, the tunnel authenticates,
+				// registers, carries a direct-IP request, and is still
+				// unreachable by the name every consumer actually uses.
+				Conditions: discoveryv1.EndpointConditions{
+					Ready: func() *bool { b := true; return &b }(),
+				},
 			},
 		},
 		Ports: []discoveryv1.EndpointPort{
@@ -482,17 +503,26 @@ func (tm *TunnelManager) createTunnelResources(ctx context.Context, reg *pb.Tunn
 
 	if _, err := tm.k8sClient.CoreV1().Services(reg.Namespace).Create(ctx, svc, metav1.CreateOptions{}); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("failed to create headless service: %w", err)
+			return fmt.Errorf("failed to create service: %w", err)
 		}
-		// Already exists — update
+		// Already exists — check if transition from legacy headless (ClusterIP: "None") is needed
 		existing, getErr := tm.k8sClient.CoreV1().Services(reg.Namespace).Get(ctx, svc.Name, metav1.GetOptions{})
 		if getErr != nil {
 			return fmt.Errorf("failed to get existing service: %w", getErr)
 		}
-		svc.ResourceVersion = existing.ResourceVersion
-		svc.Spec.ClusterIP = existing.Spec.ClusterIP // immutable
-		if _, updateErr := tm.k8sClient.CoreV1().Services(reg.Namespace).Update(ctx, svc, metav1.UpdateOptions{}); updateErr != nil {
-			return fmt.Errorf("failed to update headless service: %w", updateErr)
+		if existing.Spec.ClusterIP == corev1.ClusterIPNone {
+			// In Kubernetes, ClusterIP is immutable when changing from "None".
+			// Delete and recreate so a real ClusterIP can be allocated.
+			_ = tm.k8sClient.CoreV1().Services(reg.Namespace).Delete(ctx, svc.Name, metav1.DeleteOptions{})
+			if _, createErr := tm.k8sClient.CoreV1().Services(reg.Namespace).Create(ctx, svc, metav1.CreateOptions{}); createErr != nil && !apierrors.IsAlreadyExists(createErr) {
+				return fmt.Errorf("failed to recreate service as ClusterIP: %w", createErr)
+			}
+		} else {
+			svc.ResourceVersion = existing.ResourceVersion
+			svc.Spec.ClusterIP = existing.Spec.ClusterIP // immutable
+			if _, updateErr := tm.k8sClient.CoreV1().Services(reg.Namespace).Update(ctx, svc, metav1.UpdateOptions{}); updateErr != nil {
+				return fmt.Errorf("failed to update service: %w", updateErr)
+			}
 		}
 	}
 	if _, err := tm.k8sClient.DiscoveryV1().EndpointSlices(reg.Namespace).Create(ctx, ep, metav1.CreateOptions{}); err != nil {
@@ -510,6 +540,51 @@ func (tm *TunnelManager) createTunnelResources(ctx context.Context, reg *pb.Tunn
 		}
 	}
 
+	// ALSO a legacy core/v1 Endpoints object, or the tunnel has no DNS name on
+	// a kube-dns cluster. EndpointSlice is the modern API and CoreDNS reads it;
+	// kube-dns — still GKE's resolver on many clusters — predates it and
+	// resolves a headless Service only from Endpoints. Without this the Service
+	// exists, the EndpointSlice is Ready, and the name is NXDOMAIN, so a caller
+	// reaching the tunnel by name gets "no such host" while a direct pod IP
+	// works — which reads as an intermittent reset rather than a DNS gap.
+	// Verified on GKE: with only the slice, NXDOMAIN; add this, resolves.
+	// Writing both is portable — CoreDNS honours either.
+	//
+	// core/v1 Endpoints is deprecated in favour of EndpointSlice, which is the
+	// whole reason this object is here: the resolvers that need it are the
+	// ones that predate the slice. It is still served and still reconciled.
+	endpoints := &corev1.Endpoints{ //nolint:staticcheck // kube-dns resolves a headless Service only from core/v1 Endpoints
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      svcName,
+			Namespace: reg.Namespace,
+			Labels: map[string]string{
+				"divergedev.com/tunnel":     "true",
+				"divergedev.com/preview-id": reg.PreviewId,
+			},
+			Annotations: map[string]string{
+				"divergedev.com/tunnel-id":      tunnelID,
+				"divergedev.com/tunnel-expires": expires,
+			},
+		},
+		Subsets: []corev1.EndpointSubset{{ //nolint:staticcheck // see above
+			Addresses: []corev1.EndpointAddress{{IP: podIP}},
+			Ports:     []corev1.EndpointPort{{Port: proxyPort, Protocol: corev1.ProtocolTCP}},
+		}},
+	}
+	if _, err := tm.k8sClient.CoreV1().Endpoints(reg.Namespace).Create(ctx, endpoints, metav1.CreateOptions{}); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("failed to create endpoints: %w", err)
+		}
+		existing, getErr := tm.k8sClient.CoreV1().Endpoints(reg.Namespace).Get(ctx, endpoints.Name, metav1.GetOptions{})
+		if getErr != nil {
+			return fmt.Errorf("failed to get existing endpoints: %w", getErr)
+		}
+		endpoints.ResourceVersion = existing.ResourceVersion
+		if _, updateErr := tm.k8sClient.CoreV1().Endpoints(reg.Namespace).Update(ctx, endpoints, metav1.UpdateOptions{}); updateErr != nil {
+			return fmt.Errorf("failed to update endpoints: %w", updateErr)
+		}
+	}
+
 	return nil
 }
 
@@ -517,21 +592,36 @@ func (tm *TunnelManager) deleteTunnelResources(ctx context.Context, reg *pb.Tunn
 	svcName := fmt.Sprintf("diverge-tunnel-%s", reg.PreviewId)
 	_ = tm.k8sClient.CoreV1().Services(reg.Namespace).Delete(ctx, svcName, metav1.DeleteOptions{})
 	_ = tm.k8sClient.DiscoveryV1().EndpointSlices(reg.Namespace).Delete(ctx, svcName, metav1.DeleteOptions{})
+	_ = tm.k8sClient.CoreV1().Endpoints(reg.Namespace).Delete(ctx, svcName, metav1.DeleteOptions{})
 }
 
 func (tm *TunnelManager) refreshTunnelTTL(ctx context.Context, reg *pb.TunnelRegister) {
 	svcName := fmt.Sprintf("diverge-tunnel-%s", reg.PreviewId)
 	expires := time.Now().Add(tunnelTTLDuration).Format(time.RFC3339)
 
-	svc, err := tm.k8sClient.CoreV1().Services(reg.Namespace).Get(ctx, svcName, metav1.GetOptions{})
-	if err != nil {
-		return
+	if svc, err := tm.k8sClient.CoreV1().Services(reg.Namespace).Get(ctx, svcName, metav1.GetOptions{}); err == nil {
+		if svc.Annotations == nil {
+			svc.Annotations = make(map[string]string)
+		}
+		svc.Annotations["divergedev.com/tunnel-expires"] = expires
+		_, _ = tm.k8sClient.CoreV1().Services(reg.Namespace).Update(ctx, svc, metav1.UpdateOptions{})
 	}
-	if svc.Annotations == nil {
-		svc.Annotations = make(map[string]string)
+
+	if ep, err := tm.k8sClient.DiscoveryV1().EndpointSlices(reg.Namespace).Get(ctx, svcName, metav1.GetOptions{}); err == nil {
+		if ep.Annotations == nil {
+			ep.Annotations = make(map[string]string)
+		}
+		ep.Annotations["divergedev.com/tunnel-expires"] = expires
+		_, _ = tm.k8sClient.DiscoveryV1().EndpointSlices(reg.Namespace).Update(ctx, ep, metav1.UpdateOptions{})
 	}
-	svc.Annotations["divergedev.com/tunnel-expires"] = expires
-	_, _ = tm.k8sClient.CoreV1().Services(reg.Namespace).Update(ctx, svc, metav1.UpdateOptions{})
+
+	if endpoints, err := tm.k8sClient.CoreV1().Endpoints(reg.Namespace).Get(ctx, svcName, metav1.GetOptions{}); err == nil {
+		if endpoints.Annotations == nil {
+			endpoints.Annotations = make(map[string]string)
+		}
+		endpoints.Annotations["divergedev.com/tunnel-expires"] = expires
+		_, _ = tm.k8sClient.CoreV1().Endpoints(reg.Namespace).Update(ctx, endpoints, metav1.UpdateOptions{})
+	}
 }
 
 // ForwardRequest sends an HTTP request through the tunnel to the CLI.

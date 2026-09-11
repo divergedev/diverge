@@ -110,3 +110,35 @@ func TestTunnelGC_IgnoresServicesWithoutAnnotation(t *testing.T) {
 	_, err = fakeK8s.CoreV1().Services("default").Get(context.Background(), "diverge-tunnel-noannot", metav1.GetOptions{})
 	assert.NoError(t, err, "service without annotation should be kept")
 }
+
+func TestTunnelGC_SweepsExpiredEndpoints(t *testing.T) {
+	fakeK8s := fake.NewSimpleClientset()
+	logger := slog.Default()
+	gc := NewTunnelGC(fakeK8s, logger)
+
+	expired := time.Now().Add(-1 * time.Minute).Format(time.RFC3339)
+	ep := &corev1.Endpoints{ //nolint:staticcheck // kube-dns backward compatibility
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "diverge-tunnel-old-ep",
+			Namespace: "default",
+			Labels: map[string]string{
+				"divergedev.com/tunnel": "true",
+			},
+			Annotations: map[string]string{
+				"divergedev.com/tunnel-expires": expired,
+			},
+		},
+		Subsets: []corev1.EndpointSubset{{ //nolint:staticcheck // kube-dns backward compatibility
+			Addresses: []corev1.EndpointAddress{{IP: "10.0.0.1"}},
+			Ports:     []corev1.EndpointPort{{Port: 8081, Protocol: corev1.ProtocolTCP}},
+		}},
+	}
+
+	_, err := fakeK8s.CoreV1().Endpoints("default").Create(context.Background(), ep, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	gc.sweep(context.Background(), "default")
+
+	_, err = fakeK8s.CoreV1().Endpoints("default").Get(context.Background(), "diverge-tunnel-old-ep", metav1.GetOptions{})
+	assert.Error(t, err, "expired endpoints should be deleted by GC")
+}
