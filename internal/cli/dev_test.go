@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -697,11 +698,11 @@ func TestRunDev_PreviewGroupRefusedByCRD_CleansUpWithoutError(t *testing.T) {
 	_ = divergeiov1alpha1.AddToScheme(s)
 	_ = corev1.AddToScheme(s)
 
-	createAttempted := false
+	var createAttempted atomic.Bool
 	c := fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(interceptor.Funcs{
 		Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
 			if _, ok := obj.(*divergeiov1alpha1.PreviewGroup); ok {
-				createAttempted = true
+				createAttempted.Store(true)
 				return apierrors.NewInvalid(schema.GroupKind{Group: "divergedev.com", Kind: "PreviewGroup"}, obj.GetName(), nil)
 			}
 			return cl.Create(ctx, obj, opts...)
@@ -723,7 +724,7 @@ func TestRunDev_PreviewGroupRefusedByCRD_CleansUpWithoutError(t *testing.T) {
 	}()
 
 	require.Eventually(t, func() bool {
-		return createAttempted
+		return createAttempted.Load()
 	}, 2*time.Second, 10*time.Millisecond)
 
 	// Cancel context to trigger deferred cleanup
