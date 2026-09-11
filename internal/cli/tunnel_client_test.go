@@ -434,3 +434,23 @@ func TestTunnelClient_RejectsCrossHostRedirect(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "refusing to send credentials across redirects")
 }
+
+func TestTunnelBaseTransport(t *testing.T) {
+	// HTTPS or non-HTTP returns http.DefaultTransport
+	assert.Equal(t, http.DefaultTransport, tunnelBaseTransport("https://server.diverge.dev"))
+	assert.Equal(t, http.DefaultTransport, tunnelBaseTransport("invalid-url-scheme"))
+
+	// HTTP URLs return transport with unencrypted HTTP/2 enabled
+	for _, addr := range []string{
+		"http://localhost:8080",
+		"  http://127.0.0.1:8080  ",
+		"HTTP://localhost:8080",
+	} {
+		rt := tunnelBaseTransport(addr)
+		require.NotNil(t, rt)
+		tr, ok := rt.(*http.Transport)
+		require.True(t, ok)
+		require.NotNil(t, tr.Protocols)
+		assert.True(t, tr.Protocols.UnencryptedHTTP2(), "addr: %s", addr)
+	}
+}

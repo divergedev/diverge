@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -99,7 +100,8 @@ func (t *tunnelAuthTransport) RoundTrip(req *http.Request) (*http.Response, erro
 // build a real tunnel pass this in; a nil base transport still means the
 // default, so callers that only need plain requests are unaffected.
 func tunnelBaseTransport(serverAddr string) http.RoundTripper {
-	if !strings.HasPrefix(serverAddr, "http://") {
+	u, err := url.Parse(strings.TrimSpace(serverAddr))
+	if err != nil || !strings.EqualFold(u.Scheme, "http") {
 		return http.DefaultTransport
 	}
 	t := http.DefaultTransport.(*http.Transport).Clone()
