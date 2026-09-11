@@ -425,3 +425,97 @@ func TestMiddleware_CookieInvalid(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnauthorized, w.Result().StatusCode)
 }
+
+func TestMiddleware_BrowserRedirect_MissingToken(t *testing.T) {
+	cfg := MiddlewareConfig{
+		Provider: &mockProvider{},
+		Cache:    NewTokenCache(10, time.Minute),
+		Logger:   testLogger(),
+		LoginURL: "/auth/login",
+	}
+	mw := NewMiddleware(cfg)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/previews/alpha?view=full", nil)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	resp := w.Result()
+	assert.Equal(t, http.StatusSeeOther, resp.StatusCode)
+	assert.Equal(t, "/auth/login?return_url=%2Fpreviews%2Falpha%3Fview%3Dfull", resp.Header.Get("Location"))
+}
+
+func TestMiddleware_BrowserRedirect_ExpiredOrInvalidCookie(t *testing.T) {
+	cfg := MiddlewareConfig{
+		Provider: &mockProvider{err: errors.New("token review expired")},
+		Cache:    NewTokenCache(10, time.Minute),
+		Logger:   testLogger(),
+		LoginURL: "/auth/login",
+	}
+	mw := NewMiddleware(cfg)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/dashboard", nil)
+	req.Header.Set("Accept", "text/html")
+	req.AddCookie(&http.Cookie{Name: "diverge_token", Value: "expired-token"})
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	resp := w.Result()
+	assert.Equal(t, http.StatusSeeOther, resp.StatusCode)
+	assert.Equal(t, "/auth/login?return_url=%2Fdashboard", resp.Header.Get("Location"))
+}
+
+func TestMiddleware_BrowserRedirect_APIRequestsKeep401(t *testing.T) {
+	cfg := MiddlewareConfig{
+		Provider: &mockProvider{err: errors.New("invalid")},
+		Cache:    NewTokenCache(10, time.Minute),
+		Logger:   testLogger(),
+		LoginURL: "/auth/login",
+	}
+	mw := NewMiddleware(cfg)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Missing token with JSON accept header
+	req1 := httptest.NewRequest("GET", "/api/v1/previews", nil)
+	req1.Header.Set("Accept", "application/json")
+	w1 := httptest.NewRecorder()
+	handler.ServeHTTP(w1, req1)
+	assert.Equal(t, http.StatusUnauthorized, w1.Result().StatusCode)
+
+	// Expired cookie with JSON accept header
+	req2 := httptest.NewRequest("GET", "/api/v1/previews", nil)
+	req2.Header.Set("Accept", "application/json")
+	req2.AddCookie(&http.Cookie{Name: "diverge_token", Value: "expired"})
+	w2 := httptest.NewRecorder()
+	handler.ServeHTTP(w2, req2)
+	assert.Equal(t, http.StatusUnauthorized, w2.Result().StatusCode)
+}
+
+func TestMiddleware_BrowserRedirect_PostRequestsKeep401(t *testing.T) {
+	cfg := MiddlewareConfig{
+		Provider: &mockProvider{},
+		Cache:    NewTokenCache(10, time.Minute),
+		Logger:   testLogger(),
+		LoginURL: "/auth/login",
+	}
+	mw := NewMiddleware(cfg)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// POST request with text/html accept header must NOT be redirected
+	req := httptest.NewRequest("POST", "/api/v1/action", nil)
+	req.Header.Set("Accept", "text/html")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Result().StatusCode)
+}

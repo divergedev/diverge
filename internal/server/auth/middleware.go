@@ -2,8 +2,10 @@ package auth
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -31,6 +33,13 @@ type MiddlewareConfig struct {
 	Metrics        *AuthMetrics
 	ExemptPaths    []string
 	ExemptPrefixes []string
+	// LoginURL, when set, is where an unauthenticated BROWSER NAVIGATION is
+	// redirected instead of receiving the raw 401 below. A signed-out human
+	// loading the dashboard is the routine case — every session expires — and
+	// "missing or invalid authorization header" as a bare page is an error
+	// message for a state that is not an error. API callers, and anything not
+	// asking for text/html, keep the 401 they can act on.
+	LoginURL string
 }
 
 // NewMiddleware creates net/http middleware that authenticates requests via
@@ -68,6 +77,9 @@ func NewMiddleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 					cfg.AuditLogger.LogAuth(r.Context(), "auth.failure", nil, r, slog.String("reason", "missing_token"))
 				} else {
 					cfg.Logger.Warn("auth.failure", "reason", "missing_token", "path", r.URL.Path, "source_ip", r.RemoteAddr)
+				}
+				if redirectBrowserToLogin(w, r, cfg.LoginURL) {
+					return
 				}
 				http.Error(w, "missing or invalid authorization header", http.StatusUnauthorized)
 				return
@@ -114,6 +126,9 @@ func NewMiddleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 				} else {
 					cfg.Logger.Warn("auth.failure", "reason", "token_review_rejected", "path", r.URL.Path, "source_ip", r.RemoteAddr, "error", err)
 				}
+				if redirectBrowserToLogin(w, r, cfg.LoginURL) {
+					return
+				}
 				http.Error(w, "authentication failed", http.StatusUnauthorized)
 				return
 			}
@@ -134,6 +149,25 @@ func NewMiddleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// redirectBrowserToLogin redirects an unauthenticated browser navigation to loginURL
+// with a sanitized return_url parameter, preserving deep links while preventing open redirects.
+// Returns true if a redirect was issued. Only GET requests asking for text/html are redirected;
+// API callers and state-changing requests keep their 401 error.
+func redirectBrowserToLogin(w http.ResponseWriter, r *http.Request, loginURL string) bool {
+	if loginURL == "" || r.Method != http.MethodGet || !strings.Contains(r.Header.Get("Accept"), "text/html") {
+		return false
+	}
+	targetURL := loginURL
+	if reqURI := r.URL.RequestURI(); reqURI != "" && reqURI != "/" {
+		// Only allow valid relative paths (starts with single '/') to prevent open redirect attacks.
+		if strings.HasPrefix(reqURI, "/") && !strings.HasPrefix(reqURI, "//") && !strings.HasPrefix(reqURI, "/\\") {
+			targetURL = fmt.Sprintf("%s?return_url=%s", loginURL, url.QueryEscape(reqURI))
+		}
+	}
+	http.Redirect(w, r, targetURL, http.StatusSeeOther)
+	return true
 }
 
 func extractBearerToken(authHeader string) string {
