@@ -451,6 +451,20 @@ dev:
 			if updateErr := c.Update(ctx, &existing); updateErr != nil {
 				return fmt.Errorf("failed to update PreviewGroup: %w", updateErr)
 			}
+		} else if apierrors.IsInvalid(err) {
+			// A DEGRADED SESSION, NOT A DEAD ONE. The installed CRD refuses
+			// this spec — today that is guaranteed: dev sets
+			// spec.source.provider to "local" and the CRD's enum has only
+			// gitlab and github, so this create has never once succeeded
+			// against the product's own definition. The PreviewGroup drives
+			// controller-side routing and ownership; the TUNNEL depends on
+			// neither, and a consumer that routes by the tunnel's Service name
+			// works without it. Killing the session here tears down a tunnel
+			// that just finished establishing, for the sake of an object the
+			// session can live without.
+			fmt.Printf("⚠️  PreviewGroup not created (the installed CRD refused it): %v\n", err)
+			fmt.Println("   Continuing without one: controller-managed routing and ownership")
+			fmt.Println("   checks are unavailable; the tunnel itself is unaffected.")
 		} else {
 			return fmt.Errorf("failed to create PreviewGroup: %w", err)
 		}
@@ -589,7 +603,7 @@ dev:
 		fmt.Printf("\nCleaning up PreviewGroup %q...\n", groupName)
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := c.Delete(cleanupCtx, pg); err != nil {
+		if err := c.Delete(cleanupCtx, pg); err != nil && !apierrors.IsNotFound(err) {
 			slog.Error("failed to clean up PreviewGroup", "name", groupName, "error", err)
 		} else {
 			fmt.Println("Goodbye!")
@@ -792,6 +806,15 @@ func waitForAsyncRoutes(ctx context.Context, c client.Client, groupName string, 
 		if !hasAsync {
 			return nil, nil
 		}
+	} else if apierrors.IsNotFound(err) {
+		// NO PREVIEWGROUP MEANS NO ASYNC ROUTES, even more strongly than a
+		// PreviewGroup that declares none — the status this loop polls hangs
+		// off that object, so with it absent the wait below can only ever hit
+		// its two-minute timeout and kill a session whose tunnel is already
+		// carrying traffic. Absent is a real state here: the installed CRD may
+		// have refused the create (dev writes provider "local", the enum ends
+		// at github) and dev deliberately carries on without one.
+		return nil, nil
 	}
 
 	var envName string

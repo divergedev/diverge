@@ -68,6 +68,15 @@ func TestWaitForAsyncRoutes(t *testing.T) {
 			expectErr:   false,
 		},
 		{
+			name: "preview group not found -> proceeds immediately without blocking",
+			setup: func(t *testing.T) client.Client {
+				return setupTestClient(t)
+			},
+			ctxTimeout:  5 * time.Second,
+			expectedEnv: nil,
+			expectErr:   false,
+		},
+		{
 			name: "condition true on first poll -> proceeds",
 			setup: func(t *testing.T) client.Client {
 				pg := &divergeiov1alpha1.PreviewGroup{
