@@ -97,6 +97,31 @@ func (gc *TunnelGC) sweep(ctx context.Context, namespace string) {
 		}
 	}
 
+	// Sweep Endpoints (legacy core/v1 for kube-dns clusters)
+	endpointsList, err := gc.k8sClient.CoreV1().Endpoints(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "divergedev.com/tunnel=true",
+	})
+	if err != nil {
+		gc.logger.Warn("tunnel GC: failed to list endpoints", "ns", namespace, "err", err)
+	} else {
+		for _, ep := range endpointsList.Items {
+			expiresStr, ok := ep.Annotations["divergedev.com/tunnel-expires"]
+			if !ok {
+				continue
+			}
+			expires, err := time.Parse(time.RFC3339, expiresStr)
+			if err != nil {
+				continue
+			}
+			if now.After(expires) {
+				gc.logger.Info("tunnel GC: deleting expired endpoints", "endpoints", ep.Name, "ns", namespace)
+				if err := gc.k8sClient.CoreV1().Endpoints(namespace).Delete(ctx, ep.Name, metav1.DeleteOptions{}); err != nil {
+					gc.logger.Warn("tunnel GC: failed to delete endpoints", "endpoints", ep.Name, "err", err)
+				}
+			}
+		}
+	}
+
 	// Sweep Leases
 	leases, err := gc.k8sClient.CoordinationV1().Leases(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: "divergedev.com/tunnel=true",

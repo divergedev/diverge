@@ -503,17 +503,26 @@ func (tm *TunnelManager) createTunnelResources(ctx context.Context, reg *pb.Tunn
 
 	if _, err := tm.k8sClient.CoreV1().Services(reg.Namespace).Create(ctx, svc, metav1.CreateOptions{}); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("failed to create headless service: %w", err)
+			return fmt.Errorf("failed to create service: %w", err)
 		}
-		// Already exists — update
+		// Already exists — check if transition from legacy headless (ClusterIP: "None") is needed
 		existing, getErr := tm.k8sClient.CoreV1().Services(reg.Namespace).Get(ctx, svc.Name, metav1.GetOptions{})
 		if getErr != nil {
 			return fmt.Errorf("failed to get existing service: %w", getErr)
 		}
-		svc.ResourceVersion = existing.ResourceVersion
-		svc.Spec.ClusterIP = existing.Spec.ClusterIP // immutable
-		if _, updateErr := tm.k8sClient.CoreV1().Services(reg.Namespace).Update(ctx, svc, metav1.UpdateOptions{}); updateErr != nil {
-			return fmt.Errorf("failed to update headless service: %w", updateErr)
+		if existing.Spec.ClusterIP == corev1.ClusterIPNone {
+			// In Kubernetes, ClusterIP is immutable when changing from "None".
+			// Delete and recreate so a real ClusterIP can be allocated.
+			_ = tm.k8sClient.CoreV1().Services(reg.Namespace).Delete(ctx, svc.Name, metav1.DeleteOptions{})
+			if _, createErr := tm.k8sClient.CoreV1().Services(reg.Namespace).Create(ctx, svc, metav1.CreateOptions{}); createErr != nil && !apierrors.IsAlreadyExists(createErr) {
+				return fmt.Errorf("failed to recreate service as ClusterIP: %w", createErr)
+			}
+		} else {
+			svc.ResourceVersion = existing.ResourceVersion
+			svc.Spec.ClusterIP = existing.Spec.ClusterIP // immutable
+			if _, updateErr := tm.k8sClient.CoreV1().Services(reg.Namespace).Update(ctx, svc, metav1.UpdateOptions{}); updateErr != nil {
+				return fmt.Errorf("failed to update service: %w", updateErr)
+			}
 		}
 	}
 	if _, err := tm.k8sClient.DiscoveryV1().EndpointSlices(reg.Namespace).Create(ctx, ep, metav1.CreateOptions{}); err != nil {
@@ -549,8 +558,12 @@ func (tm *TunnelManager) createTunnelResources(ctx context.Context, reg *pb.Tunn
 			Name:      svcName,
 			Namespace: reg.Namespace,
 			Labels: map[string]string{
-				"diverge.dev/tunnel":     "true",
-				"diverge.dev/preview-id": reg.PreviewId,
+				"divergedev.com/tunnel":     "true",
+				"divergedev.com/preview-id": reg.PreviewId,
+			},
+			Annotations: map[string]string{
+				"divergedev.com/tunnel-id":      tunnelID,
+				"divergedev.com/tunnel-expires": expires,
 			},
 		},
 		Subsets: []corev1.EndpointSubset{{ //nolint:staticcheck // see above
@@ -586,15 +599,29 @@ func (tm *TunnelManager) refreshTunnelTTL(ctx context.Context, reg *pb.TunnelReg
 	svcName := fmt.Sprintf("diverge-tunnel-%s", reg.PreviewId)
 	expires := time.Now().Add(tunnelTTLDuration).Format(time.RFC3339)
 
-	svc, err := tm.k8sClient.CoreV1().Services(reg.Namespace).Get(ctx, svcName, metav1.GetOptions{})
-	if err != nil {
-		return
+	if svc, err := tm.k8sClient.CoreV1().Services(reg.Namespace).Get(ctx, svcName, metav1.GetOptions{}); err == nil {
+		if svc.Annotations == nil {
+			svc.Annotations = make(map[string]string)
+		}
+		svc.Annotations["divergedev.com/tunnel-expires"] = expires
+		_, _ = tm.k8sClient.CoreV1().Services(reg.Namespace).Update(ctx, svc, metav1.UpdateOptions{})
 	}
-	if svc.Annotations == nil {
-		svc.Annotations = make(map[string]string)
+
+	if ep, err := tm.k8sClient.DiscoveryV1().EndpointSlices(reg.Namespace).Get(ctx, svcName, metav1.GetOptions{}); err == nil {
+		if ep.Annotations == nil {
+			ep.Annotations = make(map[string]string)
+		}
+		ep.Annotations["divergedev.com/tunnel-expires"] = expires
+		_, _ = tm.k8sClient.DiscoveryV1().EndpointSlices(reg.Namespace).Update(ctx, ep, metav1.UpdateOptions{})
 	}
-	svc.Annotations["divergedev.com/tunnel-expires"] = expires
-	_, _ = tm.k8sClient.CoreV1().Services(reg.Namespace).Update(ctx, svc, metav1.UpdateOptions{})
+
+	if endpoints, err := tm.k8sClient.CoreV1().Endpoints(reg.Namespace).Get(ctx, svcName, metav1.GetOptions{}); err == nil {
+		if endpoints.Annotations == nil {
+			endpoints.Annotations = make(map[string]string)
+		}
+		endpoints.Annotations["divergedev.com/tunnel-expires"] = expires
+		_, _ = tm.k8sClient.CoreV1().Endpoints(reg.Namespace).Update(ctx, endpoints, metav1.UpdateOptions{})
+	}
 }
 
 // ForwardRequest sends an HTTP request through the tunnel to the CLI.
