@@ -603,7 +603,7 @@ dev:
 		fmt.Printf("\nCleaning up PreviewGroup %q...\n", groupName)
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := c.Delete(cleanupCtx, pg); err != nil {
+		if err := c.Delete(cleanupCtx, pg); err != nil && !apierrors.IsNotFound(err) {
 			slog.Error("failed to clean up PreviewGroup", "name", groupName, "error", err)
 		} else {
 			fmt.Println("Goodbye!")

@@ -9,8 +9,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -682,4 +684,55 @@ func TestRunDev_ConflictPolicy_Force(t *testing.T) {
 
 	cancelBob()
 	<-errChBob
+}
+
+func TestRunDev_PreviewGroupRefusedByCRD_CleansUpWithoutError(t *testing.T) {
+	detector := fakeDetector{
+		tailscaleIP: "100.100.100.100",
+		serviceName: "web",
+		username:    "charlie",
+	}
+
+	s := runtime.NewScheme()
+	_ = divergeiov1alpha1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+
+	createAttempted := false
+	c := fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(interceptor.Funcs{
+		Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*divergeiov1alpha1.PreviewGroup); ok {
+				createAttempted = true
+				return apierrors.NewInvalid(schema.GroupKind{Group: "divergedev.com", Kind: "PreviewGroup"}, obj.GetName(), nil)
+			}
+			return cl.Create(ctx, obj, opts...)
+		},
+	}).Build()
+
+	app := &App{
+		Client:    c,
+		Clientset: k8sfake.NewSimpleClientset(),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cmd := &cobra.Command{}
+	cmd.SetContext(ctx)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runDev(runDevParams{App: app, Cmd: cmd, NoTunnel: true, NoProxy: true, Options: []DevOption{WithEnvironmentDetector(detector)}})
+	}()
+
+	require.Eventually(t, func() bool {
+		return createAttempted
+	}, 2*time.Second, 10*time.Millisecond)
+
+	// Cancel context to trigger deferred cleanup
+	cancel()
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("cleanup timed out")
+	}
 }
