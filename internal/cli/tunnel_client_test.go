@@ -435,6 +435,8 @@ func TestTunnelClient_RejectsCrossHostRedirect(t *testing.T) {
 	assert.Contains(t, err.Error(), "refusing to send credentials across redirects")
 }
 
+// TestTunnelBaseTransport verifies that plaintext HTTP URLs configure an
+// unencrypted HTTP/2 transport, while HTTPS and invalid schemes retain DefaultTransport.
 func TestTunnelBaseTransport(t *testing.T) {
 	// HTTPS or non-HTTP returns http.DefaultTransport
 	assert.Equal(t, http.DefaultTransport, tunnelBaseTransport("https://server.diverge.dev"))

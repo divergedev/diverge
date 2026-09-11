@@ -381,6 +381,11 @@ func main() {
 	// side by side on the same listener, leaving the dashboard's browser
 	// traffic untouched. With TLS the standard ALPN path already provides
 	// HTTP/2, so the default protocol set is kept.
+	//
+	// Security note (CWE-319): Plaintext h2c is intended for local dev, port-forwarding,
+	// or deployments behind a TLS-terminating reverse proxy / ingress. The client-side
+	// tunnelAuthTransport explicitly restricts plaintext bearer token transmission to
+	// loopback addresses only.
 	if tlsCertFile == "" || tlsKeyFile == "" {
 		mainSrv.Protocols = new(http.Protocols)
 		mainSrv.Protocols.SetHTTP1(true)
@@ -409,11 +414,12 @@ func main() {
 
 	// Start main server
 	g.Go(func() error {
-		logger.Info("server listening", "addr", addr)
 		var listenErr error
 		if tlsCertFile != "" && tlsKeyFile != "" {
+			logger.Info("server listening with TLS", "addr", addr)
 			listenErr = mainSrv.ListenAndServeTLS(tlsCertFile, tlsKeyFile)
 		} else {
+			logger.Warn("server listening in plaintext (no TLS); unencrypted HTTP/2 enabled for local/port-forward tunnel compatibility", "addr", addr)
 			listenErr = mainSrv.ListenAndServe()
 		}
 		if listenErr != nil && listenErr != http.ErrServerClosed {
