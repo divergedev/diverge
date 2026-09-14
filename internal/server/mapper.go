@@ -7,6 +7,7 @@ import (
 	pb "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 	"github.com/divergedev/diverge/api/v1alpha1"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -17,13 +18,20 @@ func CRDEnvToProto(crd *v1alpha1.Environment) (*pb.Environment, error) {
 	if crd == nil {
 		return nil, nil
 	}
-	b, err := json.Marshal(crd)
+	crdCopy := crd.DeepCopy()
+	crdCopy.Spec.Lifecycle.TTL = nil
+	b, err := json.Marshal(crdCopy)
 	if err != nil {
 		return nil, err
 	}
 	var proto pb.Environment
 	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(b, &proto); err != nil {
 		return nil, err
+	}
+	if crd.Spec.Lifecycle.TTL != nil {
+		if proto.Spec != nil && proto.Spec.Lifecycle != nil {
+			proto.Spec.Lifecycle.Ttl = durationpb.New(crd.Spec.Lifecycle.TTL.Duration)
+		}
 	}
 	proto.Name = crd.Name
 	proto.Namespace = crd.Namespace
