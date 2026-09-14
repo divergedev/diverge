@@ -21,7 +21,9 @@ import (
 
 	"github.com/divergedev/diverge/internal/server/streaming"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/client-go/util/retry"
 )
 
 type EnvironmentService struct {
@@ -321,7 +323,88 @@ func (s *EnvironmentService) DeleteEnvironment(ctx context.Context, req *connect
 }
 
 func (s *EnvironmentService) ExtendTTL(ctx context.Context, req *connect.Request[pb.ExtendTTLRequest]) (*connect.Response[pb.ExtendTTLResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
+	if err := ValidateDNS1123Label(req.Msg.Name, "name"); err != nil {
+		return nil, err
+	}
+	if err := ValidateDNS1123Label(req.Msg.Namespace, "namespace"); err != nil {
+		return nil, err
+	}
+
+	// RBAC check
+	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "update", req.Msg.Namespace, "environments"); err != nil {
+		return nil, err
+	}
+
+	if req.Msg.ExtendBy == nil || req.Msg.ExtendBy.AsDuration() <= 0 {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("extend_by must be a positive duration"))
+	}
+
+	extendBy := req.Msg.ExtendBy.AsDuration()
+	if extendBy > 168*time.Hour { // 7 days
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("extend_by cannot exceed 7 days"))
+	}
+
+	var envProto *pb.Environment
+
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var env v1alpha1.Environment
+		if err := s.client.Get(ctx, client.ObjectKey{Name: req.Msg.Name, Namespace: req.Msg.Namespace}, &env); err != nil {
+			return SanitizeK8sError(s.logger, err)
+		}
+
+		if env.DeletionTimestamp != nil {
+			return connect.NewError(connect.CodeFailedPrecondition, errors.New("environment is being deleted"))
+		}
+
+		if env.Spec.Lifecycle.TTL == nil {
+			return connect.NewError(connect.CodeFailedPrecondition, errors.New("environment has no TTL configured"))
+		}
+
+		// Compute new expiry and new TTL
+		now := time.Now()
+
+		var expiresAt time.Time
+		if env.Status.ExpiresAt != nil {
+			expiresAt = env.Status.ExpiresAt.Time
+		}
+		if expiresAt.Before(now) {
+			expiresAt = now
+		}
+
+		var createdAt time.Time
+		if env.Status.CreatedAt != nil {
+			createdAt = env.Status.CreatedAt.Time
+		} else {
+			createdAt = env.CreationTimestamp.Time
+		}
+
+		newExpiry := expiresAt.Add(extendBy)
+		newTTL := newExpiry.Sub(createdAt)
+
+		env.Spec.Lifecycle.TTL = &metav1.Duration{Duration: newTTL}
+
+		if err := s.client.Update(ctx, &env); err != nil {
+			return err
+		}
+
+		// Convert to proto
+		converted, err := CRDEnvToProto(&env)
+		if err != nil {
+			return err
+		}
+		envProto = converted
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	s.auditLogger.LogMutation(ctx, "resource.ttl_extended", "environment", req.Msg.Name, req.Msg.Namespace)
+
+	return connect.NewResponse(&pb.ExtendTTLResponse{
+		Environment: envProto,
+	}), nil
 }
 
 func (s *EnvironmentService) WatchEnvironments(ctx context.Context, req *connect.Request[pb.WatchEnvironmentsRequest], stream *connect.ServerStream[pb.WatchEnvironmentsResponse]) error {

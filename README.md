@@ -201,22 +201,9 @@ nix develop -c make run
 
 Currently, the project contains **943 tests** utilizing table-driven tests, `testify/assert`, and Property-Based Testing (PBT) using the Hegel framework (`hegel.dev/go/hegel`).
 
-## Roadmap
+## Contributing
 
-- [x] **Provider Registry** — Pluggable provider architecture with generic `Registry[T]`
-- [x] **Environment Export** — `diverge env export` for local dev workflows
-- [x] **E2E Tests** — Dual-cluster k3d tests with Envoy Gateway
-- [x] **Prometheus Metrics** — Reconciliation, deployment, routing metrics
-- [x] **Godoc Coverage** — 80%+ documentation on exported symbols
-- [x] **GitLab/GitHub Commit Statuses** — Merge gating via `diverge/preview` commit status checks
-- [x] **Schema-per-Environment** — SQL-based schema provisioning with SchemaProvider
-- [x] **Proto Foundation** — Protobuf domain types + ConnectRPC service definition
-- [x] **Async Router** — Kafka, Temporal, and Webhook providers with KEDA auto-scaling and SDK helpers
-- [x] **Subdomain Routing** — Browser-accessible frontend preview environments via wildcard DNS
-- [x] **Slim Build** — Build tags (no_knative, no_schema, no_temporal, no_kafka) for smaller binaries
-- [x] **ConnectRPC API Server** (#12) — gRPC/ConnectRPC API server for environment management
-- [x] **WebSocket Support** (#6) — WebSocket proxy routing via Gateway API HTTPRoute with path matching and configurable timeouts
-- [x] **gRPC Routing** — Gateway API GRPCRoute generation for gRPC services (`protocol: grpc`)
+See [GitHub Issues](https://github.com/divergedev/diverge/issues) for planned features and open work.
 
 ## License
 Apache 2.0
