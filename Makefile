@@ -52,6 +52,21 @@ test: manifests generate fmt vet ## Run tests.
 test-integration: ## Run integration tests (requires running cluster)
 	go test ./internal/controller/... -tags=integration -v -count=1
 
+.PHONY: test-web
+test-web: proto-web ## Run web dashboard tests.
+	cd web && npm ci && npm run typecheck && npm test
+
+.PHONY: test-sdk-node
+test-sdk-node: ## Run Node SDK tests.
+	cd pkg/sdk/node && npm ci && npx vitest run
+
+.PHONY: test-sdk-python
+test-sdk-python: ## Run Python SDK tests.
+	cd pkg/sdk/python && uv sync --all-extras && uv run pytest tests/ -v
+
+.PHONY: test-all
+test-all: test test-web test-sdk-node test-sdk-python ## Run all test suites (Go + Web + SDKs).
+
 .PHONY: e2e-setup e2e-run e2e-teardown e2e
 
 e2e-setup: ## Create Kind cluster and install CRDs
