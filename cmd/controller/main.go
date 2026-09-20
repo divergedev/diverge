@@ -38,6 +38,7 @@ import (
 	pkgdb "github.com/divergedev/diverge/pkg/database"
 	pkgfeatures "github.com/divergedev/diverge/pkg/features"
 	"github.com/divergedev/diverge/pkg/registry"
+	pkgsandbox "github.com/divergedev/diverge/pkg/sandbox"
 )
 
 var (
@@ -288,6 +289,15 @@ func main() {
 		DatabaseProvider: dbProviderImpl,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PreviewGroup")
+		os.Exit(1)
+	}
+
+	if err = (&controller.AgentTaskReconciler{
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		SandboxRegistry: pkgsandbox.Providers,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "AgentTask")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder

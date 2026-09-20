@@ -1,0 +1,63 @@
+{{- if and .Values.sandbox.enabled .Values.sandbox.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "diverge.fullname" . }}-sandbox-isolation
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "diverge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox-isolation
+spec:
+  podSelector:
+    matchExpressions:
+      - key: divergedev.com/agent-task
+        operator: Exists
+  policyTypes:
+    - Ingress
+    - Egress
+  # Ingress is default deny for sandbox pods
+  ingress: []
+  egress:
+    # 1. Allow DNS queries
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # 2. Allow CoreDNS standard labels
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: coredns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # 3. Allow egress to diverge-server
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "diverge.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: server
+      ports:
+        - protocol: TCP
+          port: 8443
+    # 4. Allow public internet egress (HTTPS/Git/LLM APIs) while strictly blocking cloud metadata
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.169.254/32
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 22
+{{- end }}

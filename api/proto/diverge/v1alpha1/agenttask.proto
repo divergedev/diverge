@@ -1,0 +1,178 @@
+syntax = "proto3";
+
+package diverge.v1alpha1;
+
+import "diverge/v1alpha1/types.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/divergedev/diverge/api/gen/diverge/v1alpha1;divergev1alpha1";
+
+// AgentTaskPhase represents the lifecycle state of an AgentTask.
+enum AgentTaskPhase {
+  AGENT_TASK_PHASE_UNSPECIFIED = 0;
+  AGENT_TASK_PHASE_PENDING = 1;
+  AGENT_TASK_PHASE_PROVISIONING = 2;
+  AGENT_TASK_PHASE_ACTIVE = 3;
+  AGENT_TASK_PHASE_PAUSING = 4;
+  AGENT_TASK_PHASE_PAUSED = 5;
+  AGENT_TASK_PHASE_COMPLETED = 6;
+  AGENT_TASK_PHASE_FAILED = 7;
+}
+
+// AgentTaskRepository defines target VCS repository parameters.
+message AgentTaskRepository {
+  string url = 1;
+  string base_branch = 2;
+  string working_branch = 3;
+}
+
+// AgentTaskSandbox configures sandbox execution parameters.
+message AgentTaskSandbox {
+  string provider = 1;
+  string pool_ref = 2;
+  string template_ref = 3;
+  int32 timeout_seconds = 4;
+}
+
+// AgentTaskSpec defines the desired execution state of an AgentTask.
+message AgentTaskSpec {
+  string objective = 1;
+  AgentTaskRepository repository = 2;
+  AgentTaskSandbox sandbox = 3;
+  string budget_usd = 4;
+  int64 budget_tokens = 5;
+  int32 max_iterations = 6;
+  repeated string capabilities = 7;
+  bool draft_pr = 8;
+  bool suspended = 9;
+}
+
+// AgentTaskStatus defines the observed execution state of an AgentTask.
+message AgentTaskStatus {
+  AgentTaskPhase phase = 1;
+  string sandbox_claim_ref = 2;
+  string sandbox_pod_name = 3;
+  string sandbox_ip = 4;
+  int32 iteration = 5;
+  string pr_url = 6;
+  string cost_usd = 7;
+  int64 tokens_consumed = 8;
+  string message = 9;
+  int64 observed_generation = 10;
+}
+
+// AgentTask represents an autonomous developer task in Diverge.
+message AgentTask {
+  string name = 1;
+  string namespace = 2;
+  AgentTaskSpec spec = 3;
+  AgentTaskStatus status = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+// CreateTaskRequest initiates an autonomous agent task.
+message CreateTaskRequest {
+  string namespace = 1;
+  string name = 2;
+  AgentTaskSpec spec = 3;
+}
+
+// CreateTaskResponse contains the created AgentTask.
+message CreateTaskResponse {
+  AgentTask task = 1;
+}
+
+// GetTaskRequest retrieves a specific AgentTask.
+message GetTaskRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// GetTaskResponse contains the requested AgentTask.
+message GetTaskResponse {
+  AgentTask task = 1;
+}
+
+// ListTasksRequest lists tasks in a namespace.
+message ListTasksRequest {
+  string namespace = 1;
+  PaginationRequest pagination = 2;
+}
+
+// ListTasksResponse returns a paginated list of AgentTasks.
+message ListTasksResponse {
+  repeated AgentTask tasks = 1;
+  PaginationResponse pagination = 2;
+}
+
+// DeleteTaskRequest requests deletion and teardown of an AgentTask.
+message DeleteTaskRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// DeleteTaskResponse acknowledges deletion.
+message DeleteTaskResponse {}
+
+// PauseTaskRequest pauses execution of an active AgentTask.
+message PauseTaskRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// PauseTaskResponse returns the updated AgentTask.
+message PauseTaskResponse {
+  AgentTask task = 1;
+}
+
+// ResumeTaskRequest resumes execution of a paused AgentTask with optional budget bumps.
+message ResumeTaskRequest {
+  string namespace = 1;
+  string name = 2;
+  string budget_usd_bump = 3;
+  int64 budget_tokens_bump = 4;
+}
+
+// ResumeTaskResponse returns the resumed AgentTask.
+message ResumeTaskResponse {
+  AgentTask task = 1;
+}
+
+// GuideTaskRequest sends real-time steering guidance to an active AgentTask.
+message GuideTaskRequest {
+  string namespace = 1;
+  string name = 2;
+  string message = 3;
+}
+
+// GuideTaskResponse indicates whether the guidance was dispatched.
+message GuideTaskResponse {
+  bool accepted = 1;
+}
+
+// StreamTaskLogsRequest requests log streaming for an AgentTask.
+message StreamTaskLogsRequest {
+  string namespace = 1;
+  string name = 2;
+  bool follow = 3;
+  int64 tail_lines = 4;
+}
+
+// StreamTaskLogsResponse delivers chunks of task log output.
+message StreamTaskLogsResponse {
+  bytes chunk = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+// AgentTaskService exposes RPC methods for managing autonomous agent tasks.
+service AgentTaskService {
+  rpc CreateTask(CreateTaskRequest) returns (CreateTaskResponse);
+  rpc GetTask(GetTaskRequest) returns (GetTaskResponse);
+  rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);
+  rpc DeleteTask(DeleteTaskRequest) returns (DeleteTaskResponse);
+  rpc PauseTask(PauseTaskRequest) returns (PauseTaskResponse);
+  rpc ResumeTask(ResumeTaskRequest) returns (ResumeTaskResponse);
+  rpc GuideTask(GuideTaskRequest) returns (GuideTaskResponse);
+  rpc StreamTaskLogs(StreamTaskLogsRequest) returns (stream StreamTaskLogsResponse);
+}

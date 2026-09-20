@@ -1,0 +1,125 @@
+package auth
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestMacaroonMintAndVerify(t *testing.T) {
+	ctx := context.Background()
+	rootKey := []byte("0123456789abcdef0123456789abcdef")
+	provider := NewMacaroonProvider(rootKey)
+
+	claims := Claims{
+		TaskID:        "task-123",
+		RepoURL:       "https://github.com/org/repo",
+		AllowedTools:  []string{"diverge_*", "test_runner"},
+		AllowedModels: []string{"gemini-2.5-pro", "gemini-2.5-flash"},
+		MaxCostUSD:    10.00,
+		ExpiresAt:     time.Now().Add(1 * time.Hour),
+	}
+
+	tok, err := provider.Mint(ctx, claims)
+	require.NoError(t, err)
+	require.NotNil(t, tok)
+
+	raw, err := tok.Serialize()
+	require.NoError(t, err)
+
+	// Verify valid token
+	err = provider.Verify(ctx, raw, Claims{
+		TaskID:        "task-123",
+		RepoURL:       "https://github.com/org/repo",
+		AllowedTools:  []string{"diverge_create_preview"},
+		AllowedModels: []string{"gemini-2.5-flash"},
+		MaxCostUSD:    5.00,
+	})
+	assert.NoError(t, err)
+}
+
+func TestMacaroonTamperDetection(t *testing.T) {
+	ctx := context.Background()
+	rootKey := []byte("0123456789abcdef0123456789abcdef")
+	provider := NewMacaroonProvider(rootKey)
+
+	claims := Claims{
+		TaskID:    "task-456",
+		ExpiresAt: time.Now().Add(1 * time.Hour),
+	}
+
+	tok, err := provider.Mint(ctx, claims)
+	require.NoError(t, err)
+
+	mac := tok.(*Macaroon)
+	// Tamper with caveat
+	mac.CaveatSeq[0].Value = "tampered-task-id"
+	raw, err := mac.Serialize()
+	require.NoError(t, err)
+
+	err = provider.Verify(ctx, raw, Claims{TaskID: "task-456"})
+	assert.Error(t, err)
+}
+
+func TestMacaroonAttenuation(t *testing.T) {
+	ctx := context.Background()
+	rootKey := []byte("0123456789abcdef0123456789abcdef")
+	provider := NewMacaroonProvider(rootKey)
+
+	claims := Claims{
+		TaskID:       "task-789",
+		AllowedTools: []string{"diverge_*"},
+		ExpiresAt:    time.Now().Add(1 * time.Hour),
+	}
+
+	rootTok, err := provider.Mint(ctx, claims)
+	require.NoError(t, err)
+
+	// Attenuate to only read-only tools
+	attenuated, err := provider.Attenuate(ctx, rootTok, Caveat{
+		Key:   "allowed_tools",
+		Op:    OpGlob,
+		Value: "diverge_get_*,diverge_list_*",
+	})
+	require.NoError(t, err)
+
+	raw, err := attenuated.Serialize()
+	require.NoError(t, err)
+
+	// Allowed
+	err = provider.Verify(ctx, raw, Claims{
+		TaskID:       "task-789",
+		AllowedTools: []string{"diverge_get_environment"},
+	})
+	assert.NoError(t, err)
+
+	// Disallowed tool
+	err = provider.Verify(ctx, raw, Claims{
+		TaskID:       "task-789",
+		AllowedTools: []string{"diverge_delete_environment"},
+	})
+	assert.Error(t, err)
+}
+
+func TestMacaroonExpired(t *testing.T) {
+	ctx := context.Background()
+	rootKey := []byte("0123456789abcdef0123456789abcdef")
+	provider := NewMacaroonProvider(rootKey)
+
+	claims := Claims{
+		TaskID:    "task-expired",
+		ExpiresAt: time.Now().Add(-1 * time.Minute), // in the past
+	}
+
+	tok, err := provider.Mint(ctx, claims)
+	require.NoError(t, err)
+
+	raw, err := tok.Serialize()
+	require.NoError(t, err)
+
+	err = provider.Verify(ctx, raw, Claims{TaskID: "task-expired"})
+	assert.ErrorIs(t, err, ErrTokenExpired)
+}
