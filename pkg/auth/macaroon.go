@@ -81,6 +81,13 @@ func (p *MacaroonProvider) Mint(_ context.Context, claims Claims) (Token, error)
 			Value: claims.RepoURL,
 		})
 	}
+	if claims.Branch != "" {
+		caveats = append(caveats, Caveat{
+			Key:   "branch",
+			Op:    OpEqual,
+			Value: claims.Branch,
+		})
+	}
 	if !claims.ExpiresAt.IsZero() {
 		caveats = append(caveats, Caveat{
 			Key:   "expires_at",
@@ -188,14 +195,30 @@ func (p *MacaroonProvider) Verify(_ context.Context, raw []byte, required Claims
 func evaluateCaveat(c Caveat, req Claims) error {
 	switch c.Key {
 	case "task_id":
+		if c.Op != OpEqual {
+			return fmt.Errorf("%w: invalid operator %q for task_id caveat", ErrCaveatFailed, c.Op)
+		}
 		if req.TaskID == "" || req.TaskID != c.Value {
 			return fmt.Errorf("%w: task mismatch (%s != %s)", ErrCaveatFailed, req.TaskID, c.Value)
 		}
 	case "repo":
+		if c.Op != OpEqual {
+			return fmt.Errorf("%w: invalid operator %q for repo caveat", ErrCaveatFailed, c.Op)
+		}
 		if req.RepoURL == "" || req.RepoURL != c.Value {
 			return fmt.Errorf("%w: repo mismatch (%s != %s)", ErrCaveatFailed, req.RepoURL, c.Value)
 		}
+	case "branch":
+		if c.Op != OpEqual {
+			return fmt.Errorf("%w: invalid operator %q for branch caveat", ErrCaveatFailed, c.Op)
+		}
+		if req.Branch == "" || req.Branch != c.Value {
+			return fmt.Errorf("%w: branch mismatch (%s != %s)", ErrCaveatFailed, req.Branch, c.Value)
+		}
 	case "expires_at":
+		if c.Op != OpBefore {
+			return fmt.Errorf("%w: invalid operator %q for expires_at caveat", ErrCaveatFailed, c.Op)
+		}
 		unixSec, err := strconv.ParseInt(c.Value, 10, 64)
 		if err != nil {
 			return ErrMalformedToken
@@ -204,6 +227,9 @@ func evaluateCaveat(c Caveat, req Claims) error {
 			return ErrTokenExpired
 		}
 	case "allowed_tools":
+		if c.Op != OpGlob {
+			return fmt.Errorf("%w: invalid operator %q for allowed_tools caveat", ErrCaveatFailed, c.Op)
+		}
 		if len(req.AllowedTools) == 0 {
 			return fmt.Errorf("%w: token restricts allowed tools to %q but no tool was specified in request", ErrCaveatFailed, c.Value)
 		}
@@ -221,6 +247,9 @@ func evaluateCaveat(c Caveat, req Claims) error {
 			}
 		}
 	case "allowed_models":
+		if c.Op != OpIn {
+			return fmt.Errorf("%w: invalid operator %q for allowed_models caveat", ErrCaveatFailed, c.Op)
+		}
 		if len(req.AllowedModels) == 0 {
 			return fmt.Errorf("%w: token restricts allowed models to %q but no model was specified in request", ErrCaveatFailed, c.Value)
 		}
@@ -235,6 +264,9 @@ func evaluateCaveat(c Caveat, req Claims) error {
 			}
 		}
 	case "max_cost_usd":
+		if c.Op != OpLessThan {
+			return fmt.Errorf("%w: invalid operator %q for max_cost_usd caveat", ErrCaveatFailed, c.Op)
+		}
 		maxLimit, err := strconv.ParseFloat(c.Value, 64)
 		if err != nil {
 			return ErrMalformedToken
@@ -243,6 +275,9 @@ func evaluateCaveat(c Caveat, req Claims) error {
 			return fmt.Errorf("%w: cost %.2f exceeds max limit %.2f", ErrCaveatFailed, req.MaxCostUSD, maxLimit)
 		}
 	case "max_tokens":
+		if c.Op != OpLessThan {
+			return fmt.Errorf("%w: invalid operator %q for max_tokens caveat", ErrCaveatFailed, c.Op)
+		}
 		maxTokens, err := strconv.ParseInt(c.Value, 10, 64)
 		if err != nil {
 			return ErrMalformedToken
@@ -250,6 +285,8 @@ func evaluateCaveat(c Caveat, req Claims) error {
 		if req.TokensConsumed > maxTokens {
 			return fmt.Errorf("%w: tokens consumed %d exceeds max limit %d", ErrCaveatFailed, req.TokensConsumed, maxTokens)
 		}
+	default:
+		return fmt.Errorf("%w: unrecognized caveat key %q", ErrCaveatFailed, c.Key)
 	}
 	return nil
 }
