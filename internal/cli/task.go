@@ -19,6 +19,7 @@ Tasks develop code, test against on-demand Diverge preview environments, and sub
 	cmd.AddCommand(newTaskDeleteCmd(app))
 	cmd.AddCommand(newTaskPauseCmd(app))
 	cmd.AddCommand(newTaskResumeCmd(app))
+	cmd.AddCommand(newTaskGuideCmd(app))
 
 	return cmd
 }

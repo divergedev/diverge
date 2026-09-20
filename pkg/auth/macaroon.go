@@ -73,7 +73,13 @@ func (p *MacaroonProvider) Mint(_ context.Context, claims Claims) (Token, error)
 	// Embed baseline caveats from claims
 	caveats := []Caveat{
 		{Key: "task_id", Op: OpEqual, Value: claims.TaskID},
-		{Key: "repo", Op: OpEqual, Value: claims.RepoURL},
+	}
+	if claims.RepoURL != "" {
+		caveats = append(caveats, Caveat{
+			Key:   "repo",
+			Op:    OpEqual,
+			Value: claims.RepoURL,
+		})
 	}
 	if !claims.ExpiresAt.IsZero() {
 		caveats = append(caveats, Caveat{
@@ -87,6 +93,13 @@ func (p *MacaroonProvider) Mint(_ context.Context, claims Claims) (Token, error)
 			Key:   "max_cost_usd",
 			Op:    OpLessThan,
 			Value: fmt.Sprintf("%.2f", claims.MaxCostUSD),
+		})
+	}
+	if claims.MaxTokens > 0 {
+		caveats = append(caveats, Caveat{
+			Key:   "max_tokens",
+			Op:    OpLessThan,
+			Value: strconv.FormatInt(claims.MaxTokens, 10),
 		})
 	}
 	if len(claims.AllowedTools) > 0 {
@@ -105,16 +118,16 @@ func (p *MacaroonProvider) Mint(_ context.Context, claims Claims) (Token, error)
 	}
 
 	for _, c := range caveats {
-		cBytes, err := json.Marshal(c)
-		if err != nil {
-			return nil, err
-		}
-		sig = computeHMAC(sig, cBytes)
+		sig = computeHMAC(sig, serializeCaveatCanonical(c))
 		mac.CaveatSeq = append(mac.CaveatSeq, c)
 	}
 
 	mac.Signature = hex.EncodeToString(sig)
 	return mac, nil
+}
+
+func serializeCaveatCanonical(c Caveat) []byte {
+	return []byte(fmt.Sprintf("%s:%s:%s", c.Key, c.Op, c.Value))
 }
 
 // Attenuate appends additional caveats to an existing token.
@@ -137,11 +150,7 @@ func (p *MacaroonProvider) Attenuate(_ context.Context, token Token, caveats ...
 	copy(newMac.CaveatSeq, mac.CaveatSeq)
 
 	for _, c := range caveats {
-		cBytes, err := json.Marshal(c)
-		if err != nil {
-			return nil, err
-		}
-		sig = computeHMAC(sig, cBytes)
+		sig = computeHMAC(sig, serializeCaveatCanonical(c))
 		newMac.CaveatSeq = append(newMac.CaveatSeq, c)
 	}
 
@@ -160,11 +169,7 @@ func (p *MacaroonProvider) Verify(_ context.Context, raw []byte, required Claims
 	sig := computeHMAC(p.rootKey, []byte(mac.TokenID))
 
 	for _, c := range mac.CaveatSeq {
-		cBytes, err := json.Marshal(c)
-		if err != nil {
-			return err
-		}
-		sig = computeHMAC(sig, cBytes)
+		sig = computeHMAC(sig, serializeCaveatCanonical(c))
 
 		// Evaluate caveat
 		if err := evaluateCaveat(c, required); err != nil {
@@ -183,11 +188,11 @@ func (p *MacaroonProvider) Verify(_ context.Context, raw []byte, required Claims
 func evaluateCaveat(c Caveat, req Claims) error {
 	switch c.Key {
 	case "task_id":
-		if req.TaskID != "" && req.TaskID != c.Value {
+		if req.TaskID == "" || req.TaskID != c.Value {
 			return fmt.Errorf("%w: task mismatch (%s != %s)", ErrCaveatFailed, req.TaskID, c.Value)
 		}
 	case "repo":
-		if req.RepoURL != "" && req.RepoURL != c.Value {
+		if req.RepoURL == "" || req.RepoURL != c.Value {
 			return fmt.Errorf("%w: repo mismatch (%s != %s)", ErrCaveatFailed, req.RepoURL, c.Value)
 		}
 	case "expires_at":
@@ -199,32 +204,34 @@ func evaluateCaveat(c Caveat, req Claims) error {
 			return ErrTokenExpired
 		}
 	case "allowed_tools":
-		if len(req.AllowedTools) > 0 {
-			patterns := strings.Split(c.Value, ",")
-			for _, tool := range req.AllowedTools {
-				matched := false
-				for _, pat := range patterns {
-					if ok, _ := filepath.Match(pat, tool); ok {
-						matched = true
-						break
-					}
+		if len(req.AllowedTools) == 0 {
+			return fmt.Errorf("%w: token restricts allowed tools to %q but no tool was specified in request", ErrCaveatFailed, c.Value)
+		}
+		patterns := strings.Split(c.Value, ",")
+		for _, tool := range req.AllowedTools {
+			matched := false
+			for _, pat := range patterns {
+				if ok, _ := filepath.Match(pat, tool); ok {
+					matched = true
+					break
 				}
-				if !matched {
-					return fmt.Errorf("%w: tool %q not allowed by pattern %q", ErrCaveatFailed, tool, c.Value)
-				}
+			}
+			if !matched {
+				return fmt.Errorf("%w: tool %q not allowed by pattern %q", ErrCaveatFailed, tool, c.Value)
 			}
 		}
 	case "allowed_models":
-		if len(req.AllowedModels) > 0 {
-			allowedList := strings.Split(c.Value, ",")
-			allowedMap := make(map[string]bool)
-			for _, m := range allowedList {
-				allowedMap[m] = true
-			}
-			for _, model := range req.AllowedModels {
-				if !allowedMap[model] {
-					return fmt.Errorf("%w: model %q not in allowed models %v", ErrCaveatFailed, model, allowedList)
-				}
+		if len(req.AllowedModels) == 0 {
+			return fmt.Errorf("%w: token restricts allowed models to %q but no model was specified in request", ErrCaveatFailed, c.Value)
+		}
+		allowedList := strings.Split(c.Value, ",")
+		allowedMap := make(map[string]bool)
+		for _, m := range allowedList {
+			allowedMap[m] = true
+		}
+		for _, model := range req.AllowedModels {
+			if !allowedMap[model] {
+				return fmt.Errorf("%w: model %q not in allowed models %v", ErrCaveatFailed, model, allowedList)
 			}
 		}
 	case "max_cost_usd":
@@ -234,6 +241,14 @@ func evaluateCaveat(c Caveat, req Claims) error {
 		}
 		if req.MaxCostUSD > maxLimit {
 			return fmt.Errorf("%w: cost %.2f exceeds max limit %.2f", ErrCaveatFailed, req.MaxCostUSD, maxLimit)
+		}
+	case "max_tokens":
+		maxTokens, err := strconv.ParseInt(c.Value, 10, 64)
+		if err != nil {
+			return ErrMalformedToken
+		}
+		if req.TokensConsumed > maxTokens {
+			return fmt.Errorf("%w: tokens consumed %d exceeds max limit %d", ErrCaveatFailed, req.TokensConsumed, maxTokens)
 		}
 	}
 	return nil

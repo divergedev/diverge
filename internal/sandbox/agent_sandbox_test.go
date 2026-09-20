@@ -100,3 +100,51 @@ func TestAgentSandboxProvider(t *testing.T) {
 	err = p.Teardown(ctx, task)
 	assert.NoError(t, err)
 }
+
+func TestBuildSandboxClaimSpec(t *testing.T) {
+	// 1. WarmPoolRef
+	taskPool := &v1alpha1.AgentTask{
+		Spec: v1alpha1.AgentTaskSpec{
+			Sandbox: v1alpha1.AgentTaskSandbox{
+				PoolRef: "prewarmed-dev",
+			},
+		},
+	}
+	specPool := BuildSandboxClaimSpec(taskPool)
+	assert.Equal(t, map[string]interface{}{"name": "prewarmed-dev"}, specPool["warmPoolRef"])
+
+	// 2. TemplateRef
+	taskTmpl := &v1alpha1.AgentTask{
+		Spec: v1alpha1.AgentTaskSpec{
+			Sandbox: v1alpha1.AgentTaskSandbox{
+				TemplateRef: "heavy-compute",
+			},
+		},
+	}
+	specTmpl := BuildSandboxClaimSpec(taskTmpl)
+	assert.Equal(t, map[string]interface{}{"name": "heavy-compute"}, specTmpl["templateRef"])
+
+	// 3. Fallback default template with resource limits (Findings 4.1 & 9.1)
+	taskDefault := &v1alpha1.AgentTask{
+		Spec: v1alpha1.AgentTaskSpec{},
+	}
+	specDefault := BuildSandboxClaimSpec(taskDefault)
+	assert.Nil(t, specDefault["warmPoolRef"])
+	assert.Nil(t, specDefault["templateRef"])
+
+	tmpl, ok := specDefault["template"].(map[string]interface{})
+	require.True(t, ok)
+	tmplSpec, ok := tmpl["spec"].(map[string]interface{})
+	require.True(t, ok)
+	containers, ok := tmplSpec["containers"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, containers, 1)
+
+	container := containers[0].(map[string]interface{})
+	assert.Equal(t, "agent", container["name"])
+	assert.Equal(t, DefaultAgentImage, container["image"])
+	res, ok := container["resources"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, map[string]interface{}{"cpu": "500m", "memory": "512Mi"}, res["requests"])
+	assert.Equal(t, map[string]interface{}{"cpu": "2", "memory": "2Gi"}, res["limits"])
+}

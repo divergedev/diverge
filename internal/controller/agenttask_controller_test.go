@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -19,19 +20,26 @@ import (
 	pkgsandbox "github.com/divergedev/diverge/pkg/sandbox"
 )
 
+type mockToken struct{}
+
+func (m *mockToken) ID() string                 { return "test-id" }
+func (m *mockToken) Serialize() ([]byte, error) { return []byte("dummy-token"), nil }
+func (m *mockToken) Caveats() []auth.Caveat     { return nil }
+
 type mockTokenMinter struct {
 	minted bool
 }
 
 func (m *mockTokenMinter) Mint(_ context.Context, _ auth.Claims) (auth.Token, error) {
 	m.minted = true
-	return nil, nil
+	return &mockToken{}, nil
 }
 
 func TestAgentTaskReconcilerLifecycle(t *testing.T) {
 	ctx := context.Background()
 	scheme := runtime.NewScheme()
 	_ = v1alpha1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
 
 	task := &v1alpha1.AgentTask{
 		ObjectMeta: metav1.ObjectMeta{
@@ -84,6 +92,11 @@ func TestAgentTaskReconcilerLifecycle(t *testing.T) {
 	assert.Equal(t, v1alpha1.AgentTaskPhaseActive, updatedTask.Status.Phase)
 	assert.Equal(t, "noop-claim-task-test-1", updatedTask.Status.SandboxClaimRef)
 	assert.Equal(t, "noop-pod-task-test-1", updatedTask.Status.SandboxPodName)
+
+	secret := &corev1.Secret{}
+	err = fakeClient.Get(ctx, types.NamespacedName{Namespace: "default", Name: "task-test-1-token"}, secret)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("dummy-token"), secret.Data["token"])
 
 	// Step 3: Suspended spec pauses execution
 	updatedTask.Spec.Suspended = true

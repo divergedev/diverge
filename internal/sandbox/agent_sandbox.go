@@ -55,23 +55,7 @@ func (p *AgentSandboxProvider) Provision(ctx context.Context, task *v1alpha1.Age
 	claim.SetName(claimName)
 	claim.SetNamespace(task.Namespace)
 
-	spec := map[string]interface{}{}
-	if task.Spec.Sandbox.PoolRef != "" {
-		spec["warmPoolRef"] = map[string]interface{}{
-			"name": task.Spec.Sandbox.PoolRef,
-		}
-	} else if task.Spec.Sandbox.TemplateRef != "" {
-		spec["templateRef"] = map[string]interface{}{
-			"name": task.Spec.Sandbox.TemplateRef,
-		}
-	} else {
-		// Default warm pool reference
-		spec["warmPoolRef"] = map[string]interface{}{
-			"name": "default-pool",
-		}
-	}
-
-	claim.Object["spec"] = spec
+	claim.Object["spec"] = BuildSandboxClaimSpec(task)
 	claim.SetLabels(map[string]string{
 		"divergedev.com/agent-task":    task.Name,
 		"app.kubernetes.io/managed-by": "diverge",
@@ -204,6 +188,70 @@ func (p *AgentSandboxProvider) StreamLogs(ctx context.Context, task *v1alpha1.Ag
 		podLogOpts.TailLines = opts.TailLines
 	}
 
+	streamCtx, cancel := context.WithCancel(ctx)
 	req := p.clientset.CoreV1().Pods(task.Namespace).GetLogs(status.PodName, podLogOpts)
-	return req.Stream(ctx)
+	stream, err := req.Stream(streamCtx)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	return &cancelableReadCloser{ReadCloser: stream, cancel: cancel}, nil
+}
+
+type cancelableReadCloser struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c *cancelableReadCloser) Close() error {
+	if c.cancel != nil {
+		c.cancel()
+	}
+	return c.ReadCloser.Close()
+}
+
+// DefaultAgentImage is the fallback container image for autonomous agent sandboxes.
+const DefaultAgentImage = "ghcr.io/divergedev/diverge-agent:latest"
+
+// DefaultResourceBounds specifies conservative CPU and memory bounds for sandbox workloads.
+var DefaultResourceBounds = map[string]interface{}{
+	"requests": map[string]interface{}{
+		"cpu":    "500m",
+		"memory": "512Mi",
+	},
+	"limits": map[string]interface{}{
+		"cpu":    "2",
+		"memory": "2Gi",
+	},
+}
+
+// BuildSandboxClaimSpec constructs a modular SandboxClaim spec according to task configurations.
+func BuildSandboxClaimSpec(task *v1alpha1.AgentTask) map[string]interface{} {
+	spec := map[string]interface{}{}
+	if task.Spec.Sandbox.PoolRef != "" {
+		spec["warmPoolRef"] = map[string]interface{}{
+			"name": task.Spec.Sandbox.PoolRef,
+		}
+		return spec
+	}
+	if task.Spec.Sandbox.TemplateRef != "" {
+		spec["templateRef"] = map[string]interface{}{
+			"name": task.Spec.Sandbox.TemplateRef,
+		}
+		return spec
+	}
+
+	// Standalone pod template fallback with explicit resource bounds
+	spec["template"] = map[string]interface{}{
+		"spec": map[string]interface{}{
+			"containers": []interface{}{
+				map[string]interface{}{
+					"name":      "agent",
+					"image":     DefaultAgentImage,
+					"resources": DefaultResourceBounds,
+				},
+			},
+		},
+	}
+	return spec
 }

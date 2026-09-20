@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/git"
 )
 
 func newTaskCreateCmd(app *App) *cobra.Command {
@@ -43,7 +44,7 @@ environments, and opens a draft PR.`,
 	}
 
 	cmd.Flags().StringVar(&name, "name", "", "explicit name for the task (auto-generated if empty)")
-	cmd.Flags().StringVar(&repoURL, "repo", "", "Git repository clone URL (required)")
+	cmd.Flags().StringVar(&repoURL, "repo", "", "Git repository clone URL (auto-detected from git remote if omitted)")
 	cmd.Flags().StringVar(&baseBranch, "base-branch", "main", "base branch for work and PR")
 	cmd.Flags().StringVar(&poolRef, "pool", "", "SandboxWarmPool name")
 	cmd.Flags().StringVar(&templateRef, "template", "", "SandboxTemplate name")
@@ -53,12 +54,18 @@ environments, and opens a draft PR.`,
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print AgentTask specification without creating")
 	cmd.Flags().StringVarP(&output, "output", "o", "text", "output format (text, yaml, json)")
 
-	_ = cmd.MarkFlagRequired("repo")
-
 	return cmd
 }
 
 func runTaskCreate(ctx context.Context, app *App, objective, name, repoURL, baseBranch, poolRef, templateRef, budgetUSD string, maxIter int32, capabilities []string, dryRun bool, output string) error {
+	if repoURL == "" {
+		if gitCtx, err := git.Detect(); err == nil && gitCtx != nil && gitCtx.RemoteURL != "" {
+			repoURL = gitCtx.RemoteURL
+		} else {
+			return fmt.Errorf("git repository URL is required: specify --repo or run inside a git repository clone")
+		}
+	}
+
 	if err := app.ResolveNamespace(); err != nil {
 		return err
 	}

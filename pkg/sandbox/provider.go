@@ -52,5 +52,19 @@ type SandboxProvider interface {
 	StreamLogs(ctx context.Context, task *v1alpha1.AgentTask, opts LogOptions) (io.ReadCloser, error)
 }
 
+// ExecOptions specifies execution parameters inside an active sandbox container.
+type ExecOptions struct {
+	Command []string
+	Stdin   io.Reader
+	Stdout  io.Writer
+	Stderr  io.Writer
+}
+
+// SandboxExecutor is an optional interface implemented by providers that support
+// running commands or diagnostic probes directly inside an active sandbox.
+type SandboxExecutor interface {
+	Exec(ctx context.Context, task *v1alpha1.AgentTask, opts ExecOptions) (exitCode int, err error)
+}
+
 // Providers is the global registry of available SandboxProvider implementations.
 var Providers = registry.New[SandboxProvider]("sandbox")

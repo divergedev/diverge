@@ -123,3 +123,72 @@ func TestMacaroonExpired(t *testing.T) {
 	err = provider.Verify(ctx, raw, Claims{TaskID: "task-expired"})
 	assert.ErrorIs(t, err, ErrTokenExpired)
 }
+
+func TestMacaroonFailClosed(t *testing.T) {
+	ctx := context.Background()
+	rootKey := []byte("0123456789abcdef0123456789abcdef")
+	provider := NewMacaroonProvider(rootKey)
+
+	claims := Claims{
+		TaskID:        "task-fail-closed",
+		RepoURL:       "https://github.com/org/repo",
+		AllowedTools:  []string{"diverge_get_*"},
+		AllowedModels: []string{"gemini-2.5-flash"},
+	}
+
+	tok, err := provider.Mint(ctx, claims)
+	require.NoError(t, err)
+
+	raw, err := tok.Serialize()
+	require.NoError(t, err)
+
+	// Fails if request claims are missing required allowed_tools
+	err = provider.Verify(ctx, raw, Claims{
+		TaskID:        "task-fail-closed",
+		RepoURL:       "https://github.com/org/repo",
+		AllowedModels: []string{"gemini-2.5-flash"},
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no tool was specified")
+
+	// Fails if request claims are missing required allowed_models
+	err = provider.Verify(ctx, raw, Claims{
+		TaskID:       "task-fail-closed",
+		RepoURL:      "https://github.com/org/repo",
+		AllowedTools: []string{"diverge_get_environment"},
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no model was specified")
+}
+
+func TestMacaroonTokenLimits(t *testing.T) {
+	ctx := context.Background()
+	rootKey := []byte("0123456789abcdef0123456789abcdef")
+	provider := NewMacaroonProvider(rootKey)
+
+	claims := Claims{
+		TaskID:    "task-tokens",
+		MaxTokens: 500000,
+	}
+
+	tok, err := provider.Mint(ctx, claims)
+	require.NoError(t, err)
+
+	raw, err := tok.Serialize()
+	require.NoError(t, err)
+
+	// Under budget passes
+	err = provider.Verify(ctx, raw, Claims{
+		TaskID:         "task-tokens",
+		TokensConsumed: 250000,
+	})
+	assert.NoError(t, err)
+
+	// Over budget fails
+	err = provider.Verify(ctx, raw, Claims{
+		TaskID:         "task-tokens",
+		TokensConsumed: 550000,
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds max limit")
+}

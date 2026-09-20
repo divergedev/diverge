@@ -25,13 +25,15 @@ type Caveat struct {
 
 // Claims encapsulates the authorized attributes of an AgentTask token.
 type Claims struct {
-	TaskID        string    `json:"task_id"`
-	RepoURL       string    `json:"repo_url"`
-	Branch        string    `json:"branch"`
-	AllowedTools  []string  `json:"allowed_tools,omitempty"`
-	AllowedModels []string  `json:"allowed_models,omitempty"`
-	MaxCostUSD    float64   `json:"max_cost_usd,omitempty"`
-	ExpiresAt     time.Time `json:"expires_at"`
+	TaskID         string    `json:"task_id"`
+	RepoURL        string    `json:"repo_url"`
+	Branch         string    `json:"branch"`
+	AllowedTools   []string  `json:"allowed_tools,omitempty"`
+	AllowedModels  []string  `json:"allowed_models,omitempty"`
+	MaxCostUSD     float64   `json:"max_cost_usd,omitempty"`
+	MaxTokens      int64     `json:"max_tokens,omitempty"`
+	TokensConsumed int64     `json:"tokens_consumed,omitempty"`
+	ExpiresAt      time.Time `json:"expires_at"`
 }
 
 // Token represents a cryptographic credential that can be serialized and attenuated.
@@ -54,4 +56,11 @@ type Attenuator interface {
 // Verifier checks token validity, signature chain, and required caveats.
 type Verifier interface {
 	Verify(ctx context.Context, raw []byte, required Claims) error
+}
+
+// Provider combines token issuance, attenuation, and verification capabilities.
+type Provider interface {
+	Minter
+	Attenuator
+	Verifier
 }

@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -72,6 +74,7 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		if err := r.Update(ctx, task); err != nil {
 			return ctrl.Result{}, err
 		}
+		return ctrl.Result{}, nil
 	}
 
 	// 3. Handle Suspended State
@@ -100,7 +103,7 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	case "", v1alpha1.AgentTaskPhasePending:
 		logger.Info("Provisioning sandbox for AgentTask", "task", task.Name)
 
-		// Mint token if minter configured
+		// Mint capability token and persist to Secret if minter configured
 		if r.TokenMinter != nil {
 			timeoutSec := task.Spec.Sandbox.TimeoutSeconds
 			if timeoutSec <= 0 {
@@ -112,10 +115,44 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 				Branch:        task.Spec.Repository.BaseBranch,
 				AllowedTools:  []string{"diverge_*"},
 				AllowedModels: task.Spec.Capabilities,
+				MaxTokens:     task.Spec.BudgetTokens,
 				ExpiresAt:     time.Now().Add(time.Duration(timeoutSec) * time.Second),
 			}
-			if _, err := r.TokenMinter.Mint(ctx, claims); err != nil {
+			if task.Spec.BudgetUSD != "" {
+				var cost float64
+				if _, err := fmt.Sscanf(task.Spec.BudgetUSD, "%f", &cost); err == nil {
+					claims.MaxCostUSD = cost
+				}
+			}
+
+			tok, err := r.TokenMinter.Mint(ctx, claims)
+			if err != nil {
 				logger.Error(err, "Failed to mint task token")
+			} else {
+				tokBytes, err := tok.Serialize()
+				if err != nil {
+					logger.Error(err, "Failed to serialize task token")
+				} else {
+					secret := &corev1.Secret{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      fmt.Sprintf("%s-token", task.Name),
+							Namespace: task.Namespace,
+							Labels: map[string]string{
+								"divergedev.com/agent-task":    task.Name,
+								"app.kubernetes.io/managed-by": "diverge",
+							},
+						},
+						Data: map[string][]byte{
+							"token": tokBytes,
+						},
+					}
+					if r.Scheme != nil {
+						_ = controllerutil.SetControllerReference(task, secret, r.Scheme)
+					}
+					if err := r.Create(ctx, secret); err != nil && !apierrors.IsAlreadyExists(err) {
+						logger.Error(err, "Failed to persist task token Secret")
+					}
+				}
 			}
 		}
 

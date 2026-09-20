@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
@@ -85,4 +86,43 @@ func TestTaskCreateExecution(t *testing.T) {
 		"text",
 	)
 	require.NoError(t, err)
+}
+
+func TestTaskCreateAutoDetectRepo(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = v1alpha1.AddToScheme(scheme)
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1alpha1.AgentTask{}).
+		Build()
+
+	app := &App{
+		Namespace: "default",
+		Client:    fakeClient,
+	}
+
+	// In current git working tree, git remote origin exists (divergedev/diverge)
+	// Testing with empty repoURL should auto-detect from the current repo
+	err := runTaskCreate(
+		context.Background(),
+		app,
+		"Add automated test runner",
+		"task-autodetect",
+		"", // empty repo to trigger detection
+		"main",
+		"",
+		"",
+		"5.00",
+		3,
+		[]string{"fast"},
+		false,
+		"text",
+	)
+	require.NoError(t, err)
+
+	task := &v1alpha1.AgentTask{}
+	err = fakeClient.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "task-autodetect"}, task)
+	require.NoError(t, err)
+	assert.NotEmpty(t, task.Spec.Repository.URL)
 }

@@ -59,3 +59,42 @@ func TestTaskPauseAndResumeCmd(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, updated.Spec.Suspended)
 }
+
+func TestTaskResumeWithBudgetBump(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = v1alpha1.AddToScheme(scheme)
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-task-resume-bump",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective:    "Refactor auth",
+			Suspended:    true,
+			BudgetUSD:    "5.00",
+			BudgetTokens: 500000,
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(task).
+		WithStatusSubresource(&v1alpha1.AgentTask{}).
+		Build()
+
+	app := &App{
+		Namespace: "default",
+		Client:    fakeClient,
+	}
+
+	err := runTaskResume(context.Background(), app, "test-task-resume-bump", "15.00", 1500000)
+	require.NoError(t, err)
+
+	updated := &v1alpha1.AgentTask{}
+	err = fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "test-task-resume-bump"}, updated)
+	require.NoError(t, err)
+	assert.False(t, updated.Spec.Suspended)
+	assert.Equal(t, "15.00", updated.Spec.BudgetUSD)
+	assert.Equal(t, int64(1500000), updated.Spec.BudgetTokens)
+}
