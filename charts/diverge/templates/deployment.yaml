@@ -43,7 +43,12 @@ spec:
         {{- else if .Values.notifier }}
         - --notifier-provider={{ .Values.notifier.provider | default "noop" }}
         {{- end }}
+        {{- if .Values.sandbox }}
+        - --enable-agent-sandbox={{ .Values.sandbox.enabled }}
+        - --sandbox-provider={{ .Values.sandbox.provider | default "agent-sandbox" }}
+        {{- end }}
         command:
+
         - /diverge-controller
         image: {{ include "diverge.image" . | quote }}
         name: diverge-controller

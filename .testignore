@@ -5,9 +5,12 @@
 # --- Type-only / interface files (no logic to test) ---
 internal/argocd/types.go
 internal/events/recorder.go
+pkg/auth/auth.go
+pkg/auth/models.go
 pkg/database/provider.go
 pkg/database/registry.go
 pkg/features/provider.go
+pkg/sandbox/provider.go
 
 # --- Provider registration glue (auto-registration via init(), no logic) ---
 internal/async/kafka_register.go
@@ -30,6 +33,8 @@ internal/routing/gateway_register.go
 internal/routing/istio_register.go
 internal/routing/noop_register.go
 internal/routing/providers.go
+internal/sandbox/agent_sandbox_register.go
+internal/sandbox/noop_register.go
 internal/testing/github_register.go
 internal/testing/gitlab_register.go
 internal/testing/noop_register.go
@@ -41,6 +46,7 @@ internal/deployer/noop.go
 internal/notifier/noop.go
 internal/notifier/noop_status.go
 internal/routing/noop.go
+internal/sandbox/noop.go
 internal/testing/noop.go
 
 # --- Embed / generated / platform-specific ---

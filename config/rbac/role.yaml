@@ -21,6 +21,14 @@ rules:
   - update
   - watch
 - apiGroups:
+  - agents.x-k8s.io
+  resources:
+  - sandboxes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - apps
   resources:
   - deployments
@@ -78,6 +86,7 @@ rules:
 - apiGroups:
   - divergedev.com
   resources:
+  - agenttasks
   - environments
   - previewgroups
   verbs:
@@ -91,6 +100,7 @@ rules:
 - apiGroups:
   - divergedev.com
   resources:
+  - agenttasks/finalizers
   - environments/finalizers
   - previewgroups/finalizers
   verbs:
@@ -98,12 +108,25 @@ rules:
 - apiGroups:
   - divergedev.com
   resources:
+  - agenttasks/status
   - environments/status
   - previewgroups/status
   verbs:
   - get
   - patch
   - update
+- apiGroups:
+  - extensions.agents.x-k8s.io
+  resources:
+  - sandboxclaims
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
 - apiGroups:
   - gateway.networking.k8s.io
   resources:
