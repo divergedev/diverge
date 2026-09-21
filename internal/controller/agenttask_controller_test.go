@@ -35,6 +35,36 @@ func (m *mockTokenMinter) Mint(_ context.Context, _ auth.Claims) (auth.Token, er
 	return &mockToken{}, nil
 }
 
+type trackingTaskNotifier struct {
+	transitions []string
+}
+
+func (n *trackingTaskNotifier) NotifyPhaseChange(_ context.Context, _ *v1alpha1.AgentTask, oldPhase, newPhase v1alpha1.AgentTaskPhase) error {
+	n.transitions = append(n.transitions, string(oldPhase)+"->"+string(newPhase))
+	return nil
+}
+
+type trackingLifecycleHook struct {
+	preProvision  bool
+	postProvision bool
+	preTeardown   bool
+}
+
+func (h *trackingLifecycleHook) PreProvision(_ context.Context, _ *v1alpha1.AgentTask) error {
+	h.preProvision = true
+	return nil
+}
+
+func (h *trackingLifecycleHook) PostProvision(_ context.Context, _ *v1alpha1.AgentTask, _ *pkgsandbox.SandboxResult) error {
+	h.postProvision = true
+	return nil
+}
+
+func (h *trackingLifecycleHook) PreTeardown(_ context.Context, _ *v1alpha1.AgentTask) error {
+	h.preTeardown = true
+	return nil
+}
+
 func TestAgentTaskReconcilerLifecycle(t *testing.T) {
 	ctx := context.Background()
 	scheme := runtime.NewScheme()
@@ -120,4 +150,88 @@ func TestAgentTaskReconcilerLifecycle(t *testing.T) {
 
 	err = fakeClient.Get(ctx, req.NamespacedName, updatedTask)
 	assert.True(t, apierrors.IsNotFound(err))
+}
+
+func TestAgentTaskReconcilerWithDecoupledInterfaces(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	_ = v1alpha1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "task-decoupled",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective: "Test decoupled interfaces",
+			Sandbox: v1alpha1.AgentTaskSandbox{
+				Provider: "noop",
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(task).
+		WithStatusSubresource(&v1alpha1.AgentTask{}).
+		Build()
+
+	minter := &mockTokenMinter{}
+	memStore := auth.NewInMemoryTokenStore()
+	notifier := &trackingTaskNotifier{}
+	hooks := &trackingLifecycleHook{}
+
+	reconciler := &AgentTaskReconciler{
+		Client:          fakeClient,
+		Scheme:          scheme,
+		SandboxRegistry: pkgsandbox.Providers,
+		TokenMinter:     minter,
+		TokenStore:      memStore,
+		Notifier:        notifier,
+		LifecycleHook:   hooks,
+		FeatureGate:     &StaticFeatureGate{Enabled: true},
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "task-decoupled"}}
+
+	// 1. Add finalizer
+	_, err := reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+
+	// 2. Provision with hooks & in-memory token store
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+
+	assert.True(t, hooks.preProvision)
+	assert.True(t, hooks.postProvision)
+
+	// Check token stored in in-memory store rather than k8s secret
+	tok, err := memStore.GetToken(ctx, "task-decoupled", "default")
+	require.NoError(t, err)
+	assert.Equal(t, []byte("dummy-token"), tok)
+
+	assert.Contains(t, notifier.transitions, "->Active")
+
+	// 3. Dynamic Feature Gate Check: disable feature gate
+	reconciler.FeatureGate = &StaticFeatureGate{Enabled: false}
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+
+	updatedTask := &v1alpha1.AgentTask{}
+	err = fakeClient.Get(ctx, req.NamespacedName, updatedTask)
+	require.NoError(t, err)
+	assert.Equal(t, v1alpha1.AgentTaskPhasePaused, updatedTask.Status.Phase)
+	assert.Contains(t, updatedTask.Status.Message, "feature gate 'agent_sandbox' is disabled")
+
+	// 4. Teardown triggers PreTeardown hook and deletes token from store
+	err = fakeClient.Delete(ctx, updatedTask)
+	require.NoError(t, err)
+
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+
+	assert.True(t, hooks.preTeardown)
+	_, err = memStore.GetToken(ctx, "task-decoupled", "default")
+	assert.ErrorIs(t, err, auth.ErrTokenNotFound)
 }

@@ -76,6 +76,10 @@ func NewServeMux(cfg ServeMuxConfig) (*http.ServeMux, *TunnelManager) {
 	// NOTE: Tunnel proxy handler is on a SEPARATE port (8081), not this mux.
 	// See NewTunnelProxyServer() for the dedicated proxy listener.
 
+	taskService := NewAgentTaskService(cfg.Client, cfg.K8sClient, cfg.LogStreamer, cfg.StreamLimiter, cfg.Logger, cfg.AuditLogger)
+	taskPath, taskHandler := divergev1alpha1connect.NewAgentTaskServiceHandler(taskService, interceptors)
+	mux.Handle(taskPath, taskHandler)
+
 	// Serve the embedded web dashboard at root when enabled.
 	// Go 1.22+ ServeMux uses most-specific-match routing, so the ConnectRPC
 	// service paths (e.g., /diverge.v1alpha1.EnvironmentService/) registered

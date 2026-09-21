@@ -147,4 +147,14 @@ func TestBuildSandboxClaimSpec(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, map[string]interface{}{"cpu": "500m", "memory": "512Mi"}, res["requests"])
 	assert.Equal(t, map[string]interface{}{"cpu": "2", "memory": "2Gi"}, res["limits"])
+
+	// Assert securityContext & volumes
+	secCtx, ok := tmplSpec["securityContext"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, true, secCtx["runAsNonRoot"])
+	assert.Equal(t, int64(10001), secCtx["runAsUser"])
+
+	volumes, ok := tmplSpec["volumes"].([]interface{})
+	require.True(t, ok)
+	assert.Len(t, volumes, 2)
 }

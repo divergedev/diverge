@@ -7,9 +7,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	"github.com/divergedev/diverge/api/v1alpha1"
 )
 
 func newTaskPauseCmd(app *App) *cobra.Command {
@@ -54,24 +51,17 @@ func runTaskResume(ctx context.Context, app *App, name, budgetUSD string, tokens
 		return fmt.Errorf("create kube client: %w", err)
 	}
 
-	task := &v1alpha1.AgentTask{}
-	if err := c.Get(ctx, client.ObjectKey{Namespace: app.Namespace, Name: name}, task); err != nil {
-		return fmt.Errorf("get AgentTask %s: %w", name, err)
+	taskClient := NewKubeTaskClient(c)
+	if err := taskClient.Resume(ctx, app.Namespace, name, budgetUSD, tokens); err != nil {
+		return err
 	}
 
-	task.Spec.Suspended = false
 	var bumped []string
 	if budgetUSD != "" {
-		task.Spec.BudgetUSD = budgetUSD
 		bumped = append(bumped, fmt.Sprintf("budget: $%s", budgetUSD))
 	}
 	if tokens > 0 {
-		task.Spec.BudgetTokens = tokens
 		bumped = append(bumped, fmt.Sprintf("tokens: %d", tokens))
-	}
-
-	if err := c.Update(ctx, task); err != nil {
-		return fmt.Errorf("update AgentTask %s: %w", name, err)
 	}
 
 	if len(bumped) > 0 {
@@ -92,14 +82,15 @@ func runTaskSetSuspended(ctx context.Context, app *App, name string, suspended b
 		return fmt.Errorf("create kube client: %w", err)
 	}
 
-	task := &v1alpha1.AgentTask{}
-	if err := c.Get(ctx, client.ObjectKey{Namespace: app.Namespace, Name: name}, task); err != nil {
-		return fmt.Errorf("get AgentTask %s: %w", name, err)
-	}
-
-	task.Spec.Suspended = suspended
-	if err := c.Update(ctx, task); err != nil {
-		return fmt.Errorf("update AgentTask %s: %w", name, err)
+	taskClient := NewKubeTaskClient(c)
+	if suspended {
+		if err := taskClient.Pause(ctx, app.Namespace, name); err != nil {
+			return err
+		}
+	} else {
+		if err := taskClient.Resume(ctx, app.Namespace, name, "", 0); err != nil {
+			return err
+		}
 	}
 
 	state := "resumed"

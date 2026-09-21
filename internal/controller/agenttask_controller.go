@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -22,12 +20,52 @@ import (
 
 const agentTaskFinalizer = "divergedev.com/agenttask-finalizer"
 
+// TaskNotifier notifies external observers when an AgentTask changes phases.
+type TaskNotifier interface {
+	NotifyPhaseChange(ctx context.Context, task *v1alpha1.AgentTask, oldPhase, newPhase v1alpha1.AgentTaskPhase) error
+}
+
+// NoopTaskNotifier is a default no-op implementation of TaskNotifier.
+type NoopTaskNotifier struct{}
+
+// NotifyPhaseChange does nothing.
+func (n *NoopTaskNotifier) NotifyPhaseChange(_ context.Context, _ *v1alpha1.AgentTask, _, _ v1alpha1.AgentTaskPhase) error {
+	return nil
+}
+
+// SandboxLifecycleHook allows executing custom logic before/after provisioning and before teardown.
+type SandboxLifecycleHook interface {
+	PreProvision(ctx context.Context, task *v1alpha1.AgentTask) error
+	PostProvision(ctx context.Context, task *v1alpha1.AgentTask, res *pkgsandbox.SandboxResult) error
+	PreTeardown(ctx context.Context, task *v1alpha1.AgentTask) error
+}
+
+// FeatureGate provides dynamic feature enablement queries.
+type FeatureGate interface {
+	IsEnabled(ctx context.Context, feature string) bool
+}
+
+// StaticFeatureGate is a static implementation of FeatureGate.
+type StaticFeatureGate struct {
+	Enabled bool
+}
+
+// IsEnabled returns the configured static enablement state.
+func (g *StaticFeatureGate) IsEnabled(_ context.Context, _ string) bool {
+	return g.Enabled
+}
+
 // AgentTaskReconciler reconciles an AgentTask object.
 type AgentTaskReconciler struct {
 	client.Client
 	Scheme          *runtime.Scheme
 	SandboxRegistry *registry.Registry[pkgsandbox.SandboxProvider]
 	TokenMinter     auth.Minter
+	TokenStore      auth.TokenStore
+	TokenAuditor    auth.TokenAuditor
+	Notifier        TaskNotifier
+	LifecycleHook   SandboxLifecycleHook
+	FeatureGate     FeatureGate
 }
 
 // +kubebuilder:rbac:groups=divergedev.com,resources=agenttasks,verbs=get;list;watch;create;update;patch;delete
@@ -35,6 +73,7 @@ type AgentTaskReconciler struct {
 // +kubebuilder:rbac:groups=divergedev.com,resources=agenttasks/finalizers,verbs=update
 // +kubebuilder:rbac:groups=extensions.agents.x-k8s.io,resources=sandboxclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=agents.x-k8s.io,resources=sandboxes,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile manages the AgentTask lifecycle.
 func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -52,12 +91,32 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if !task.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(task, agentTaskFinalizer) {
 			logger.Info("Tearing down AgentTask sandbox", "task", task.Name)
+			if r.LifecycleHook != nil {
+				if err := r.LifecycleHook.PreTeardown(ctx, task); err != nil {
+					logger.Error(err, "PreTeardown lifecycle hook failed")
+				}
+			}
+
 			provider, err := r.resolveSandboxProvider(task)
 			if err == nil && provider != nil {
 				if err := provider.Teardown(ctx, task); err != nil {
 					logger.Error(err, "Failed to teardown sandbox")
 					return ctrl.Result{RequeueAfter: 5 * time.Second}, err
 				}
+			}
+
+			store := r.resolveTokenStore()
+			_ = store.DeleteToken(ctx, task.Name, task.Namespace)
+
+			if r.TokenAuditor != nil {
+				_ = r.TokenAuditor.RecordEvent(ctx, auth.AuthEvent{
+					Type:      auth.EventRevoke,
+					TaskID:    task.Name,
+					Namespace: task.Namespace,
+					Principal: "diverge-controller",
+					Success:   true,
+					Timestamp: time.Now(),
+				})
 			}
 
 			controllerutil.RemoveFinalizer(task, agentTaskFinalizer)
@@ -77,33 +136,54 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, nil
 	}
 
-	// 3. Handle Suspended State
+	// 3. Dynamic Feature Gate Check
+	if r.FeatureGate != nil && !r.FeatureGate.IsEnabled(ctx, "agent_sandbox") {
+		if task.Status.Phase != v1alpha1.AgentTaskPhasePaused {
+			patch := client.MergeFrom(task.DeepCopy())
+			task.Status.Phase = v1alpha1.AgentTaskPhasePaused
+			task.Status.Message = "Agent sandbox execution paused: feature gate 'agent_sandbox' is disabled"
+			_ = r.Status().Patch(ctx, task, patch)
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// 4. Handle Suspended State
 	if task.Spec.Suspended {
 		if task.Status.Phase != v1alpha1.AgentTaskPhasePaused {
+			patch := client.MergeFrom(task.DeepCopy())
+			oldPhase := task.Status.Phase
 			task.Status.Phase = v1alpha1.AgentTaskPhasePaused
 			task.Status.Message = "Task execution paused by spec.suspended"
-			if err := r.Status().Update(ctx, task); err != nil {
+			if r.Notifier != nil && oldPhase != task.Status.Phase {
+				_ = r.Notifier.NotifyPhaseChange(ctx, task, oldPhase, task.Status.Phase)
+			}
+			if err := r.Status().Patch(ctx, task, patch); err != nil {
 				return ctrl.Result{}, err
 			}
 		}
 		return ctrl.Result{}, nil
 	}
 
-	// 4. Resolve Sandbox Provider
+	// 5. Resolve Sandbox Provider
 	provider, err := r.resolveSandboxProvider(task)
 	if err != nil {
+		patch := client.MergeFrom(task.DeepCopy())
+		oldPhase := task.Status.Phase
 		task.Status.Phase = v1alpha1.AgentTaskPhaseFailed
 		task.Status.Message = fmt.Sprintf("Failed to resolve sandbox provider: %v", err)
-		_ = r.Status().Update(ctx, task)
+		if r.Notifier != nil && oldPhase != task.Status.Phase {
+			_ = r.Notifier.NotifyPhaseChange(ctx, task, oldPhase, task.Status.Phase)
+		}
+		_ = r.Status().Patch(ctx, task, patch)
 		return ctrl.Result{}, err
 	}
 
-	// 5. Lifecycle State Machine
+	// 6. Lifecycle State Machine
 	switch task.Status.Phase {
 	case "", v1alpha1.AgentTaskPhasePending:
 		logger.Info("Provisioning sandbox for AgentTask", "task", task.Name)
 
-		// Mint capability token and persist to Secret if minter configured
+		// Mint capability token and persist via TokenStore
 		if r.TokenMinter != nil {
 			timeoutSec := task.Spec.Sandbox.TimeoutSeconds
 			if timeoutSec <= 0 {
@@ -133,37 +213,51 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 				if err != nil {
 					logger.Error(err, "Failed to serialize task token")
 				} else {
-					secret := &corev1.Secret{
-						ObjectMeta: metav1.ObjectMeta{
-							Name:      fmt.Sprintf("%s-token", task.Name),
+					store := r.resolveTokenStore()
+					if err := store.SaveToken(ctx, task.Name, task.Namespace, tokBytes); err != nil {
+						logger.Error(err, "Failed to persist task token via TokenStore")
+					}
+					if r.TokenAuditor != nil {
+						_ = r.TokenAuditor.RecordEvent(ctx, auth.AuthEvent{
+							Type:      auth.EventMint,
+							TaskID:    task.Name,
 							Namespace: task.Namespace,
-							Labels: map[string]string{
-								"divergedev.com/agent-task":    task.Name,
-								"app.kubernetes.io/managed-by": "diverge",
-							},
-						},
-						Data: map[string][]byte{
-							"token": tokBytes,
-						},
-					}
-					if r.Scheme != nil {
-						_ = controllerutil.SetControllerReference(task, secret, r.Scheme)
-					}
-					if err := r.Create(ctx, secret); err != nil && !apierrors.IsAlreadyExists(err) {
-						logger.Error(err, "Failed to persist task token Secret")
+							Principal: "diverge-controller",
+							Success:   true,
+							Timestamp: time.Now(),
+						})
 					}
 				}
 			}
 		}
 
+		if r.LifecycleHook != nil {
+			if err := r.LifecycleHook.PreProvision(ctx, task); err != nil {
+				logger.Error(err, "PreProvision lifecycle hook failed")
+			}
+		}
+
 		res, err := provider.Provision(ctx, task)
 		if err != nil {
+			patch := client.MergeFrom(task.DeepCopy())
+			oldPhase := task.Status.Phase
 			task.Status.Phase = v1alpha1.AgentTaskPhaseFailed
 			task.Status.Message = fmt.Sprintf("Provisioning failed: %v", err)
-			_ = r.Status().Update(ctx, task)
+			if r.Notifier != nil && oldPhase != task.Status.Phase {
+				_ = r.Notifier.NotifyPhaseChange(ctx, task, oldPhase, task.Status.Phase)
+			}
+			_ = r.Status().Patch(ctx, task, patch)
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, err
 		}
 
+		if r.LifecycleHook != nil {
+			if err := r.LifecycleHook.PostProvision(ctx, task, res); err != nil {
+				logger.Error(err, "PostProvision lifecycle hook failed")
+			}
+		}
+
+		patch := client.MergeFrom(task.DeepCopy())
+		oldPhase := task.Status.Phase
 		task.Status.SandboxClaimRef = res.ClaimName
 		task.Status.SandboxPodName = res.PodName
 		task.Status.SandboxIP = res.PodIP
@@ -173,8 +267,11 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		} else {
 			task.Status.Phase = v1alpha1.AgentTaskPhaseProvisioning
 		}
+		if r.Notifier != nil && oldPhase != task.Status.Phase {
+			_ = r.Notifier.NotifyPhaseChange(ctx, task, oldPhase, task.Status.Phase)
+		}
 
-		if err := r.Status().Update(ctx, task); err != nil {
+		if err := r.Status().Patch(ctx, task, patch); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: 3 * time.Second}, nil
@@ -186,6 +283,8 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		}
 
+		patch := client.MergeFrom(task.DeepCopy())
+		oldPhase := task.Status.Phase
 		task.Status.SandboxPodName = sbStatus.PodName
 		task.Status.SandboxIP = sbStatus.PodIP
 		task.Status.Message = sbStatus.Message
@@ -193,8 +292,11 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			task.Status.Phase = v1alpha1.AgentTaskPhaseActive
 			task.Status.Message = "Sandbox active and ready"
 		}
+		if r.Notifier != nil && oldPhase != task.Status.Phase {
+			_ = r.Notifier.NotifyPhaseChange(ctx, task, oldPhase, task.Status.Phase)
+		}
 
-		if err := r.Status().Update(ctx, task); err != nil {
+		if err := r.Status().Patch(ctx, task, patch); err != nil {
 			return ctrl.Result{}, err
 		}
 		if !sbStatus.Ready {
@@ -205,9 +307,14 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	case v1alpha1.AgentTaskPhaseActive:
 		// Check iteration limits
 		if task.Spec.MaxIterations > 0 && task.Status.Iteration >= task.Spec.MaxIterations {
+			patch := client.MergeFrom(task.DeepCopy())
+			oldPhase := task.Status.Phase
 			task.Status.Phase = v1alpha1.AgentTaskPhasePaused
 			task.Status.Message = fmt.Sprintf("Reached max iterations limit (%d); paused", task.Spec.MaxIterations)
-			if err := r.Status().Update(ctx, task); err != nil {
+			if r.Notifier != nil && oldPhase != task.Status.Phase {
+				_ = r.Notifier.NotifyPhaseChange(ctx, task, oldPhase, task.Status.Phase)
+			}
+			if err := r.Status().Patch(ctx, task, patch); err != nil {
 				return ctrl.Result{}, err
 			}
 			return ctrl.Result{}, nil
@@ -215,6 +322,7 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 		// Periodic health check
 		sbStatus, err := provider.Status(ctx, task)
+		patch := client.MergeFrom(task.DeepCopy())
 		if err == nil && sbStatus != nil {
 			if sbStatus.PodName != "" {
 				task.Status.SandboxPodName = sbStatus.PodName
@@ -224,7 +332,7 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			}
 		}
 
-		_ = r.Status().Update(ctx, task)
+		_ = r.Status().Patch(ctx, task, patch)
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 
 	case v1alpha1.AgentTaskPhasePaused, v1alpha1.AgentTaskPhaseCompleted, v1alpha1.AgentTaskPhaseFailed:
@@ -232,6 +340,13 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func (r *AgentTaskReconciler) resolveTokenStore() auth.TokenStore {
+	if r.TokenStore != nil {
+		return r.TokenStore
+	}
+	return auth.NewKubernetesSecretTokenStore(r.Client, r.Scheme)
 }
 
 func (r *AgentTaskReconciler) resolveSandboxProvider(task *v1alpha1.AgentTask) (pkgsandbox.SandboxProvider, error) {
@@ -246,7 +361,6 @@ func (r *AgentTaskReconciler) resolveSandboxProvider(task *v1alpha1.AgentTask) (
 	}
 
 	if !reg.Has(providerName) {
-		// Fallback to noop if agent-sandbox is not compiled or available
 		if reg.Has("noop") {
 			return reg.Create("noop", registry.Deps{Client: r.Client, Scheme: r.Scheme})
 		}

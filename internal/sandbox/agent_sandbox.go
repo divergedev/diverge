@@ -241,14 +241,47 @@ func BuildSandboxClaimSpec(task *v1alpha1.AgentTask) map[string]interface{} {
 		return spec
 	}
 
-	// Standalone pod template fallback with explicit resource bounds
+	// Standalone pod template fallback with explicit resource bounds, ephemeral disk limits, and non-root security context
 	spec["template"] = map[string]interface{}{
 		"spec": map[string]interface{}{
+			"securityContext": map[string]interface{}{
+				"runAsNonRoot": true,
+				"runAsUser":    int64(10001),
+			},
 			"containers": []interface{}{
 				map[string]interface{}{
 					"name":      "agent",
 					"image":     DefaultAgentImage,
 					"resources": DefaultResourceBounds,
+					"securityContext": map[string]interface{}{
+						"allowPrivilegeEscalation": false,
+					},
+					"volumeMounts": []interface{}{
+						map[string]interface{}{
+							"name":      "workspace",
+							"mountPath": "/workspace",
+						},
+						map[string]interface{}{
+							"name":      "token",
+							"mountPath": "/etc/diverge/token",
+							"readOnly":  true,
+						},
+					},
+				},
+			},
+			"volumes": []interface{}{
+				map[string]interface{}{
+					"name": "workspace",
+					"emptyDir": map[string]interface{}{
+						"sizeLimit": "10Gi",
+					},
+				},
+				map[string]interface{}{
+					"name": "token",
+					"secret": map[string]interface{}{
+						"secretName":  fmt.Sprintf("%s-token", task.Name),
+						"defaultMode": int64(0400),
+					},
 				},
 			},
 		},
