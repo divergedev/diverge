@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -123,6 +124,17 @@ func (p *MacaroonProvider) Mint(_ context.Context, claims Claims) (Token, error)
 			Value: strings.Join(claims.AllowedModels, ","),
 		})
 	}
+
+	// Embed cryptographic nonce to ensure unique token signatures across distinct issuances
+	nonceBytes := make([]byte, 16)
+	if _, err := rand.Read(nonceBytes); err != nil {
+		return nil, fmt.Errorf("generate nonce: %w", err)
+	}
+	caveats = append(caveats, Caveat{
+		Key:   "nonce",
+		Op:    OpEqual,
+		Value: hex.EncodeToString(nonceBytes),
+	})
 
 	for _, c := range caveats {
 		sig = computeHMAC(sig, serializeCaveatCanonical(c))
@@ -284,6 +296,13 @@ func evaluateCaveat(c Caveat, req Claims) error {
 		}
 		if req.TokensConsumed > maxTokens {
 			return fmt.Errorf("%w: tokens consumed %d exceeds max limit %d", ErrCaveatFailed, req.TokensConsumed, maxTokens)
+		}
+	case "nonce":
+		if c.Op != OpEqual {
+			return fmt.Errorf("%w: invalid operator %q for nonce caveat", ErrCaveatFailed, c.Op)
+		}
+		if c.Value == "" {
+			return fmt.Errorf("%w: empty nonce caveat value", ErrCaveatFailed)
 		}
 	default:
 		return fmt.Errorf("%w: unrecognized caveat key %q", ErrCaveatFailed, c.Key)

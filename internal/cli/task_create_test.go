@@ -126,3 +126,53 @@ func TestTaskCreateAutoDetectRepo(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, task.Spec.Repository.URL)
 }
+
+func TestTaskCreateWithAgentRepoConfig(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = v1alpha1.AddToScheme(scheme)
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1alpha1.AgentTask{}).
+		Build()
+
+	app := &App{
+		Namespace: "default",
+		Client:    fakeClient,
+	}
+
+	tempDir, err := os.MkdirTemp("", "task-create-cfg-*")
+	require.NoError(t, err)
+	defer func() { _ = os.RemoveAll(tempDir) }()
+
+	origWd, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(tempDir))
+	defer func() { _ = os.Chdir(origWd) }()
+
+	require.NoError(t, runTaskInit(false))
+
+	err = runTaskCreate(
+		context.Background(),
+		app,
+		"Test task from repo config",
+		"task-from-cfg",
+		"https://github.com/org/repo",
+		"main", // default should remain main
+		"",     // empty poolRef
+		"",     // empty templateRef
+		"5.00", // default budget flag should pick up repo config if customized
+		5,      // default iterations
+		[]string{"fast", "smart"},
+		false,
+		"text",
+	)
+	require.NoError(t, err)
+
+	task := &v1alpha1.AgentTask{}
+	err = fakeClient.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "task-from-cfg"}, task)
+	require.NoError(t, err)
+	assert.Equal(t, "5.00", task.Spec.BudgetUSD)
+	assert.Equal(t, int32(5), task.Spec.MaxIterations)
+	assert.Contains(t, task.Spec.Capabilities, "claude-3-5-sonnet")
+}

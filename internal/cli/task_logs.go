@@ -72,6 +72,23 @@ func runTaskLogs(ctx context.Context, app *App, name string, follow bool, tail i
 	}
 	defer func() { _ = stream.Close() }()
 
-	_, err = io.Copy(os.Stdout, stream)
-	return err
+	_, copyErr := io.Copy(os.Stdout, stream)
+	if copyErr != nil {
+		return copyErr
+	}
+
+	if follow {
+		// After follow streaming completes, check whether the task ended in failure
+		finalTask := &v1alpha1.AgentTask{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: app.Namespace, Name: name}, finalTask); err == nil {
+			if finalTask.Status.Phase == v1alpha1.AgentTaskPhaseFailed {
+				if finalTask.Status.Message != "" {
+					return fmt.Errorf("task %s failed: %s", name, finalTask.Status.Message)
+				}
+				return fmt.Errorf("task %s failed", name)
+			}
+		}
+	}
+
+	return nil
 }

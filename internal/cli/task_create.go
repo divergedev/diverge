@@ -70,6 +70,28 @@ func runTaskCreate(ctx context.Context, app *App, objective, name, repoURL, base
 		return err
 	}
 
+	// Apply defaults from .diverge/agent.yaml if present and flags were not explicitly overridden
+	if repoCfg, _ := LoadAgentRepoConfig("."); repoCfg != nil {
+		if budgetUSD == "5.00" && repoCfg.Agent.BudgetUSD != "" {
+			budgetUSD = repoCfg.Agent.BudgetUSD
+		}
+		if maxIter == 5 && repoCfg.Agent.MaxIterations > 0 {
+			maxIter = repoCfg.Agent.MaxIterations
+		}
+		if baseBranch == "main" && repoCfg.Agent.BaseBranch != "" {
+			baseBranch = repoCfg.Agent.BaseBranch
+		}
+		if poolRef == "" && repoCfg.Agent.Sandbox.PoolRef != "" {
+			poolRef = repoCfg.Agent.Sandbox.PoolRef
+		}
+		if templateRef == "" && repoCfg.Agent.Sandbox.TemplateRef != "" {
+			templateRef = repoCfg.Agent.Sandbox.TemplateRef
+		}
+		if len(capabilities) == 2 && capabilities[0] == "fast" && capabilities[1] == "smart" && len(repoCfg.Agent.AllowedModels) > 0 {
+			capabilities = repoCfg.Agent.AllowedModels
+		}
+	}
+
 	taskName := name
 	if taskName == "" {
 		taskName = fmt.Sprintf("task-%d", time.Now().Unix())

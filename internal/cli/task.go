@@ -12,6 +12,7 @@ func newTaskCmd(app *App) *cobra.Command {
 Tasks develop code, test against on-demand Diverge preview environments, and submit draft PRs.`,
 	}
 
+	cmd.AddCommand(newTaskInitCmd(app))
 	cmd.AddCommand(newTaskCreateCmd(app))
 	cmd.AddCommand(newTaskStatusCmd(app))
 	cmd.AddCommand(newTaskListCmd(app))

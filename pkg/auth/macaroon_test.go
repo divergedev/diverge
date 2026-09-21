@@ -266,3 +266,50 @@ func TestMacaroonOperatorAndUnknownKeyValidation(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid operator")
 }
+
+func TestMacaroonNonceUniqueness(t *testing.T) {
+	ctx := context.Background()
+	rootKey := []byte("0123456789abcdef0123456789abcdef")
+	provider := NewMacaroonProvider(rootKey)
+
+	claims := Claims{
+		TaskID:    "identical-task-id",
+		ExpiresAt: time.Now().Add(1 * time.Hour),
+	}
+
+	tok1, err := provider.Mint(ctx, claims)
+	require.NoError(t, err)
+
+	tok2, err := provider.Mint(ctx, claims)
+	require.NoError(t, err)
+
+	mac1 := tok1.(*Macaroon)
+	mac2 := tok2.(*Macaroon)
+
+	// Even with identical claims, signatures and nonces must differ
+	assert.NotEqual(t, mac1.Signature, mac2.Signature)
+
+	var nonce1, nonce2 string
+	for _, c := range mac1.CaveatSeq {
+		if c.Key == "nonce" {
+			nonce1 = c.Value
+		}
+	}
+	for _, c := range mac2.CaveatSeq {
+		if c.Key == "nonce" {
+			nonce2 = c.Value
+		}
+	}
+	assert.NotEmpty(t, nonce1)
+	assert.NotEmpty(t, nonce2)
+	assert.NotEqual(t, nonce1, nonce2)
+
+	// Both should verify successfully
+	raw1, err := tok1.Serialize()
+	require.NoError(t, err)
+	assert.NoError(t, provider.Verify(ctx, raw1, Claims{TaskID: "identical-task-id"}))
+
+	raw2, err := tok2.Serialize()
+	require.NoError(t, err)
+	assert.NoError(t, provider.Verify(ctx, raw2, Claims{TaskID: "identical-task-id"}))
+}

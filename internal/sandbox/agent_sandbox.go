@@ -255,6 +255,9 @@ func BuildSandboxClaimSpec(task *v1alpha1.AgentTask) map[string]interface{} {
 					"resources": DefaultResourceBounds,
 					"securityContext": map[string]interface{}{
 						"allowPrivilegeEscalation": false,
+						"capabilities": map[string]interface{}{
+							"drop": []interface{}{"ALL"},
+						},
 					},
 					"volumeMounts": []interface{}{
 						map[string]interface{}{

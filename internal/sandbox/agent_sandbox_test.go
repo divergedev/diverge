@@ -154,6 +154,13 @@ func TestBuildSandboxClaimSpec(t *testing.T) {
 	assert.Equal(t, true, secCtx["runAsNonRoot"])
 	assert.Equal(t, int64(10001), secCtx["runAsUser"])
 
+	cSecCtx, ok := container["securityContext"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, false, cSecCtx["allowPrivilegeEscalation"])
+	caps, ok := cSecCtx["capabilities"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, []interface{}{"ALL"}, caps["drop"])
+
 	volumes, ok := tmplSpec["volumes"].([]interface{})
 	require.True(t, ok)
 	assert.Len(t, volumes, 2)
