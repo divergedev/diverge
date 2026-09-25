@@ -9,7 +9,7 @@ import (
 
 // FeatureProvider manages feature flags and remote configuration for preview environments.
 type FeatureProvider interface {
-	// Type returns the provider type identifier (e.g. "configmap", "flipt", "flagsmith", "unleash", "noop").
+	// Type returns the provider type identifier (e.g. "configmap", "flipt", "flagsmith", "noop").
 	Type() string
 
 	// Provision configures or creates ephemeral feature rules for the preview environment.
