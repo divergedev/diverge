@@ -98,7 +98,7 @@ The `Environment` Custom Resource represents a single preview environment in Kub
 | `database.connectionRef` | Reference to a Secret containing the database connection string. |
 | `database.seedSource` | Path or reference to database seeding scripts. |
 | `database.migrationJob` | Configuration for a Kubernetes Job to run migrations against the provisioned DB. |
-| `features.provider` | Feature flag provider: `configmap` (default), `flipt`, `flagsmith`, `unleash`, `noop`, `none`. |
+| `features.provider` | Feature flag provider: `configmap` (default), `flipt`, `flagsmith`, `noop`, `none`. |
 | `features.overrides` | Map of key-value flag overrides for this environment. |
 | `features.connectionRef` | Reference to a Secret containing remote provider endpoint and auth tokens. |
 | `lifecycle.ttl` | Time-to-Live duration string (e.g., `72h`). Environment is deleted after this duration. |
@@ -111,7 +111,7 @@ Diverge includes an OpenFeature-compatible feature flags engine. For details and
 
 | Field | Description |
 |---|---|
-| `provider` | Provider implementation: `configmap` (default, in-cluster flagd format), `flipt` (remote ephemeral namespaces), `flagsmith` (preview stub), `unleash` (preview stub), `noop` / `none` (disabled). |
+| `provider` | Provider implementation: `configmap` (default, in-cluster flagd format), `flipt` (remote ephemeral namespaces), `flagsmith` (remote identity-based), `noop` / `none` (disabled). |
 | `overrides` | Map of flag key to value string. Values `"true"` and `"false"` map to boolean flags; numeric and string values map to variant flags. |
 | `connectionRef` | Name of Kubernetes Secret containing provider connection details (e.g., `url`, `adminToken`, `clientToken`). Dual-tier resolution checks `env.Namespace` first, falling back to `diverge-system`. |
 

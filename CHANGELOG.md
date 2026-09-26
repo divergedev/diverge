@@ -7,12 +7,21 @@ The CRD API group, labels, annotations, and RBAC bindings have migrated from `di
 - Upgrading clusters must install the new CRD manifests: `charts/diverge/crds/divergedev.com_*.yaml`.
 - Existing `Environment` and `PreviewGroup` custom resources under `diverge.io/v1alpha1` should be updated to `divergedev.com/v1alpha1`.
 
+### ⚠️ Breaking: Unleash Feature Provider Removed
+The `unleash` feature flag provider has been removed. Use the **OpenFeature provider** or migrate to `flipt` / `flagsmith`.
+
+**If you have existing Environments with `spec.features.provider: unleash`:**
+1. Update each Environment CR to use `configmap`, `flipt`, or `flagsmith`.
+2. Manually remove any orphaned strategy constraints from your Unleash instance
+   (strategies with `contextName: "divergeEnvironment"` created by Diverge).
+3. CRD validation ratcheting may allow unchanged `unleash` values to persist
+   until the next update to the resource.
+
 ### 🚀 Highlights & New Features
 
 #### 🚩 Enterprise Feature Flag Providers & OpenFeature Integration
 - **Flagsmith Provider**: Full enterprise integration supporting identity and trait targeting (`pkg/features/flagsmith`).
 - **Flipt Provider**: Dual-tier secret resolution and evaluation provider (`pkg/features/flipt`).
-- **Unleash Provider**: Extensible Unleash provider implementation (`pkg/features/unleash`).
 - **OpenFeature Hook**: Generic OpenFeature evaluation hook injecting Diverge preview context into flag evaluations (`pkg/sdk/openfeature`).
 - **Dashboard Feature Flags Tab**: Dedicated Feature Flags view in the web dashboard for inspecting active provider state and evaluation rules per environment.
 
