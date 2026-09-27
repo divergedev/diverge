@@ -385,37 +385,3 @@ func TestEnvironmentReconciler_Flagsmith(t *testing.T) {
 	assert.Empty(t, identities)
 	mu.Unlock()
 }
-
-func TestEnvironmentReconciler_UnleashStub(t *testing.T) {
-	ctx := context.Background()
-
-	env := &divergeiov1alpha1.Environment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "feat-unleash-env",
-			Namespace:  "default",
-			Finalizers: []string{environmentFinalizer},
-		},
-		Spec: divergeiov1alpha1.EnvironmentSpec{
-			Features: &divergeiov1alpha1.FeatureSpec{
-				Provider: "unleash",
-			},
-		},
-	}
-
-	dbResult := &database.DatabaseResult{Ready: true, Message: "db ready"}
-	r, _, _, _, _ := newTestReconciler(t, env, dbResult, "https://feat-unleash-env.example.com")
-
-	statusBase := env.DeepCopy()
-	_, done, err := r.reconcileProvisioning(ctx, env, statusBase)
-	require.NoError(t, err)
-	assert.False(t, done)
-
-	cond := meta.FindStatusCondition(env.Status.Conditions, "FeaturesReady")
-	require.NotNil(t, cond)
-	assert.Equal(t, metav1.ConditionTrue, cond.Status)
-	assert.Equal(t, features.UnleashEnvironmentName("default", "feat-unleash-env"), env.Status.FeatureEnvVars["UNLEASH_APP_NAME"])
-	assert.Equal(t, "feat-unleash-env", env.Status.FeatureEnvVars["UNLEASH_ENVIRONMENT"])
-
-	_, err = r.handleTeardown(ctx, env)
-	require.NoError(t, err)
-}

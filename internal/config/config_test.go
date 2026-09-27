@@ -614,7 +614,7 @@ func TestFeatureSettings_ParsingAndMerging(t *testing.T) {
 
 func TestFeatureSettings_Validation(t *testing.T) {
 	t.Run("valid providers", func(t *testing.T) {
-		for _, p := range []string{"configmap", "flipt", "flagsmith", "unleash", "noop", "none"} {
+		for _, p := range []string{"configmap", "flipt", "flagsmith", "noop", "none"} {
 			feat := &FeatureSettings{Provider: p}
 			assert.NoError(t, feat.Validate())
 		}

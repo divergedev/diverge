@@ -170,8 +170,8 @@ func (f *FeatureSettings) Validate() error {
 	if f == nil {
 		return nil
 	}
-	if f.Provider != "" && f.Provider != "configmap" && f.Provider != "flipt" && f.Provider != "flagsmith" && f.Provider != "unleash" && f.Provider != "noop" && f.Provider != "none" {
-		return fmt.Errorf("feature provider must be one of \"configmap\", \"flipt\", \"flagsmith\", \"unleash\", \"noop\", \"none\", got %q", f.Provider)
+	if f.Provider != "" && f.Provider != "configmap" && f.Provider != "flipt" && f.Provider != "flagsmith" && f.Provider != "noop" && f.Provider != "none" {
+		return fmt.Errorf("feature provider must be one of \"configmap\", \"flipt\", \"flagsmith\", \"noop\", \"none\", got %q", f.Provider)
 	}
 	return nil
 }

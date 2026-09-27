@@ -226,8 +226,8 @@ type EnvironmentLifecycle struct {
 
 // FeatureSpec configures feature flag management and remote configuration.
 type FeatureSpec struct {
-	// Provider selects the feature flag provider: "configmap", "flipt", "flagsmith", "unleash".
-	// +kubebuilder:validation:Enum=configmap;flipt;flagsmith;unleash
+	// Provider selects the feature flag provider: "configmap", "flipt", "flagsmith".
+	// +kubebuilder:validation:Enum=configmap;flipt;flagsmith
 	// +kubebuilder:default=configmap
 	// +optional
 	Provider string `json:"provider,omitempty"`
