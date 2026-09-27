@@ -14,8 +14,9 @@ The `unleash` feature flag provider has been removed. Use the **OpenFeature prov
 1. Update each Environment CR to use `configmap`, `flipt`, or `flagsmith`.
 2. Manually remove any orphaned strategy constraints from your Unleash instance
    (strategies with `contextName: "divergeEnvironment"` created by Diverge).
-3. CRD validation ratcheting may allow unchanged `unleash` values to persist
-   until the next update to the resource.
+3. When CRD validation ratcheting is enabled (default since Kubernetes v1.33),
+   unchanged `unleash` values may persist across updates until the provider
+   is explicitly changed to a valid value.
 
 ### 🚀 Highlights & New Features
 
