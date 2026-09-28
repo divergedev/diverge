@@ -8,7 +8,7 @@ ISTIO_VERSION="${ISTIO_VERSION:-1.24.3}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "==> Creating Kind cluster '${CLUSTER_NAME}'..."
-kind get clusters | grep -q "${CLUSTER_NAME}" || \
+kind get clusters | grep -qx "${CLUSTER_NAME}" || \
   kind create cluster --name "${CLUSTER_NAME}" --config "${SCRIPT_DIR}/kind-config.yaml"
 
 echo "==> Installing Gateway API CRDs..."
@@ -43,9 +43,9 @@ kind load docker-image divergedev/diverge:latest --name "${CLUSTER_NAME}"
 
 echo "==> Deploying Diverge CRDs and controller..."
 kubectl apply -f config/crd/bases/ --context "kind-${CLUSTER_NAME}"
-kubectl apply -k config/default --context "kind-${CLUSTER_NAME}" || true
+kubectl apply -k config/default --context "kind-${CLUSTER_NAME}"
 kubectl -n diverge-system wait --for=condition=available \
   deployment/diverge-controller --timeout=120s \
-  --context "kind-${CLUSTER_NAME}" || true
+  --context "kind-${CLUSTER_NAME}"
 
 echo "==> Istio E2E setup complete!"
