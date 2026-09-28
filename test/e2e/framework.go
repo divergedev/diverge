@@ -218,3 +218,22 @@ func (f *Framework) CleanupNamespaceByName(ctx context.Context, name string) {
 		f.T.Logf("Failed to delete namespace %s: %v", name, err)
 	}
 }
+
+// LabelNamespace adds labels to the test namespace (e.g. for Istio injection).
+func (f *Framework) LabelNamespace(ctx context.Context, namespace string, labels map[string]string) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	ns, err := f.Clientset.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
+	if err != nil {
+		f.T.Fatalf("Failed to get namespace %s: %v", namespace, err)
+	}
+	if ns.Labels == nil {
+		ns.Labels = map[string]string{}
+	}
+	for k, v := range labels {
+		ns.Labels[k] = v
+	}
+	if _, err := f.Clientset.CoreV1().Namespaces().Update(ctx, ns, metav1.UpdateOptions{}); err != nil {
+		f.T.Fatalf("Failed to label namespace %s: %v", namespace, err)
+	}
+}
