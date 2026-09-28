@@ -1,0 +1,65 @@
+{{- if and .Values.sandbox.enabled .Values.sandbox.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "diverge.fullname" . }}-sandbox-isolation
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "diverge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox-isolation
+spec:
+  podSelector:
+    matchExpressions:
+      - key: divergedev.com/agent-task
+        operator: Exists
+  policyTypes:
+    - Ingress
+    - Egress
+  # Ingress is default deny for sandbox pods
+  ingress: []
+  egress:
+    # 1. Allow DNS queries (CoreDNS, kube-dns pods and NodeLocal DNSCache)
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: coredns
+        - ipBlock:
+            cidr: 169.254.20.10/32 # NodeLocal DNSCache standard endpoint
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # 2. Allow egress to diverge-server (ConnectRPC on 8443 TLS or 8080 plaintext)
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "diverge.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: server
+      ports:
+        - protocol: TCP
+          port: 8443
+        - protocol: TCP
+          port: 8080
+    # 3. Allow public internet egress (HTTPS/Git/LLM APIs)
+    # Strictly blocks cloud metadata (169.254.0.0/16) and RFC 1918 internal VPC subnets
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.0.0/16     # Link-local & cloud metadata
+              - 10.0.0.0/8         # RFC 1918 private network
+              - 172.16.0.0/12      # RFC 1918 private network
+              - 192.168.0.0/16     # RFC 1918 private network
+              - 100.64.0.0/10      # Carrier-grade NAT
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 22
+{{- end }}

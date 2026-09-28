@@ -38,6 +38,7 @@ import (
 	pkgdb "github.com/divergedev/diverge/pkg/database"
 	pkgfeatures "github.com/divergedev/diverge/pkg/features"
 	"github.com/divergedev/diverge/pkg/registry"
+	pkgsandbox "github.com/divergedev/diverge/pkg/sandbox"
 )
 
 var (
@@ -70,6 +71,8 @@ func main() {
 	var defaultNamespace string
 	var asyncProvider string
 	var featureProvider string
+	var enableAgentSandbox bool
+	var sandboxProvider string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -83,6 +86,8 @@ func main() {
 	flag.StringVar(&notifierProvider, "notifier-provider", "noop", "Notification provider (gitlab|github|noop)")
 	flag.StringVar(&asyncProvider, "async-provider", "noop", "Async provisioning provider (noop, webhook)")
 	flag.StringVar(&featureProvider, "feature-provider", "configmap", "Feature flag provider (configmap, noop)")
+	flag.BoolVar(&enableAgentSandbox, "enable-agent-sandbox", true, "Enable AgentTask controller and sandbox management")
+	flag.StringVar(&sandboxProvider, "sandbox-provider", "agent-sandbox", "Default sandbox provider (agent-sandbox, noop)")
 	flag.StringVar(&webhookSecretToken, "webhook-secret-token", "", "The secret token for authenticating webhooks (prefer DIVERGE_WEBHOOK_SECRET env var).")
 	flag.StringVar(&defaultNamespace, "default-namespace", "default", "Default namespace to create environments in")
 
@@ -289,6 +294,20 @@ func main() {
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PreviewGroup")
 		os.Exit(1)
+	}
+
+	if enableAgentSandbox {
+		if err = (&controller.AgentTaskReconciler{
+			Client:          mgr.GetClient(),
+			Scheme:          mgr.GetScheme(),
+			SandboxRegistry: pkgsandbox.Providers,
+			FeatureGate:     &controller.StaticFeatureGate{Enabled: true},
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "AgentTask")
+			os.Exit(1)
+		}
+	} else {
+		setupLog.Info("AgentTask controller is disabled via --enable-agent-sandbox=false")
 	}
 	// +kubebuilder:scaffold:builder
 

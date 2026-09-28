@@ -222,3 +222,17 @@ rbac:
   namespaceScoped: false
   # -- List of namespaces to manage when namespaceScoped is true.
   managedNamespaces: []
+
+# Agent Sandbox configuration for autonomous development tasks
+sandbox:
+  # -- Enable sandbox execution support in the chart
+  enabled: true
+  # -- Default sandbox provider: agent-sandbox | noop
+  provider: "agent-sandbox"
+  # -- Default warm pool name (if configured)
+  poolRef: "default-pool"
+  # -- Security network policies
+  networkPolicy:
+    enabled: true
+    blockCloudMetadata: true
+    blockKubernetesAPI: true
