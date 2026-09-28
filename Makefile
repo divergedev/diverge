@@ -98,8 +98,7 @@ e2e-dual:
 e2e-dual-teardown:
 	./test/e2e/teardown_dual.sh
 
-e2e-istio:
-	go test -tags=e2e,e2e_istio -v -count=1 -timeout=15m ./test/e2e/...
+
 
 .PHONY: e2e-cilium-setup e2e-cilium-run e2e-cilium-teardown e2e-cilium
 
@@ -133,6 +132,23 @@ e2e-linkerd: e2e-linkerd-setup ## Full Linkerd E2E cycle
 	@$(MAKE) e2e-linkerd-run; \
 	status=$$?; \
 	$(MAKE) e2e-linkerd-teardown; \
+	exit $$status
+
+.PHONY: e2e-istio-setup e2e-istio-run e2e-istio-teardown e2e-istio
+
+e2e-istio-setup: ## Create Kind cluster with Istio mesh
+	./test/e2e/setup_istio.sh
+
+e2e-istio-run: ## Run Istio conformance tests
+	go test -tags=e2e,e2e_istio -v -count=1 -timeout=15m ./test/e2e/...
+
+e2e-istio-teardown: ## Delete Istio Kind cluster
+	kind delete cluster --name diverge-istio
+
+e2e-istio: e2e-istio-setup ## Full Istio E2E cycle
+	@$(MAKE) e2e-istio-run; \
+	status=$$?; \
+	$(MAKE) e2e-istio-teardown; \
 	exit $$status
 
 ##@ Build
