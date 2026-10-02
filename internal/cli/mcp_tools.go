@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -146,18 +147,56 @@ func registerFetchErrors(registry mcpruntime.Registry, client divergev1alpha1con
 			Namespace:       params.Namespace,
 		}))
 		if err != nil {
-			return nil, fmt.Errorf("failed to stream logs: %w", err)
+			if connect.CodeOf(err) == connect.CodeUnimplemented {
+				result, _ := json.Marshal(map[string]interface{}{
+					"environment": params.Name,
+					"namespace":   params.Namespace,
+					"error_count": 0,
+					"lines":       []string{},
+					"warning":     "log streaming is not configured or supported by this server",
+				})
+				return &mcpruntime.CallToolResult{
+					Content: json.RawMessage(result),
+				}, nil
+			}
+			return &mcpruntime.CallToolResult{
+				Content: json.RawMessage(fmt.Sprintf(`{"error": %q}`, err.Error())),
+				IsError: true,
+			}, nil
 		}
 
-		var errorLines []string
+		errorLines := make([]string, 0)
 		for stream.Receive() {
 			msg := stream.Msg()
-			line := msg.Content // content instead of line, checking streamlogsresponse
+			line := msg.Content
 			if containsErrorLevel(line) {
 				errorLines = append(errorLines, line)
 				if len(errorLines) > params.Lines {
 					errorLines = errorLines[1:]
 				}
+			}
+		}
+
+		if streamErr := stream.Err(); streamErr != nil {
+			if connect.CodeOf(streamErr) == connect.CodeUnimplemented {
+				result, _ := json.Marshal(map[string]interface{}{
+					"environment": params.Name,
+					"namespace":   params.Namespace,
+					"error_count": 0,
+					"lines":       []string{},
+					"warning":     "log streaming is not configured or supported by this server",
+				})
+				return &mcpruntime.CallToolResult{
+					Content: json.RawMessage(result),
+				}, nil
+			}
+			// If context timed out or was canceled after reading available logs, treat collected logs as valid.
+			if !errors.Is(streamErr, context.DeadlineExceeded) && !errors.Is(streamErr, context.Canceled) &&
+				connect.CodeOf(streamErr) != connect.CodeDeadlineExceeded && connect.CodeOf(streamErr) != connect.CodeCanceled {
+				return &mcpruntime.CallToolResult{
+					Content: json.RawMessage(fmt.Sprintf(`{"error": %q}`, streamErr.Error())),
+					IsError: true,
+				}, nil
 			}
 		}
 
