@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -475,4 +476,93 @@ func TestRegisterFetchErrors_StreamEndsWithUnimplemented(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, float64(0), data["error_count"])
 	assert.Contains(t, data["warning"], "not configured or supported")
+}
+
+func TestRegisterFetchErrors_ControlCharacterError(t *testing.T) {
+	ansiError := fmt.Errorf("\x1b[31mfailed with ANSI escape\x1b[0m and \x00 null byte")
+	registry := mcpruntime.NewToolRegistry()
+	mockClient := &mockEnvClient{
+		streamLogsErr: ansiError,
+	}
+	registerFetchErrors(registry, mockClient)
+
+	handler, ok := registry.Lookup("diverge_fetch_errors")
+	require.True(t, ok)
+
+	res, err := handler(context.Background(), mcpruntime.ToolRequest{
+		ToolName:  "diverge_fetch_errors",
+		Arguments: []byte(`{"name": "test-env", "namespace": "test-ns"}`),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.True(t, res.IsError)
+
+	var data map[string]interface{}
+	err = json.Unmarshal(res.Content, &data)
+	require.NoError(t, err, "Content must be valid JSON even with control characters in error message")
+	assert.Equal(t, ansiError.Error(), data["error"])
+}
+
+func TestRegisterFetchErrors_ServerDeadlineExceededWhileContextActive(t *testing.T) {
+	mockHandler := &mockStreamLogsHandler{
+		streamErr: connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("server timeout")),
+	}
+	path, handler := divergev1alpha1connect.NewEnvironmentServiceHandler(mockHandler)
+	mux := http.NewServeMux()
+	mux.Handle(path, handler)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	client := divergev1alpha1connect.NewEnvironmentServiceClient(http.DefaultClient, srv.URL)
+
+	registry := mcpruntime.NewToolRegistry()
+	registerFetchErrors(registry, client)
+
+	h, ok := registry.Lookup("diverge_fetch_errors")
+	require.True(t, ok)
+
+	res, err := h(context.Background(), mcpruntime.ToolRequest{
+		ToolName:  "diverge_fetch_errors",
+		Arguments: []byte(`{"name": "test-env", "namespace": "test-ns"}`),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.True(t, res.IsError, "Server deadline exceeded while client context is active should be marked as error")
+
+	var data map[string]interface{}
+	err = json.Unmarshal(res.Content, &data)
+	require.NoError(t, err)
+	assert.Contains(t, data["error"], "server timeout")
+}
+
+func TestRegisterFetchErrors_ServerCanceledWhileContextActive(t *testing.T) {
+	mockHandler := &mockStreamLogsHandler{
+		streamErr: connect.NewError(connect.CodeCanceled, fmt.Errorf("server cancelled call")),
+	}
+	path, handler := divergev1alpha1connect.NewEnvironmentServiceHandler(mockHandler)
+	mux := http.NewServeMux()
+	mux.Handle(path, handler)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	client := divergev1alpha1connect.NewEnvironmentServiceClient(http.DefaultClient, srv.URL)
+
+	registry := mcpruntime.NewToolRegistry()
+	registerFetchErrors(registry, client)
+
+	h, ok := registry.Lookup("diverge_fetch_errors")
+	require.True(t, ok)
+
+	res, err := h(context.Background(), mcpruntime.ToolRequest{
+		ToolName:  "diverge_fetch_errors",
+		Arguments: []byte(`{"name": "test-env", "namespace": "test-ns"}`),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.True(t, res.IsError, "Server canceled while client context is active should be marked as error")
+
+	var data map[string]interface{}
+	err = json.Unmarshal(res.Content, &data)
+	require.NoError(t, err)
+	assert.Contains(t, data["error"], "server cancelled call")
 }

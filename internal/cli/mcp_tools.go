@@ -49,6 +49,14 @@ var loadtestSchema = json.RawMessage(`{
 	"required": ["target_url"]
 }`)
 
+func errorToolResult(err error) *mcpruntime.CallToolResult {
+	data, _ := json.Marshal(map[string]string{"error": err.Error()})
+	return &mcpruntime.CallToolResult{
+		Content: json.RawMessage(data),
+		IsError: true,
+	}
+}
+
 // registerWaitForReady registers the diverge_wait_for_ready MCP tool handler.
 func registerWaitForReady(registry mcpruntime.Registry, client divergev1alpha1connect.EnvironmentServiceClient) {
 	registry.Register(mcpruntime.ToolDefinition{
@@ -159,10 +167,7 @@ func registerFetchErrors(registry mcpruntime.Registry, client divergev1alpha1con
 					Content: json.RawMessage(result),
 				}, nil
 			}
-			return &mcpruntime.CallToolResult{
-				Content: json.RawMessage(fmt.Sprintf(`{"error": %q}`, err.Error())),
-				IsError: true,
-			}, nil
+			return errorToolResult(err), nil
 		}
 
 		errorLines := make([]string, 0)
@@ -190,13 +195,18 @@ func registerFetchErrors(registry mcpruntime.Registry, client divergev1alpha1con
 					Content: json.RawMessage(result),
 				}, nil
 			}
-			// If context timed out or was canceled after reading available logs, treat collected logs as valid.
-			if !errors.Is(streamErr, context.DeadlineExceeded) && !errors.Is(streamErr, context.Canceled) &&
-				connect.CodeOf(streamErr) != connect.CodeDeadlineExceeded && connect.CodeOf(streamErr) != connect.CodeCanceled {
-				return &mcpruntime.CallToolResult{
-					Content: json.RawMessage(fmt.Sprintf(`{"error": %q}`, streamErr.Error())),
-					IsError: true,
-				}, nil
+			// Only treat deadline exceeded or canceled as normal completion if our local context was terminated.
+			// If logCtx is still active, an error code from the server (e.g. server-side timeout/cancellation)
+			// represents a failure.
+			isLocalTimeout := errors.Is(logCtx.Err(), context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded)
+			isLocalCanceled := errors.Is(logCtx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.Canceled)
+
+			isDeadlineErr := errors.Is(streamErr, context.DeadlineExceeded) || connect.CodeOf(streamErr) == connect.CodeDeadlineExceeded
+			isCanceledErr := errors.Is(streamErr, context.Canceled) || connect.CodeOf(streamErr) == connect.CodeCanceled
+
+			isNormalCompletion := (isDeadlineErr && isLocalTimeout) || (isCanceledErr && isLocalCanceled)
+			if !isNormalCompletion {
+				return errorToolResult(streamErr), nil
 			}
 		}
 
@@ -251,10 +261,7 @@ func registerLoadtest(registry mcpruntime.Registry) {
 		}
 
 		if err := validateTargetURL(params.TargetURL); err != nil {
-			return &mcpruntime.CallToolResult{
-				Content: json.RawMessage(fmt.Sprintf(`{"error": %q}`, err.Error())),
-				IsError: true,
-			}, nil
+			return errorToolResult(err), nil
 		}
 
 		duration := time.Duration(params.DurationSeconds) * time.Second
@@ -278,10 +285,7 @@ func registerLoadtest(registry mcpruntime.Registry) {
 		runner := loadtest.NewRunner()
 		res, err := runner.Run(ctx, cfg)
 		if err != nil {
-			return &mcpruntime.CallToolResult{
-				Content: json.RawMessage(fmt.Sprintf(`{"error": %q}`, err.Error())),
-				IsError: true,
-			}, nil
+			return errorToolResult(err), nil
 		}
 
 		data, err := json.Marshal(res)
@@ -332,10 +336,7 @@ func registerDoctor(registry mcpruntime.Registry, client divergev1alpha1connect.
 		if diag != nil {
 			report, err := diag.Diagnose(ctx, params.Namespace, params.Name)
 			if err != nil {
-				return &mcpruntime.CallToolResult{
-					Content: json.RawMessage(fmt.Sprintf(`{"error": %q}`, err.Error())),
-					IsError: true,
-				}, nil
+				return errorToolResult(err), nil
 			}
 			healthy = report.Healthy
 			for _, iss := range report.Issues {
@@ -351,10 +352,7 @@ func registerDoctor(registry mcpruntime.Registry, client divergev1alpha1connect.
 				Namespace: params.Namespace,
 			}))
 			if err != nil {
-				return &mcpruntime.CallToolResult{
-					Content: json.RawMessage(fmt.Sprintf(`{"error": %q}`, err.Error())),
-					IsError: true,
-				}, nil
+				return errorToolResult(err), nil
 			}
 
 			env := resp.Msg.Environment
