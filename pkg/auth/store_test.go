@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -130,4 +132,74 @@ func TestTokenAuditors(t *testing.T) {
 	loggerAuditor := NewLoggerTokenAuditor(slog.Default())
 	err = loggerAuditor.RecordEvent(ctx, event)
 	assert.NoError(t, err)
+}
+
+func TestKubernetesSecretTokenStore_LongTaskID(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+
+	client := fake.NewClientBuilder().WithScheme(scheme).Build()
+	store := NewKubernetesSecretTokenStore(client, scheme)
+
+	// Create a taskID with 250 characters (would exceed 253 with "-token")
+	longTaskID := strings.Repeat("a", 250)
+	namespace := "default"
+	tokenData := []byte("long-id-token")
+
+	err := store.SaveToken(ctx, longTaskID, namespace, tokenData)
+	require.NoError(t, err)
+
+	secName := secretName(longTaskID)
+	assert.LessOrEqual(t, len(secName), 253)
+
+	retrieved, err := store.GetToken(ctx, longTaskID, namespace)
+	require.NoError(t, err)
+	assert.Equal(t, tokenData, retrieved)
+
+	err = store.DeleteToken(ctx, longTaskID, namespace)
+	require.NoError(t, err)
+}
+
+func TestKubernetesSecretTokenStore_OwnershipValidation(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	store := NewKubernetesSecretTokenStore(fakeClient, scheme)
+
+	task1 := "task-owner-1"
+	task2 := "task-owner-2"
+	namespace := "default"
+
+	// Save token for task1
+	err := store.SaveToken(ctx, task1, namespace, []byte("token1"))
+	require.NoError(t, err)
+
+	// Attempting to overwrite secret with a different taskID should fail
+	// Manually construct secretName collision or modify label
+	name := secretName(task1)
+	sec := &corev1.Secret{}
+	err = fakeClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, sec)
+	require.NoError(t, err)
+
+	// Change label to simulate mismatch or unowned secret
+	sec.Labels[LabelAgentTask] = task2
+	err = fakeClient.Update(ctx, sec)
+	require.NoError(t, err)
+
+	// GetToken for task1 should now fail (ErrTokenNotFound due to mismatch)
+	_, err = store.GetToken(ctx, task1, namespace)
+	assert.ErrorIs(t, err, ErrTokenNotFound)
+
+	// RevokeToken for task1 should fail
+	err = store.RevokeToken(ctx, task1, namespace)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not owned by")
+
+	// DeleteToken for task1 should fail
+	err = store.DeleteToken(ctx, task1, namespace)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not owned by")
 }

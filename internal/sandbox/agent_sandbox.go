@@ -235,7 +235,7 @@ func BuildSandboxClaimSpec(task *v1alpha1.AgentTask) map[string]interface{} {
 		return spec
 	}
 	if task.Spec.Sandbox.TemplateRef != "" {
-		spec["templateRef"] = map[string]interface{}{
+		spec["sandboxTemplateRef"] = map[string]interface{}{
 			"name": task.Spec.Sandbox.TemplateRef,
 		}
 		return spec

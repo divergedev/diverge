@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -66,6 +67,7 @@ type AgentTaskReconciler struct {
 	Notifier        TaskNotifier
 	LifecycleHook   SandboxLifecycleHook
 	FeatureGate     FeatureGate
+	DefaultProvider string
 }
 
 // +kubebuilder:rbac:groups=divergedev.com,resources=agenttasks,verbs=get;list;watch;create;update;patch;delete
@@ -106,15 +108,23 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			}
 
 			store := r.resolveTokenStore()
-			_ = store.DeleteToken(ctx, task.Name, task.Namespace)
+			delErr := store.DeleteToken(ctx, task.Name, task.Namespace)
+			if delErr != nil {
+				logger.Error(delErr, "Failed to delete token")
+			}
 
 			if r.TokenAuditor != nil {
+				reason := ""
+				if delErr != nil {
+					reason = delErr.Error()
+				}
 				_ = r.TokenAuditor.RecordEvent(ctx, auth.AuthEvent{
 					Type:      auth.EventRevoke,
 					TaskID:    task.Name,
 					Namespace: task.Namespace,
 					Principal: "diverge-controller",
-					Success:   true,
+					Success:   delErr == nil,
+					Reason:    reason,
 					Timestamp: time.Now(),
 				})
 			}
@@ -142,7 +152,9 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			patch := client.MergeFrom(task.DeepCopy())
 			task.Status.Phase = v1alpha1.AgentTaskPhasePaused
 			task.Status.Message = "Agent sandbox execution paused: feature gate 'agent_sandbox' is disabled"
-			_ = r.Status().Patch(ctx, task, patch)
+			if err := r.Status().Patch(ctx, task, patch); err != nil {
+				return ctrl.Result{}, err
+			}
 		}
 		return ctrl.Result{}, nil
 	}
@@ -199,8 +211,7 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 				ExpiresAt:     time.Now().Add(time.Duration(timeoutSec) * time.Second),
 			}
 			if task.Spec.BudgetUSD != "" {
-				var cost float64
-				if _, err := fmt.Sscanf(task.Spec.BudgetUSD, "%f", &cost); err == nil {
+				if cost, err := strconv.ParseFloat(task.Spec.BudgetUSD, 64); err == nil {
 					claims.MaxCostUSD = cost
 				}
 			}
@@ -208,14 +219,39 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			tok, err := r.TokenMinter.Mint(ctx, claims)
 			if err != nil {
 				logger.Error(err, "Failed to mint task token")
+				if r.TokenAuditor != nil {
+					_ = r.TokenAuditor.RecordEvent(ctx, auth.AuthEvent{
+						Type:      auth.EventMint,
+						TaskID:    task.Name,
+						Namespace: task.Namespace,
+						Principal: "diverge-controller",
+						Success:   false,
+						Reason:    err.Error(),
+						Timestamp: time.Now(),
+					})
+				}
 			} else {
 				tokBytes, err := tok.Serialize()
 				if err != nil {
 					logger.Error(err, "Failed to serialize task token")
+					if r.TokenAuditor != nil {
+						_ = r.TokenAuditor.RecordEvent(ctx, auth.AuthEvent{
+							Type:      auth.EventMint,
+							TaskID:    task.Name,
+							Namespace: task.Namespace,
+							Principal: "diverge-controller",
+							Success:   false,
+							Reason:    err.Error(),
+							Timestamp: time.Now(),
+						})
+					}
 				} else {
 					store := r.resolveTokenStore()
-					if err := store.SaveToken(ctx, task.Name, task.Namespace, tokBytes); err != nil {
-						logger.Error(err, "Failed to persist task token via TokenStore")
+					saveErr := store.SaveToken(ctx, task.Name, task.Namespace, tokBytes)
+					reason := ""
+					if saveErr != nil {
+						logger.Error(saveErr, "Failed to persist task token via TokenStore")
+						reason = saveErr.Error()
 					}
 					if r.TokenAuditor != nil {
 						_ = r.TokenAuditor.RecordEvent(ctx, auth.AuthEvent{
@@ -223,7 +259,8 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 							TaskID:    task.Name,
 							Namespace: task.Namespace,
 							Principal: "diverge-controller",
-							Success:   true,
+							Success:   saveErr == nil,
+							Reason:    reason,
 							Timestamp: time.Now(),
 						})
 					}
@@ -335,7 +372,28 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		_ = r.Status().Patch(ctx, task, patch)
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 
-	case v1alpha1.AgentTaskPhasePaused, v1alpha1.AgentTaskPhaseCompleted, v1alpha1.AgentTaskPhaseFailed:
+	case v1alpha1.AgentTaskPhasePaused:
+		if !task.Spec.Suspended {
+			patch := client.MergeFrom(task.DeepCopy())
+			oldPhase := task.Status.Phase
+			if task.Status.SandboxPodName != "" {
+				task.Status.Phase = v1alpha1.AgentTaskPhaseActive
+				task.Status.Message = "Task resumed and active"
+			} else {
+				task.Status.Phase = v1alpha1.AgentTaskPhasePending
+				task.Status.Message = "Task resumed, awaiting provisioning"
+			}
+			if r.Notifier != nil && oldPhase != task.Status.Phase {
+				_ = r.Notifier.NotifyPhaseChange(ctx, task, oldPhase, task.Status.Phase)
+			}
+			if err := r.Status().Patch(ctx, task, patch); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
+		}
+		return ctrl.Result{}, nil
+
+	case v1alpha1.AgentTaskPhaseCompleted, v1alpha1.AgentTaskPhaseFailed:
 		return ctrl.Result{}, nil
 	}
 
@@ -352,7 +410,11 @@ func (r *AgentTaskReconciler) resolveTokenStore() auth.TokenStore {
 func (r *AgentTaskReconciler) resolveSandboxProvider(task *v1alpha1.AgentTask) (pkgsandbox.SandboxProvider, error) {
 	providerName := task.Spec.Sandbox.Provider
 	if providerName == "" {
-		providerName = "agent-sandbox"
+		if r.DefaultProvider != "" {
+			providerName = r.DefaultProvider
+		} else {
+			providerName = "agent-sandbox"
+		}
 	}
 
 	reg := r.SandboxRegistry
@@ -361,9 +423,6 @@ func (r *AgentTaskReconciler) resolveSandboxProvider(task *v1alpha1.AgentTask) (
 	}
 
 	if !reg.Has(providerName) {
-		if reg.Has("noop") {
-			return reg.Create("noop", registry.Deps{Client: r.Client, Scheme: r.Scheme})
-		}
 		return nil, fmt.Errorf("sandbox provider %q not registered", providerName)
 	}
 

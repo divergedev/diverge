@@ -111,7 +111,7 @@ func TestAgentTaskServiceCRUD(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, pauseRes.Msg.Task.Spec.Suspended)
 
-	// 7. ResumeTask with budget bump
+	// 7. ResumeTask with budget bump (additive)
 	resumeRes, err := svc.ResumeTask(ctx, connect.NewRequest(&pb.ResumeTaskRequest{
 		Namespace:        "default",
 		Name:             "task-auth-fix",
@@ -120,8 +120,8 @@ func TestAgentTaskServiceCRUD(t *testing.T) {
 	}))
 	require.NoError(t, err)
 	assert.False(t, resumeRes.Msg.Task.Spec.Suspended)
-	assert.Equal(t, "10.00", resumeRes.Msg.Task.Spec.BudgetUsd)
-	assert.Equal(t, int64(100000), resumeRes.Msg.Task.Spec.BudgetTokens)
+	assert.Equal(t, "15.00", resumeRes.Msg.Task.Spec.BudgetUsd)
+	assert.Equal(t, int64(150000), resumeRes.Msg.Task.Spec.BudgetTokens)
 
 	// 8. DeleteTask
 	_, err = svc.DeleteTask(ctx, connect.NewRequest(&pb.DeleteTaskRequest{
@@ -157,6 +157,40 @@ func TestAgentTaskServiceValidation(t *testing.T) {
 	_, err = svc.CreateTask(ctx, connect.NewRequest(&pb.CreateTaskRequest{
 		Namespace: "default",
 		Name:      "Invalid_Uppercase_Name",
+	}))
+	assert.Error(t, err)
+
+	// Missing Spec
+	_, err = svc.CreateTask(ctx, connect.NewRequest(&pb.CreateTaskRequest{
+		Namespace: "default",
+		Name:      "task-no-spec",
+		Spec:      nil,
+	}))
+	assert.Error(t, err)
+
+	// Missing Objective
+	_, err = svc.CreateTask(ctx, connect.NewRequest(&pb.CreateTaskRequest{
+		Namespace: "default",
+		Name:      "task-no-objective",
+		Spec: &pb.AgentTaskSpec{
+			Objective: "",
+			Repository: &pb.AgentTaskRepository{
+				Url: "https://github.com/org/repo",
+			},
+		},
+	}))
+	assert.Error(t, err)
+
+	// Missing Repository URL
+	_, err = svc.CreateTask(ctx, connect.NewRequest(&pb.CreateTaskRequest{
+		Namespace: "default",
+		Name:      "task-no-repo",
+		Spec: &pb.AgentTaskSpec{
+			Objective: "Some task",
+			Repository: &pb.AgentTaskRepository{
+				Url: "",
+			},
+		},
 	}))
 	assert.Error(t, err)
 }

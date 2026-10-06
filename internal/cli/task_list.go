@@ -81,7 +81,7 @@ func runTaskList(ctx context.Context, app *App, output string) error {
 				pod,
 				iter,
 				pr,
-				t.CreationTimestamp.Format("2006-01-02 15:04"),
+				formatAge(t.CreationTimestamp.Time),
 			)
 		}
 		_ = w.Flush()

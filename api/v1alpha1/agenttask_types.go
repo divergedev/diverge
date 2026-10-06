@@ -28,6 +28,7 @@ const (
 type AgentTaskRepository struct {
 	// URL is the Git clone URL (e.g. https://github.com/org/repo or git@github.com:org/repo.git).
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
 	URL string `json:"url"`
 
 	// BaseBranch is the baseline branch to fork from and submit PR against (defaults to "main").
@@ -88,6 +89,7 @@ type AgentTaskSpec struct {
 	// MaxIterations sets the maximum number of autonomous build-test-review loops.
 	// Defaults to 5.
 	// +kubebuilder:default=5
+	// +kubebuilder:validation:Minimum=1
 	// +optional
 	MaxIterations int32 `json:"maxIterations,omitempty"`
 

@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -141,6 +142,19 @@ func TestAgentTaskReconcilerLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, v1alpha1.AgentTaskPhasePaused, updatedTask.Status.Phase)
 
+	// Step 3b: Un-suspending transitions Paused -> Active
+	updatedTask.Spec.Suspended = false
+	err = fakeClient.Update(ctx, updatedTask)
+	require.NoError(t, err)
+
+	res, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, 1*time.Second, res.RequeueAfter)
+
+	err = fakeClient.Get(ctx, req.NamespacedName, updatedTask)
+	require.NoError(t, err)
+	assert.Equal(t, v1alpha1.AgentTaskPhaseActive, updatedTask.Status.Phase)
+
 	// Step 4: Deletion triggers teardown and clears finalizer
 	err = fakeClient.Delete(ctx, updatedTask)
 	require.NoError(t, err)
@@ -234,4 +248,51 @@ func TestAgentTaskReconcilerWithDecoupledInterfaces(t *testing.T) {
 	assert.True(t, hooks.preTeardown)
 	_, err = memStore.GetToken(ctx, "task-decoupled", "default")
 	assert.ErrorIs(t, err, auth.ErrTokenNotFound)
+}
+
+func TestAgentTaskReconcilerUnknownProviderFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	_ = v1alpha1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "task-unknown-provider",
+			Namespace:  "default",
+			Finalizers: []string{agentTaskFinalizer},
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective: "Build a healthcheck",
+			Repository: v1alpha1.AgentTaskRepository{
+				URL: "https://github.com/org/repo",
+			},
+			Sandbox: v1alpha1.AgentTaskSandbox{
+				Provider: "unregistered-provider",
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(task).
+		WithStatusSubresource(&v1alpha1.AgentTask{}).
+		Build()
+
+	reconciler := &AgentTaskReconciler{
+		Client:          fakeClient,
+		Scheme:          scheme,
+		SandboxRegistry: pkgsandbox.Providers,
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "task-unknown-provider"}}
+	_, err := reconciler.Reconcile(ctx, req)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unregistered-provider")
+
+	updatedTask := &v1alpha1.AgentTask{}
+	err = fakeClient.Get(ctx, req.NamespacedName, updatedTask)
+	require.NoError(t, err)
+	assert.Equal(t, v1alpha1.AgentTaskPhaseFailed, updatedTask.Status.Phase)
+	assert.Contains(t, updatedTask.Status.Message, "unregistered-provider")
 }

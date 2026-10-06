@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -120,7 +122,14 @@ func NewKubernetesSecretTokenStore(c client.Client, scheme *runtime.Scheme) *Kub
 }
 
 func secretName(taskID string) string {
-	return fmt.Sprintf("%s-token", taskID)
+	base := fmt.Sprintf("%s-token", taskID)
+	if len(base) <= 253 {
+		return base
+	}
+	h := sha256.Sum256([]byte(taskID))
+	hashStr := hex.EncodeToString(h[:8]) // 16 hex chars
+	prefixLen := 253 - len("-token-") - len(hashStr)
+	return fmt.Sprintf("%s-token-%s", taskID[:prefixLen], hashStr)
 }
 
 // SaveToken creates or updates the <task-name>-token Kubernetes Secret.
@@ -148,6 +157,10 @@ func (s *KubernetesSecretTokenStore) SaveToken(ctx context.Context, taskID, name
 		return fmt.Errorf("get token secret %s: %w", name, err)
 	}
 
+	if sec.Labels == nil || sec.Labels[LabelAgentTask] != taskID {
+		return fmt.Errorf("secret %s is not owned by agent task %s", name, taskID)
+	}
+
 	if sec.Data == nil {
 		sec.Data = make(map[string][]byte)
 	}
@@ -170,6 +183,10 @@ func (s *KubernetesSecretTokenStore) GetToken(ctx context.Context, taskID, names
 		return nil, fmt.Errorf("get token secret %s: %w", name, err)
 	}
 
+	if sec.Labels == nil || sec.Labels[LabelAgentTask] != taskID {
+		return nil, ErrTokenNotFound
+	}
+
 	if sec.Labels != nil && sec.Labels[LabelRevoked] == "true" {
 		return nil, ErrTokenRevoked
 	}
@@ -184,14 +201,20 @@ func (s *KubernetesSecretTokenStore) GetToken(ctx context.Context, taskID, names
 // DeleteToken removes the token Secret.
 func (s *KubernetesSecretTokenStore) DeleteToken(ctx context.Context, taskID, namespace string) error {
 	name := secretName(taskID)
-	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-		},
+	sec := &corev1.Secret{}
+	err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, sec)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("get token secret %s: %w", name, err)
 	}
-	err := s.client.Delete(ctx, sec)
-	if err != nil && !apierrors.IsNotFound(err) {
+
+	if sec.Labels == nil || sec.Labels[LabelAgentTask] != taskID {
+		return fmt.Errorf("secret %s is not owned by agent task %s", name, taskID)
+	}
+
+	if err := s.client.Delete(ctx, sec); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete token secret %s: %w", name, err)
 	}
 	return nil
@@ -209,6 +232,10 @@ func (s *KubernetesSecretTokenStore) RevokeToken(ctx context.Context, taskID, na
 		return fmt.Errorf("get token secret %s for revocation: %w", name, err)
 	}
 
+	if sec.Labels == nil || sec.Labels[LabelAgentTask] != taskID {
+		return fmt.Errorf("secret %s is not owned by agent task %s", name, taskID)
+	}
+
 	if sec.Labels == nil {
 		sec.Labels = make(map[string]string)
 	}
@@ -223,7 +250,10 @@ func (s *KubernetesSecretTokenStore) IsRevoked(ctx context.Context, taskID, name
 	if err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, sec); err != nil {
 		return false
 	}
-	return sec.Labels != nil && sec.Labels[LabelRevoked] == "true"
+	if sec.Labels == nil || sec.Labels[LabelAgentTask] != taskID {
+		return false
+	}
+	return sec.Labels[LabelRevoked] == "true"
 }
 
 // NoopTokenAuditor discards audit events.

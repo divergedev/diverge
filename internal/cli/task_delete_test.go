@@ -42,4 +42,8 @@ func TestTaskDeleteCmd(t *testing.T) {
 
 	err := runTaskDelete(context.Background(), app, "test-task-del")
 	require.NoError(t, err)
+
+	// Deleting a non-existent task is idempotent and succeeds without error
+	err = runTaskDelete(context.Background(), app, "non-existent-task")
+	require.NoError(t, err)
 }

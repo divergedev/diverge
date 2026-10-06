@@ -130,4 +130,8 @@ func TestKubeTaskClient(t *testing.T) {
 	require.NoError(t, err)
 	_, err = taskClient.Get(ctx, "default", "task-kube-1")
 	assert.Error(t, err)
+
+	// 8. Idempotent delete on non-existent task
+	err = taskClient.Delete(ctx, "default", "non-existent-task")
+	assert.NoError(t, err)
 }

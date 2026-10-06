@@ -94,7 +94,7 @@ func runTaskCreate(ctx context.Context, app *App, objective, name, repoURL, base
 
 	taskName := name
 	if taskName == "" {
-		taskName = fmt.Sprintf("task-%d", time.Now().Unix())
+		taskName = fmt.Sprintf("task-%d", time.Now().UnixNano())
 	}
 
 	task := &v1alpha1.AgentTask{
