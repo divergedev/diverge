@@ -88,7 +88,7 @@ func TestTaskResumeWithBudgetBump(t *testing.T) {
 		Client:    fakeClient,
 	}
 
-	err := runTaskResume(context.Background(), app, "test-task-resume-bump", "15.00", 1500000)
+	err := runTaskResume(context.Background(), app, "test-task-resume-bump", "10.00", 1000000)
 	require.NoError(t, err)
 
 	updated := &v1alpha1.AgentTask{}

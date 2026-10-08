@@ -302,6 +302,7 @@ func main() {
 			Scheme:          mgr.GetScheme(),
 			SandboxRegistry: pkgsandbox.Providers,
 			FeatureGate:     &controller.StaticFeatureGate{Enabled: true},
+			DefaultProvider: sandboxProvider,
 		}).SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "AgentTask")
 			os.Exit(1)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"connectrpc.com/connect"
@@ -78,14 +79,22 @@ func (s *AgentTaskService) CreateTask(ctx context.Context, req *connect.Request[
 		return nil, err
 	}
 
+	if msg.Spec == nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("task spec is required"))
+	}
+	if msg.Spec.Objective == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("task objective is required"))
+	}
+	if msg.Spec.Repository == nil || msg.Spec.Repository.Url == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("repository url is required"))
+	}
+
 	task := &v1alpha1.AgentTask{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      msg.Name,
 			Namespace: namespace,
 		},
-	}
-	if msg.Spec != nil {
-		task.Spec = v1alpha1.AgentTaskSpec{
+		Spec: v1alpha1.AgentTaskSpec{
 			Objective:     msg.Spec.Objective,
 			BudgetUSD:     msg.Spec.BudgetUsd,
 			BudgetTokens:  msg.Spec.BudgetTokens,
@@ -93,21 +102,19 @@ func (s *AgentTaskService) CreateTask(ctx context.Context, req *connect.Request[
 			Capabilities:  msg.Spec.Capabilities,
 			DraftPR:       msg.Spec.DraftPr,
 			Suspended:     msg.Spec.Suspended,
-		}
-		if msg.Spec.Repository != nil {
-			task.Spec.Repository = v1alpha1.AgentTaskRepository{
+			Repository: v1alpha1.AgentTaskRepository{
 				URL:           msg.Spec.Repository.Url,
 				BaseBranch:    msg.Spec.Repository.BaseBranch,
 				WorkingBranch: msg.Spec.Repository.WorkingBranch,
-			}
-		}
-		if msg.Spec.Sandbox != nil {
-			task.Spec.Sandbox = v1alpha1.AgentTaskSandbox{
-				Provider:       msg.Spec.Sandbox.Provider,
-				PoolRef:        msg.Spec.Sandbox.PoolRef,
-				TemplateRef:    msg.Spec.Sandbox.TemplateRef,
-				TimeoutSeconds: msg.Spec.Sandbox.TimeoutSeconds,
-			}
+			},
+		},
+	}
+	if msg.Spec.Sandbox != nil {
+		task.Spec.Sandbox = v1alpha1.AgentTaskSandbox{
+			Provider:       msg.Spec.Sandbox.Provider,
+			PoolRef:        msg.Spec.Sandbox.PoolRef,
+			TemplateRef:    msg.Spec.Sandbox.TemplateRef,
+			TimeoutSeconds: msg.Spec.Sandbox.TimeoutSeconds,
 		}
 	}
 
@@ -288,10 +295,20 @@ func (s *AgentTaskService) ResumeTask(ctx context.Context, req *connect.Request[
 
 	task.Spec.Suspended = false
 	if msg.BudgetUsdBump != "" {
-		task.Spec.BudgetUSD = msg.BudgetUsdBump
+		if task.Spec.BudgetUSD == "" {
+			task.Spec.BudgetUSD = msg.BudgetUsdBump
+		} else {
+			existing, err1 := strconv.ParseFloat(task.Spec.BudgetUSD, 64)
+			bump, err2 := strconv.ParseFloat(msg.BudgetUsdBump, 64)
+			if err1 == nil && err2 == nil {
+				task.Spec.BudgetUSD = fmt.Sprintf("%.2f", existing+bump)
+			} else {
+				task.Spec.BudgetUSD = msg.BudgetUsdBump
+			}
+		}
 	}
 	if msg.BudgetTokensBump > 0 {
-		task.Spec.BudgetTokens = msg.BudgetTokensBump
+		task.Spec.BudgetTokens += msg.BudgetTokensBump
 	}
 
 	if err := s.client.Update(ctx, task); err != nil {
@@ -356,6 +373,20 @@ func (s *AgentTaskService) StreamTaskLogs(
 	if namespace == "" {
 		namespace = "default"
 	}
+	if err := ValidateDNS1123Label(namespace, "namespace"); err != nil {
+		return err
+	}
+	if err := ValidateDNS1123Label(msg.Name, "name"); err != nil {
+		return err
+	}
+
+	// RBAC: Authorize agenttask access AND pod logs access BEFORE reading resource to prevent information disclosure (CWE-200)
+	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "get", namespace, "agenttasks"); err != nil {
+		return err
+	}
+	if err := AuthorizePodLogs(ctx, s.k8sClient, s.auditLogger, namespace); err != nil {
+		return err
+	}
 
 	task := &v1alpha1.AgentTask{}
 	if err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: msg.Name}, task); err != nil {
@@ -368,10 +399,6 @@ func (s *AgentTaskService) StreamTaskLogs(
 	podName := task.Status.SandboxPodName
 	if podName == "" {
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("sandbox pod not yet bound for task %s", msg.Name))
-	}
-
-	if err := AuthorizePodLogs(ctx, s.k8sClient, s.auditLogger, namespace); err != nil {
-		return err
 	}
 
 	if s.limiter != nil {

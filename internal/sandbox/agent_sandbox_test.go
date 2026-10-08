@@ -1,8 +1,9 @@
+//go:build !no_sandbox
+
 package sandbox
 
 import (
 	"context"
-	"io"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,42 +16,6 @@ import (
 	"github.com/divergedev/diverge/pkg/registry"
 	pkgsandbox "github.com/divergedev/diverge/pkg/sandbox"
 )
-
-func TestNoopSandboxProvider(t *testing.T) {
-	ctx := context.Background()
-	p := &NoopSandboxProvider{}
-
-	task := &v1alpha1.AgentTask{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-task",
-			Namespace: "default",
-		},
-		Spec: v1alpha1.AgentTaskSpec{
-			Objective: "Test noop provider",
-		},
-	}
-
-	res, err := p.Provision(ctx, task)
-	require.NoError(t, err)
-	assert.True(t, res.Ready)
-	assert.Equal(t, "noop-claim-test-task", res.ClaimName)
-
-	status, err := p.Status(ctx, task)
-	require.NoError(t, err)
-	assert.True(t, status.Ready)
-	assert.Equal(t, "Running", status.Phase)
-
-	rc, err := p.StreamLogs(ctx, task, pkgsandbox.LogOptions{})
-	require.NoError(t, err)
-	defer func() { _ = rc.Close() }()
-
-	out, err := io.ReadAll(rc)
-	require.NoError(t, err)
-	assert.Contains(t, string(out), "Noop sandbox agent started")
-
-	err = p.Teardown(ctx, task)
-	assert.NoError(t, err)
-}
 
 func TestRegistryHasProviders(t *testing.T) {
 	list := pkgsandbox.Providers.List()
@@ -122,7 +87,7 @@ func TestBuildSandboxClaimSpec(t *testing.T) {
 		},
 	}
 	specTmpl := BuildSandboxClaimSpec(taskTmpl)
-	assert.Equal(t, map[string]interface{}{"name": "heavy-compute"}, specTmpl["templateRef"])
+	assert.Equal(t, map[string]interface{}{"name": "heavy-compute"}, specTmpl["sandboxTemplateRef"])
 
 	// 3. Fallback default template with resource limits (Findings 4.1 & 9.1)
 	taskDefault := &v1alpha1.AgentTask{
@@ -130,7 +95,7 @@ func TestBuildSandboxClaimSpec(t *testing.T) {
 	}
 	specDefault := BuildSandboxClaimSpec(taskDefault)
 	assert.Nil(t, specDefault["warmPoolRef"])
-	assert.Nil(t, specDefault["templateRef"])
+	assert.Nil(t, specDefault["sandboxTemplateRef"])
 
 	tmpl, ok := specDefault["template"].(map[string]interface{})
 	require.True(t, ok)

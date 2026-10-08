@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
@@ -35,10 +36,14 @@ func runTaskDelete(ctx context.Context, app *App, name string) error {
 
 	task := &v1alpha1.AgentTask{}
 	if err := c.Get(ctx, client.ObjectKey{Namespace: app.Namespace, Name: name}, task); err != nil {
+		if apierrors.IsNotFound(err) {
+			_, _ = fmt.Fprintf(os.Stdout, "AgentTask %q not found in namespace %q.\n", name, app.Namespace)
+			return nil
+		}
 		return fmt.Errorf("get AgentTask %s: %w", name, err)
 	}
 
-	if err := c.Delete(ctx, task); err != nil {
+	if err := c.Delete(ctx, task); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete AgentTask %s: %w", name, err)
 	}
 

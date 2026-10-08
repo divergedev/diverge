@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.21.0
+    controller-gen.kubebuilder.io/version: v0.17.3
   name: agenttasks.divergedev.com
 spec:
   group: divergedev.com
@@ -85,6 +85,7 @@ spec:
                   MaxIterations sets the maximum number of autonomous build-test-review loops.
                   Defaults to 5.
                 format: int32
+                minimum: 1
                 type: integer
               objective:
                 description: Objective is the human-provided natural language task
@@ -102,6 +103,7 @@ spec:
                   url:
                     description: URL is the Git clone URL (e.g. https://github.com/org/repo
                       or git@github.com:org/repo.git).
+                    minLength: 1
                     type: string
                   workingBranch:
                     description: |-

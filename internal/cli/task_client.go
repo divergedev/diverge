@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -64,6 +65,9 @@ func (c *KubeTaskClient) List(ctx context.Context, namespace string) ([]v1alpha1
 func (c *KubeTaskClient) Delete(ctx context.Context, namespace, name string) error {
 	task := &v1alpha1.AgentTask{}
 	if err := c.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, task); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
 		return fmt.Errorf("get AgentTask %s: %w", name, err)
 	}
 	if err := c.client.Delete(ctx, task); err != nil && !apierrors.IsNotFound(err) {
@@ -93,10 +97,20 @@ func (c *KubeTaskClient) Resume(ctx context.Context, namespace, name string, bud
 	}
 	task.Spec.Suspended = false
 	if budgetUSD != "" {
-		task.Spec.BudgetUSD = budgetUSD
+		if task.Spec.BudgetUSD == "" {
+			task.Spec.BudgetUSD = budgetUSD
+		} else {
+			existing, err1 := strconv.ParseFloat(task.Spec.BudgetUSD, 64)
+			bump, err2 := strconv.ParseFloat(budgetUSD, 64)
+			if err1 == nil && err2 == nil {
+				task.Spec.BudgetUSD = fmt.Sprintf("%.2f", existing+bump)
+			} else {
+				task.Spec.BudgetUSD = budgetUSD
+			}
+		}
 	}
 	if tokens > 0 {
-		task.Spec.BudgetTokens = tokens
+		task.Spec.BudgetTokens += tokens
 	}
 	if err := c.client.Update(ctx, task); err != nil {
 		return fmt.Errorf("resume AgentTask %s: %w", name, err)
@@ -209,10 +223,20 @@ func (m *MockTaskClient) Resume(_ context.Context, namespace, name string, budge
 	}
 	task.Spec.Suspended = false
 	if budgetUSD != "" {
-		task.Spec.BudgetUSD = budgetUSD
+		if task.Spec.BudgetUSD == "" {
+			task.Spec.BudgetUSD = budgetUSD
+		} else {
+			existing, err1 := strconv.ParseFloat(task.Spec.BudgetUSD, 64)
+			bump, err2 := strconv.ParseFloat(budgetUSD, 64)
+			if err1 == nil && err2 == nil {
+				task.Spec.BudgetUSD = fmt.Sprintf("%.2f", existing+bump)
+			} else {
+				task.Spec.BudgetUSD = budgetUSD
+			}
+		}
 	}
 	if tokens > 0 {
-		task.Spec.BudgetTokens = tokens
+		task.Spec.BudgetTokens += tokens
 	}
 	return nil
 }
