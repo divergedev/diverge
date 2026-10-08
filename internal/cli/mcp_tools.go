@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -47,6 +48,14 @@ var loadtestSchema = json.RawMessage(`{
 	},
 	"required": ["target_url"]
 }`)
+
+func errorToolResult(err error) *mcpruntime.CallToolResult {
+	data, _ := json.Marshal(map[string]string{"error": err.Error()})
+	return &mcpruntime.CallToolResult{
+		Content: json.RawMessage(data),
+		IsError: true,
+	}
+}
 
 // registerWaitForReady registers the diverge_wait_for_ready MCP tool handler.
 func registerWaitForReady(registry mcpruntime.Registry, client divergev1alpha1connect.EnvironmentServiceClient) {
@@ -146,18 +155,58 @@ func registerFetchErrors(registry mcpruntime.Registry, client divergev1alpha1con
 			Namespace:       params.Namespace,
 		}))
 		if err != nil {
-			return nil, fmt.Errorf("failed to stream logs: %w", err)
+			if connect.CodeOf(err) == connect.CodeUnimplemented {
+				result, _ := json.Marshal(map[string]interface{}{
+					"environment": params.Name,
+					"namespace":   params.Namespace,
+					"error_count": 0,
+					"lines":       []string{},
+					"warning":     "log streaming is not configured or supported by this server",
+				})
+				return &mcpruntime.CallToolResult{
+					Content: json.RawMessage(result),
+				}, nil
+			}
+			return errorToolResult(err), nil
 		}
 
-		var errorLines []string
+		errorLines := make([]string, 0)
 		for stream.Receive() {
 			msg := stream.Msg()
-			line := msg.Content // content instead of line, checking streamlogsresponse
+			line := msg.Content
 			if containsErrorLevel(line) {
 				errorLines = append(errorLines, line)
 				if len(errorLines) > params.Lines {
 					errorLines = errorLines[1:]
 				}
+			}
+		}
+
+		if streamErr := stream.Err(); streamErr != nil {
+			if connect.CodeOf(streamErr) == connect.CodeUnimplemented {
+				result, _ := json.Marshal(map[string]interface{}{
+					"environment": params.Name,
+					"namespace":   params.Namespace,
+					"error_count": 0,
+					"lines":       []string{},
+					"warning":     "log streaming is not configured or supported by this server",
+				})
+				return &mcpruntime.CallToolResult{
+					Content: json.RawMessage(result),
+				}, nil
+			}
+			// Only treat deadline exceeded or canceled as normal completion if our local context was terminated.
+			// If logCtx is still active, an error code from the server (e.g. server-side timeout/cancellation)
+			// represents a failure.
+			isLocalTimeout := errors.Is(logCtx.Err(), context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded)
+			isLocalCanceled := errors.Is(logCtx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.Canceled)
+
+			isDeadlineErr := errors.Is(streamErr, context.DeadlineExceeded) || connect.CodeOf(streamErr) == connect.CodeDeadlineExceeded
+			isCanceledErr := errors.Is(streamErr, context.Canceled) || connect.CodeOf(streamErr) == connect.CodeCanceled
+
+			isNormalCompletion := (isDeadlineErr && isLocalTimeout) || (isCanceledErr && isLocalCanceled)
+			if !isNormalCompletion {
+				return errorToolResult(streamErr), nil
 			}
 		}
 
@@ -212,10 +261,7 @@ func registerLoadtest(registry mcpruntime.Registry) {
 		}
 
 		if err := validateTargetURL(params.TargetURL); err != nil {
-			return &mcpruntime.CallToolResult{
-				Content: json.RawMessage(fmt.Sprintf(`{"error": %q}`, err.Error())),
-				IsError: true,
-			}, nil
+			return errorToolResult(err), nil
 		}
 
 		duration := time.Duration(params.DurationSeconds) * time.Second
@@ -239,10 +285,7 @@ func registerLoadtest(registry mcpruntime.Registry) {
 		runner := loadtest.NewRunner()
 		res, err := runner.Run(ctx, cfg)
 		if err != nil {
-			return &mcpruntime.CallToolResult{
-				Content: json.RawMessage(fmt.Sprintf(`{"error": %q}`, err.Error())),
-				IsError: true,
-			}, nil
+			return errorToolResult(err), nil
 		}
 
 		data, err := json.Marshal(res)
@@ -293,10 +336,7 @@ func registerDoctor(registry mcpruntime.Registry, client divergev1alpha1connect.
 		if diag != nil {
 			report, err := diag.Diagnose(ctx, params.Namespace, params.Name)
 			if err != nil {
-				return &mcpruntime.CallToolResult{
-					Content: json.RawMessage(fmt.Sprintf(`{"error": %q}`, err.Error())),
-					IsError: true,
-				}, nil
+				return errorToolResult(err), nil
 			}
 			healthy = report.Healthy
 			for _, iss := range report.Issues {
@@ -312,10 +352,7 @@ func registerDoctor(registry mcpruntime.Registry, client divergev1alpha1connect.
 				Namespace: params.Namespace,
 			}))
 			if err != nil {
-				return &mcpruntime.CallToolResult{
-					Content: json.RawMessage(fmt.Sprintf(`{"error": %q}`, err.Error())),
-					IsError: true,
-				}, nil
+				return errorToolResult(err), nil
 			}
 
 			env := resp.Msg.Environment

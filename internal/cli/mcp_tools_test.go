@@ -3,6 +3,9 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -16,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	divergev1alpha1 "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
+	divergev1alpha1connect "github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/pkg/doctor"
 )
@@ -316,4 +320,249 @@ func TestRegisterDoctor_WithDiagnoser(t *testing.T) {
 	issues := data["issues"].([]interface{})
 	require.NotEmpty(t, issues)
 	assert.Contains(t, issues[0].(string), "CrashLoopBackOff")
+}
+
+func TestRegisterFetchErrors_InvalidJSON(t *testing.T) {
+	registry := mcpruntime.NewToolRegistry()
+	mockClient := &mockEnvClient{}
+	registerFetchErrors(registry, mockClient)
+
+	handler, ok := registry.Lookup("diverge_fetch_errors")
+	require.True(t, ok)
+
+	_, err := handler(context.Background(), mcpruntime.ToolRequest{
+		ToolName:  "diverge_fetch_errors",
+		Arguments: []byte(`bad-json`),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid arguments")
+}
+
+func TestRegisterFetchErrors_CodeUnimplemented(t *testing.T) {
+	registry := mcpruntime.NewToolRegistry()
+	mockClient := &mockEnvClient{
+		streamLogsErr: connect.NewError(connect.CodeUnimplemented, assert.AnError),
+	}
+	registerFetchErrors(registry, mockClient)
+
+	handler, ok := registry.Lookup("diverge_fetch_errors")
+	require.True(t, ok)
+
+	res, err := handler(context.Background(), mcpruntime.ToolRequest{
+		ToolName:  "diverge_fetch_errors",
+		Arguments: []byte(`{"name": "test-env", "namespace": "test-ns"}`),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.False(t, res.IsError)
+
+	var data map[string]interface{}
+	err = json.Unmarshal(res.Content, &data)
+	require.NoError(t, err)
+	assert.Equal(t, float64(0), data["error_count"])
+	assert.Empty(t, data["lines"])
+	assert.Contains(t, data["warning"], "not configured or supported")
+}
+
+func TestRegisterFetchErrors_StreamError(t *testing.T) {
+	registry := mcpruntime.NewToolRegistry()
+	mockClient := &mockEnvClient{
+		streamLogsErr: connect.NewError(connect.CodeNotFound, assert.AnError),
+	}
+	registerFetchErrors(registry, mockClient)
+
+	handler, ok := registry.Lookup("diverge_fetch_errors")
+	require.True(t, ok)
+
+	res, err := handler(context.Background(), mcpruntime.ToolRequest{
+		ToolName:  "diverge_fetch_errors",
+		Arguments: []byte(`{"name": "test-env", "namespace": "test-ns"}`),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.True(t, res.IsError)
+
+	var data map[string]interface{}
+	err = json.Unmarshal(res.Content, &data)
+	require.NoError(t, err)
+	assert.NotEmpty(t, data["error"])
+}
+
+type mockStreamLogsHandler struct {
+	divergev1alpha1connect.UnimplementedEnvironmentServiceHandler
+	lines     []string
+	streamErr error
+}
+
+func (m *mockStreamLogsHandler) StreamLogs(ctx context.Context, req *connect.Request[divergev1alpha1.StreamLogsRequest], stream *connect.ServerStream[divergev1alpha1.StreamLogsResponse]) error {
+	for _, l := range m.lines {
+		if err := stream.Send(&divergev1alpha1.StreamLogsResponse{Content: l}); err != nil {
+			return err
+		}
+	}
+	return m.streamErr
+}
+
+func TestRegisterFetchErrors_StreamingSuccess(t *testing.T) {
+	mockHandler := &mockStreamLogsHandler{
+		lines: []string{
+			"INFO: starting preview environment",
+			"DEBUG: config loaded",
+			"ERROR: database connection refused",
+			"FATAL: crash loop backoff",
+			"INFO: worker shutting down",
+		},
+	}
+	path, handler := divergev1alpha1connect.NewEnvironmentServiceHandler(mockHandler)
+	mux := http.NewServeMux()
+	mux.Handle(path, handler)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	client := divergev1alpha1connect.NewEnvironmentServiceClient(http.DefaultClient, srv.URL)
+
+	registry := mcpruntime.NewToolRegistry()
+	registerFetchErrors(registry, client)
+
+	h, ok := registry.Lookup("diverge_fetch_errors")
+	require.True(t, ok)
+
+	res, err := h(context.Background(), mcpruntime.ToolRequest{
+		ToolName:  "diverge_fetch_errors",
+		Arguments: []byte(`{"name": "test-env", "namespace": "test-ns", "lines": 10}`),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.False(t, res.IsError)
+
+	var data map[string]interface{}
+	err = json.Unmarshal(res.Content, &data)
+	require.NoError(t, err)
+	assert.Equal(t, float64(2), data["error_count"])
+	lines := data["lines"].([]interface{})
+	require.Len(t, lines, 2)
+	assert.Contains(t, lines[0].(string), "ERROR")
+	assert.Contains(t, lines[1].(string), "FATAL")
+}
+
+func TestRegisterFetchErrors_StreamEndsWithUnimplemented(t *testing.T) {
+	mockHandler := &mockStreamLogsHandler{
+		streamErr: connect.NewError(connect.CodeUnimplemented, assert.AnError),
+	}
+	path, handler := divergev1alpha1connect.NewEnvironmentServiceHandler(mockHandler)
+	mux := http.NewServeMux()
+	mux.Handle(path, handler)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	client := divergev1alpha1connect.NewEnvironmentServiceClient(http.DefaultClient, srv.URL)
+
+	registry := mcpruntime.NewToolRegistry()
+	registerFetchErrors(registry, client)
+
+	h, ok := registry.Lookup("diverge_fetch_errors")
+	require.True(t, ok)
+
+	res, err := h(context.Background(), mcpruntime.ToolRequest{
+		ToolName:  "diverge_fetch_errors",
+		Arguments: []byte(`{"name": "test-env", "namespace": "test-ns"}`),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.False(t, res.IsError)
+
+	var data map[string]interface{}
+	err = json.Unmarshal(res.Content, &data)
+	require.NoError(t, err)
+	assert.Equal(t, float64(0), data["error_count"])
+	assert.Contains(t, data["warning"], "not configured or supported")
+}
+
+func TestRegisterFetchErrors_ControlCharacterError(t *testing.T) {
+	ansiError := fmt.Errorf("\x1b[31mfailed with ANSI escape\x1b[0m and \x00 null byte")
+	registry := mcpruntime.NewToolRegistry()
+	mockClient := &mockEnvClient{
+		streamLogsErr: ansiError,
+	}
+	registerFetchErrors(registry, mockClient)
+
+	handler, ok := registry.Lookup("diverge_fetch_errors")
+	require.True(t, ok)
+
+	res, err := handler(context.Background(), mcpruntime.ToolRequest{
+		ToolName:  "diverge_fetch_errors",
+		Arguments: []byte(`{"name": "test-env", "namespace": "test-ns"}`),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.True(t, res.IsError)
+
+	var data map[string]interface{}
+	err = json.Unmarshal(res.Content, &data)
+	require.NoError(t, err, "Content must be valid JSON even with control characters in error message")
+	assert.Equal(t, ansiError.Error(), data["error"])
+}
+
+func TestRegisterFetchErrors_ServerDeadlineExceededWhileContextActive(t *testing.T) {
+	mockHandler := &mockStreamLogsHandler{
+		streamErr: connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("server timeout")),
+	}
+	path, handler := divergev1alpha1connect.NewEnvironmentServiceHandler(mockHandler)
+	mux := http.NewServeMux()
+	mux.Handle(path, handler)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	client := divergev1alpha1connect.NewEnvironmentServiceClient(http.DefaultClient, srv.URL)
+
+	registry := mcpruntime.NewToolRegistry()
+	registerFetchErrors(registry, client)
+
+	h, ok := registry.Lookup("diverge_fetch_errors")
+	require.True(t, ok)
+
+	res, err := h(context.Background(), mcpruntime.ToolRequest{
+		ToolName:  "diverge_fetch_errors",
+		Arguments: []byte(`{"name": "test-env", "namespace": "test-ns"}`),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.True(t, res.IsError, "Server deadline exceeded while client context is active should be marked as error")
+
+	var data map[string]interface{}
+	err = json.Unmarshal(res.Content, &data)
+	require.NoError(t, err)
+	assert.Contains(t, data["error"], "server timeout")
+}
+
+func TestRegisterFetchErrors_ServerCanceledWhileContextActive(t *testing.T) {
+	mockHandler := &mockStreamLogsHandler{
+		streamErr: connect.NewError(connect.CodeCanceled, fmt.Errorf("server cancelled call")),
+	}
+	path, handler := divergev1alpha1connect.NewEnvironmentServiceHandler(mockHandler)
+	mux := http.NewServeMux()
+	mux.Handle(path, handler)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	client := divergev1alpha1connect.NewEnvironmentServiceClient(http.DefaultClient, srv.URL)
+
+	registry := mcpruntime.NewToolRegistry()
+	registerFetchErrors(registry, client)
+
+	h, ok := registry.Lookup("diverge_fetch_errors")
+	require.True(t, ok)
+
+	res, err := h(context.Background(), mcpruntime.ToolRequest{
+		ToolName:  "diverge_fetch_errors",
+		Arguments: []byte(`{"name": "test-env", "namespace": "test-ns"}`),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.True(t, res.IsError, "Server canceled while client context is active should be marked as error")
+
+	var data map[string]interface{}
+	err = json.Unmarshal(res.Content, &data)
+	require.NoError(t, err)
+	assert.Contains(t, data["error"], "server cancelled call")
 }
