@@ -37,6 +37,28 @@ describe('AgentTasks', () => {
     expect(await screen.findByText('No agent tasks yet')).toBeInTheDocument()
   })
 
+  it('renders error alert and retry button when listTasks fails', async () => {
+    let attempts = 0
+    server.use(
+      http.post('*/diverge.v1alpha1.AgentTaskService/ListTasks', () => {
+        attempts++
+        if (attempts === 1) {
+          return HttpResponse.json({ code: 'internal', message: 'backend unavailable' }, { status: 500 })
+        }
+        return HttpResponse.json({
+          tasks: [{ name: 'recovered-task', namespace: 'default', status: { phase: 'AGENT_TASK_PHASE_ACTIVE' } }],
+        })
+      }),
+    )
+
+    renderPage()
+
+    expect(await screen.findByText('Failed to load agent tasks')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Retry/i }))
+
+    expect(await screen.findByText('recovered-task')).toBeInTheDocument()
+  })
+
   it('renders task rows with status, iterations, cost, and PR link', async () => {
     server.use(
       http.post('*/diverge.v1alpha1.AgentTaskService/ListTasks', () =>
@@ -73,40 +95,50 @@ describe('AgentTasks', () => {
     expect(screen.getByRole('link', { name: /PR/i })).toHaveAttribute('href', 'https://github.com/org/checkout/pull/42')
   })
 
-  it('filters tasks by search query', async () => {
+  it('loads subsequent pages and filters tasks across all loaded pages', async () => {
     server.use(
-      http.post('*/diverge.v1alpha1.AgentTaskService/ListTasks', () =>
-        HttpResponse.json({
+      http.post('*/diverge.v1alpha1.AgentTaskService/ListTasks', async ({ request }) => {
+        const body = (await request.json()) as { pagination?: { pageToken?: string } }
+        const token = body.pagination?.pageToken ?? ''
+        if (!token) {
+          return HttpResponse.json({
+            tasks: [
+              {
+                name: 'task-page-1',
+                namespace: 'default',
+                spec: { objective: 'Add login metric' },
+                status: { phase: 'AGENT_TASK_PHASE_ACTIVE' },
+              },
+            ],
+            pagination: { nextPageToken: 'page-2' },
+          })
+        }
+        return HttpResponse.json({
           tasks: [
             {
-              name: 'task-alpha',
-              namespace: 'default',
-              spec: { objective: 'Add login metric' },
-              status: { phase: 'AGENT_TASK_PHASE_ACTIVE' },
-            },
-            {
-              name: 'task-beta',
+              name: 'task-page-2',
               namespace: 'default',
               spec: { objective: 'Refactor billing query' },
               status: { phase: 'AGENT_TASK_PHASE_COMPLETED' },
             },
           ],
-        }),
-      ),
+          pagination: { nextPageToken: '' },
+        })
+      }),
     )
 
     renderPage()
 
-    expect(await screen.findByText('task-alpha')).toBeInTheDocument()
-    expect(screen.getByText('task-beta')).toBeInTheDocument()
+    expect(await screen.findByText('task-page-1')).toBeInTheDocument()
+    expect(screen.getByText('task-page-2')).toBeInTheDocument()
 
     fireEvent.change(screen.getByPlaceholderText('Search tasks...'), {
       target: { value: 'billing' },
     })
 
     await waitFor(() => {
-      expect(screen.queryByText('task-alpha')).not.toBeInTheDocument()
-      expect(screen.getByText('task-beta')).toBeInTheDocument()
+      expect(screen.queryByText('task-page-1')).not.toBeInTheDocument()
+      expect(screen.getByText('task-page-2')).toBeInTheDocument()
     })
   })
 })

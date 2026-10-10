@@ -8,7 +8,7 @@ export const queryKeys = {
   environment: (ns: string, name: string) => ['environment', ns, name] as const,
   previewGroups: (ns?: string) => ['previewGroups', ns ?? 'all'] as const,
   previewGroup: (ns: string, name: string) => ['previewGroup', ns, name] as const,
-  agentTasks: (ns?: string) => ['agentTasks', ns ?? 'all'] as const,
+  agentTasks: (ns?: string, pageSize = 100, pageToken = '') => ['agentTasks', ns ?? 'all', pageSize, pageToken] as const,
   agentTask: (ns: string, name: string) => ['agentTask', ns, name] as const,
   hookJobs: (ns: string, envName: string) => ['hookJobs', ns, envName] as const,
   clusterInfo: ['clusterInfo'] as const,
@@ -141,15 +141,47 @@ export function useRetryHook() {
 }
 
 export function useListAgentTasks(params: { namespace?: string; pageSize?: number; pageToken?: string } = {}) {
+  const pageSize = params.pageSize ?? 100
+  const pageToken = params.pageToken ?? ''
   return useQuery({
-    queryKey: queryKeys.agentTasks(params.namespace),
-    queryFn: () => agentTaskClient.listTasks({
-      namespace: params.namespace ?? '',
-      pagination: {
-        pageSize: params.pageSize ?? 100,
-        pageToken: params.pageToken ?? '',
-      },
-    }),
+    queryKey: queryKeys.agentTasks(params.namespace, pageSize, pageToken),
+    queryFn: async () => {
+      if (pageToken) {
+        return agentTaskClient.listTasks({
+          namespace: params.namespace ?? '',
+          pagination: { pageSize, pageToken },
+        })
+      }
+
+      const allTasks: Awaited<ReturnType<typeof agentTaskClient.listTasks>>['tasks'] = []
+      let currentToken = ''
+      let lastResp: Awaited<ReturnType<typeof agentTaskClient.listTasks>> | undefined
+      const seenTokens = new Set<string>()
+
+      for (let page = 0; page < 50; page++) {
+        const resp = await agentTaskClient.listTasks({
+          namespace: params.namespace ?? '',
+          pagination: { pageSize, pageToken: currentToken },
+        })
+        lastResp = resp
+        allTasks.push(...(resp.tasks ?? []))
+        const nextToken = resp.pagination?.nextPageToken ?? ''
+        if (!nextToken || seenTokens.has(nextToken)) {
+          break
+        }
+        seenTokens.add(nextToken)
+        currentToken = nextToken
+      }
+
+      if (lastResp) {
+        lastResp.tasks = allTasks
+        return lastResp
+      }
+      return agentTaskClient.listTasks({
+        namespace: params.namespace ?? '',
+        pagination: { pageSize, pageToken: '' },
+      })
+    },
     refetchInterval: 5000,
   })
 }
