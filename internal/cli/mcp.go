@@ -228,6 +228,84 @@ func (h *mcpTaskHandler) GuideTask(ctx context.Context, req *divergev1alpha1.Gui
 	return resp.Msg, nil
 }
 
+type mcpToolMeta struct {
+	description string
+	annotations mcp.ToolAnnotation
+}
+
+var agentTaskToolMetadata = map[string]mcpToolMeta{
+	"diverge_create_task": {
+		description: "Create and launch an autonomous AgentTask in an isolated sandbox for a repository and objective.",
+		annotations: mcp.ToolAnnotation{
+			Title:           "Create Agent Task",
+			ReadOnlyHint:    mcp.ToBoolPtr(false),
+			DestructiveHint: mcp.ToBoolPtr(false),
+			IdempotentHint:  mcp.ToBoolPtr(false),
+			OpenWorldHint:   mcp.ToBoolPtr(true),
+		},
+	},
+	"diverge_get_task": {
+		description: "Get the current specification, lifecycle phase, sandbox status, and cost/token usage of an AgentTask.",
+		annotations: mcp.ToolAnnotation{
+			Title:           "Get Agent Task",
+			ReadOnlyHint:    mcp.ToBoolPtr(true),
+			DestructiveHint: mcp.ToBoolPtr(false),
+			IdempotentHint:  mcp.ToBoolPtr(true),
+			OpenWorldHint:   mcp.ToBoolPtr(false),
+		},
+	},
+	"diverge_list_tasks": {
+		description: "List AgentTasks in a namespace with optional pagination.",
+		annotations: mcp.ToolAnnotation{
+			Title:           "List Agent Tasks",
+			ReadOnlyHint:    mcp.ToBoolPtr(true),
+			DestructiveHint: mcp.ToBoolPtr(false),
+			IdempotentHint:  mcp.ToBoolPtr(true),
+			OpenWorldHint:   mcp.ToBoolPtr(false),
+		},
+	},
+	"diverge_delete_task": {
+		description: "Delete an AgentTask and tear down its associated sandbox resources.",
+		annotations: mcp.ToolAnnotation{
+			Title:           "Delete Agent Task",
+			ReadOnlyHint:    mcp.ToBoolPtr(false),
+			DestructiveHint: mcp.ToBoolPtr(true),
+			IdempotentHint:  mcp.ToBoolPtr(true),
+			OpenWorldHint:   mcp.ToBoolPtr(false),
+		},
+	},
+	"diverge_pause_task": {
+		description: "Pause execution of an active AgentTask and suspend its sandbox.",
+		annotations: mcp.ToolAnnotation{
+			Title:           "Pause Agent Task",
+			ReadOnlyHint:    mcp.ToBoolPtr(false),
+			DestructiveHint: mcp.ToBoolPtr(false),
+			IdempotentHint:  mcp.ToBoolPtr(true),
+			OpenWorldHint:   mcp.ToBoolPtr(false),
+		},
+	},
+	"diverge_resume_task": {
+		description: "Resume execution of a paused AgentTask, optionally bumping its USD or token budget.",
+		annotations: mcp.ToolAnnotation{
+			Title:           "Resume Agent Task",
+			ReadOnlyHint:    mcp.ToBoolPtr(false),
+			DestructiveHint: mcp.ToBoolPtr(false),
+			IdempotentHint:  mcp.ToBoolPtr(false),
+			OpenWorldHint:   mcp.ToBoolPtr(true),
+		},
+	},
+	"diverge_guide_task": {
+		description: "Send real-time steering guidance or instructions to an active AgentTask.",
+		annotations: mcp.ToolAnnotation{
+			Title:           "Guide Agent Task",
+			ReadOnlyHint:    mcp.ToBoolPtr(false),
+			DestructiveHint: mcp.ToBoolPtr(false),
+			IdempotentHint:  mcp.ToBoolPtr(false),
+			OpenWorldHint:   mcp.ToBoolPtr(false),
+		},
+	},
+}
+
 func newMCPServer(envClient divergev1alpha1connect.EnvironmentServiceClient, pgClient divergev1alpha1connect.PreviewGroupServiceClient, taskClient divergev1alpha1connect.AgentTaskServiceClient, allowDestructive bool, diagnoser ...*doctor.Diagnoser) *server.MCPServer {
 	registry := mcpruntime.NewToolRegistry()
 
@@ -275,6 +353,12 @@ func newMCPServer(envClient divergev1alpha1connect.EnvironmentServiceClient, pgC
 			Name:        toolName,
 			Description: def.Description,
 			InputSchema: toolSchema,
+		}
+		if meta, ok := agentTaskToolMetadata[toolName]; ok {
+			if tool.Description == "" {
+				tool.Description = meta.description
+			}
+			tool.Annotations = meta.annotations
 		}
 
 		lookupName := def.Name

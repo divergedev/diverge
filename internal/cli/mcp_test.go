@@ -155,18 +155,28 @@ func TestMCPToolRegistration(t *testing.T) {
 		assert.Contains(t, tools, name, "expected PreviewGroupService tool %s to be registered", name)
 	}
 
-	// Verify all expected AgentTaskService tools are registered
-	expectedTaskTools := []string{
-		"diverge_create_task",
-		"diverge_get_task",
-		"diverge_list_tasks",
-		"diverge_delete_task",
-		"diverge_pause_task",
-		"diverge_resume_task",
-		"diverge_guide_task",
+	// Verify all expected AgentTaskService tools are registered with descriptions and side-effect annotations
+	expectedTaskTools := map[string]struct {
+		readOnly    bool
+		destructive bool
+	}{
+		"diverge_create_task": {readOnly: false, destructive: false},
+		"diverge_get_task":    {readOnly: true, destructive: false},
+		"diverge_list_tasks":  {readOnly: true, destructive: false},
+		"diverge_delete_task": {readOnly: false, destructive: true},
+		"diverge_pause_task":  {readOnly: false, destructive: false},
+		"diverge_resume_task": {readOnly: false, destructive: false},
+		"diverge_guide_task":  {readOnly: false, destructive: false},
 	}
-	for _, name := range expectedTaskTools {
-		assert.Contains(t, tools, name, "expected AgentTaskService tool %s to be registered", name)
+	for name, expected := range expectedTaskTools {
+		serverTool, ok := tools[name]
+		if assert.True(t, ok, "expected AgentTaskService tool %s to be registered", name) {
+			assert.NotEmpty(t, serverTool.Tool.Description, "tool %s must have a non-empty description", name)
+			require.NotNil(t, serverTool.Tool.Annotations.ReadOnlyHint, "tool %s must set ReadOnlyHint", name)
+			assert.Equal(t, expected.readOnly, *serverTool.Tool.Annotations.ReadOnlyHint, "unexpected ReadOnlyHint for %s", name)
+			require.NotNil(t, serverTool.Tool.Annotations.DestructiveHint, "tool %s must set DestructiveHint", name)
+			assert.Equal(t, expected.destructive, *serverTool.Tool.Annotations.DestructiveHint, "unexpected DestructiveHint for %s", name)
+		}
 	}
 
 	// Verify Auth, Cluster, and Tunnel services are NOT registered
