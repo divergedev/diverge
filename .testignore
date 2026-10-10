@@ -10,7 +10,6 @@ pkg/auth/models.go
 pkg/database/provider.go
 pkg/database/registry.go
 pkg/features/provider.go
-pkg/sandbox/provider.go
 
 # --- Provider registration glue (auto-registration via init(), no logic) ---
 internal/async/kafka_register.go
@@ -46,7 +45,6 @@ internal/deployer/noop.go
 internal/notifier/noop.go
 internal/notifier/noop_status.go
 internal/routing/noop.go
-internal/sandbox/noop.go
 internal/testing/noop.go
 
 # --- Embed / generated / platform-specific ---

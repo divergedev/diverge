@@ -235,3 +235,22 @@ func TestAuthInterceptor_Metrics(t *testing.T) {
 	}
 	assert.True(t, foundFail)
 }
+
+func TestSanitizeMethod_KnownProcedures(t *testing.T) {
+	known := []string{
+		"/diverge.v1alpha1.EnvironmentService/ListHookJobs",
+		"/diverge.v1alpha1.EnvironmentService/RetryHook",
+		"/diverge.v1alpha1.AgentTaskService/CreateTask",
+		"/diverge.v1alpha1.AgentTaskService/GetTask",
+		"/diverge.v1alpha1.AgentTaskService/ListTasks",
+		"/diverge.v1alpha1.AgentTaskService/DeleteTask",
+		"/diverge.v1alpha1.AgentTaskService/PauseTask",
+		"/diverge.v1alpha1.AgentTaskService/ResumeTask",
+		"/diverge.v1alpha1.AgentTaskService/GuideTask",
+		"/diverge.v1alpha1.AgentTaskService/StreamTaskLogs",
+	}
+	for _, proc := range known {
+		assert.Equal(t, proc, sanitizeMethod(proc))
+	}
+	assert.Equal(t, "unknown", sanitizeMethod("/diverge.v1alpha1.AgentTaskService/NonExistent"))
+}

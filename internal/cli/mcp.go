@@ -134,14 +134,6 @@ func (h *mcpEnvHandler) RetryHook(ctx context.Context, req *divergev1alpha1.Retr
 	return resp.Msg, nil
 }
 
-// Stub out the skipped streaming methods that were temporarily un-streamed
-func (h *mcpEnvHandler) WatchEnvironments(ctx context.Context, req *divergev1alpha1.WatchEnvironmentsRequest) (*divergev1alpha1.WatchEnvironmentsResponse, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-func (h *mcpEnvHandler) StreamLogs(ctx context.Context, req *divergev1alpha1.StreamLogsRequest) (*divergev1alpha1.StreamLogsResponse, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-
 type mcpPgHandler struct {
 	client divergev1alpha1connect.PreviewGroupServiceClient
 }
@@ -181,11 +173,140 @@ func (h *mcpPgHandler) DeletePreviewGroup(ctx context.Context, req *divergev1alp
 	}
 	return resp.Msg, nil
 }
-func (h *mcpPgHandler) WatchPreviewGroups(ctx context.Context, req *divergev1alpha1.WatchPreviewGroupsRequest) (*divergev1alpha1.WatchPreviewGroupsResponse, error) {
-	return nil, fmt.Errorf("not implemented")
+
+type mcpTaskHandler struct {
+	client divergev1alpha1connect.AgentTaskServiceClient
 }
 
-func newMCPServer(envClient divergev1alpha1connect.EnvironmentServiceClient, pgClient divergev1alpha1connect.PreviewGroupServiceClient, allowDestructive bool, diagnoser ...*doctor.Diagnoser) *server.MCPServer {
+func (h *mcpTaskHandler) CreateTask(ctx context.Context, req *divergev1alpha1.CreateTaskRequest) (*divergev1alpha1.CreateTaskResponse, error) {
+	resp, err := h.client.CreateTask(ctx, connect.NewRequest(req))
+	if err != nil {
+		return nil, err
+	}
+	return resp.Msg, nil
+}
+func (h *mcpTaskHandler) GetTask(ctx context.Context, req *divergev1alpha1.GetTaskRequest) (*divergev1alpha1.GetTaskResponse, error) {
+	resp, err := h.client.GetTask(ctx, connect.NewRequest(req))
+	if err != nil {
+		return nil, err
+	}
+	return resp.Msg, nil
+}
+func (h *mcpTaskHandler) ListTasks(ctx context.Context, req *divergev1alpha1.ListTasksRequest) (*divergev1alpha1.ListTasksResponse, error) {
+	resp, err := h.client.ListTasks(ctx, connect.NewRequest(req))
+	if err != nil {
+		return nil, err
+	}
+	return resp.Msg, nil
+}
+func (h *mcpTaskHandler) DeleteTask(ctx context.Context, req *divergev1alpha1.DeleteTaskRequest) (*divergev1alpha1.DeleteTaskResponse, error) {
+	resp, err := h.client.DeleteTask(ctx, connect.NewRequest(req))
+	if err != nil {
+		return nil, err
+	}
+	return resp.Msg, nil
+}
+func (h *mcpTaskHandler) PauseTask(ctx context.Context, req *divergev1alpha1.PauseTaskRequest) (*divergev1alpha1.PauseTaskResponse, error) {
+	resp, err := h.client.PauseTask(ctx, connect.NewRequest(req))
+	if err != nil {
+		return nil, err
+	}
+	return resp.Msg, nil
+}
+func (h *mcpTaskHandler) ResumeTask(ctx context.Context, req *divergev1alpha1.ResumeTaskRequest) (*divergev1alpha1.ResumeTaskResponse, error) {
+	resp, err := h.client.ResumeTask(ctx, connect.NewRequest(req))
+	if err != nil {
+		return nil, err
+	}
+	return resp.Msg, nil
+}
+func (h *mcpTaskHandler) GuideTask(ctx context.Context, req *divergev1alpha1.GuideTaskRequest) (*divergev1alpha1.GuideTaskResponse, error) {
+	resp, err := h.client.GuideTask(ctx, connect.NewRequest(req))
+	if err != nil {
+		return nil, err
+	}
+	return resp.Msg, nil
+}
+
+type mcpToolMeta struct {
+	description string
+	annotations mcp.ToolAnnotation
+}
+
+var agentTaskToolMetadata = map[string]mcpToolMeta{
+	"diverge_create_task": {
+		description: "Create and launch an autonomous AgentTask in an isolated sandbox for a repository and objective.",
+		annotations: mcp.ToolAnnotation{
+			Title:           "Create Agent Task",
+			ReadOnlyHint:    mcp.ToBoolPtr(false),
+			DestructiveHint: mcp.ToBoolPtr(false),
+			IdempotentHint:  mcp.ToBoolPtr(false),
+			OpenWorldHint:   mcp.ToBoolPtr(true),
+		},
+	},
+	"diverge_get_task": {
+		description: "Get the current specification, lifecycle phase, sandbox status, and cost/token usage of an AgentTask.",
+		annotations: mcp.ToolAnnotation{
+			Title:           "Get Agent Task",
+			ReadOnlyHint:    mcp.ToBoolPtr(true),
+			DestructiveHint: mcp.ToBoolPtr(false),
+			IdempotentHint:  mcp.ToBoolPtr(true),
+			OpenWorldHint:   mcp.ToBoolPtr(false),
+		},
+	},
+	"diverge_list_tasks": {
+		description: "List AgentTasks in a namespace with optional pagination.",
+		annotations: mcp.ToolAnnotation{
+			Title:           "List Agent Tasks",
+			ReadOnlyHint:    mcp.ToBoolPtr(true),
+			DestructiveHint: mcp.ToBoolPtr(false),
+			IdempotentHint:  mcp.ToBoolPtr(true),
+			OpenWorldHint:   mcp.ToBoolPtr(false),
+		},
+	},
+	"diverge_delete_task": {
+		description: "Delete an AgentTask and tear down its associated sandbox resources.",
+		annotations: mcp.ToolAnnotation{
+			Title:           "Delete Agent Task",
+			ReadOnlyHint:    mcp.ToBoolPtr(false),
+			DestructiveHint: mcp.ToBoolPtr(true),
+			IdempotentHint:  mcp.ToBoolPtr(true),
+			OpenWorldHint:   mcp.ToBoolPtr(false),
+		},
+	},
+	"diverge_pause_task": {
+		description: "Pause execution of an active AgentTask and suspend its sandbox.",
+		annotations: mcp.ToolAnnotation{
+			Title:           "Pause Agent Task",
+			ReadOnlyHint:    mcp.ToBoolPtr(false),
+			DestructiveHint: mcp.ToBoolPtr(false),
+			IdempotentHint:  mcp.ToBoolPtr(true),
+			OpenWorldHint:   mcp.ToBoolPtr(false),
+		},
+	},
+	"diverge_resume_task": {
+		description: "Resume execution of a paused AgentTask, optionally bumping its USD or token budget.",
+		annotations: mcp.ToolAnnotation{
+			Title:           "Resume Agent Task",
+			ReadOnlyHint:    mcp.ToBoolPtr(false),
+			DestructiveHint: mcp.ToBoolPtr(false),
+			IdempotentHint:  mcp.ToBoolPtr(false),
+			OpenWorldHint:   mcp.ToBoolPtr(true),
+		},
+	},
+	"diverge_guide_task": {
+		description: "Send real-time steering guidance or instructions to an active AgentTask.",
+		annotations: mcp.ToolAnnotation{
+			Title:           "Guide Agent Task",
+			ReadOnlyHint:    mcp.ToBoolPtr(false),
+			DestructiveHint: mcp.ToBoolPtr(false),
+			IdempotentHint:  mcp.ToBoolPtr(false),
+			OpenWorldHint:   mcp.ToBoolPtr(false),
+		},
+	},
+}
+
+func newMCPServer(envClient divergev1alpha1connect.EnvironmentServiceClient, pgClient divergev1alpha1connect.PreviewGroupServiceClient, taskClient divergev1alpha1connect.AgentTaskServiceClient, allowDestructive bool, diagnoser ...*doctor.Diagnoser) *server.MCPServer {
 	registry := mcpruntime.NewToolRegistry()
 
 	envHandler := &mcpEnvHandler{client: envClient}
@@ -193,6 +314,11 @@ func newMCPServer(envClient divergev1alpha1connect.EnvironmentServiceClient, pgC
 
 	pgHandler := &mcpPgHandler{client: pgClient}
 	divergev1alpha1.RegisterPreviewGroupServiceMCP(registry, pgHandler, mcpruntime.WithToolNamer(divergeToolNamer))
+
+	if taskClient != nil {
+		taskHandler := &mcpTaskHandler{client: taskClient}
+		divergev1alpha1.RegisterAgentTaskServiceMCP(registry, taskHandler, mcpruntime.WithToolNamer(divergeToolNamer))
+	}
 
 	registerWaitForReady(registry, envClient)
 	registerFetchErrors(registry, envClient)
@@ -207,8 +333,8 @@ func newMCPServer(envClient divergev1alpha1connect.EnvironmentServiceClient, pgC
 			toolName = divergeToolNamer(service, method)
 		}
 
-		// Skip streaming methods (proto2mcp generated them because it couldn't skip them, but MCP tools are request-response)
-		if strings.Contains(toolName, "watch") || strings.Contains(toolName, "stream_logs") {
+		// Skip streaming methods (MCP tools are request-response)
+		if strings.Contains(toolName, "watch") || strings.Contains(toolName, "stream_") {
 			continue
 		}
 
@@ -227,6 +353,12 @@ func newMCPServer(envClient divergev1alpha1connect.EnvironmentServiceClient, pgC
 			Name:        toolName,
 			Description: def.Description,
 			InputSchema: toolSchema,
+		}
+		if meta, ok := agentTaskToolMetadata[toolName]; ok {
+			if tool.Description == "" {
+				tool.Description = meta.description
+			}
+			tool.Annotations = meta.annotations
 		}
 
 		lookupName := def.Name
@@ -297,13 +429,14 @@ func runMCP(ctx context.Context, app *App, serverURL string, allowDestructive bo
 	httpClient := http.DefaultClient
 	envClient := divergev1alpha1connect.NewEnvironmentServiceClient(httpClient, serverURL)
 	pgClient := divergev1alpha1connect.NewPreviewGroupServiceClient(httpClient, serverURL)
+	taskClient := divergev1alpha1connect.NewAgentTaskServiceClient(httpClient, serverURL)
 
 	var diagnoser *doctor.Diagnoser
 	if c, _, err := app.KubeClient(); err == nil && c != nil {
 		diagnoser = doctor.NewDiagnoser(c)
 	}
 
-	mcpServer := newMCPServer(envClient, pgClient, allowDestructive, diagnoser)
+	mcpServer := newMCPServer(envClient, pgClient, taskClient, allowDestructive, diagnoser)
 
 	return server.ServeStdio(mcpServer)
 }

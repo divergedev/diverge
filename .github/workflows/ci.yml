@@ -187,13 +187,17 @@ jobs:
   sdk-node-test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['20', '22']
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22'
+          node-version: ${{ matrix.node-version }}
           cache: 'npm'
           cache-dependency-path: pkg/sdk/node/package-lock.json
       - run: npm ci
@@ -204,15 +208,20 @@ jobs:
   sdk-python-test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182 # v5
         with:
+          python-version: ${{ matrix.python-version }}
           enable-cache: true
           cache-dependency-glob: pkg/sdk/python/uv.lock
-      - run: uv sync --all-extras
+      - run: uv sync --python ${{ matrix.python-version }} --all-extras
         working-directory: pkg/sdk/python
-      - run: uv run pytest tests/ -v
+      - run: uv run --python ${{ matrix.python-version }} pytest tests/ -v
         working-directory: pkg/sdk/python
