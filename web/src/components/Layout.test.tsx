@@ -7,6 +7,7 @@ describe('Layout', () => {
     render(<Layout />)
     expect(screen.getByText('Environments')).toBeInTheDocument()
     expect(screen.getByText('Preview Groups')).toBeInTheDocument()
+    expect(screen.getByText('Agent Tasks')).toBeInTheDocument()
     expect(screen.getByText('Cluster')).toBeInTheDocument()
   })
 
@@ -14,6 +15,7 @@ describe('Layout', () => {
     render(<Layout />)
     expect(screen.getByText('Environments').closest('a')).toHaveAttribute('href', '/')
     expect(screen.getByText('Preview Groups').closest('a')).toHaveAttribute('href', '/preview-groups')
+    expect(screen.getByText('Agent Tasks').closest('a')).toHaveAttribute('href', '/tasks')
     expect(screen.getByText('Cluster').closest('a')).toHaveAttribute('href', '/cluster')
   })
 

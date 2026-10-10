@@ -1,0 +1,313 @@
+import { useState, useEffect } from 'react'
+import { useParams, useNavigate, Link } from 'react-router-dom'
+import { stringify as yamlStringify } from 'yaml'
+import {
+  useGetAgentTask,
+  useDeleteAgentTask,
+  usePauseAgentTask,
+  useResumeAgentTask,
+  useGuideAgentTask,
+} from '@/api/queries'
+import { AgentTaskPhase } from '@/api/gen/diverge/v1alpha1/agenttask_pb'
+import { StatusBadge, formatAgentTaskPhase } from '@/components/StatusBadge'
+import { TaskLogViewer } from '@/components/TaskLogViewer'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
+import {
+  ArrowLeft,
+  ExternalLink,
+  Trash2,
+  Pause,
+  Play,
+  Send,
+  AlertCircle,
+  CheckCircle,
+} from 'lucide-react'
+
+export default function AgentTaskDetail() {
+  const { namespace = '', name = '' } = useParams()
+  const navigate = useNavigate()
+  const { data, isLoading, error, refetch } = useGetAgentTask(namespace, name)
+  const deleteTask = useDeleteAgentTask()
+  const pauseTask = usePauseAgentTask()
+  const resumeTask = useResumeAgentTask()
+  const guideTask = useGuideAgentTask()
+
+  const [activeTab, setActiveTab] = useState('overview')
+  const [mutationError, setMutationError] = useState<string | null>(null)
+  const [successMessage, setSuccessMessage] = useState<string | null>(null)
+  const [guidanceMessage, setGuidanceMessage] = useState('')
+  const [resumeDialogOpen, setResumeDialogOpen] = useState(false)
+  const [budgetUsdBump, setBudgetUsdBump] = useState('')
+
+  useEffect(() => {
+    if (!successMessage) return
+    const timer = setTimeout(() => setSuccessMessage(null), 4000)
+    return () => clearTimeout(timer)
+  }, [successMessage])
+
+  if (isLoading) {
+    return <div className="flex justify-center py-16"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" /></div>
+  }
+
+  if (error) {
+    return (
+      <div className="text-center py-16 space-y-4" role="alert">
+        <AlertCircle className="h-10 w-10 text-destructive mx-auto" />
+        <h2 className="text-xl font-semibold">Failed to load agent task</h2>
+        <p className="text-muted-foreground">{error.message}</p>
+        <Button variant="outline" onClick={() => refetch()}>Retry</Button>
+      </div>
+    )
+  }
+
+  const task = data?.task
+  if (!task) {
+    return <div className="text-center py-16"><h2 className="text-xl font-semibold">Agent task not found</h2></div>
+  }
+
+  const phase = task.status?.phase
+  const phaseLabel = formatAgentTaskPhase(phase)
+  const isPaused = phase === AgentTaskPhase.PAUSED || task.spec?.suspended
+  const canPause = !isPaused && (phase === AgentTaskPhase.ACTIVE || phase === AgentTaskPhase.PROVISIONING || phase === AgentTaskPhase.PENDING)
+
+  const handleDelete = async () => {
+    if (!confirm(`Delete agent task ${namespace}/${name}?`)) return
+    setMutationError(null)
+    try {
+      await deleteTask.mutateAsync({ namespace, name })
+      navigate('/tasks')
+    } catch (err) {
+      setMutationError(err instanceof Error ? err.message : 'Failed to delete task')
+    }
+  }
+
+  const handlePause = async () => {
+    setMutationError(null)
+    try {
+      await pauseTask.mutateAsync({ namespace, name })
+      setSuccessMessage('Task paused')
+    } catch (err) {
+      setMutationError(err instanceof Error ? err.message : 'Failed to pause task')
+    }
+  }
+
+  const handleResume = async () => {
+    setMutationError(null)
+    try {
+      await resumeTask.mutateAsync({
+        namespace,
+        name,
+        budgetUsdBump: budgetUsdBump.trim() || undefined,
+      })
+      setResumeDialogOpen(false)
+      setBudgetUsdBump('')
+      setSuccessMessage(budgetUsdBump.trim() ? `Task resumed (+$${budgetUsdBump.trim()} budget)` : 'Task resumed')
+    } catch (err) {
+      setMutationError(err instanceof Error ? err.message : 'Failed to resume task')
+      setResumeDialogOpen(false)
+    }
+  }
+
+  const handleGuide = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!guidanceMessage.trim()) return
+    setMutationError(null)
+    try {
+      await guideTask.mutateAsync({
+        namespace,
+        name,
+        message: guidanceMessage.trim(),
+      })
+      setGuidanceMessage('')
+      setSuccessMessage('Guidance sent to agent sandbox')
+    } catch (err) {
+      setMutationError(err instanceof Error ? err.message : 'Failed to send guidance')
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      {mutationError && (
+        <div className="bg-destructive/10 border border-destructive/20 text-destructive px-4 py-3 rounded-md flex items-center gap-2 text-sm" role="alert">
+          <AlertCircle className="h-4 w-4 flex-shrink-0" />
+          {mutationError}
+        </div>
+      )}
+
+      {successMessage && (
+        <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-400 px-4 py-3 rounded-md flex items-center gap-2 text-sm" role="status">
+          <CheckCircle className="h-4 w-4 flex-shrink-0" />
+          {successMessage}
+        </div>
+      )}
+
+      <div className="flex items-center gap-4">
+        <Link to="/tasks" aria-label="Back to agent tasks" className="inline-flex items-center justify-center h-9 w-9 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground">
+          <ArrowLeft className="h-4 w-4" />
+        </Link>
+        <div className="flex-1">
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-bold">{task.name}</h1>
+            <StatusBadge phase={phaseLabel} />
+          </div>
+          <p className="text-muted-foreground">{task.namespace}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {task.status?.prUrl && (
+            <a href={task.status.prUrl} target="_blank" rel="noreferrer">
+              <Button variant="outline" size="sm"><ExternalLink className="h-4 w-4 mr-2" />Open PR</Button>
+            </a>
+          )}
+          {canPause && (
+            <Button variant="outline" size="sm" onClick={handlePause} disabled={pauseTask.isPending}>
+              <Pause className="h-4 w-4 mr-2" />Pause
+            </Button>
+          )}
+          {isPaused && (
+            <Button variant="outline" size="sm" onClick={() => setResumeDialogOpen(true)} disabled={resumeTask.isPending}>
+              <Play className="h-4 w-4 mr-2" />Resume
+            </Button>
+          )}
+          <Button variant="destructive" size="sm" onClick={handleDelete} disabled={deleteTask.isPending}>
+            <Trash2 className="h-4 w-4 mr-2" />Delete
+          </Button>
+        </div>
+      </div>
+
+      {/* Live Steering Guidance Bar */}
+      <Card>
+        <CardContent className="p-4">
+          <form onSubmit={handleGuide} className="flex items-center gap-3">
+            <Input
+              aria-label="Guidance message"
+              placeholder="Send live steering guidance or instructions to the agent..."
+              value={guidanceMessage}
+              onChange={(e) => setGuidanceMessage(e.target.value)}
+              className="flex-1"
+            />
+            <Button type="submit" size="sm" disabled={guideTask.isPending || !guidanceMessage.trim()}>
+              <Send className="h-4 w-4 mr-2" />
+              {guideTask.isPending ? 'Sending...' : 'Guide Agent'}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <TabsList>
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="logs">Logs</TabsTrigger>
+          <TabsTrigger value="yaml">YAML</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="overview" className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Card>
+              <CardHeader><CardTitle className="text-base">Objective & Repository</CardTitle></CardHeader>
+              <CardContent className="space-y-3 text-sm">
+                <div>
+                  <span className="text-muted-foreground block mb-1">Objective</span>
+                  <p className="font-medium whitespace-pre-wrap">{task.spec?.objective || '—'}</p>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Repository</span>
+                  <span className="font-mono text-xs">{task.spec?.repository?.url || '—'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Base Branch</span>
+                  <span>{task.spec?.repository?.baseBranch || 'main'}</span>
+                </div>
+                {task.spec?.repository?.workingBranch && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Working Branch</span>
+                    <span className="font-mono text-xs">{task.spec.repository.workingBranch}</span>
+                  </div>
+                )}
+                {task.status?.message && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Status Message</span>
+                    <span>{task.status.message}</span>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader><CardTitle className="text-base">Execution & Budget</CardTitle></CardHeader>
+              <CardContent className="space-y-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Phase</span>
+                  <StatusBadge phase={phaseLabel} />
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Iterations</span>
+                  <span>{task.status?.iteration ?? 0} / {task.spec?.maxIterations || '∞'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Cost (USD)</span>
+                  <span>${task.status?.costUsd || '0.00'} / ${task.spec?.budgetUsd || '—'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Tokens Consumed</span>
+                  <span>{String(task.status?.tokensConsumed ?? 0)}{task.spec?.budgetTokens ? ` / ${String(task.spec.budgetTokens)}` : ''}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Sandbox Claim</span>
+                  <span className="font-mono text-xs">{task.status?.sandboxClaimRef || '—'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Sandbox Pod</span>
+                  <span className="font-mono text-xs">{task.status?.sandboxPodName || '—'}</span>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="logs">
+          <TaskLogViewer namespace={namespace} name={name} />
+        </TabsContent>
+
+        <TabsContent value="yaml">
+          <Card>
+            <CardContent className="p-0">
+              <pre className="p-4 text-xs font-mono overflow-auto max-h-[600px] bg-black text-gray-200 rounded-md">
+                {yamlStringify(task.toJson?.() ?? task)}
+              </pre>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+
+      <Dialog open={resumeDialogOpen} onClose={() => setResumeDialogOpen(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Resume Agent Task</DialogTitle>
+            <DialogDescription>
+              Resume execution of {namespace}/{name}. Optionally increase the USD budget.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-2">
+            <label htmlFor="budget-usd-bump" className="text-sm font-medium mb-1 block">Additional Budget USD (optional)</label>
+            <Input
+              id="budget-usd-bump"
+              value={budgetUsdBump}
+              onChange={(e) => setBudgetUsdBump(e.target.value)}
+              placeholder="e.g. 5.00"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setResumeDialogOpen(false)}>Cancel</Button>
+            <Button onClick={handleResume} disabled={resumeTask.isPending}>
+              {resumeTask.isPending ? 'Resuming...' : 'Resume'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}

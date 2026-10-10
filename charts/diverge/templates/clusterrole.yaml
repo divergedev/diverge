@@ -7,7 +7,8 @@ rules:
   # Diverge CRDs
   - apiGroups: ["divergedev.com"]
     resources: [environments, environments/status, environments/finalizers,
-                previewgroups, previewgroups/status, previewgroups/finalizers]
+                previewgroups, previewgroups/status, previewgroups/finalizers,
+                agenttasks, agenttasks/status, agenttasks/finalizers]
     verbs: [get, list, watch, create, update, patch, delete]
   # Core K8s - Namespaces
   - apiGroups: [""]
@@ -51,4 +52,11 @@ rules:
   - apiGroups: ["http.keda.sh"]
     resources: [httpscaledobjects]
     verbs: [get, list, watch, create, update, patch, delete]
+  # Agent Sandbox CRDs
+  - apiGroups: ["extensions.agents.x-k8s.io"]
+    resources: [sandboxclaims]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: ["agents.x-k8s.io"]
+    resources: [sandboxes]
+    verbs: [get, list, watch]
 {{- end }}

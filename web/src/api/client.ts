@@ -5,6 +5,7 @@ import { EnvironmentService } from '@/api/gen/diverge/v1alpha1/environment_conne
 import { PreviewGroupService } from '@/api/gen/diverge/v1alpha1/previewgroup_connect'
 import { ClusterService } from '@/api/gen/diverge/v1alpha1/cluster_connect'
 import { AuthService } from '@/api/gen/diverge/v1alpha1/auth_connect'
+import { AgentTaskService } from '@/api/gen/diverge/v1alpha1/agenttask_connect'
 
 const TOKEN_KEY = 'diverge:token'
 
@@ -39,3 +40,4 @@ export const environmentClient = createPromiseClient(EnvironmentService, transpo
 export const previewGroupClient = createPromiseClient(PreviewGroupService, transport)
 export const clusterClient = createPromiseClient(ClusterService, transport)
 export const authClient = createPromiseClient(AuthService, transport)
+export const agentTaskClient = createPromiseClient(AgentTaskService, transport)

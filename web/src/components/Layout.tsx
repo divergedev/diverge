@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
-import { Home, GitBranch, Server, Moon, Sun, LogOut, Menu, X } from 'lucide-react'
+import { Home, GitBranch, Bot, Server, Moon, Sun, LogOut, Menu } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/useAuth'
 import { useTheme } from '@/components/ThemeProvider'
@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils'
 const navItems = [
   { to: '/', icon: Home, label: 'Environments' },
   { to: '/preview-groups', icon: GitBranch, label: 'Preview Groups' },
+  { to: '/tasks', icon: Bot, label: 'Agent Tasks' },
   { to: '/cluster', icon: Server, label: 'Cluster' },
 ]
 
