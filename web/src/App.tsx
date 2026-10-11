@@ -6,6 +6,8 @@ import EnvironmentList from '@/pages/EnvironmentList'
 import EnvironmentDetail from '@/pages/EnvironmentDetail'
 import PreviewGroups from '@/pages/PreviewGroups'
 import PreviewGroupDetail from '@/pages/PreviewGroupDetail'
+import AgentTasks from '@/pages/AgentTasks'
+import AgentTaskDetail from '@/pages/AgentTaskDetail'
 import ClusterInfo from '@/pages/ClusterInfo'
 
 export default function App() {
@@ -17,6 +19,8 @@ export default function App() {
         <Route path="environments/:namespace/:name" element={<EnvironmentDetail />} />
         <Route path="preview-groups" element={<PreviewGroups />} />
         <Route path="preview-groups/:namespace/:name" element={<PreviewGroupDetail />} />
+        <Route path="tasks" element={<AgentTasks />} />
+        <Route path="tasks/:namespace/:name" element={<AgentTaskDetail />} />
         <Route path="cluster" element={<ClusterInfo />} />
       </Route>
     </Routes>

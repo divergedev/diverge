@@ -1,11 +1,15 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { environmentClient, previewGroupClient, clusterClient, authClient } from '@/api/client'
+import type { PartialMessage } from '@bufbuild/protobuf'
+import type { AgentTaskSpec } from '@/api/gen/diverge/v1alpha1/agenttask_pb'
+import { environmentClient, previewGroupClient, clusterClient, authClient, agentTaskClient } from '@/api/client'
 
 export const queryKeys = {
   environments: (ns?: string) => ['environments', ns ?? 'all'] as const,
   environment: (ns: string, name: string) => ['environment', ns, name] as const,
   previewGroups: (ns?: string) => ['previewGroups', ns ?? 'all'] as const,
   previewGroup: (ns: string, name: string) => ['previewGroup', ns, name] as const,
+  agentTasks: (ns?: string, pageSize = 100, pageToken = '') => ['agentTasks', ns ?? 'all', pageSize, pageToken] as const,
+  agentTask: (ns: string, name: string) => ['agentTask', ns, name] as const,
   hookJobs: (ns: string, envName: string) => ['hookJobs', ns, envName] as const,
   clusterInfo: ['clusterInfo'] as const,
   currentUser: ['currentUser'] as const,
@@ -132,6 +136,114 @@ export function useRetryHook() {
       environmentClient.retryHook(req),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: queryKeys.hookJobs(vars.namespace, vars.environmentName) })
+    },
+  })
+}
+
+export function useListAgentTasks(params: { namespace?: string; pageSize?: number; pageToken?: string } = {}) {
+  const pageSize = params.pageSize ?? 100
+  const pageToken = params.pageToken ?? ''
+  return useQuery({
+    queryKey: queryKeys.agentTasks(params.namespace, pageSize, pageToken),
+    queryFn: async () => {
+      if (pageToken) {
+        return agentTaskClient.listTasks({
+          namespace: params.namespace ?? '',
+          pagination: { pageSize, pageToken },
+        })
+      }
+
+      const allTasks: Awaited<ReturnType<typeof agentTaskClient.listTasks>>['tasks'] = []
+      let currentToken = ''
+      let lastResp: Awaited<ReturnType<typeof agentTaskClient.listTasks>> | undefined
+      const seenTokens = new Set<string>()
+
+      for (let page = 0; page < 50; page++) {
+        const resp = await agentTaskClient.listTasks({
+          namespace: params.namespace ?? '',
+          pagination: { pageSize, pageToken: currentToken },
+        })
+        lastResp = resp
+        allTasks.push(...(resp.tasks ?? []))
+        const nextToken = resp.pagination?.nextPageToken ?? ''
+        if (!nextToken || seenTokens.has(nextToken)) {
+          break
+        }
+        seenTokens.add(nextToken)
+        currentToken = nextToken
+      }
+
+      if (lastResp) {
+        lastResp.tasks = allTasks
+        return lastResp
+      }
+      return agentTaskClient.listTasks({
+        namespace: params.namespace ?? '',
+        pagination: { pageSize, pageToken: '' },
+      })
+    },
+    refetchInterval: 5000,
+  })
+}
+
+export function useGetAgentTask(namespace: string, name: string) {
+  return useQuery({
+    queryKey: queryKeys.agentTask(namespace, name),
+    queryFn: () => agentTaskClient.getTask({ namespace, name }),
+    enabled: !!name && !!namespace,
+    refetchInterval: 5000,
+  })
+}
+
+export function useCreateAgentTask() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (req: { name: string; namespace: string; spec: PartialMessage<AgentTaskSpec> }) =>
+      agentTaskClient.createTask(req),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['agentTasks'] }) },
+  })
+}
+
+export function useDeleteAgentTask() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (req: { namespace: string; name: string }) =>
+      agentTaskClient.deleteTask(req),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['agentTasks'] }) },
+  })
+}
+
+export function usePauseAgentTask() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (req: { namespace: string; name: string }) =>
+      agentTaskClient.pauseTask(req),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: queryKeys.agentTask(vars.namespace, vars.name) })
+      qc.invalidateQueries({ queryKey: ['agentTasks'] })
+    },
+  })
+}
+
+export function useResumeAgentTask() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (req: { namespace: string; name: string; budgetUsdBump?: string; budgetTokensBump?: bigint }) =>
+      agentTaskClient.resumeTask(req),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: queryKeys.agentTask(vars.namespace, vars.name) })
+      qc.invalidateQueries({ queryKey: ['agentTasks'] })
+    },
+  })
+}
+
+export function useGuideAgentTask() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (req: { namespace: string; name: string; message: string }) =>
+      agentTaskClient.guideTask(req),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: queryKeys.agentTask(vars.namespace, vars.name) })
     },
   })
 }
