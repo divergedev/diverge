@@ -313,7 +313,7 @@ func TestMCPBearerTokenAuth(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := newMCPHTTPClient()
+	client := newMCPHTTPClient(ts.URL)
 	resp, err := client.Get(ts.URL)
 	require.NoError(t, err)
 	_ = resp.Body.Close()
@@ -332,4 +332,29 @@ func TestMCPBearerTokenAuth(t *testing.T) {
 	require.NoError(t, err)
 	_ = resp.Body.Close()
 	assert.Equal(t, "Bearer env-override-token", seenAuthHeader)
+
+	// Cross-origin redirect must NOT receive the Authorization bearer token
+	var secondOriginAuthHeader string
+	secondServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondOriginAuthHeader = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer secondServer.Close()
+
+	redirectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, secondServer.URL, http.StatusFound)
+	}))
+	defer redirectServer.Close()
+
+	redirectClient := newMCPHTTPClient(redirectServer.URL)
+	resp, err = redirectClient.Get(redirectServer.URL)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	assert.Empty(t, secondOriginAuthHeader, "cross-origin redirect target must not receive Authorization header")
+
+	// Non-loopback plaintext HTTP must be rejected before sending credentials
+	remoteHTTPClient := newMCPHTTPClient("http://diverge.example.com:8080")
+	_, err = remoteHTTPClient.Get("http://diverge.example.com:8080/healthz")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "insecure HTTP scheme is only allowed for loopback addresses")
 }

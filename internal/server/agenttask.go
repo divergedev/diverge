@@ -158,6 +158,9 @@ func (s *AgentTaskService) GetTask(ctx context.Context, req *connect.Request[pb.
 	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "get", namespace, "agenttasks"); err != nil {
 		return nil, err
 	}
+	if err := AuthorizeTaskObjectAccess(ctx, s.auditLogger, "get", namespace, msg.Name); err != nil {
+		return nil, err
+	}
 
 	task := &v1alpha1.AgentTask{}
 	if err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: msg.Name}, task); err != nil {
@@ -441,6 +444,9 @@ func (s *AgentTaskService) StreamTaskLogs(
 
 	// RBAC: Authorize agenttask access AND pod logs access BEFORE reading resource to prevent information disclosure (CWE-200)
 	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "get", namespace, "agenttasks"); err != nil {
+		return err
+	}
+	if err := AuthorizeTaskObjectAccess(ctx, s.auditLogger, "get", namespace, msg.Name); err != nil {
 		return err
 	}
 	if err := AuthorizePodLogs(ctx, s.k8sClient, s.auditLogger, namespace); err != nil {

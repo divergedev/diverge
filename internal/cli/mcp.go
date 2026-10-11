@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"unicode"
@@ -421,8 +422,17 @@ func newMCPServer(envClient divergev1alpha1connect.EnvironmentServiceClient, pgC
 const defaultMCPTokenFilePath = "/etc/diverge/token/token"
 
 type bearerAuthRoundTripper struct {
-	base      http.RoundTripper
-	tokenFunc func() string
+	base         http.RoundTripper
+	tokenFunc    func() string
+	targetScheme string
+	targetHost   string
+}
+
+func (rt *bearerAuthRoundTripper) matchesTargetOrigin(u *url.URL) bool {
+	if u == nil || rt.targetScheme == "" || rt.targetHost == "" {
+		return false
+	}
+	return strings.EqualFold(u.Scheme, rt.targetScheme) && strings.EqualFold(u.Host, rt.targetHost)
 }
 
 func (rt *bearerAuthRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -430,8 +440,15 @@ func (rt *bearerAuthRoundTripper) RoundTrip(req *http.Request) (*http.Response, 
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	if rt.tokenFunc != nil && req.Header.Get("Authorization") == "" {
+	if rt.tokenFunc != nil && req.Header.Get("Authorization") == "" && rt.matchesTargetOrigin(req.URL) {
 		if token := rt.tokenFunc(); token != "" {
+			// Security: Do not transmit bearer credentials in cleartext over non-loopback HTTP.
+			if strings.EqualFold(req.URL.Scheme, "http") && !isLoopbackHost(req.URL.Host) {
+				return nil, fmt.Errorf("insecure HTTP scheme is only allowed for loopback addresses, got %q", req.URL.Host)
+			}
+			if !strings.EqualFold(req.URL.Scheme, "https") && !strings.EqualFold(req.URL.Scheme, "http") {
+				return nil, fmt.Errorf("unsupported URL scheme %q for bearer token authentication", req.URL.Scheme)
+			}
 			clone := req.Clone(req.Context())
 			clone.Header.Set("Authorization", "Bearer "+token)
 			req = clone
@@ -455,11 +472,18 @@ func resolveMCPBearerToken() string {
 	return strings.TrimSpace(string(data))
 }
 
-func newMCPHTTPClient() *http.Client {
+func newMCPHTTPClient(serverURL string) *http.Client {
+	var targetScheme, targetHost string
+	if parsed, err := url.Parse(strings.TrimSpace(serverURL)); err == nil && parsed != nil {
+		targetScheme = parsed.Scheme
+		targetHost = parsed.Host
+	}
 	return &http.Client{
 		Transport: &bearerAuthRoundTripper{
-			base:      http.DefaultTransport,
-			tokenFunc: resolveMCPBearerToken,
+			base:         http.DefaultTransport,
+			tokenFunc:    resolveMCPBearerToken,
+			targetScheme: targetScheme,
+			targetHost:   targetHost,
 		},
 	}
 }
@@ -472,7 +496,7 @@ func runMCP(ctx context.Context, app *App, serverURL string, allowDestructive bo
 		}
 	}
 
-	httpClient := newMCPHTTPClient()
+	httpClient := newMCPHTTPClient(serverURL)
 	envClient := divergev1alpha1connect.NewEnvironmentServiceClient(httpClient, serverURL)
 	pgClient := divergev1alpha1connect.NewPreviewGroupServiceClient(httpClient, serverURL)
 	taskClient := divergev1alpha1connect.NewAgentTaskServiceClient(httpClient, serverURL)

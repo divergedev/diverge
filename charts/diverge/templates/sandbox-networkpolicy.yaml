@@ -43,9 +43,11 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-    # 2. Allow egress to diverge-server (ConnectRPC on 8443 TLS or 8080 plaintext) across namespaces
+    # 2. Allow egress to diverge-server (ConnectRPC on 8443 TLS or 8080 plaintext) in the release namespace
     - to:
-        - namespaceSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $.Release.Namespace }}
           podSelector:
             matchLabels:
               {{- include "diverge.selectorLabels" $ | nindent 14 }}

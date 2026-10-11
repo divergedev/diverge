@@ -16,6 +16,7 @@ func TestMacaroonMintAndVerify(t *testing.T) {
 
 	claims := Claims{
 		TaskID:        "task-123",
+		Namespace:     "default",
 		RepoURL:       "https://github.com/org/repo",
 		AllowedTools:  []string{"diverge_*", "test_runner"},
 		AllowedModels: []string{"gemini-2.5-pro", "gemini-2.5-flash"},
@@ -33,6 +34,7 @@ func TestMacaroonMintAndVerify(t *testing.T) {
 	// Verify valid token
 	err = provider.Verify(ctx, raw, Claims{
 		TaskID:        "task-123",
+		Namespace:     "default",
 		RepoURL:       "https://github.com/org/repo",
 		AllowedTools:  []string{"diverge_create_preview"},
 		AllowedModels: []string{"gemini-2.5-flash"},
@@ -48,6 +50,7 @@ func TestMacaroonTamperDetection(t *testing.T) {
 
 	claims := Claims{
 		TaskID:    "task-456",
+		Namespace: "default",
 		ExpiresAt: time.Now().Add(1 * time.Hour),
 	}
 
@@ -71,6 +74,7 @@ func TestMacaroonAttenuation(t *testing.T) {
 
 	claims := Claims{
 		TaskID:       "task-789",
+		Namespace:    "default",
 		AllowedTools: []string{"diverge_*"},
 		ExpiresAt:    time.Now().Add(1 * time.Hour),
 	}
@@ -111,6 +115,7 @@ func TestMacaroonExpired(t *testing.T) {
 
 	claims := Claims{
 		TaskID:    "task-expired",
+		Namespace: "default",
 		ExpiresAt: time.Now().Add(-1 * time.Minute), // in the past
 	}
 
@@ -131,6 +136,7 @@ func TestMacaroonFailClosed(t *testing.T) {
 
 	claims := Claims{
 		TaskID:        "task-fail-closed",
+		Namespace:     "default",
 		RepoURL:       "https://github.com/org/repo",
 		AllowedTools:  []string{"diverge_get_*"},
 		AllowedModels: []string{"gemini-2.5-flash"},
@@ -168,6 +174,7 @@ func TestMacaroonTokenLimits(t *testing.T) {
 
 	claims := Claims{
 		TaskID:    "task-tokens",
+		Namespace: "default",
 		MaxTokens: 500000,
 	}
 
@@ -199,9 +206,10 @@ func TestMacaroonBranchCaveat(t *testing.T) {
 	provider := NewMacaroonProvider(rootKey)
 
 	claims := Claims{
-		TaskID:  "task-branch",
-		RepoURL: "https://github.com/org/repo",
-		Branch:  "feat/payments",
+		TaskID:    "task-branch",
+		Namespace: "default",
+		RepoURL:   "https://github.com/org/repo",
+		Branch:    "feat/payments",
 	}
 
 	tok, err := provider.Mint(ctx, claims)
@@ -233,7 +241,7 @@ func TestMacaroonOperatorAndUnknownKeyValidation(t *testing.T) {
 	rootKey := []byte("0123456789abcdef0123456789abcdef")
 	provider := NewMacaroonProvider(rootKey)
 
-	tok, err := provider.Mint(ctx, Claims{TaskID: "task-test"})
+	tok, err := provider.Mint(ctx, Claims{TaskID: "task-test", Namespace: "default"})
 	require.NoError(t, err)
 
 	// Attenuate with unknown caveat key
@@ -274,6 +282,7 @@ func TestMacaroonNonceUniqueness(t *testing.T) {
 
 	claims := Claims{
 		TaskID:    "identical-task-id",
+		Namespace: "default",
 		ExpiresAt: time.Now().Add(1 * time.Hour),
 	}
 

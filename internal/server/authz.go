@@ -101,6 +101,13 @@ func authorizeMacaroon(ctx context.Context, auditLogger *AuditLogger, user *auth
 	if nsVals := user.Extra[auth.ExtraKeyNamespace]; len(nsVals) > 0 {
 		boundNS = nsVals[0]
 	}
+	// Task capability tokens must never manage AgentTask lifecycle, list other tasks, or modify budgets.
+	if resource == "agenttasks" && verb != "get" {
+		if auditLogger != nil {
+			auditLogger.LogAuthz(ctx, "authz.denied", user, verb, resource, namespace)
+		}
+		return connect.NewError(connect.CodePermissionDenied, errors.New(denialMsg))
+	}
 	// Macaroon capability tokens are strictly namespace-bound; cluster-wide or cross-namespace access is denied.
 	if boundNS == "" || namespace == "" || namespace != boundNS {
 		if auditLogger != nil {
@@ -128,6 +135,29 @@ func authorizeMacaroon(ctx context.Context, auditLogger *AuditLogger, user *auth
 			auditLogger.LogAuthz(ctx, "authz.denied", user, verb, resource, namespace)
 		}
 		return connect.NewError(connect.CodePermissionDenied, errors.New(denialMsg))
+	}
+	return nil
+}
+
+// AuthorizeTaskObjectAccess ensures that when a request is authenticated with a task-bound
+// Macaroon capability token, it can only access the specific AgentTask named in ExtraKeyTaskID.
+func AuthorizeTaskObjectAccess(ctx context.Context, auditLogger *AuditLogger, verb, namespace, taskName string) error {
+	user, ok := auth.UserInfoFromContext(ctx)
+	if !ok {
+		return connect.NewError(connect.CodeUnauthenticated, errors.New("not authenticated"))
+	}
+	if !isMacaroonUser(user) {
+		return nil
+	}
+	boundTask := ""
+	if taskVals := user.Extra[auth.ExtraKeyTaskID]; len(taskVals) > 0 {
+		boundTask = taskVals[0]
+	}
+	if boundTask == "" || taskName == "" || boundTask != taskName {
+		if auditLogger != nil {
+			auditLogger.LogAuthz(ctx, "authz.denied", user, verb, "agenttasks", namespace)
+		}
+		return connect.NewError(connect.CodePermissionDenied, errors.New("permission denied"))
 	}
 	return nil
 }

@@ -221,6 +221,10 @@ func main() {
 
 	var macaroonAuthProvider *auth.MacaroonAuthProvider
 	if macaroonRootKey != "" {
+		if len(macaroonRootKey) < pkgauth.MinMacaroonRootKeyLen {
+			logger.Error("macaroon root key is too short (must be at least 32 bytes)", "length", len(macaroonRootKey))
+			os.Exit(1)
+		}
 		macaroonAuthProvider = auth.NewMacaroonAuthProvider(
 			pkgauth.NewMacaroonProvider([]byte(macaroonRootKey)),
 			nil,

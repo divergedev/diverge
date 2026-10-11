@@ -47,6 +47,9 @@ type MacaroonProvider struct {
 	rootKey []byte
 }
 
+// MinMacaroonRootKeyLen is the minimum required length in bytes for a Macaroon HMAC root key.
+const MinMacaroonRootKeyLen = 32
+
 // NewMacaroonProvider initializes a provider with a 32-byte secret root key.
 func NewMacaroonProvider(rootKey []byte) *MacaroonProvider {
 	return &MacaroonProvider{rootKey: rootKey}
@@ -63,6 +66,9 @@ func (p *MacaroonProvider) Mint(_ context.Context, claims Claims) (Token, error)
 	if claims.TaskID == "" {
 		return nil, errors.New("claims must specify TaskID")
 	}
+	if claims.Namespace == "" {
+		return nil, errors.New("claims must specify Namespace")
+	}
 
 	mac := &Macaroon{
 		TokenID:  claims.TaskID,
@@ -71,16 +77,10 @@ func (p *MacaroonProvider) Mint(_ context.Context, claims Claims) (Token, error)
 
 	sig := computeHMAC(p.rootKey, []byte(mac.TokenID))
 
-	// Embed baseline caveats from claims
+	// Embed baseline caveats from claims (task_id at index 0, namespace at index 1)
 	caveats := []Caveat{
 		{Key: "task_id", Op: OpEqual, Value: claims.TaskID},
-	}
-	if claims.Namespace != "" {
-		caveats = append(caveats, Caveat{
-			Key:   "namespace",
-			Op:    OpEqual,
-			Value: claims.Namespace,
-		})
+		{Key: "namespace", Op: OpEqual, Value: claims.Namespace},
 	}
 	if claims.RepoURL != "" {
 		caveats = append(caveats, Caveat{
@@ -225,24 +225,27 @@ func (p *MacaroonProvider) VerifyAndExtract(_ context.Context, raw []byte) (*Mac
 	sig := computeHMAC(p.rootKey, []byte(mac.TokenID))
 	claims := Claims{TaskID: mac.TokenID}
 	hasTaskID := false
+	hasNamespace := false
 
-	for _, c := range mac.CaveatSeq {
+	for i, c := range mac.CaveatSeq {
 		sig = computeHMAC(sig, serializeCaveatCanonical(c))
 
 		switch c.Key {
 		case "task_id":
-			if c.Op != OpEqual || c.Value == "" || c.Value != mac.TokenID {
+			if c.Op != OpEqual || c.Value == "" || c.Value != mac.TokenID || (!hasTaskID && i != 0) {
 				return nil, Claims{}, fmt.Errorf("%w: invalid task_id caveat", ErrCaveatFailed)
 			}
 			hasTaskID = true
 			claims.TaskID = c.Value
 		case "namespace":
-			if c.Op != OpEqual || c.Value == "" {
+			// The namespace is fixed at mint time (directly after task_id); attenuation cannot introduce one.
+			if c.Op != OpEqual || c.Value == "" || (!hasNamespace && i != 1) {
 				return nil, Claims{}, fmt.Errorf("%w: invalid namespace caveat", ErrCaveatFailed)
 			}
 			if claims.Namespace != "" && claims.Namespace != c.Value {
 				return nil, Claims{}, fmt.Errorf("%w: conflicting namespace caveat", ErrCaveatFailed)
 			}
+			hasNamespace = true
 			claims.Namespace = c.Value
 		case "repo":
 			if c.Op != OpEqual || c.Value == "" {
@@ -358,6 +361,9 @@ func (p *MacaroonProvider) VerifyAndExtract(_ context.Context, raw []byte) (*Mac
 	}
 	if !hasTaskID {
 		return nil, Claims{}, fmt.Errorf("%w: missing task_id caveat", ErrCaveatFailed)
+	}
+	if !hasNamespace {
+		return nil, Claims{}, fmt.Errorf("%w: missing namespace caveat", ErrCaveatFailed)
 	}
 
 	return &mac, claims, nil

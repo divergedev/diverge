@@ -379,11 +379,22 @@ func (r *AgentTaskReconciler) mintAndSaveToken(ctx context.Context, task *v1alph
 		timeoutSec = 3600
 	}
 	claims := auth.Claims{
-		TaskID:        task.Name,
-		Namespace:     task.Namespace,
-		RepoURL:       task.Spec.Repository.URL,
-		Branch:        task.Spec.Repository.BaseBranch,
-		AllowedTools:  []string{"diverge_*"},
+		TaskID:    task.Name,
+		Namespace: task.Namespace,
+		RepoURL:   task.Spec.Repository.URL,
+		Branch:    task.Spec.Repository.BaseBranch,
+		AllowedTools: []string{
+			"diverge_*_environment*",
+			"diverge_*_preview_group*",
+			"diverge_wait_for_ready",
+			"diverge_fetch_errors",
+			"diverge_list_hook_jobs",
+			"diverge_retry_hook",
+			"diverge_extend_ttl",
+			"diverge_doctor",
+			"diverge_loadtest",
+			"diverge_get_task",
+		},
 		AllowedModels: task.Spec.Capabilities,
 		MaxTokens:     task.Spec.BudgetTokens,
 		ExpiresAt:     time.Now().Add(time.Duration(timeoutSec) * time.Second),

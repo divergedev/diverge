@@ -270,12 +270,19 @@ func TestAgentTaskServiceListAllNamespacesAndBudgetValidation(t *testing.T) {
 func TestAgentTaskMacaroonCapabilityAuthorization(t *testing.T) {
 	_, svc := buildTaskTestSetup()
 
-	// Seed a task in "default" and "other-ns" as a normal user
+	// Seed task-1 and task-2 in "default" and task-1 in "other-ns" as a normal user
 	adminCtx := auth.ContextWithUserInfo(context.Background(), &auth.UserInfo{Username: "admin"})
-	for _, ns := range []string{"default", "other-ns"} {
+	for _, tc := range []struct {
+		ns   string
+		name string
+	}{
+		{ns: "default", name: "task-1"},
+		{ns: "default", name: "task-2"},
+		{ns: "other-ns", name: "task-1"},
+	} {
 		_, err := svc.CreateTask(adminCtx, connect.NewRequest(&pb.CreateTaskRequest{
-			Namespace: ns,
-			Name:      "task-1",
+			Namespace: tc.ns,
+			Name:      tc.name,
 			Spec: &pb.AgentTaskSpec{
 				Objective: "Test macaroon authz",
 				Repository: &pb.AgentTaskRepository{
@@ -286,7 +293,7 @@ func TestAgentTaskMacaroonCapabilityAuthorization(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Macaroon user bound to "default" with read-only tools ("diverge_get_*", "diverge_list_*")
+	// Macaroon user bound to "default" / "task-1"
 	macaroonCtx := auth.ContextWithUserInfo(context.Background(), &auth.UserInfo{
 		Username: "system:agenttask:default:task-1",
 		Groups:   []string{"system:authenticated", "diverge:agenttasks"},
@@ -294,11 +301,11 @@ func TestAgentTaskMacaroonCapabilityAuthorization(t *testing.T) {
 			auth.ExtraKeyAuthType:     {"macaroon"},
 			auth.ExtraKeyTaskID:       {"task-1"},
 			auth.ExtraKeyNamespace:    {"default"},
-			auth.ExtraKeyAllowedTools: {"diverge_get_*", "diverge_list_*"},
+			auth.ExtraKeyAllowedTools: {"diverge_*"},
 		},
 	})
 
-	// 1. Allowed tool in bound namespace ("default") succeeds
+	// 1. GetTask on its own task ("task-1") in bound namespace ("default") succeeds
 	getRes, err := svc.GetTask(macaroonCtx, connect.NewRequest(&pb.GetTaskRequest{
 		Namespace: "default",
 		Name:      "task-1",
@@ -306,10 +313,10 @@ func TestAgentTaskMacaroonCapabilityAuthorization(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "task-1", getRes.Msg.Task.Name)
 
-	// 2. Allowed tool in different namespace ("other-ns") is denied
+	// 2. GetTask on a different task ("task-2") in the SAME namespace is denied
 	_, err = svc.GetTask(macaroonCtx, connect.NewRequest(&pb.GetTaskRequest{
-		Namespace: "other-ns",
-		Name:      "task-1",
+		Namespace: "default",
+		Name:      "task-2",
 	}))
 	require.Error(t, err)
 	var connectErr *connect.Error
@@ -317,16 +324,35 @@ func TestAgentTaskMacaroonCapabilityAuthorization(t *testing.T) {
 		assert.Equal(t, connect.CodePermissionDenied, connectErr.Code())
 	}
 
-	// 3. Cluster-wide list (empty namespace) is denied for namespace-bound Macaroon
-	_, err = svc.ListTasks(macaroonCtx, connect.NewRequest(&pb.ListTasksRequest{
-		Namespace: "",
+	// 3. GetTask in different namespace ("other-ns") is denied
+	_, err = svc.GetTask(macaroonCtx, connect.NewRequest(&pb.GetTaskRequest{
+		Namespace: "other-ns",
+		Name:      "task-1",
 	}))
 	require.Error(t, err)
 	if assert.ErrorAs(t, err, &connectErr) {
 		assert.Equal(t, connect.CodePermissionDenied, connectErr.Code())
 	}
 
-	// 4. Disallowed tool (DeleteTask -> diverge_delete_task) in bound namespace is denied
+	// 4. ListTasks and lifecycle/budget mutations (ResumeTask, DeleteTask) are denied even with diverge_* glob
+	_, err = svc.ListTasks(macaroonCtx, connect.NewRequest(&pb.ListTasksRequest{
+		Namespace: "default",
+	}))
+	require.Error(t, err)
+	if assert.ErrorAs(t, err, &connectErr) {
+		assert.Equal(t, connect.CodePermissionDenied, connectErr.Code())
+	}
+
+	_, err = svc.ResumeTask(macaroonCtx, connect.NewRequest(&pb.ResumeTaskRequest{
+		Namespace:     "default",
+		Name:          "task-1",
+		BudgetUsdBump: "100.00",
+	}))
+	require.Error(t, err)
+	if assert.ErrorAs(t, err, &connectErr) {
+		assert.Equal(t, connect.CodePermissionDenied, connectErr.Code())
+	}
+
 	_, err = svc.DeleteTask(macaroonCtx, connect.NewRequest(&pb.DeleteTaskRequest{
 		Namespace: "default",
 		Name:      "task-1",
