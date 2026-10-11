@@ -51,6 +51,7 @@ spec:
 
         - /diverge-controller
         image: {{ include "diverge.image" . | quote }}
+        imagePullPolicy: {{ .Values.image.pullPolicy | default "IfNotPresent" }}
         name: diverge-controller
         securityContext:
           readOnlyRootFilesystem: true

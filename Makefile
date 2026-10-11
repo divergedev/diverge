@@ -80,12 +80,14 @@ e2e-setup: ## Create Kind cluster, install CRDs, and deploy controller
 	kubectl -n diverge-system create secret tls diverge-webhook-tls --cert=/tmp/diverge-e2e-tls.crt --key=/tmp/diverge-e2e-tls.key --dry-run=client -o yaml | kubectl apply --context kind-diverge-e2e -f -
 	rm -f /tmp/diverge-e2e-tls.key /tmp/diverge-e2e-tls.crt
 	helm upgrade --install diverge charts/diverge --namespace diverge-system \
+		--skip-crds \
 		--set image.repository=divergedev/diverge \
 		--set image.tag=latest \
 		--set image.pullPolicy=Never \
 		--set sandbox.provider=noop \
 		--kube-context kind-diverge-e2e
-	kubectl -n diverge-system wait --for=condition=available deployment/diverge-controller-manager --timeout=120s --context kind-diverge-e2e
+	kubectl -n diverge-system wait --for=condition=available deployment/diverge-controller-manager --timeout=120s --context kind-diverge-e2e || \
+		(kubectl -n diverge-system describe pods --context kind-diverge-e2e && kubectl -n diverge-system logs -l control-plane=controller-manager --all-containers --context kind-diverge-e2e && exit 1)
 
 e2e-run: ## Run E2E tests
 	go test -tags=e2e -v -count=1 -timeout=10m ./test/e2e/...
