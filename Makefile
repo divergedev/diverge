@@ -49,8 +49,8 @@ test: manifests generate fmt vet ## Run tests.
 	go test ./... -coverprofile cover.out
 
 .PHONY: test-integration
-test-integration: ## Run integration tests (requires running cluster)
-	go test ./internal/controller/... -tags=integration -v -count=1
+test-integration: ## Run envtest integration tests (requires KUBEBUILDER_ASSETS)
+	go test ./internal/controller/... ./internal/server/... -tags=integration -v -count=1
 
 .PHONY: test-web
 test-web: proto-web ## Run web dashboard tests.
@@ -74,8 +74,7 @@ e2e-setup: ## Create Kind cluster and install CRDs
 	$(MAKE) docker-build
 	kind load docker-image divergedev/diverge:latest --name diverge-e2e
 	kubectl apply -f config/crd/bases/ --context kind-diverge-e2e
-	kubectl apply -k config/default --context kind-diverge-e2e || true
-	kubectl -n diverge-system wait --for=condition=available deployment/diverge-controller --timeout=60s --context kind-diverge-e2e || true
+	kubectl -n diverge-system wait --for=condition=available deployment/diverge-controller-manager --timeout=60s --context kind-diverge-e2e || true
 
 e2e-run: ## Run E2E tests
 	go test -tags=e2e -v -count=1 -timeout=10m ./test/e2e/...

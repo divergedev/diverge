@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"pgregory.net/rapid"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,18 +34,20 @@ import (
 	"github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/server"
 	"github.com/divergedev/diverge/internal/server/auth"
+	pkgauth "github.com/divergedev/diverge/pkg/auth"
 )
 
 var (
-	testEnv       *envtest.Environment
-	k8sClient     kubernetes.Interface
-	ctrlClient    client.Client
-	httpServer    *httptest.Server
-	testMux       *http.ServeMux
-	testEnvToken  string
-	readOnlyToken string
-	noPermsToken  string
-	nsAToken      string
+	testEnv          *envtest.Environment
+	k8sClient        kubernetes.Interface
+	ctrlClient       client.Client
+	httpServer       *httptest.Server
+	testMux          *http.ServeMux
+	macaroonProvider *pkgauth.MacaroonProvider
+	testEnvToken     string
+	readOnlyToken    string
+	noPermsToken     string
+	nsAToken         string
 )
 
 func TestMain(m *testing.M) {
@@ -117,7 +120,7 @@ func TestMain(m *testing.M) {
 		Rules: []rbacv1.PolicyRule{
 			{
 				APIGroups: []string{"divergedev.com"},
-				Resources: []string{"environments", "previewgroups"},
+				Resources: []string{"environments", "previewgroups", "agenttasks"},
 				Verbs:     []string{"*"},
 			},
 		},
@@ -128,7 +131,7 @@ func TestMain(m *testing.M) {
 		Rules: []rbacv1.PolicyRule{
 			{
 				APIGroups: []string{"divergedev.com"},
-				Resources: []string{"environments", "previewgroups"},
+				Resources: []string{"environments", "previewgroups", "agenttasks"},
 				Verbs:     []string{"get", "list", "watch"},
 			},
 		},
@@ -156,7 +159,10 @@ func TestMain(m *testing.M) {
 	}, metav1.CreateOptions{})
 
 	// Server setup
-	provider := auth.NewTokenReviewProvider(k8sClient, nil)
+	macaroonProvider = pkgauth.NewMacaroonProvider([]byte("0123456789abcdef0123456789abcdef"))
+	provider := auth.NewCompositeProvider(slog.Default())
+	provider.Add("macaroon", auth.NewMacaroonAuthProvider(macaroonProvider, nil).WithTaskActiveCheck(ctrlClient))
+	provider.Add("tokenreview", auth.NewTokenReviewProvider(k8sClient, nil))
 	authMw := auth.NewMiddleware(auth.MiddlewareConfig{
 		Provider: provider,
 		Cache:    auth.NewTokenCache(100, time.Minute),
@@ -192,6 +198,14 @@ func getEnvClient(token string) divergev1alpha1connect.EnvironmentServiceClient 
 	)
 }
 
+func getTaskClient(token string) divergev1alpha1connect.AgentTaskServiceClient {
+	return divergev1alpha1connect.NewAgentTaskServiceClient(
+		httpServer.Client(),
+		httpServer.URL,
+		connect.WithInterceptors(authInterceptor(token)),
+	)
+}
+
 func getClusterClient(token string) divergev1alpha1connect.ClusterServiceClient {
 	return divergev1alpha1connect.NewClusterServiceClient(
 		httpServer.Client(),
@@ -218,9 +232,19 @@ func skipIfNoEnvtest(t *testing.T) {
 	}
 }
 
+var nsSeq uint64
+
 func uniqueNamespace(t *testing.T) string {
 	t.Helper()
-	return fmt.Sprintf("test-%s", strings.ToLower(t.Name()))
+	seq := atomic.AddUint64(&nsSeq, 1)
+	clean := strings.ToLower(t.Name())
+	clean = strings.ReplaceAll(clean, "_", "-")
+	clean = strings.ReplaceAll(clean, "/", "-")
+	if len(clean) > 40 {
+		clean = clean[:40]
+	}
+	clean = strings.Trim(clean, "-")
+	return fmt.Sprintf("t-%s-%d", clean, seq)
 }
 
 func setupTestNamespace(t *testing.T, saName, roleName string) (string, string) {
@@ -357,16 +381,15 @@ func TestNamespaceIsolation(t *testing.T) {
 func TestGetClusterInfo_RequiresBothResources(t *testing.T) {
 	t.Parallel()
 	skipIfNoEnvtest(t)
-	// admin has both
-	_, adminToken := setupTestNamespace(t, "admin", "diverge-admin")
-	adminClient := getClusterClient(adminToken)
+	// testEnvToken has a ClusterRoleBinding to diverge-admin
+	adminClient := getClusterClient(testEnvToken)
 	resp, err := adminClient.GetClusterInfo(context.Background(), connect.NewRequest(&pb.GetClusterInfoRequest{}))
 	require.NoError(t, err)
 	assert.NotNil(t, resp.Msg)
 
 	// noPerms has neither
-	_, noPermsToken := setupTestNamespace(t, "noperms", "diverge-none")
-	noPermsClient := getClusterClient(noPermsToken)
+	_, noPermsTok := setupTestNamespace(t, "noperms", "diverge-none")
+	noPermsClient := getClusterClient(noPermsTok)
 	_, err = noPermsClient.GetClusterInfo(context.Background(), connect.NewRequest(&pb.GetClusterInfoRequest{}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
@@ -375,7 +398,7 @@ func TestGetClusterInfo_RequiresBothResources(t *testing.T) {
 func TestInputValidation(t *testing.T) {
 	t.Parallel()
 	skipIfNoEnvtest(t)
-	ns, token := setupTestNamespace(t, "admin", "diverge-admin")
+	_, token := setupTestNamespace(t, "admin", "diverge-admin")
 	client := getEnvClient(token)
 
 	// Invalid namespace
@@ -412,6 +435,12 @@ func TestCreateEnvironment_Authorized(t *testing.T) {
 		Namespace: ns,
 		Environment: &pb.Environment{
 			Name: "test-env-auth",
+			Spec: &pb.EnvironmentSpec{
+				Source: &pb.EnvironmentSource{
+					Provider: "github",
+					Project:  "divergedev/diverge",
+				},
+			},
 		},
 	}))
 	require.NoError(t, err)
@@ -429,6 +458,12 @@ func TestCreateEnvironment_Denied(t *testing.T) {
 		Namespace: ns,
 		Environment: &pb.Environment{
 			Name: "test-env-denied",
+			Spec: &pb.EnvironmentSpec{
+				Source: &pb.EnvironmentSource{
+					Provider: "github",
+					Project:  "divergedev/diverge",
+				},
+			},
 		},
 	}))
 	require.Error(t, err)
@@ -445,6 +480,12 @@ func TestDeleteEnvironment_Authorized(t *testing.T) {
 		Namespace: ns,
 		Environment: &pb.Environment{
 			Name: "test-env-del",
+			Spec: &pb.EnvironmentSpec{
+				Source: &pb.EnvironmentSource{
+					Provider: "github",
+					Project:  "divergedev/diverge",
+				},
+			},
 		},
 	}))
 	require.NoError(t, err)
@@ -473,11 +514,11 @@ func TestDeleteEnvironment_NotFound(t *testing.T) {
 func TestInputValidation_PBT(t *testing.T) {
 	t.Parallel()
 	skipIfNoEnvtest(t)
+	_, token := setupTestNamespace(t, "admin", "diverge-admin")
+	client := getEnvClient(token)
+
 	rapid.Check(t, func(rt *rapid.T) {
 		ns := rapid.String().Draw(rt, "namespace")
-
-		_, token := setupTestNamespace(t, "admin", "diverge-admin")
-		client := getEnvClient(token)
 
 		// Use the randomized namespace for testing validation
 		_, err := client.ListEnvironments(context.Background(), connect.NewRequest(&pb.ListEnvironmentsRequest{
@@ -496,7 +537,7 @@ func TestInputValidation_PBT(t *testing.T) {
 func TestBoundaryValidation(t *testing.T) {
 	t.Parallel()
 	skipIfNoEnvtest(t)
-	ns, token := setupTestNamespace(t, "admin", "diverge-admin")
+	_, token := setupTestNamespace(t, "admin", "diverge-admin")
 	client := getEnvClient(token)
 
 	cases := []struct {
@@ -504,7 +545,7 @@ func TestBoundaryValidation(t *testing.T) {
 		ns    string
 		valid bool
 	}{
-		{"empty", "", false},
+		{"leading-hyphen", "-invalid", false},
 		{"63-char", strings.Repeat("a", 63), true},
 		{"64-char", strings.Repeat("a", 64), false},
 		{"unicode", "namespace-🌟", false},
@@ -526,4 +567,101 @@ func TestBoundaryValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMacaroonCapabilityToken_Integration(t *testing.T) {
+	t.Parallel()
+	skipIfNoEnvtest(t)
+	ctx := context.Background()
+
+	nsA, adminTokenA := setupTestNamespace(t, "admin-a", "diverge-admin")
+	nsB, _ := setupTestNamespace(t, "admin-b", "diverge-admin")
+
+	adminTaskClient := getTaskClient(adminTokenA)
+	_, err := adminTaskClient.CreateTask(ctx, connect.NewRequest(&pb.CreateTaskRequest{
+		Namespace: nsA,
+		Name:      "task-alpha",
+		Spec: &pb.AgentTaskSpec{
+			Objective: "Fix login redirect",
+			Repository: &pb.AgentTaskRepository{
+				Url: "https://github.com/divergedev/diverge",
+			},
+		},
+	}))
+	require.NoError(t, err)
+
+	_, err = adminTaskClient.CreateTask(ctx, connect.NewRequest(&pb.CreateTaskRequest{
+		Namespace: nsA,
+		Name:      "task-beta",
+		Spec: &pb.AgentTaskSpec{
+			Objective: "Add rate limiter",
+			Repository: &pb.AgentTaskRepository{
+				Url: "https://github.com/divergedev/diverge",
+			},
+		},
+	}))
+	require.NoError(t, err)
+
+	capToken, err := macaroonProvider.Mint(ctx, pkgauth.Claims{
+		TaskID:    "task-alpha",
+		Namespace: nsA,
+		AllowedTools: []string{
+			"diverge_list_*",
+			"diverge_get_*",
+			"diverge_status",
+			"diverge_task_status",
+			"diverge_task_logs",
+			"diverge_up",
+			"diverge_down",
+		},
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+	require.NoError(t, err)
+	rawToken, err := capToken.Serialize()
+	require.NoError(t, err)
+
+	macaroonTaskClient := getTaskClient(string(rawToken))
+	macaroonEnvClient := getEnvClient(string(rawToken))
+
+	// 1. Reading own task succeeds via Macaroon capability token (no K8s TokenReview/SAR)
+	ownTaskResp, err := macaroonTaskClient.GetTask(ctx, connect.NewRequest(&pb.GetTaskRequest{
+		Namespace: nsA,
+		Name:      "task-alpha",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, "task-alpha", ownTaskResp.Msg.Task.Name)
+
+	// 2. Reading sibling task in same namespace is denied
+	_, err = macaroonTaskClient.GetTask(ctx, connect.NewRequest(&pb.GetTaskRequest{
+		Namespace: nsA,
+		Name:      "task-beta",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+
+	// 3. Listing or mutating tasks via Macaroon token is denied
+	_, err = macaroonTaskClient.ListTasks(ctx, connect.NewRequest(&pb.ListTasksRequest{
+		Namespace: nsA,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+
+	_, err = macaroonTaskClient.DeleteTask(ctx, connect.NewRequest(&pb.DeleteTaskRequest{
+		Namespace: nsA,
+		Name:      "task-alpha",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+
+	// 4. Listing environments in own namespace succeeds, cross-namespace is denied
+	_, err = macaroonEnvClient.ListEnvironments(ctx, connect.NewRequest(&pb.ListEnvironmentsRequest{
+		Namespace: nsA,
+	}))
+	require.NoError(t, err)
+
+	_, err = macaroonEnvClient.ListEnvironments(ctx, connect.NewRequest(&pb.ListEnvironmentsRequest{
+		Namespace: nsB,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
 }

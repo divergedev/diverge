@@ -39,6 +39,11 @@ jobs:
             exit 1
           fi
           echo "✅ Coverage ${COVERAGE}% meets threshold"
+      - name: Integration Tests (envtest)
+        run: |
+          go install sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.21
+          export KUBEBUILDER_ASSETS="$($(go env GOPATH)/bin/setup-envtest use 1.32.x --bin-dir /tmp/envtest -p path)"
+          go test ./internal/controller/... ./internal/server/... -tags=integration -v -count=1
 
   lint:
     runs-on: ubuntu-latest
