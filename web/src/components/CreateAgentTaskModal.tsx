@@ -5,7 +5,23 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useCreateAgentTask } from '@/api/queries'
 
-const DNS1123_REGEX = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/
+const DNS1123_REGEX = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/
+
+function isValidRepositoryUrl(raw: string): boolean {
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      const parsed = new URL(raw)
+      return (
+        (parsed.protocol === 'https:' || parsed.protocol === 'http:') &&
+        Boolean(parsed.hostname) &&
+        parsed.pathname.length > 1
+      )
+    } catch {
+      return false
+    }
+  }
+  return /^git@[a-z0-9.-]+:[a-z0-9._/-]+$/i.test(raw)
+}
 
 /**
  * Modal dialog for creating and launching a new autonomous AgentTask.
@@ -29,11 +45,11 @@ export function CreateAgentTaskModal({ open, onClose }: { open: boolean; onClose
 
     const targetNs = namespace.trim() || 'default'
     if (!DNS1123_REGEX.test(name)) {
-      setError('Name must be lowercase alphanumeric with hyphens')
+      setError('Name must be lowercase alphanumeric with hyphens (max 63 characters)')
       return
     }
     if (!DNS1123_REGEX.test(targetNs)) {
-      setError('Namespace must be lowercase alphanumeric with hyphens')
+      setError('Namespace must be lowercase alphanumeric with hyphens (max 63 characters)')
       return
     }
     if (!objective.trim()) {
@@ -45,7 +61,7 @@ export function CreateAgentTaskModal({ open, onClose }: { open: boolean; onClose
       setError('Repository URL is required')
       return
     }
-    if (!/^https?:\/\/\S+$/i.test(trimmedRepo) && !/^git@\S+:\S+$/i.test(trimmedRepo)) {
+    if (!isValidRepositoryUrl(trimmedRepo)) {
       setError('Repository URL must be a valid HTTP(S) or SSH Git URL')
       return
     }

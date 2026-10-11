@@ -203,7 +203,9 @@ export default function AgentTaskDetail() {
               placeholder={
                 canGuide
                   ? 'Send live steering guidance or instructions to the agent...'
-                  : 'Task is not active; resume the task to send live guidance'
+                  : isTerminal
+                    ? 'Task has completed and can no longer receive live guidance'
+                    : 'Task is paused; resume the task to send live guidance'
               }
               value={guidanceMessage}
               onChange={(e) => setGuidanceMessage(e.target.value)}

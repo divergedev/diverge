@@ -18,7 +18,7 @@ describe('CreateAgentTaskModal', () => {
     expect(screen.getByLabelText('Open pull request as draft')).toBeChecked()
   })
 
-  it('validates DNS-1123 name and namespace formats', async () => {
+  it('validates DNS-1123 name and namespace formats and 63-character limit', async () => {
     render(<CreateAgentTaskModal open={true} onClose={() => {}} />)
 
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Invalid_Name' } })
@@ -26,16 +26,21 @@ describe('CreateAgentTaskModal', () => {
     fireEvent.change(screen.getByLabelText('Repository URL'), { target: { value: 'https://github.com/org/repo' } })
     fireEvent.click(screen.getByText('Create Task'))
 
-    expect(await screen.findByText('Name must be lowercase alphanumeric with hyphens')).toBeInTheDocument()
+    expect(await screen.findByText(/Name must be lowercase alphanumeric with hyphens/)).toBeInTheDocument()
+
+    // >63 characters should also fail DNS-1123 label validation
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'a'.repeat(64) } })
+    fireEvent.click(screen.getByText('Create Task'))
+    expect(await screen.findByText(/Name must be lowercase alphanumeric with hyphens/)).toBeInTheDocument()
 
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'valid-name' } })
     fireEvent.change(screen.getByLabelText('Namespace'), { target: { value: 'Invalid_NS' } })
     fireEvent.click(screen.getByText('Create Task'))
 
-    expect(await screen.findByText('Namespace must be lowercase alphanumeric with hyphens')).toBeInTheDocument()
+    expect(await screen.findByText(/Namespace must be lowercase alphanumeric with hyphens/)).toBeInTheDocument()
   })
 
-  it('validates repository URL scheme and positive budget USD', async () => {
+  it('validates repository URL scheme, host/path, and positive budget USD', async () => {
     render(<CreateAgentTaskModal open={true} onClose={() => {}} />)
 
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'valid-task' } })
@@ -43,6 +48,11 @@ describe('CreateAgentTaskModal', () => {
     fireEvent.change(screen.getByLabelText('Repository URL'), { target: { value: 'ftp://example.com/repo' } })
     fireEvent.click(screen.getByText('Create Task'))
 
+    expect(await screen.findByText('Repository URL must be a valid HTTP(S) or SSH Git URL')).toBeInTheDocument()
+
+    // Malformed HTTP(S) URL without host or path should be rejected
+    fireEvent.change(screen.getByLabelText('Repository URL'), { target: { value: 'https://:bad' } })
+    fireEvent.click(screen.getByText('Create Task'))
     expect(await screen.findByText('Repository URL must be a valid HTTP(S) or SSH Git URL')).toBeInTheDocument()
 
     fireEvent.change(screen.getByLabelText('Repository URL'), { target: { value: 'https://github.com/org/repo' } })
