@@ -360,6 +360,8 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	return ctrl.Result{}, nil
 }
 
+// checkBudgetOrIterationLimit reports whether the AgentTask has reached its configured
+// maxIterations, budgetUSD, or budgetTokens limit and returns the human-readable pause reason.
 func (r *AgentTaskReconciler) checkBudgetOrIterationLimit(task *v1alpha1.AgentTask) (bool, string) {
 	if task.Spec.MaxIterations > 0 && task.Status.Iteration >= task.Spec.MaxIterations {
 		return true, fmt.Sprintf("Reached max iterations limit (%d); paused", task.Spec.MaxIterations)
@@ -377,6 +379,8 @@ func (r *AgentTaskReconciler) checkBudgetOrIterationLimit(task *v1alpha1.AgentTa
 	return false, ""
 }
 
+// mintAndSaveToken mints a namespace- and task-bound Macaroon capability token for the
+// given AgentTask and persists it via the configured TokenStore.
 func (r *AgentTaskReconciler) mintAndSaveToken(ctx context.Context, task *v1alpha1.AgentTask) error {
 	if r.TokenMinter == nil {
 		return nil
@@ -471,6 +475,7 @@ func (r *AgentTaskReconciler) mintAndSaveToken(ctx context.Context, task *v1alph
 	return nil
 }
 
+// revokeToken marks the AgentTask's capability token as revoked in the TokenStore and records an audit event.
 func (r *AgentTaskReconciler) revokeToken(ctx context.Context, task *v1alpha1.AgentTask, reason string) {
 	store := r.resolveTokenStore()
 	if !store.IsRevoked(ctx, task.Name, task.Namespace) {
@@ -491,6 +496,7 @@ func (r *AgentTaskReconciler) revokeToken(ctx context.Context, task *v1alpha1.Ag
 	}
 }
 
+// resolveTokenStore returns the configured TokenStore or defaults to KubernetesSecretTokenStore.
 func (r *AgentTaskReconciler) resolveTokenStore() auth.TokenStore {
 	if r.TokenStore != nil {
 		return r.TokenStore
@@ -498,6 +504,7 @@ func (r *AgentTaskReconciler) resolveTokenStore() auth.TokenStore {
 	return auth.NewKubernetesSecretTokenStore(r.Client, r.Scheme)
 }
 
+// resolveSandboxProvider resolves and instantiates the SandboxProvider for the given AgentTask.
 func (r *AgentTaskReconciler) resolveSandboxProvider(task *v1alpha1.AgentTask) (pkgsandbox.SandboxProvider, error) {
 	providerName := task.Spec.Sandbox.Provider
 	if providerName == "" {

@@ -33,6 +33,7 @@ func NewClusterService(c client.Client, k8s kubernetes.Interface, logger *slog.L
 	return &ClusterService{client: c, k8sClient: k8s, logger: logger, auditLogger: auditLogger, version: version}
 }
 
+// GetClusterInfo returns cluster-wide summary counts and controller health status.
 func (s *ClusterService) GetClusterInfo(ctx context.Context, req *connect.Request[pb.GetClusterInfoRequest]) (*connect.Response[pb.GetClusterInfoResponse], error) {
 	const apiTimeout = 5 * time.Second
 
@@ -82,10 +83,12 @@ type AuthService struct {
 	auditLogger *AuditLogger
 }
 
+// NewAuthService creates an AuthService backed by the given Kubernetes client and loggers.
 func NewAuthService(k8s kubernetes.Interface, logger *slog.Logger, auditLogger *AuditLogger) divergev1alpha1connect.AuthServiceHandler {
 	return &AuthService{k8sClient: k8s, logger: logger, auditLogger: auditLogger}
 }
 
+// GetCurrentUser returns the authenticated user's identity and issuer type.
 func (s *AuthService) GetCurrentUser(ctx context.Context, req *connect.Request[pb.GetCurrentUserRequest]) (*connect.Response[pb.GetCurrentUserResponse], error) {
 	user, ok := auth.UserInfoFromContext(ctx)
 	if !ok {
@@ -105,6 +108,7 @@ func (s *AuthService) GetCurrentUser(ctx context.Context, req *connect.Request[p
 	}), nil
 }
 
+// ListPermissions evaluates and returns the authenticated user's permitted verbs on Diverge resources in the requested namespace.
 func (s *AuthService) ListPermissions(ctx context.Context, req *connect.Request[pb.ListPermissionsRequest]) (*connect.Response[pb.ListPermissionsResponse], error) {
 	if _, ok := auth.UserInfoFromContext(ctx); !ok {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("not authenticated"))

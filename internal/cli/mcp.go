@@ -428,6 +428,7 @@ type bearerAuthRoundTripper struct {
 	targetHost   string
 }
 
+// matchesTargetOrigin reports whether u shares the configured server's scheme and host.
 func (rt *bearerAuthRoundTripper) matchesTargetOrigin(u *url.URL) bool {
 	if u == nil || rt.targetScheme == "" || rt.targetHost == "" {
 		return false
@@ -435,6 +436,8 @@ func (rt *bearerAuthRoundTripper) matchesTargetOrigin(u *url.URL) bool {
 	return strings.EqualFold(u.Scheme, rt.targetScheme) && strings.EqualFold(u.Host, rt.targetHost)
 }
 
+// RoundTrip attaches the resolved bearer token to same-origin requests over HTTPS (or loopback HTTP)
+// when no Authorization header is already present.
 func (rt *bearerAuthRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	base := rt.base
 	if base == nil {
@@ -457,6 +460,7 @@ func (rt *bearerAuthRoundTripper) RoundTrip(req *http.Request) (*http.Response, 
 	return base.RoundTrip(req)
 }
 
+// resolveMCPBearerToken reads the MCP bearer token from DIVERGE_TOKEN or the mounted token file.
 func resolveMCPBearerToken() string {
 	if token := strings.TrimSpace(os.Getenv("DIVERGE_TOKEN")); token != "" {
 		return token
@@ -472,6 +476,7 @@ func resolveMCPBearerToken() string {
 	return strings.TrimSpace(string(data))
 }
 
+// newMCPHTTPClient constructs an *http.Client that injects bearer credentials for the target server origin.
 func newMCPHTTPClient(serverURL string) *http.Client {
 	var targetScheme, targetHost string
 	if parsed, err := url.Parse(strings.TrimSpace(serverURL)); err == nil && parsed != nil {
@@ -488,6 +493,7 @@ func newMCPHTTPClient(serverURL string) *http.Client {
 	}
 }
 
+// runMCP starts the MCP stdio server connected to the given Diverge API server URL.
 func runMCP(ctx context.Context, app *App, serverURL string, allowDestructive bool) error {
 	if serverURL == "" {
 		serverURL = os.Getenv("DIVERGE_SERVER_URL")

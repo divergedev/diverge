@@ -517,6 +517,7 @@ func (s *AgentTaskService) StreamTaskLogs(
 	return nil
 }
 
+// toProtoAgentTask converts a Kubernetes v1alpha1.AgentTask resource into its protobuf representation.
 func toProtoAgentTask(task *v1alpha1.AgentTask) *pb.AgentTask {
 	if task == nil {
 		return nil

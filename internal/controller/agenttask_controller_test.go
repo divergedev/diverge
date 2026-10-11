@@ -470,6 +470,18 @@ func (f *failingTokenMinter) Mint(_ context.Context, _ auth.Claims) (auth.Token,
 	return nil, f.err
 }
 
+type failingSaveTokenStore struct {
+	*auth.InMemoryTokenStore
+	saveErr error
+}
+
+func (f *failingSaveTokenStore) SaveToken(ctx context.Context, taskID, namespace string, token []byte) error {
+	if f.saveErr != nil {
+		return f.saveErr
+	}
+	return f.InMemoryTokenStore.SaveToken(ctx, taskID, namespace, token)
+}
+
 func TestAgentTaskReconcilerResumeStaysPausedWhenTokenMintFails(t *testing.T) {
 	ctx := context.Background()
 	scheme := runtime.NewScheme()
@@ -514,6 +526,17 @@ func TestAgentTaskReconcilerResumeStaysPausedWhenTokenMintFails(t *testing.T) {
 	require.Error(t, err)
 
 	updated := &v1alpha1.AgentTask{}
+	require.NoError(t, fakeClient.Get(ctx, req.NamespacedName, updated))
+	assert.Equal(t, v1alpha1.AgentTaskPhasePaused, updated.Status.Phase)
+
+	// Also verify SaveToken persistence failure keeps the task Paused
+	reconciler.TokenMinter = auth.NewMacaroonProvider([]byte("0123456789abcdef0123456789abcdef"))
+	reconciler.TokenStore = &failingSaveTokenStore{
+		InMemoryTokenStore: auth.NewInMemoryTokenStore(),
+		saveErr:            assert.AnError,
+	}
+	_, err = reconciler.Reconcile(ctx, req)
+	require.Error(t, err)
 	require.NoError(t, fakeClient.Get(ctx, req.NamespacedName, updated))
 	assert.Equal(t, v1alpha1.AgentTaskPhasePaused, updated.Status.Phase)
 }

@@ -37,6 +37,7 @@ func ValidateDNS1123Label(value, field string) error {
 	return nil
 }
 
+// isMacaroonUser reports whether the authenticated UserInfo originated from a Macaroon capability token.
 func isMacaroonUser(user *auth.UserInfo) bool {
 	if user == nil || len(user.Extra) == 0 {
 		return false
@@ -45,6 +46,8 @@ func isMacaroonUser(user *auth.UserInfo) bool {
 	return len(vals) > 0 && vals[0] == "macaroon"
 }
 
+// candidateToolsForAction maps a Kubernetes RBAC verb and resource to the MCP tool names
+// that authorize the action under a Macaroon capability token's allowed_tools caveat.
 func candidateToolsForAction(verb, resource string) []string {
 	switch resource {
 	case "environments":
@@ -66,7 +69,7 @@ func candidateToolsForAction(verb, resource string) []string {
 		switch verb {
 		case "get", "list", "watch":
 			return []string{"diverge_list_hook_jobs", "diverge_fetch_errors"}
-		case "create", "delete", "retry-hook":
+		case "retry-hook":
 			return []string{"diverge_retry_hook"}
 		}
 	case "previewgroups":
@@ -105,6 +108,8 @@ func candidateToolsForAction(verb, resource string) []string {
 	}
 }
 
+// authorizeMacaroon enforces namespace binding, AgentTask lifecycle restrictions, and allowed_tools
+// glob matching for requests authenticated with a Macaroon capability token.
 func authorizeMacaroon(ctx context.Context, auditLogger *AuditLogger, user *auth.UserInfo, verb, namespace, resource, denialMsg string) error {
 	boundNS := ""
 	if nsVals := user.Extra[auth.ExtraKeyNamespace]; len(nsVals) > 0 {

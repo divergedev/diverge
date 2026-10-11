@@ -50,6 +50,7 @@ func NewInMemoryTokenStore() *InMemoryTokenStore {
 	}
 }
 
+// tokenKey builds the namespace-scoped map key for in-memory token storage.
 func tokenKey(taskID, namespace string) string {
 	return fmt.Sprintf("%s/%s", namespace, taskID)
 }
@@ -133,6 +134,7 @@ func SecretName(taskID string) string {
 	return fmt.Sprintf("%s-token-%s", taskID[:prefixLen], hashStr)
 }
 
+// secretName delegates to SecretName for internal callers.
 func secretName(taskID string) string {
 	return SecretName(taskID)
 }
@@ -266,6 +268,7 @@ type NoopTokenAuditor struct{}
 
 var _ TokenAuditor = (*NoopTokenAuditor)(nil)
 
+// RecordEvent discards the provided AuthEvent and returns nil.
 func (a *NoopTokenAuditor) RecordEvent(_ context.Context, _ AuthEvent) error {
 	return nil
 }

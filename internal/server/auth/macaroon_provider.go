@@ -144,6 +144,7 @@ func matchesStoredRootToken(presented *pkgauth.Macaroon, storedRaw []byte) bool 
 	return true
 }
 
+// decodeMacaroonToken decodes a raw JSON or base64-encoded Macaroon token string into JSON bytes.
 func decodeMacaroonToken(token string) ([]byte, error) {
 	trimmed := strings.TrimSpace(token)
 	if trimmed == "" {

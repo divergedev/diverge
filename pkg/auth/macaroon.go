@@ -31,14 +31,17 @@ type Macaroon struct {
 	Signature string   `json:"signature"` // hex-encoded
 }
 
+// ID returns the Macaroon's task identifier.
 func (m *Macaroon) ID() string {
 	return m.TokenID
 }
 
+// Caveats returns the ordered caveat chain embedded in the Macaroon.
 func (m *Macaroon) Caveats() []Caveat {
 	return m.CaveatSeq
 }
 
+// Serialize encodes the Macaroon as JSON bytes.
 func (m *Macaroon) Serialize() ([]byte, error) {
 	return json.Marshal(m)
 }
@@ -56,6 +59,7 @@ func NewMacaroonProvider(rootKey []byte) *MacaroonProvider {
 	return &MacaroonProvider{rootKey: rootKey}
 }
 
+// computeHMAC calculates the HMAC-SHA256 digest of data under key.
 func computeHMAC(key, data []byte) []byte {
 	h := hmac.New(sha256.New, key)
 	h.Write(data)
@@ -153,6 +157,7 @@ func (p *MacaroonProvider) Mint(_ context.Context, claims Claims) (Token, error)
 	return mac, nil
 }
 
+// serializeCaveatCanonical returns the canonical key:op:value byte representation of a caveat.
 func serializeCaveatCanonical(c Caveat) []byte {
 	return []byte(fmt.Sprintf("%s:%s:%s", c.Key, c.Op, c.Value))
 }
@@ -227,6 +232,8 @@ func (p *MacaroonProvider) VerifyAndExtract(_ context.Context, raw []byte) (*Mac
 	claims := Claims{TaskID: mac.TokenID}
 	hasTaskID := false
 	hasNamespace := false
+	hasAllowedTools := false
+	hasAllowedModels := false
 	hasMaxCostUSD := false
 	hasMaxTokens := false
 
@@ -286,8 +293,14 @@ func (p *MacaroonProvider) VerifyAndExtract(_ context.Context, raw []byte) (*Mac
 				return nil, Claims{}, fmt.Errorf("%w: invalid allowed_tools caveat", ErrCaveatFailed)
 			}
 			newPatterns := strings.Split(c.Value, ",")
-			if len(claims.AllowedTools) == 0 {
+			for _, np := range newPatterns {
+				if np == "" {
+					return nil, Claims{}, fmt.Errorf("%w: empty pattern in allowed_tools caveat", ErrCaveatFailed)
+				}
+			}
+			if !hasAllowedTools {
 				claims.AllowedTools = newPatterns
+				hasAllowedTools = true
 			} else {
 				// Attenuated allowed_tools caveats can only narrow existing patterns
 				var narrowed []string
@@ -309,8 +322,14 @@ func (p *MacaroonProvider) VerifyAndExtract(_ context.Context, raw []byte) (*Mac
 				return nil, Claims{}, fmt.Errorf("%w: invalid allowed_models caveat", ErrCaveatFailed)
 			}
 			newModels := strings.Split(c.Value, ",")
-			if len(claims.AllowedModels) == 0 {
+			for _, m := range newModels {
+				if m == "" {
+					return nil, Claims{}, fmt.Errorf("%w: empty model in allowed_models caveat", ErrCaveatFailed)
+				}
+			}
+			if !hasAllowedModels {
 				claims.AllowedModels = newModels
+				hasAllowedModels = true
 			} else {
 				existingSet := make(map[string]bool, len(claims.AllowedModels))
 				for _, m := range claims.AllowedModels {
@@ -380,6 +399,7 @@ func (p *MacaroonProvider) VerifyAndExtract(_ context.Context, raw []byte) (*Mac
 	return &mac, claims, nil
 }
 
+// evaluateCaveat verifies that a single Caveat holds against the provided request Claims.
 func evaluateCaveat(c Caveat, req Claims) error {
 	switch c.Key {
 	case "task_id":
