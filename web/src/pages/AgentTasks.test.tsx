@@ -141,4 +141,33 @@ describe('AgentTasks', () => {
       expect(screen.getByText('task-page-2')).toBeInTheDocument()
     })
   })
+
+  it('paginates when more than 25 tasks exist and blocks unsafe javascript: PR URLs', async () => {
+    const manyTasks = Array.from({ length: 28 }, (_, i) => ({
+      name: `task-${i + 1}`,
+      namespace: 'default',
+      spec: { objective: `Objective ${i + 1}` },
+      status: {
+        phase: 'AGENT_TASK_PHASE_ACTIVE',
+        prUrl: i === 0 ? 'javascript:alert(1)' : '',
+      },
+    }))
+
+    server.use(
+      http.post('*/diverge.v1alpha1.AgentTaskService/ListTasks', () =>
+        HttpResponse.json({ tasks: manyTasks }),
+      ),
+    )
+
+    renderPage()
+
+    expect(await screen.findByText('task-1')).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /PR/i })).not.toBeInTheDocument()
+    expect(screen.getByText('Page 1 of 2 (28 tasks)')).toBeInTheDocument()
+    expect(screen.queryByText('task-26')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /Next/i }))
+    expect(await screen.findByText('task-26')).toBeInTheDocument()
+    expect(screen.getByText('Page 2 of 2 (28 tasks)')).toBeInTheDocument()
+  })
 })
