@@ -257,7 +257,7 @@ func TestMultiServicePreviewGroup(t *testing.T) {
 		err = f.Client.Delete(ctx, pg)
 		require.NoError(t, err, "Failed to delete PreviewGroup")
 		for _, svc := range pg.Spec.Services {
-			_ = f.WaitForEnvironmentDeleted(ctx, childEnvName(pg.Name, svc.Name), defaultTimeout)
+			require.NoError(t, f.WaitForEnvironmentDeleted(ctx, childEnvName(pg.Name, svc.Name), defaultTimeout))
 		}
 	} else {
 		_ = f.Client.Delete(ctx, pg)

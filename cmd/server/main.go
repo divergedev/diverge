@@ -227,7 +227,7 @@ func main() {
 		}
 		macaroonAuthProvider = auth.NewMacaroonAuthProvider(
 			pkgauth.NewMacaroonProvider([]byte(macaroonRootKey)),
-			pkgauth.NewKubernetesSecretTokenStore(crClient, scheme),
+			pkgauth.NewKubernetesSecretTokenStore(crClient, scheme).WithIndexOnly(),
 		).WithTaskActiveCheck(crClient)
 		logger.Info("Macaroon capability token authentication enabled")
 	}

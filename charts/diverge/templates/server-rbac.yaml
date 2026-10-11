@@ -83,6 +83,7 @@ rules:
   {{- if and .Values.sandbox .Values.sandbox.macaroonSecretRef .Values.sandbox.macaroonSecretRef.name }}
   - apiGroups: [""]
     resources: ["secrets"]
+    resourceNames: ["diverge-agenttask-tokens"]
     verbs: ["get"]
   {{- end }}
 ---
@@ -130,6 +131,7 @@ rules:
   {{- if and $.Values.sandbox $.Values.sandbox.macaroonSecretRef $.Values.sandbox.macaroonSecretRef.name }}
   - apiGroups: [""]
     resources: ["secrets"]
+    resourceNames: ["diverge-agenttask-tokens"]
     verbs: ["get"]
   {{- end }}
 ---

@@ -30,6 +30,9 @@ const (
 	LabelRevoked = "divergedev.com/revoked"
 	// ManagedByLabel is the standard Kubernetes management label.
 	ManagedByLabel = "app.kubernetes.io/managed-by"
+	// TokenIndexSecretName is the fixed Secret name per namespace used to index active
+	// AgentTask capability tokens so diverge-server RBAC can restrict Secret reads via resourceNames.
+	TokenIndexSecretName = "diverge-agenttask-tokens"
 )
 
 // InMemoryTokenStore provides an in-memory, thread-safe implementation of TokenStore.
@@ -108,8 +111,9 @@ func (s *InMemoryTokenStore) IsRevoked(_ context.Context, taskID, namespace stri
 
 // KubernetesSecretTokenStore implements TokenStore using Kubernetes corev1.Secret resources.
 type KubernetesSecretTokenStore struct {
-	client client.Client
-	scheme *runtime.Scheme
+	client    client.Client
+	scheme    *runtime.Scheme
+	indexOnly bool
 }
 
 var _ TokenStore = (*KubernetesSecretTokenStore)(nil)
@@ -120,6 +124,14 @@ func NewKubernetesSecretTokenStore(c client.Client, scheme *runtime.Scheme) *Kub
 		client: c,
 		scheme: scheme,
 	}
+}
+
+// WithIndexOnly configures the store to read token state exclusively from the
+// namespace-scoped TokenIndexSecretName ("diverge-agenttask-tokens") Secret, allowing
+// callers like diverge-server to operate with RBAC restricted via resourceNames.
+func (s *KubernetesSecretTokenStore) WithIndexOnly() *KubernetesSecretTokenStore {
+	s.indexOnly = true
+	return s
 }
 
 // SecretName returns the deterministic Kubernetes Secret name for an AgentTask capability token.
@@ -139,29 +151,37 @@ func secretName(taskID string) string {
 	return SecretName(taskID)
 }
 
-// SaveToken creates or updates the <task-name>-token Kubernetes Secret.
+// revokedIndexKey returns the annotation key used in TokenIndexSecretName to record revocation.
+func revokedIndexKey(taskID string) string {
+	return fmt.Sprintf("revoked.divergedev.com/%s", taskID)
+}
+
+// SaveToken creates or updates the <task-name>-token Kubernetes Secret and syncs the namespace token index.
 func (s *KubernetesSecretTokenStore) SaveToken(ctx context.Context, taskID, namespace string, token []byte) error {
 	name := SecretName(taskID)
 	sec := &corev1.Secret{}
 	err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, sec)
 	if err != nil {
-		if apierrors.IsNotFound(err) {
-			sec = &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      name,
-					Namespace: namespace,
-					Labels: map[string]string{
-						LabelAgentTask: taskID,
-						ManagedByLabel: "diverge",
-					},
-				},
-				Data: map[string][]byte{
-					"token": token,
-				},
-			}
-			return s.client.Create(ctx, sec)
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("get token secret %s: %w", name, err)
 		}
-		return fmt.Errorf("get token secret %s: %w", name, err)
+		sec = &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: namespace,
+				Labels: map[string]string{
+					LabelAgentTask: taskID,
+					ManagedByLabel: "diverge",
+				},
+			},
+			Data: map[string][]byte{
+				"token": token,
+			},
+		}
+		if err := s.client.Create(ctx, sec); err != nil {
+			return err
+		}
+		return s.upsertTokenIndex(ctx, taskID, namespace, token)
 	}
 
 	if sec.Labels == nil || sec.Labels[LabelAgentTask] != taskID {
@@ -175,11 +195,17 @@ func (s *KubernetesSecretTokenStore) SaveToken(ctx context.Context, taskID, name
 	if sec.Labels != nil {
 		delete(sec.Labels, LabelRevoked)
 	}
-	return s.client.Update(ctx, sec)
+	if err := s.client.Update(ctx, sec); err != nil {
+		return err
+	}
+	return s.upsertTokenIndex(ctx, taskID, namespace, token)
 }
 
-// GetToken reads the token from the Kubernetes Secret.
+// GetToken reads the token from the Kubernetes Secret (or from TokenIndexSecretName when indexOnly is enabled).
 func (s *KubernetesSecretTokenStore) GetToken(ctx context.Context, taskID, namespace string) ([]byte, error) {
+	if s.indexOnly {
+		return s.getTokenFromIndex(ctx, taskID, namespace)
+	}
 	name := SecretName(taskID)
 	sec := &corev1.Secret{}
 	err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, sec)
@@ -205,14 +231,34 @@ func (s *KubernetesSecretTokenStore) GetToken(ctx context.Context, taskID, names
 	return tok, nil
 }
 
-// DeleteToken removes the token Secret.
+// getTokenFromIndex reads a task's active or revoked token state from TokenIndexSecretName.
+func (s *KubernetesSecretTokenStore) getTokenFromIndex(ctx context.Context, taskID, namespace string) ([]byte, error) {
+	sec := &corev1.Secret{}
+	err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: TokenIndexSecretName}, sec)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, ErrTokenNotFound
+		}
+		return nil, fmt.Errorf("get token index secret %s: %w", TokenIndexSecretName, err)
+	}
+	if sec.Annotations != nil && sec.Annotations[revokedIndexKey(taskID)] == "true" {
+		return nil, ErrTokenRevoked
+	}
+	tok, ok := sec.Data[taskID]
+	if !ok || len(tok) == 0 {
+		return nil, ErrTokenNotFound
+	}
+	return tok, nil
+}
+
+// DeleteToken removes the token Secret and clears its entry in TokenIndexSecretName.
 func (s *KubernetesSecretTokenStore) DeleteToken(ctx context.Context, taskID, namespace string) error {
 	name := SecretName(taskID)
 	sec := &corev1.Secret{}
 	err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, sec)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil
+			return s.removeFromTokenIndex(ctx, taskID, namespace)
 		}
 		return fmt.Errorf("get token secret %s: %w", name, err)
 	}
@@ -224,10 +270,10 @@ func (s *KubernetesSecretTokenStore) DeleteToken(ctx context.Context, taskID, na
 	if err := s.client.Delete(ctx, sec); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete token secret %s: %w", name, err)
 	}
-	return nil
+	return s.removeFromTokenIndex(ctx, taskID, namespace)
 }
 
-// RevokeToken marks the token Secret as revoked via label and data entry.
+// RevokeToken marks the token Secret and TokenIndexSecretName entry as revoked.
 func (s *KubernetesSecretTokenStore) RevokeToken(ctx context.Context, taskID, namespace string) error {
 	name := SecretName(taskID)
 	sec := &corev1.Secret{}
@@ -247,11 +293,21 @@ func (s *KubernetesSecretTokenStore) RevokeToken(ctx context.Context, taskID, na
 		sec.Labels = make(map[string]string)
 	}
 	sec.Labels[LabelRevoked] = "true"
-	return s.client.Update(ctx, sec)
+	if err := s.client.Update(ctx, sec); err != nil {
+		return err
+	}
+	return s.markRevokedInIndex(ctx, taskID, namespace)
 }
 
-// IsRevoked inspects whether the token Secret has the revoked label.
+// IsRevoked inspects whether the token Secret (or TokenIndexSecretName when indexOnly is enabled) is marked revoked.
 func (s *KubernetesSecretTokenStore) IsRevoked(ctx context.Context, taskID, namespace string) bool {
+	if s.indexOnly {
+		sec := &corev1.Secret{}
+		if err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: TokenIndexSecretName}, sec); err != nil {
+			return false
+		}
+		return sec.Annotations != nil && sec.Annotations[revokedIndexKey(taskID)] == "true"
+	}
 	name := SecretName(taskID)
 	sec := &corev1.Secret{}
 	if err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, sec); err != nil {
@@ -261,6 +317,72 @@ func (s *KubernetesSecretTokenStore) IsRevoked(ctx context.Context, taskID, name
 		return false
 	}
 	return sec.Labels[LabelRevoked] == "true"
+}
+
+// upsertTokenIndex records or updates a task's active token in the namespace TokenIndexSecretName Secret.
+func (s *KubernetesSecretTokenStore) upsertTokenIndex(ctx context.Context, taskID, namespace string, token []byte) error {
+	idx := &corev1.Secret{}
+	err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: TokenIndexSecretName}, idx)
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("get token index secret %s: %w", TokenIndexSecretName, err)
+		}
+		idx = &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      TokenIndexSecretName,
+				Namespace: namespace,
+				Labels: map[string]string{
+					ManagedByLabel: "diverge",
+				},
+			},
+			Data: map[string][]byte{
+				taskID: append([]byte(nil), token...),
+			},
+		}
+		return s.client.Create(ctx, idx)
+	}
+	if idx.Data == nil {
+		idx.Data = make(map[string][]byte)
+	}
+	idx.Data[taskID] = append([]byte(nil), token...)
+	if idx.Annotations != nil {
+		delete(idx.Annotations, revokedIndexKey(taskID))
+	}
+	return s.client.Update(ctx, idx)
+}
+
+// markRevokedInIndex marks a task's token as revoked in the namespace TokenIndexSecretName Secret.
+func (s *KubernetesSecretTokenStore) markRevokedInIndex(ctx context.Context, taskID, namespace string) error {
+	idx := &corev1.Secret{}
+	err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: TokenIndexSecretName}, idx)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("get token index secret %s: %w", TokenIndexSecretName, err)
+	}
+	if idx.Annotations == nil {
+		idx.Annotations = make(map[string]string)
+	}
+	idx.Annotations[revokedIndexKey(taskID)] = "true"
+	return s.client.Update(ctx, idx)
+}
+
+// removeFromTokenIndex removes a task's token and revocation state from the namespace TokenIndexSecretName Secret.
+func (s *KubernetesSecretTokenStore) removeFromTokenIndex(ctx context.Context, taskID, namespace string) error {
+	idx := &corev1.Secret{}
+	err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: TokenIndexSecretName}, idx)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("get token index secret %s: %w", TokenIndexSecretName, err)
+	}
+	delete(idx.Data, taskID)
+	if idx.Annotations != nil {
+		delete(idx.Annotations, revokedIndexKey(taskID))
+	}
+	return s.client.Update(ctx, idx)
 }
 
 // NoopTokenAuditor discards audit events.
