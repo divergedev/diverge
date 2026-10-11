@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
+	"strings"
 
 	"connectrpc.com/connect"
 	authorizationv1 "k8s.io/api/authorization/v1"
@@ -31,6 +33,101 @@ func ValidateDNS1123Label(value, field string) error {
 	}
 	if !dns1123LabelRegex.MatchString(value) {
 		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("%s must be a valid DNS label (lowercase alphanumeric and hyphens)", field))
+	}
+	return nil
+}
+
+func isMacaroonUser(user *auth.UserInfo) bool {
+	if user == nil || len(user.Extra) == 0 {
+		return false
+	}
+	vals := user.Extra[auth.ExtraKeyAuthType]
+	return len(vals) > 0 && vals[0] == "macaroon"
+}
+
+func candidateToolsForAction(verb, resource string) []string {
+	switch resource {
+	case "environments":
+		switch verb {
+		case "get":
+			return []string{"diverge_get_environment", "diverge_wait_for_ready", "diverge_fetch_errors", "diverge_list_hook_jobs", "diverge_doctor"}
+		case "list", "watch":
+			return []string{"diverge_list_environments", "diverge_watch_environments"}
+		case "create":
+			return []string{"diverge_create_environment", "diverge_retry_hook"}
+		case "update":
+			return []string{"diverge_update_environment", "diverge_extend_ttl"}
+		case "delete":
+			return []string{"diverge_delete_environment"}
+		}
+	case "previewgroups":
+		switch verb {
+		case "get":
+			return []string{"diverge_get_preview_group"}
+		case "list", "watch":
+			return []string{"diverge_list_preview_groups", "diverge_watch_preview_groups"}
+		case "create":
+			return []string{"diverge_create_preview_group"}
+		case "update":
+			return []string{"diverge_update_preview_group"}
+		case "delete":
+			return []string{"diverge_delete_preview_group"}
+		}
+	case "agenttasks":
+		switch verb {
+		case "get":
+			return []string{"diverge_get_task", "diverge_stream_task_logs"}
+		case "list", "watch":
+			return []string{"diverge_list_tasks"}
+		case "create":
+			return []string{"diverge_create_task"}
+		case "update":
+			return []string{"diverge_pause_task", "diverge_resume_task", "diverge_guide_task"}
+		case "delete":
+			return []string{"diverge_delete_task"}
+		}
+	case "pods/log":
+		return []string{"diverge_stream_logs", "diverge_stream_task_logs", "diverge_fetch_errors", "diverge_get_task", "diverge_get_environment"}
+	}
+	singular := strings.TrimSuffix(resource, "s")
+	return []string{
+		fmt.Sprintf("diverge_%s_%s", verb, singular),
+		fmt.Sprintf("diverge_%s_%s", verb, resource),
+	}
+}
+
+func authorizeMacaroon(ctx context.Context, auditLogger *AuditLogger, user *auth.UserInfo, verb, namespace, resource, denialMsg string) error {
+	boundNS := ""
+	if nsVals := user.Extra[auth.ExtraKeyNamespace]; len(nsVals) > 0 {
+		boundNS = nsVals[0]
+	}
+	// Macaroon capability tokens are strictly namespace-bound; cluster-wide or cross-namespace access is denied.
+	if boundNS == "" || namespace == "" || namespace != boundNS {
+		if auditLogger != nil {
+			auditLogger.LogAuthz(ctx, "authz.denied", user, verb, resource, namespace)
+		}
+		return connect.NewError(connect.CodePermissionDenied, errors.New(denialMsg))
+	}
+
+	allowedPatterns := user.Extra[auth.ExtraKeyAllowedTools]
+	candidates := candidateToolsForAction(verb, resource)
+	allowed := false
+	for _, pattern := range allowedPatterns {
+		for _, candidate := range candidates {
+			if matched, err := filepath.Match(pattern, candidate); err == nil && matched {
+				allowed = true
+				break
+			}
+		}
+		if allowed {
+			break
+		}
+	}
+	if !allowed {
+		if auditLogger != nil {
+			auditLogger.LogAuthz(ctx, "authz.denied", user, verb, resource, namespace)
+		}
+		return connect.NewError(connect.CodePermissionDenied, errors.New(denialMsg))
 	}
 	return nil
 }
@@ -82,6 +179,9 @@ func AuthorizeAction(ctx context.Context, k8sClient kubernetes.Interface, auditL
 	if !ok {
 		return connect.NewError(connect.CodeUnauthenticated, errors.New("not authenticated"))
 	}
+	if isMacaroonUser(user) {
+		return authorizeMacaroon(ctx, auditLogger, user, verb, namespace, resource, "permission denied")
+	}
 
 	return checkSAR(ctx, k8sClient, auditLogger, user, &authorizationv1.ResourceAttributes{
 		Namespace: namespace,
@@ -97,6 +197,9 @@ func AuthorizePodLogs(ctx context.Context, k8sClient kubernetes.Interface, audit
 	user, ok := auth.UserInfoFromContext(ctx)
 	if !ok {
 		return connect.NewError(connect.CodeUnauthenticated, errors.New("not authenticated"))
+	}
+	if isMacaroonUser(user) {
+		return authorizeMacaroon(ctx, auditLogger, user, "get", namespace, "pods/log", "permission denied: requires get access to pods/log")
 	}
 
 	return checkSAR(ctx, k8sClient, auditLogger, user, &authorizationv1.ResourceAttributes{

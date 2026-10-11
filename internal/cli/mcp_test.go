@@ -2,6 +2,10 @@ package cli
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -291,4 +295,41 @@ func TestMCPTaskHandler(t *testing.T) {
 	assert.ErrorIs(t, err, assert.AnError)
 	_, err = errHandler.GuideTask(ctx, &divergev1alpha1.GuideTaskRequest{})
 	assert.ErrorIs(t, err, assert.AnError)
+}
+
+func TestMCPBearerTokenAuth(t *testing.T) {
+	tmpDir := t.TempDir()
+	tokenFile := filepath.Join(tmpDir, "token")
+	require.NoError(t, os.WriteFile(tokenFile, []byte("  file-macaroon-token-1\n"), 0o600))
+
+	t.Setenv("DIVERGE_TOKEN", "")
+	t.Setenv("DIVERGE_TOKEN_FILE", tokenFile)
+	assert.Equal(t, "file-macaroon-token-1", resolveMCPBearerToken())
+
+	var seenAuthHeader string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenAuthHeader = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	client := newMCPHTTPClient()
+	resp, err := client.Get(ts.URL)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	assert.Equal(t, "Bearer file-macaroon-token-1", seenAuthHeader)
+
+	// Rotating the token file on disk (e.g., after ResumeTask re-mints Secret) is picked up dynamically
+	require.NoError(t, os.WriteFile(tokenFile, []byte("file-macaroon-token-2"), 0o600))
+	resp, err = client.Get(ts.URL)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	assert.Equal(t, "Bearer file-macaroon-token-2", seenAuthHeader)
+
+	// Explicit DIVERGE_TOKEN takes precedence over DIVERGE_TOKEN_FILE
+	t.Setenv("DIVERGE_TOKEN", "env-override-token")
+	resp, err = client.Get(ts.URL)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	assert.Equal(t, "Bearer env-override-token", seenAuthHeader)
 }

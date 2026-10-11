@@ -418,6 +418,52 @@ func newMCPServer(envClient divergev1alpha1connect.EnvironmentServiceClient, pgC
 	return mcpServer
 }
 
+const defaultMCPTokenFilePath = "/etc/diverge/token/token"
+
+type bearerAuthRoundTripper struct {
+	base      http.RoundTripper
+	tokenFunc func() string
+}
+
+func (rt *bearerAuthRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	base := rt.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	if rt.tokenFunc != nil && req.Header.Get("Authorization") == "" {
+		if token := rt.tokenFunc(); token != "" {
+			clone := req.Clone(req.Context())
+			clone.Header.Set("Authorization", "Bearer "+token)
+			req = clone
+		}
+	}
+	return base.RoundTrip(req)
+}
+
+func resolveMCPBearerToken() string {
+	if token := strings.TrimSpace(os.Getenv("DIVERGE_TOKEN")); token != "" {
+		return token
+	}
+	tokenFile := strings.TrimSpace(os.Getenv("DIVERGE_TOKEN_FILE"))
+	if tokenFile == "" {
+		tokenFile = defaultMCPTokenFilePath
+	}
+	data, err := os.ReadFile(tokenFile)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func newMCPHTTPClient() *http.Client {
+	return &http.Client{
+		Transport: &bearerAuthRoundTripper{
+			base:      http.DefaultTransport,
+			tokenFunc: resolveMCPBearerToken,
+		},
+	}
+}
+
 func runMCP(ctx context.Context, app *App, serverURL string, allowDestructive bool) error {
 	if serverURL == "" {
 		serverURL = os.Getenv("DIVERGE_SERVER_URL")
@@ -426,7 +472,7 @@ func runMCP(ctx context.Context, app *App, serverURL string, allowDestructive bo
 		}
 	}
 
-	httpClient := http.DefaultClient
+	httpClient := newMCPHTTPClient()
 	envClient := divergev1alpha1connect.NewEnvironmentServiceClient(httpClient, serverURL)
 	pgClient := divergev1alpha1connect.NewPreviewGroupServiceClient(httpClient, serverURL)
 	taskClient := divergev1alpha1connect.NewAgentTaskServiceClient(httpClient, serverURL)

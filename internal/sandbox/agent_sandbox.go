@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -18,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	pkgauth "github.com/divergedev/diverge/pkg/auth"
 	pkgsandbox "github.com/divergedev/diverge/pkg/sandbox"
 )
 
@@ -86,7 +88,7 @@ func (p *AgentSandboxProvider) Provision(ctx context.Context, task *v1alpha1.Age
 		ClaimName:      claimName,
 		PodName:        status.PodName,
 		PodIP:          status.PodIP,
-		TokenMountPath: "/etc/diverge/token",
+		TokenMountPath: "/etc/diverge/token/token",
 		Ready:          status.Ready,
 		Message:        status.Message,
 	}, nil
@@ -241,8 +243,32 @@ func BuildSandboxClaimSpec(task *v1alpha1.AgentTask) map[string]interface{} {
 		return spec
 	}
 
-	// Standalone pod template fallback with explicit resource bounds, ephemeral disk limits, and non-root security context
+	baseBranch := task.Spec.Repository.BaseBranch
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
+
+	envVars := []interface{}{
+		map[string]interface{}{"name": "DIVERGE_TASK_NAME", "value": task.Name},
+		map[string]interface{}{"name": "DIVERGE_TASK_NAMESPACE", "value": task.Namespace},
+		map[string]interface{}{"name": "DIVERGE_OBJECTIVE", "value": task.Spec.Objective},
+		map[string]interface{}{"name": "DIVERGE_REPO_URL", "value": task.Spec.Repository.URL},
+		map[string]interface{}{"name": "DIVERGE_BASE_BRANCH", "value": baseBranch},
+		map[string]interface{}{"name": "DIVERGE_WORKING_BRANCH", "value": task.Spec.Repository.WorkingBranch},
+		map[string]interface{}{"name": "DIVERGE_BUDGET_USD", "value": task.Spec.BudgetUSD},
+		map[string]interface{}{"name": "DIVERGE_MAX_ITERATIONS", "value": strconv.Itoa(int(task.Spec.MaxIterations))},
+		map[string]interface{}{"name": "DIVERGE_TOKEN_FILE", "value": "/etc/diverge/token/token"},
+	}
+
+	// Standalone pod template fallback with explicit resource bounds, ephemeral disk limits,
+	// NetworkPolicy isolation labels, and non-root security context.
 	spec["template"] = map[string]interface{}{
+		"metadata": map[string]interface{}{
+			"labels": map[string]interface{}{
+				"divergedev.com/agent-task":    task.Name,
+				"app.kubernetes.io/managed-by": "diverge",
+			},
+		},
 		"spec": map[string]interface{}{
 			"securityContext": map[string]interface{}{
 				"runAsNonRoot": true,
@@ -252,6 +278,7 @@ func BuildSandboxClaimSpec(task *v1alpha1.AgentTask) map[string]interface{} {
 				map[string]interface{}{
 					"name":      "agent",
 					"image":     DefaultAgentImage,
+					"env":       envVars,
 					"resources": DefaultResourceBounds,
 					"securityContext": map[string]interface{}{
 						"allowPrivilegeEscalation": false,
@@ -282,7 +309,7 @@ func BuildSandboxClaimSpec(task *v1alpha1.AgentTask) map[string]interface{} {
 				map[string]interface{}{
 					"name": "token",
 					"secret": map[string]interface{}{
-						"secretName":  fmt.Sprintf("%s-token", task.Name),
+						"secretName":  pkgauth.SecretName(task.Name),
 						"defaultMode": int64(0400),
 					},
 				},

@@ -313,3 +313,65 @@ func TestMacaroonNonceUniqueness(t *testing.T) {
 	require.NoError(t, err)
 	assert.NoError(t, provider.Verify(ctx, raw2, Claims{TaskID: "identical-task-id"}))
 }
+
+func TestMacaroonVerifyAndExtract(t *testing.T) {
+	ctx := context.Background()
+	rootKey := []byte("0123456789abcdef0123456789abcdef")
+	provider := NewMacaroonProvider(rootKey)
+
+	claims := Claims{
+		TaskID:        "task-extract",
+		Namespace:     "team-alpha",
+		RepoURL:       "https://github.com/org/repo",
+		Branch:        "main",
+		AllowedTools:  []string{"diverge_*"},
+		AllowedModels: []string{"gemini-2.5-pro", "gemini-2.5-flash"},
+		MaxCostUSD:    12.50,
+		MaxTokens:     200000,
+		ExpiresAt:     time.Now().Add(1 * time.Hour),
+	}
+
+	tok, err := provider.Mint(ctx, claims)
+	require.NoError(t, err)
+
+	// Narrow via attenuation
+	attenuated, err := provider.Attenuate(ctx, tok,
+		Caveat{Key: "allowed_tools", Op: OpGlob, Value: "diverge_get_*"},
+		Caveat{Key: "max_cost_usd", Op: OpLessThan, Value: "5.00"},
+	)
+	require.NoError(t, err)
+
+	raw, err := attenuated.Serialize()
+	require.NoError(t, err)
+
+	mac, extracted, err := provider.VerifyAndExtract(ctx, raw)
+	require.NoError(t, err)
+	require.NotNil(t, mac)
+	assert.Equal(t, "task-extract", extracted.TaskID)
+	assert.Equal(t, "team-alpha", extracted.Namespace)
+	assert.Equal(t, "https://github.com/org/repo", extracted.RepoURL)
+	assert.Equal(t, "main", extracted.Branch)
+	assert.Equal(t, []string{"diverge_get_*"}, extracted.AllowedTools)
+	assert.InDelta(t, 5.00, extracted.MaxCostUSD, 0.001)
+	assert.Equal(t, int64(200000), extracted.MaxTokens)
+
+	// Attempting to widen allowed_tools via attenuation must fail closed
+	widened, err := provider.Attenuate(ctx, attenuated,
+		Caveat{Key: "allowed_tools", Op: OpGlob, Value: "kubectl_*"},
+	)
+	require.NoError(t, err)
+	widenedRaw, err := widened.Serialize()
+	require.NoError(t, err)
+	_, _, err = provider.VerifyAndExtract(ctx, widenedRaw)
+	assert.ErrorIs(t, err, ErrCaveatFailed)
+
+	// Conflicting namespace caveat must fail closed
+	conflictingNS, err := provider.Attenuate(ctx, tok,
+		Caveat{Key: "namespace", Op: OpEqual, Value: "team-beta"},
+	)
+	require.NoError(t, err)
+	conflictRaw, err := conflictingNS.Serialize()
+	require.NoError(t, err)
+	_, _, err = provider.VerifyAndExtract(ctx, conflictRaw)
+	assert.ErrorIs(t, err, ErrCaveatFailed)
+}

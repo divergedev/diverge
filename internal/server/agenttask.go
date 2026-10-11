@@ -22,6 +22,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -129,10 +130,7 @@ func (s *AgentTaskService) CreateTask(ctx context.Context, req *connect.Request[
 	}
 
 	if err := s.client.Create(ctx, task); err != nil {
-		if apierrors.IsAlreadyExists(err) {
-			return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("agent task %q already exists", msg.Name))
-		}
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create agent task: %w", err))
+		return nil, SanitizeK8sError(s.logger, err)
 	}
 
 	return connect.NewResponse(&pb.CreateTaskResponse{
@@ -163,10 +161,7 @@ func (s *AgentTaskService) GetTask(ctx context.Context, req *connect.Request[pb.
 
 	task := &v1alpha1.AgentTask{}
 	if err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: msg.Name}, task); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("agent task %q not found", msg.Name))
-		}
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get agent task: %w", err))
+		return nil, SanitizeK8sError(s.logger, err)
 	}
 
 	return connect.NewResponse(&pb.GetTaskResponse{
@@ -217,7 +212,7 @@ func (s *AgentTaskService) ListTasks(ctx context.Context, req *connect.Request[p
 
 	taskList := &v1alpha1.AgentTaskList{}
 	if err := s.client.List(ctx, taskList, opts...); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("list agent tasks: %w", err))
+		return nil, SanitizeK8sError(s.logger, err)
 	}
 
 	protoTasks := make([]*pb.AgentTask, 0, len(taskList.Items))
@@ -261,7 +256,7 @@ func (s *AgentTaskService) DeleteTask(ctx context.Context, req *connect.Request[
 		},
 	}
 	if err := s.client.Delete(ctx, task); err != nil && !apierrors.IsNotFound(err) {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("delete agent task: %w", err))
+		return nil, SanitizeK8sError(s.logger, err)
 	}
 
 	return connect.NewResponse(&pb.DeleteTaskResponse{}), nil
@@ -280,26 +275,33 @@ func (s *AgentTaskService) PauseTask(ctx context.Context, req *connect.Request[p
 	if err := ValidateDNS1123Label(namespace, "namespace"); err != nil {
 		return nil, err
 	}
+	if err := ValidateDNS1123Label(msg.Name, "name"); err != nil {
+		return nil, err
+	}
 
 	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "update", namespace, "agenttasks"); err != nil {
 		return nil, err
 	}
 
-	task := &v1alpha1.AgentTask{}
-	if err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: msg.Name}, task); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("agent task %q not found", msg.Name))
+	var updatedTask *v1alpha1.AgentTask
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		task := &v1alpha1.AgentTask{}
+		if err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: msg.Name}, task); err != nil {
+			return err
 		}
-		return nil, connect.NewError(connect.CodeInternal, err)
-	}
-
-	task.Spec.Suspended = true
-	if err := s.client.Update(ctx, task); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("pause agent task: %w", err))
+		task.Spec.Suspended = true
+		if err := s.client.Update(ctx, task); err != nil {
+			return err
+		}
+		updatedTask = task
+		return nil
+	})
+	if err != nil {
+		return nil, SanitizeK8sError(s.logger, err)
 	}
 
 	return connect.NewResponse(&pb.PauseTaskResponse{
-		Task: toProtoAgentTask(task),
+		Task: toProtoAgentTask(updatedTask),
 	}), nil
 }
 
@@ -314,6 +316,9 @@ func (s *AgentTaskService) ResumeTask(ctx context.Context, req *connect.Request[
 		namespace = "default"
 	}
 	if err := ValidateDNS1123Label(namespace, "namespace"); err != nil {
+		return nil, err
+	}
+	if err := ValidateDNS1123Label(msg.Name, "name"); err != nil {
 		return nil, err
 	}
 	if msg.BudgetTokensBump < 0 {
@@ -332,33 +337,36 @@ func (s *AgentTaskService) ResumeTask(ctx context.Context, req *connect.Request[
 		return nil, err
 	}
 
-	task := &v1alpha1.AgentTask{}
-	if err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: msg.Name}, task); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("agent task %q not found", msg.Name))
+	var updatedTask *v1alpha1.AgentTask
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		task := &v1alpha1.AgentTask{}
+		if err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: msg.Name}, task); err != nil {
+			return err
 		}
-		return nil, connect.NewError(connect.CodeInternal, err)
-	}
-
-	task.Spec.Suspended = false
-	if msg.BudgetUsdBump != "" {
-		existing, err := strconv.ParseFloat(task.Spec.BudgetUSD, 64)
-		if err == nil && !math.IsNaN(existing) && !math.IsInf(existing, 0) {
-			task.Spec.BudgetUSD = fmt.Sprintf("%.2f", existing+bumpUSD)
-		} else {
-			task.Spec.BudgetUSD = fmt.Sprintf("%.2f", bumpUSD)
+		task.Spec.Suspended = false
+		if msg.BudgetUsdBump != "" {
+			existing, err := strconv.ParseFloat(task.Spec.BudgetUSD, 64)
+			if err == nil && !math.IsNaN(existing) && !math.IsInf(existing, 0) {
+				task.Spec.BudgetUSD = fmt.Sprintf("%.2f", existing+bumpUSD)
+			} else {
+				task.Spec.BudgetUSD = fmt.Sprintf("%.2f", bumpUSD)
+			}
 		}
-	}
-	if msg.BudgetTokensBump > 0 {
-		task.Spec.BudgetTokens += msg.BudgetTokensBump
-	}
-
-	if err := s.client.Update(ctx, task); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("resume agent task: %w", err))
+		if msg.BudgetTokensBump > 0 {
+			task.Spec.BudgetTokens += msg.BudgetTokensBump
+		}
+		if err := s.client.Update(ctx, task); err != nil {
+			return err
+		}
+		updatedTask = task
+		return nil
+	})
+	if err != nil {
+		return nil, SanitizeK8sError(s.logger, err)
 	}
 
 	return connect.NewResponse(&pb.ResumeTaskResponse{
-		Task: toProtoAgentTask(task),
+		Task: toProtoAgentTask(updatedTask),
 	}), nil
 }
 
@@ -375,31 +383,36 @@ func (s *AgentTaskService) GuideTask(ctx context.Context, req *connect.Request[p
 	if err := ValidateDNS1123Label(namespace, "namespace"); err != nil {
 		return nil, err
 	}
+	if err := ValidateDNS1123Label(msg.Name, "name"); err != nil {
+		return nil, err
+	}
 
 	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "update", namespace, "agenttasks"); err != nil {
 		return nil, err
 	}
 
-	task := &v1alpha1.AgentTask{}
-	if err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: msg.Name}, task); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("agent task %q not found", msg.Name))
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		task := &v1alpha1.AgentTask{}
+		if err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: msg.Name}, task); err != nil {
+			return err
 		}
-		return nil, connect.NewError(connect.CodeInternal, err)
-	}
+		if task.Status.Phase == v1alpha1.AgentTaskPhaseCompleted || task.Status.Phase == v1alpha1.AgentTaskPhaseFailed {
+			return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("cannot guide task in terminal phase %s", task.Status.Phase))
+		}
+		if task.Annotations == nil {
+			task.Annotations = make(map[string]string)
+		}
+		task.Annotations["divergedev.com/guidance"] = msg.Message
+		task.Annotations["divergedev.com/guidance-timestamp"] = time.Now().UTC().Format(time.RFC3339)
 
-	if task.Status.Phase == v1alpha1.AgentTaskPhaseCompleted || task.Status.Phase == v1alpha1.AgentTaskPhaseFailed {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("cannot guide task in terminal phase %s", task.Status.Phase))
-	}
-
-	if task.Annotations == nil {
-		task.Annotations = make(map[string]string)
-	}
-	task.Annotations["divergedev.com/guidance"] = msg.Message
-	task.Annotations["divergedev.com/guidance-timestamp"] = time.Now().UTC().Format(time.RFC3339)
-
-	if err := s.client.Update(ctx, task); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("guide agent task: %w", err))
+		return s.client.Update(ctx, task)
+	})
+	if err != nil {
+		var connectErr *connect.Error
+		if errors.As(err, &connectErr) {
+			return nil, err
+		}
+		return nil, SanitizeK8sError(s.logger, err)
 	}
 
 	return connect.NewResponse(&pb.GuideTaskResponse{Accepted: true}), nil
@@ -436,10 +449,7 @@ func (s *AgentTaskService) StreamTaskLogs(
 
 	task := &v1alpha1.AgentTask{}
 	if err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: msg.Name}, task); err != nil {
-		if apierrors.IsNotFound(err) {
-			return connect.NewError(connect.CodeNotFound, fmt.Errorf("agent task %q not found", msg.Name))
-		}
-		return connect.NewError(connect.CodeInternal, err)
+		return SanitizeK8sError(s.logger, err)
 	}
 
 	podName := task.Status.SandboxPodName

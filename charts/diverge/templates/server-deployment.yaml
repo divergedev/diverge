@@ -86,6 +86,13 @@ spec:
                   name: {{ .Values.server.auth.session.secretRef.name }}
                   key: {{ .Values.server.auth.session.secretRef.key }}
             {{- end }}
+            {{- if and .Values.sandbox .Values.sandbox.macaroonSecretRef .Values.sandbox.macaroonSecretRef.name }}
+            - name: DIVERGE_MACAROON_ROOT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.sandbox.macaroonSecretRef.name }}
+                  key: {{ .Values.sandbox.macaroonSecretRef.key | default "root-key" }}
+            {{- end }}
           ports:
             - name: grpc
               containerPort: {{ .Values.server.service.port }}

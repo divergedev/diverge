@@ -231,6 +231,12 @@ sandbox:
   provider: "agent-sandbox"
   # -- Default warm pool name (if configured)
   poolRef: "default-pool"
+  # -- Kubernetes Secret containing the shared HMAC root key (DIVERGE_MACAROON_ROOT_KEY)
+  # used by diverge-controller to mint AgentTask capability tokens and by diverge-server
+  # to verify them.
+  macaroonSecretRef:
+    name: ""
+    key: "root-key"
   # -- Security network policies
   networkPolicy:
     enabled: true

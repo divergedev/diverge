@@ -121,7 +121,8 @@ func NewKubernetesSecretTokenStore(c client.Client, scheme *runtime.Scheme) *Kub
 	}
 }
 
-func secretName(taskID string) string {
+// SecretName returns the deterministic Kubernetes Secret name for an AgentTask capability token.
+func SecretName(taskID string) string {
 	base := fmt.Sprintf("%s-token", taskID)
 	if len(base) <= 253 {
 		return base
@@ -132,9 +133,13 @@ func secretName(taskID string) string {
 	return fmt.Sprintf("%s-token-%s", taskID[:prefixLen], hashStr)
 }
 
+func secretName(taskID string) string {
+	return SecretName(taskID)
+}
+
 // SaveToken creates or updates the <task-name>-token Kubernetes Secret.
 func (s *KubernetesSecretTokenStore) SaveToken(ctx context.Context, taskID, namespace string, token []byte) error {
-	name := secretName(taskID)
+	name := SecretName(taskID)
 	sec := &corev1.Secret{}
 	err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, sec)
 	if err != nil {
@@ -173,7 +178,7 @@ func (s *KubernetesSecretTokenStore) SaveToken(ctx context.Context, taskID, name
 
 // GetToken reads the token from the Kubernetes Secret.
 func (s *KubernetesSecretTokenStore) GetToken(ctx context.Context, taskID, namespace string) ([]byte, error) {
-	name := secretName(taskID)
+	name := SecretName(taskID)
 	sec := &corev1.Secret{}
 	err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, sec)
 	if err != nil {
@@ -200,7 +205,7 @@ func (s *KubernetesSecretTokenStore) GetToken(ctx context.Context, taskID, names
 
 // DeleteToken removes the token Secret.
 func (s *KubernetesSecretTokenStore) DeleteToken(ctx context.Context, taskID, namespace string) error {
-	name := secretName(taskID)
+	name := SecretName(taskID)
 	sec := &corev1.Secret{}
 	err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, sec)
 	if err != nil {
@@ -222,7 +227,7 @@ func (s *KubernetesSecretTokenStore) DeleteToken(ctx context.Context, taskID, na
 
 // RevokeToken marks the token Secret as revoked via label and data entry.
 func (s *KubernetesSecretTokenStore) RevokeToken(ctx context.Context, taskID, namespace string) error {
-	name := secretName(taskID)
+	name := SecretName(taskID)
 	sec := &corev1.Secret{}
 	err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, sec)
 	if err != nil {
@@ -245,7 +250,7 @@ func (s *KubernetesSecretTokenStore) RevokeToken(ctx context.Context, taskID, na
 
 // IsRevoked inspects whether the token Secret has the revoked label.
 func (s *KubernetesSecretTokenStore) IsRevoked(ctx context.Context, taskID, namespace string) bool {
-	name := secretName(taskID)
+	name := SecretName(taskID)
 	sec := &corev1.Secret{}
 	if err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, sec); err != nil {
 		return false

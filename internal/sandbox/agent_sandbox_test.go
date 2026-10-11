@@ -89,9 +89,22 @@ func TestBuildSandboxClaimSpec(t *testing.T) {
 	specTmpl := BuildSandboxClaimSpec(taskTmpl)
 	assert.Equal(t, map[string]interface{}{"name": "heavy-compute"}, specTmpl["sandboxTemplateRef"])
 
-	// 3. Fallback default template with resource limits (Findings 4.1 & 9.1)
+	// 3. Fallback default template with resource limits, NetworkPolicy labels, and task env vars
 	taskDefault := &v1alpha1.AgentTask{
-		Spec: v1alpha1.AgentTaskSpec{},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "task-default-1",
+			Namespace: "staging",
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective:     "Fix login regression",
+			BudgetUSD:     "8.00",
+			MaxIterations: 12,
+			Repository: v1alpha1.AgentTaskRepository{
+				URL:           "https://github.com/org/app",
+				BaseBranch:    "develop",
+				WorkingBranch: "agent/fix-login",
+			},
+		},
 	}
 	specDefault := BuildSandboxClaimSpec(taskDefault)
 	assert.Nil(t, specDefault["warmPoolRef"])
@@ -99,6 +112,15 @@ func TestBuildSandboxClaimSpec(t *testing.T) {
 
 	tmpl, ok := specDefault["template"].(map[string]interface{})
 	require.True(t, ok)
+
+	// Verify NetworkPolicy pod selector label is present on template.metadata.labels
+	tmplMeta, ok := tmpl["metadata"].(map[string]interface{})
+	require.True(t, ok)
+	tmplLabels, ok := tmplMeta["labels"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "task-default-1", tmplLabels["divergedev.com/agent-task"])
+	assert.Equal(t, "diverge", tmplLabels["app.kubernetes.io/managed-by"])
+
 	tmplSpec, ok := tmpl["spec"].(map[string]interface{})
 	require.True(t, ok)
 	containers, ok := tmplSpec["containers"].([]interface{})
@@ -112,6 +134,24 @@ func TestBuildSandboxClaimSpec(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, map[string]interface{}{"cpu": "500m", "memory": "512Mi"}, res["requests"])
 	assert.Equal(t, map[string]interface{}{"cpu": "2", "memory": "2Gi"}, res["limits"])
+
+	// Verify injected task context environment variables
+	envList, ok := container["env"].([]interface{})
+	require.True(t, ok)
+	envMap := make(map[string]string, len(envList))
+	for _, e := range envList {
+		em := e.(map[string]interface{})
+		envMap[em["name"].(string)] = em["value"].(string)
+	}
+	assert.Equal(t, "task-default-1", envMap["DIVERGE_TASK_NAME"])
+	assert.Equal(t, "staging", envMap["DIVERGE_TASK_NAMESPACE"])
+	assert.Equal(t, "Fix login regression", envMap["DIVERGE_OBJECTIVE"])
+	assert.Equal(t, "https://github.com/org/app", envMap["DIVERGE_REPO_URL"])
+	assert.Equal(t, "develop", envMap["DIVERGE_BASE_BRANCH"])
+	assert.Equal(t, "agent/fix-login", envMap["DIVERGE_WORKING_BRANCH"])
+	assert.Equal(t, "8.00", envMap["DIVERGE_BUDGET_USD"])
+	assert.Equal(t, "12", envMap["DIVERGE_MAX_ITERATIONS"])
+	assert.Equal(t, "/etc/diverge/token/token", envMap["DIVERGE_TOKEN_FILE"])
 
 	// Assert securityContext & volumes
 	secCtx, ok := tmplSpec["securityContext"].(map[string]interface{})

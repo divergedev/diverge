@@ -266,3 +266,73 @@ func TestAgentTaskServiceListAllNamespacesAndBudgetValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentTaskMacaroonCapabilityAuthorization(t *testing.T) {
+	_, svc := buildTaskTestSetup()
+
+	// Seed a task in "default" and "other-ns" as a normal user
+	adminCtx := auth.ContextWithUserInfo(context.Background(), &auth.UserInfo{Username: "admin"})
+	for _, ns := range []string{"default", "other-ns"} {
+		_, err := svc.CreateTask(adminCtx, connect.NewRequest(&pb.CreateTaskRequest{
+			Namespace: ns,
+			Name:      "task-1",
+			Spec: &pb.AgentTaskSpec{
+				Objective: "Test macaroon authz",
+				Repository: &pb.AgentTaskRepository{
+					Url: "https://github.com/divergedev/diverge",
+				},
+			},
+		}))
+		require.NoError(t, err)
+	}
+
+	// Macaroon user bound to "default" with read-only tools ("diverge_get_*", "diverge_list_*")
+	macaroonCtx := auth.ContextWithUserInfo(context.Background(), &auth.UserInfo{
+		Username: "system:agenttask:default:task-1",
+		Groups:   []string{"system:authenticated", "diverge:agenttasks"},
+		Extra: map[string]authorizationv1.ExtraValue{
+			auth.ExtraKeyAuthType:     {"macaroon"},
+			auth.ExtraKeyTaskID:       {"task-1"},
+			auth.ExtraKeyNamespace:    {"default"},
+			auth.ExtraKeyAllowedTools: {"diverge_get_*", "diverge_list_*"},
+		},
+	})
+
+	// 1. Allowed tool in bound namespace ("default") succeeds
+	getRes, err := svc.GetTask(macaroonCtx, connect.NewRequest(&pb.GetTaskRequest{
+		Namespace: "default",
+		Name:      "task-1",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, "task-1", getRes.Msg.Task.Name)
+
+	// 2. Allowed tool in different namespace ("other-ns") is denied
+	_, err = svc.GetTask(macaroonCtx, connect.NewRequest(&pb.GetTaskRequest{
+		Namespace: "other-ns",
+		Name:      "task-1",
+	}))
+	require.Error(t, err)
+	var connectErr *connect.Error
+	if assert.ErrorAs(t, err, &connectErr) {
+		assert.Equal(t, connect.CodePermissionDenied, connectErr.Code())
+	}
+
+	// 3. Cluster-wide list (empty namespace) is denied for namespace-bound Macaroon
+	_, err = svc.ListTasks(macaroonCtx, connect.NewRequest(&pb.ListTasksRequest{
+		Namespace: "",
+	}))
+	require.Error(t, err)
+	if assert.ErrorAs(t, err, &connectErr) {
+		assert.Equal(t, connect.CodePermissionDenied, connectErr.Code())
+	}
+
+	// 4. Disallowed tool (DeleteTask -> diverge_delete_task) in bound namespace is denied
+	_, err = svc.DeleteTask(macaroonCtx, connect.NewRequest(&pb.DeleteTaskRequest{
+		Namespace: "default",
+		Name:      "task-1",
+	}))
+	require.Error(t, err)
+	if assert.ErrorAs(t, err, &connectErr) {
+		assert.Equal(t, connect.CodePermissionDenied, connectErr.Code())
+	}
+}

@@ -75,6 +75,13 @@ func (p *MacaroonProvider) Mint(_ context.Context, claims Claims) (Token, error)
 	caveats := []Caveat{
 		{Key: "task_id", Op: OpEqual, Value: claims.TaskID},
 	}
+	if claims.Namespace != "" {
+		caveats = append(caveats, Caveat{
+			Key:   "namespace",
+			Op:    OpEqual,
+			Value: claims.Namespace,
+		})
+	}
 	if claims.RepoURL != "" {
 		caveats = append(caveats, Caveat{
 			Key:   "repo",
@@ -204,6 +211,158 @@ func (p *MacaroonProvider) Verify(_ context.Context, raw []byte, required Claims
 	return nil
 }
 
+// VerifyAndExtract validates the cryptographic HMAC chain, expiration, and caveat syntax of a
+// serialized Macaroon and extracts the effective Claims embedded in its caveat sequence.
+func (p *MacaroonProvider) VerifyAndExtract(_ context.Context, raw []byte) (*Macaroon, Claims, error) {
+	var mac Macaroon
+	if err := json.Unmarshal(raw, &mac); err != nil {
+		return nil, Claims{}, fmt.Errorf("%w: %v", ErrMalformedToken, err)
+	}
+	if mac.TokenID == "" {
+		return nil, Claims{}, ErrMalformedToken
+	}
+
+	sig := computeHMAC(p.rootKey, []byte(mac.TokenID))
+	claims := Claims{TaskID: mac.TokenID}
+	hasTaskID := false
+
+	for _, c := range mac.CaveatSeq {
+		sig = computeHMAC(sig, serializeCaveatCanonical(c))
+
+		switch c.Key {
+		case "task_id":
+			if c.Op != OpEqual || c.Value == "" || c.Value != mac.TokenID {
+				return nil, Claims{}, fmt.Errorf("%w: invalid task_id caveat", ErrCaveatFailed)
+			}
+			hasTaskID = true
+			claims.TaskID = c.Value
+		case "namespace":
+			if c.Op != OpEqual || c.Value == "" {
+				return nil, Claims{}, fmt.Errorf("%w: invalid namespace caveat", ErrCaveatFailed)
+			}
+			if claims.Namespace != "" && claims.Namespace != c.Value {
+				return nil, Claims{}, fmt.Errorf("%w: conflicting namespace caveat", ErrCaveatFailed)
+			}
+			claims.Namespace = c.Value
+		case "repo":
+			if c.Op != OpEqual || c.Value == "" {
+				return nil, Claims{}, fmt.Errorf("%w: invalid repo caveat", ErrCaveatFailed)
+			}
+			if claims.RepoURL != "" && claims.RepoURL != c.Value {
+				return nil, Claims{}, fmt.Errorf("%w: conflicting repo caveat", ErrCaveatFailed)
+			}
+			claims.RepoURL = c.Value
+		case "branch":
+			if c.Op != OpEqual || c.Value == "" {
+				return nil, Claims{}, fmt.Errorf("%w: invalid branch caveat", ErrCaveatFailed)
+			}
+			if claims.Branch != "" && claims.Branch != c.Value {
+				return nil, Claims{}, fmt.Errorf("%w: conflicting branch caveat", ErrCaveatFailed)
+			}
+			claims.Branch = c.Value
+		case "expires_at":
+			if c.Op != OpBefore {
+				return nil, Claims{}, fmt.Errorf("%w: invalid operator %q for expires_at caveat", ErrCaveatFailed, c.Op)
+			}
+			unixSec, err := strconv.ParseInt(c.Value, 10, 64)
+			if err != nil {
+				return nil, Claims{}, ErrMalformedToken
+			}
+			if time.Now().Unix() > unixSec {
+				return nil, Claims{}, ErrTokenExpired
+			}
+			exp := time.Unix(unixSec, 0)
+			if claims.ExpiresAt.IsZero() || exp.Before(claims.ExpiresAt) {
+				claims.ExpiresAt = exp
+			}
+		case "allowed_tools":
+			if c.Op != OpGlob || c.Value == "" {
+				return nil, Claims{}, fmt.Errorf("%w: invalid allowed_tools caveat", ErrCaveatFailed)
+			}
+			newPatterns := strings.Split(c.Value, ",")
+			if len(claims.AllowedTools) == 0 {
+				claims.AllowedTools = newPatterns
+			} else {
+				// Attenuated allowed_tools caveats can only narrow existing patterns
+				var narrowed []string
+				for _, np := range newPatterns {
+					for _, existing := range claims.AllowedTools {
+						if ok, _ := filepath.Match(existing, np); ok || np == existing {
+							narrowed = append(narrowed, np)
+							break
+						}
+					}
+				}
+				if len(narrowed) == 0 {
+					return nil, Claims{}, fmt.Errorf("%w: attenuated allowed_tools %q is disjoint from prior allowed_tools", ErrCaveatFailed, c.Value)
+				}
+				claims.AllowedTools = narrowed
+			}
+		case "allowed_models":
+			if c.Op != OpIn || c.Value == "" {
+				return nil, Claims{}, fmt.Errorf("%w: invalid allowed_models caveat", ErrCaveatFailed)
+			}
+			newModels := strings.Split(c.Value, ",")
+			if len(claims.AllowedModels) == 0 {
+				claims.AllowedModels = newModels
+			} else {
+				existingSet := make(map[string]bool, len(claims.AllowedModels))
+				for _, m := range claims.AllowedModels {
+					existingSet[m] = true
+				}
+				var narrowed []string
+				for _, m := range newModels {
+					if existingSet[m] {
+						narrowed = append(narrowed, m)
+					}
+				}
+				if len(narrowed) == 0 {
+					return nil, Claims{}, fmt.Errorf("%w: attenuated allowed_models %q is disjoint from prior allowed_models", ErrCaveatFailed, c.Value)
+				}
+				claims.AllowedModels = narrowed
+			}
+		case "max_cost_usd":
+			if c.Op != OpLessThan {
+				return nil, Claims{}, fmt.Errorf("%w: invalid operator %q for max_cost_usd caveat", ErrCaveatFailed, c.Op)
+			}
+			maxLimit, err := strconv.ParseFloat(c.Value, 64)
+			if err != nil {
+				return nil, Claims{}, ErrMalformedToken
+			}
+			if claims.MaxCostUSD == 0 || maxLimit < claims.MaxCostUSD {
+				claims.MaxCostUSD = maxLimit
+			}
+		case "max_tokens":
+			if c.Op != OpLessThan {
+				return nil, Claims{}, fmt.Errorf("%w: invalid operator %q for max_tokens caveat", ErrCaveatFailed, c.Op)
+			}
+			maxTokens, err := strconv.ParseInt(c.Value, 10, 64)
+			if err != nil {
+				return nil, Claims{}, ErrMalformedToken
+			}
+			if claims.MaxTokens == 0 || maxTokens < claims.MaxTokens {
+				claims.MaxTokens = maxTokens
+			}
+		case "nonce":
+			if c.Op != OpEqual || c.Value == "" {
+				return nil, Claims{}, fmt.Errorf("%w: invalid nonce caveat", ErrCaveatFailed)
+			}
+		default:
+			return nil, Claims{}, fmt.Errorf("%w: unrecognized caveat key %q", ErrCaveatFailed, c.Key)
+		}
+	}
+
+	expectedSig := hex.EncodeToString(sig)
+	if !hmac.Equal([]byte(expectedSig), []byte(mac.Signature)) {
+		return nil, Claims{}, ErrInvalidSignature
+	}
+	if !hasTaskID {
+		return nil, Claims{}, fmt.Errorf("%w: missing task_id caveat", ErrCaveatFailed)
+	}
+
+	return &mac, claims, nil
+}
+
 func evaluateCaveat(c Caveat, req Claims) error {
 	switch c.Key {
 	case "task_id":
@@ -212,6 +371,13 @@ func evaluateCaveat(c Caveat, req Claims) error {
 		}
 		if req.TaskID == "" || req.TaskID != c.Value {
 			return fmt.Errorf("%w: task mismatch (%s != %s)", ErrCaveatFailed, req.TaskID, c.Value)
+		}
+	case "namespace":
+		if c.Op != OpEqual {
+			return fmt.Errorf("%w: invalid operator %q for namespace caveat", ErrCaveatFailed, c.Op)
+		}
+		if req.Namespace != "" && req.Namespace != c.Value {
+			return fmt.Errorf("%w: namespace mismatch (%s != %s)", ErrCaveatFailed, req.Namespace, c.Value)
 		}
 	case "repo":
 		if c.Op != OpEqual {

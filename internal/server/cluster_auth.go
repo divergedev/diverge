@@ -111,7 +111,7 @@ func (s *AuthService) ListPermissions(ctx context.Context, req *connect.Request[
 	}
 
 	// Check actual permissions for Diverge resources
-	resources := []string{"environments", "previewgroups"}
+	resources := []string{"environments", "previewgroups", "agenttasks"}
 	verbs := []string{"get", "list", "watch", "create", "update", "delete"}
 	namespace := req.Msg.Namespace
 	if namespace == "" {
