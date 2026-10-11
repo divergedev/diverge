@@ -18,6 +18,9 @@ const phaseStyles: Record<string, string> = {
   Deleting: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
 }
 
+/**
+ * Maps a protobuf AgentTaskPhase enum value to its human-readable status label.
+ */
 export function formatAgentTaskPhase(phase?: AgentTaskPhase): string {
   switch (phase) {
     case AgentTaskPhase.PENDING: return 'Pending'
@@ -31,6 +34,9 @@ export function formatAgentTaskPhase(phase?: AgentTaskPhase): string {
   }
 }
 
+/**
+ * Renders a color-coded pill badge for an Environment, PreviewGroup, or AgentTask phase.
+ */
 export function StatusBadge({ phase, className }: { phase: string; className?: string }) {
   const isKnown = Object.prototype.hasOwnProperty.call(phaseStyles, phase)
   const style = isKnown ? phaseStyles[phase] : 'bg-gray-500/20 text-gray-400 border-gray-500/30'

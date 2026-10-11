@@ -5,6 +5,27 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useCreateAgentTask } from '@/api/queries'
 
+const DNS1123_REGEX = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/
+
+function isValidRepositoryUrl(raw: string): boolean {
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      const parsed = new URL(raw)
+      return (
+        (parsed.protocol === 'https:' || parsed.protocol === 'http:') &&
+        Boolean(parsed.hostname) &&
+        parsed.pathname.length > 1
+      )
+    } catch {
+      return false
+    }
+  }
+  return /^git@[a-z0-9.-]+:[a-z0-9._/-]+$/i.test(raw)
+}
+
+/**
+ * Modal dialog for creating and launching a new autonomous AgentTask.
+ */
 export function CreateAgentTaskModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [name, setName] = useState('')
   const [namespace, setNamespace] = useState('default')
@@ -22,16 +43,33 @@ export function CreateAgentTaskModal({ open, onClose }: { open: boolean; onClose
     e.preventDefault()
     setError('')
 
-    if (!/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(name)) {
-      setError('Name must be lowercase alphanumeric with hyphens')
+    const targetNs = namespace.trim() || 'default'
+    if (!DNS1123_REGEX.test(name)) {
+      setError('Name must be lowercase alphanumeric with hyphens (max 63 characters)')
+      return
+    }
+    if (!DNS1123_REGEX.test(targetNs)) {
+      setError('Namespace must be lowercase alphanumeric with hyphens (max 63 characters)')
       return
     }
     if (!objective.trim()) {
       setError('Objective is required')
       return
     }
-    if (!repoUrl.trim()) {
+    const trimmedRepo = repoUrl.trim()
+    if (!trimmedRepo) {
       setError('Repository URL is required')
+      return
+    }
+    if (!isValidRepositoryUrl(trimmedRepo)) {
+      setError('Repository URL must be a valid HTTP(S) or SSH Git URL')
+      return
+    }
+
+    const trimmedBudget = budgetUsd.trim() || '5.00'
+    const parsedBudget = Number(trimmedBudget)
+    if (!Number.isFinite(parsedBudget) || parsedBudget <= 0) {
+      setError('Budget (USD) must be a positive number')
       return
     }
 
@@ -40,20 +78,20 @@ export function CreateAgentTaskModal({ open, onClose }: { open: boolean; onClose
     try {
       await create.mutateAsync({
         name,
-        namespace: namespace || 'default',
+        namespace: targetNs,
         spec: {
           objective: objective.trim(),
           repository: {
-            url: repoUrl.trim(),
+            url: trimmedRepo,
             baseBranch: baseBranch.trim() || 'main',
           },
-          budgetUsd: budgetUsd.trim() || '5.00',
-          maxIterations: Number.isNaN(parsedIterations) ? 20 : parsedIterations,
+          budgetUsd: trimmedBudget,
+          maxIterations: Number.isNaN(parsedIterations) || parsedIterations <= 0 ? 20 : parsedIterations,
           draftPr,
         },
       })
       onClose()
-      navigate(`/tasks/${namespace || 'default'}/${name}`)
+      navigate(`/tasks/${targetNs}/${name}`)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create agent task')
     }

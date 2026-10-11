@@ -123,4 +123,113 @@ describe('AgentTaskDetail', () => {
       expect(screen.getByRole('status')).toHaveTextContent('Task paused')
     })
   })
+
+  it('resumes a paused task with an optional USD budget bump and rejects negative bumps', async () => {
+    let resumeBody: { budgetUsdBump?: string } | null = null
+    const pausedTask = {
+      task: {
+        ...mockActiveTask.task,
+        spec: { ...mockActiveTask.task.spec, suspended: true },
+        status: { ...mockActiveTask.task.status, phase: 'AGENT_TASK_PHASE_PAUSED', prUrl: 'javascript:alert(1)' },
+      },
+    }
+
+    server.use(
+      http.post('*/diverge.v1alpha1.AgentTaskService/GetTask', () =>
+        HttpResponse.json(pausedTask),
+      ),
+      http.post('*/diverge.v1alpha1.AgentTaskService/ResumeTask', async ({ request }) => {
+        resumeBody = (await request.json()) as { budgetUsdBump?: string }
+        return HttpResponse.json(mockActiveTask)
+      }),
+    )
+
+    renderPage()
+    const resumeBtn = await screen.findByRole('button', { name: /Resume/i })
+    // Unsafe javascript: PR URL must not render an Open PR anchor
+    expect(screen.queryByRole('button', { name: /Open PR/i })).not.toBeInTheDocument()
+    // Live steering input is disabled while paused and shows paused placeholder
+    const guidanceInput = screen.getByLabelText('Guidance message')
+    expect(guidanceInput).toBeDisabled()
+    expect(guidanceInput).toHaveAttribute('placeholder', 'Task is paused; resume the task to send live guidance')
+
+    fireEvent.click(resumeBtn)
+    const bumpInput = await screen.findByLabelText(/Additional Budget USD/i)
+
+    // Negative bump triggers validation alert
+    fireEvent.change(bumpInput, { target: { value: '-5.00' } })
+    fireEvent.click(screen.getAllByRole('button', { name: /^Resume$/i, hidden: true }).at(-1)!)
+    expect(await screen.findByRole('alert')).toHaveTextContent('Additional budget USD must be a positive number')
+
+    // Valid bump calls ResumeTask RPC
+    fireEvent.click(screen.getByRole('button', { name: /Resume/i }))
+    fireEvent.change(await screen.findByLabelText(/Additional Budget USD/i), { target: { value: '7.50' } })
+    fireEvent.click(screen.getAllByRole('button', { name: /^Resume$/i, hidden: true }).at(-1)!)
+
+    await waitFor(() => {
+      expect(resumeBody).toMatchObject({ budgetUsdBump: '7.50' })
+      expect(screen.getByRole('status')).toHaveTextContent('Task resumed (+$7.50 budget)')
+    })
+  })
+
+  it('disables live guidance with a completed placeholder when task is in a terminal phase', async () => {
+    server.use(
+      http.post('*/diverge.v1alpha1.AgentTaskService/GetTask', () =>
+        HttpResponse.json({
+          task: {
+            ...mockActiveTask.task,
+            status: { ...mockActiveTask.task.status, phase: 'AGENT_TASK_PHASE_COMPLETED' },
+          },
+        }),
+      ),
+    )
+
+    renderPage()
+    await screen.findByText('fix-checkout')
+
+    const guidanceInput = screen.getByLabelText('Guidance message')
+    expect(guidanceInput).toBeDisabled()
+    expect(guidanceInput).toHaveAttribute(
+      'placeholder',
+      'Task has completed and can no longer receive live guidance',
+    )
+    expect(screen.queryByRole('button', { name: /Pause/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Resume/i })).not.toBeInTheDocument()
+  })
+
+  it('deletes a task after confirmation and handles GetTask error retry and YAML tab', async () => {
+    let getAttempts = 0
+    let deleteCalled = false
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    server.use(
+      http.post('*/diverge.v1alpha1.AgentTaskService/GetTask', () => {
+        getAttempts++
+        if (getAttempts === 1) {
+          return HttpResponse.json({ code: 'internal', message: 'timeout' }, { status: 500 })
+        }
+        return HttpResponse.json(mockActiveTask)
+      }),
+      http.post('*/diverge.v1alpha1.AgentTaskService/DeleteTask', () => {
+        deleteCalled = true
+        return HttpResponse.json({})
+      }),
+    )
+
+    renderPage()
+    expect(await screen.findByText('Failed to load agent task')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Retry/i }))
+
+    expect(await screen.findByText('fix-checkout')).toBeInTheDocument()
+
+    // Switch to YAML tab
+    fireEvent.click(screen.getByRole('tab', { name: /YAML/i }))
+    expect(await screen.findByText(/fix-checkout-claim/)).toBeInTheDocument()
+
+    // Click Delete
+    fireEvent.click(screen.getByRole('button', { name: /Delete/i }))
+    await waitFor(() => {
+      expect(deleteCalled).toBe(true)
+    })
+  })
 })

@@ -193,4 +193,76 @@ func TestAgentTaskServiceValidation(t *testing.T) {
 		},
 	}))
 	assert.Error(t, err)
+
+	// Invalid negative budget_usd
+	_, err = svc.CreateTask(ctx, connect.NewRequest(&pb.CreateTaskRequest{
+		Namespace: "default",
+		Name:      "task-bad-budget",
+		Spec: &pb.AgentTaskSpec{
+			Objective: "Some task",
+			BudgetUsd: "-5.00",
+			Repository: &pb.AgentTaskRepository{
+				Url: "https://github.com/org/repo",
+			},
+		},
+	}))
+	assert.Error(t, err)
+}
+
+func TestAgentTaskServiceListAllNamespacesAndBudgetValidation(t *testing.T) {
+	ctx := context.Background()
+	ctx = auth.ContextWithUserInfo(ctx, &auth.UserInfo{Username: "test-user"})
+	_, svc := buildTaskTestSetup()
+
+	for _, tc := range []struct {
+		ns   string
+		name string
+	}{
+		{ns: "default", name: "task-default"},
+		{ns: "staging", name: "task-staging"},
+	} {
+		_, err := svc.CreateTask(ctx, connect.NewRequest(&pb.CreateTaskRequest{
+			Namespace: tc.ns,
+			Name:      tc.name,
+			Spec: &pb.AgentTaskSpec{
+				Objective: "Cross-namespace test",
+				BudgetUsd: "10.00",
+				Repository: &pb.AgentTaskRepository{
+					Url: "https://github.com/divergedev/diverge",
+				},
+			},
+		}))
+		require.NoError(t, err)
+	}
+
+	// Empty namespace lists tasks across all namespaces (used by Web UI /tasks page)
+	allRes, err := svc.ListTasks(ctx, connect.NewRequest(&pb.ListTasksRequest{
+		Namespace:  "",
+		Pagination: &pb.PaginationRequest{PageSize: 50},
+	}))
+	require.NoError(t, err)
+	assert.Len(t, allRes.Msg.Tasks, 2)
+	assert.NotNil(t, allRes.Msg.Pagination)
+
+	// Specific namespace filters to only that namespace
+	stagingRes, err := svc.ListTasks(ctx, connect.NewRequest(&pb.ListTasksRequest{
+		Namespace: "staging",
+	}))
+	require.NoError(t, err)
+	require.Len(t, stagingRes.Msg.Tasks, 1)
+	assert.Equal(t, "task-staging", stagingRes.Msg.Tasks[0].Name)
+
+	// ResumeTask rejects negative or non-numeric budgetUsdBump
+	for _, badBump := range []string{"-10.00", "0", "not-a-number"} {
+		_, err = svc.ResumeTask(ctx, connect.NewRequest(&pb.ResumeTaskRequest{
+			Namespace:     "default",
+			Name:          "task-default",
+			BudgetUsdBump: badBump,
+		}))
+		require.Error(t, err, "expected error for budgetUsdBump=%q", badBump)
+		var connectErr *connect.Error
+		if assert.ErrorAs(t, err, &connectErr) {
+			assert.Equal(t, connect.CodeInvalidArgument, connectErr.Code())
+		}
+	}
 }

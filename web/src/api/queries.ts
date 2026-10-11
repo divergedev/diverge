@@ -140,6 +140,9 @@ export function useRetryHook() {
   })
 }
 
+/**
+ * Fetches AgentTasks for a namespace (or all namespaces) and automatically follows pagination tokens when pageToken is omitted.
+ */
 export function useListAgentTasks(params: { namespace?: string; pageSize?: number; pageToken?: string } = {}) {
   const pageSize = params.pageSize ?? 100
   const pageToken = params.pageToken ?? ''
@@ -174,8 +177,9 @@ export function useListAgentTasks(params: { namespace?: string; pageSize?: numbe
       }
 
       if (lastResp) {
-        lastResp.tasks = allTasks
-        return lastResp
+        const combined = typeof lastResp.clone === 'function' ? lastResp.clone() : { ...lastResp }
+        combined.tasks = allTasks
+        return combined
       }
       return agentTaskClient.listTasks({
         namespace: params.namespace ?? '',
@@ -186,6 +190,9 @@ export function useListAgentTasks(params: { namespace?: string; pageSize?: numbe
   })
 }
 
+/**
+ * Fetches a single AgentTask by namespace and name with periodic polling.
+ */
 export function useGetAgentTask(namespace: string, name: string) {
   return useQuery({
     queryKey: queryKeys.agentTask(namespace, name),
@@ -195,6 +202,9 @@ export function useGetAgentTask(namespace: string, name: string) {
   })
 }
 
+/**
+ * Mutation hook for creating a new AgentTask.
+ */
 export function useCreateAgentTask() {
   const qc = useQueryClient()
   return useMutation({
@@ -204,6 +214,9 @@ export function useCreateAgentTask() {
   })
 }
 
+/**
+ * Mutation hook for deleting an AgentTask.
+ */
 export function useDeleteAgentTask() {
   const qc = useQueryClient()
   return useMutation({
@@ -213,6 +226,9 @@ export function useDeleteAgentTask() {
   })
 }
 
+/**
+ * Mutation hook for pausing an active AgentTask.
+ */
 export function usePauseAgentTask() {
   const qc = useQueryClient()
   return useMutation({
@@ -225,6 +241,9 @@ export function usePauseAgentTask() {
   })
 }
 
+/**
+ * Mutation hook for resuming a paused AgentTask with optional budget bumps.
+ */
 export function useResumeAgentTask() {
   const qc = useQueryClient()
   return useMutation({
@@ -237,6 +256,9 @@ export function useResumeAgentTask() {
   })
 }
 
+/**
+ * Mutation hook for sending live steering guidance to an active AgentTask.
+ */
 export function useGuideAgentTask() {
   const qc = useQueryClient()
   return useMutation({
