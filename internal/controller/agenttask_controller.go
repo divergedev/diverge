@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -162,7 +163,6 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// 4. Handle Suspended State
 	if task.Spec.Suspended {
 		if task.Status.Phase != v1alpha1.AgentTaskPhasePaused {
-			r.revokeToken(ctx, task, "paused by spec.suspended")
 			patch := client.MergeFrom(task.DeepCopy())
 			oldPhase := task.Status.Phase
 			task.Status.Phase = v1alpha1.AgentTaskPhasePaused
@@ -173,6 +173,9 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			if err := r.Status().Patch(ctx, task, patch); err != nil {
 				return ctrl.Result{}, err
 			}
+		}
+		if err := r.revokeToken(ctx, task, "paused by spec.suspended"); err != nil {
+			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil
 	}
@@ -278,7 +281,6 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		if task.Spec.Sandbox.TimeoutSeconds > 0 && !task.CreationTimestamp.IsZero() {
 			if time.Since(task.CreationTimestamp.Time) > time.Duration(task.Spec.Sandbox.TimeoutSeconds)*time.Second {
 				_ = provider.Teardown(ctx, task)
-				r.revokeToken(ctx, task, "sandbox timeout exceeded")
 				patch := client.MergeFrom(task.DeepCopy())
 				oldPhase := task.Status.Phase
 				task.Status.Phase = v1alpha1.AgentTaskPhaseFailed
@@ -289,13 +291,15 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 				if err := r.Status().Patch(ctx, task, patch); err != nil {
 					return ctrl.Result{}, err
 				}
+				if err := r.revokeToken(ctx, task, "sandbox timeout exceeded"); err != nil {
+					return ctrl.Result{}, err
+				}
 				return ctrl.Result{}, nil
 			}
 		}
 
 		// Check iteration, USD budget, and token budget limits
 		if exceeded, reason := r.checkBudgetOrIterationLimit(task); exceeded {
-			r.revokeToken(ctx, task, reason)
 			patch := client.MergeFrom(task.DeepCopy())
 			oldPhase := task.Status.Phase
 			task.Status.Phase = v1alpha1.AgentTaskPhasePaused
@@ -304,6 +308,9 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 				_ = r.Notifier.NotifyPhaseChange(ctx, task, oldPhase, task.Status.Phase)
 			}
 			if err := r.Status().Patch(ctx, task, patch); err != nil {
+				return ctrl.Result{}, err
+			}
+			if err := r.revokeToken(ctx, task, reason); err != nil {
 				return ctrl.Result{}, err
 			}
 			return ctrl.Result{}, nil
@@ -326,7 +333,10 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	case v1alpha1.AgentTaskPhasePaused:
 		if !task.Spec.Suspended {
-			if exceeded, _ := r.checkBudgetOrIterationLimit(task); exceeded {
+			if exceeded, reason := r.checkBudgetOrIterationLimit(task); exceeded {
+				if err := r.revokeToken(ctx, task, reason); err != nil {
+					return ctrl.Result{}, err
+				}
 				return ctrl.Result{}, nil
 			}
 			patch := client.MergeFrom(task.DeepCopy())
@@ -353,7 +363,9 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, nil
 
 	case v1alpha1.AgentTaskPhaseCompleted, v1alpha1.AgentTaskPhaseFailed:
-		r.revokeToken(ctx, task, "task in terminal phase")
+		if err := r.revokeToken(ctx, task, "task in terminal phase"); err != nil {
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -476,24 +488,30 @@ func (r *AgentTaskReconciler) mintAndSaveToken(ctx context.Context, task *v1alph
 }
 
 // revokeToken marks the AgentTask's capability token as revoked in the TokenStore and records an audit event.
-func (r *AgentTaskReconciler) revokeToken(ctx context.Context, task *v1alpha1.AgentTask, reason string) {
+// Missing or already-revoked tokens are treated as idempotent success.
+func (r *AgentTaskReconciler) revokeToken(ctx context.Context, task *v1alpha1.AgentTask, reason string) error {
 	store := r.resolveTokenStore()
-	if !store.IsRevoked(ctx, task.Name, task.Namespace) {
-		if err := store.RevokeToken(ctx, task.Name, task.Namespace); err != nil {
-			return
-		}
-		if r.TokenAuditor != nil {
-			_ = r.TokenAuditor.RecordEvent(ctx, auth.AuthEvent{
-				Type:      auth.EventRevoke,
-				TaskID:    task.Name,
-				Namespace: task.Namespace,
-				Principal: "diverge-controller",
-				Success:   true,
-				Reason:    reason,
-				Timestamp: time.Now(),
-			})
-		}
+	if store.IsRevoked(ctx, task.Name, task.Namespace) {
+		return nil
 	}
+	if err := store.RevokeToken(ctx, task.Name, task.Namespace); err != nil {
+		if errors.Is(err, auth.ErrTokenNotFound) || errors.Is(err, auth.ErrTokenRevoked) {
+			return nil
+		}
+		return fmt.Errorf("revoke task token: %w", err)
+	}
+	if r.TokenAuditor != nil {
+		_ = r.TokenAuditor.RecordEvent(ctx, auth.AuthEvent{
+			Type:      auth.EventRevoke,
+			TaskID:    task.Name,
+			Namespace: task.Namespace,
+			Principal: "diverge-controller",
+			Success:   true,
+			Reason:    reason,
+			Timestamp: time.Now(),
+		})
+	}
+	return nil
 }
 
 // resolveTokenStore returns the configured TokenStore or defaults to KubernetesSecretTokenStore.

@@ -540,3 +540,77 @@ func TestAgentTaskReconcilerResumeStaysPausedWhenTokenMintFails(t *testing.T) {
 	require.NoError(t, fakeClient.Get(ctx, req.NamespacedName, updated))
 	assert.Equal(t, v1alpha1.AgentTaskPhasePaused, updated.Status.Phase)
 }
+
+type failingRevokeTokenStore struct {
+	*auth.InMemoryTokenStore
+	revokeErr error
+}
+
+func (f *failingRevokeTokenStore) RevokeToken(ctx context.Context, taskID, namespace string) error {
+	if f.revokeErr != nil {
+		return f.revokeErr
+	}
+	return f.InMemoryTokenStore.RevokeToken(ctx, taskID, namespace)
+}
+
+func TestAgentTaskReconcilerPausePersistsBeforeRevokeAndRetries(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	_ = v1alpha1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "task-pause-retry",
+			Namespace:  "default",
+			Finalizers: []string{agentTaskFinalizer},
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective: "Pause retry test",
+			Suspended: true,
+			Sandbox: v1alpha1.AgentTaskSandbox{
+				Provider: "noop",
+			},
+		},
+		Status: v1alpha1.AgentTaskStatus{
+			Phase: v1alpha1.AgentTaskPhaseActive,
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(task).
+		WithStatusSubresource(&v1alpha1.AgentTask{}).
+		Build()
+
+	baseStore := auth.NewInMemoryTokenStore()
+	require.NoError(t, baseStore.SaveToken(ctx, task.Name, task.Namespace, []byte("tok")))
+	store := &failingRevokeTokenStore{
+		InMemoryTokenStore: baseStore,
+		revokeErr:          assert.AnError,
+	}
+
+	reconciler := &AgentTaskReconciler{
+		Client:          fakeClient,
+		Scheme:          scheme,
+		SandboxRegistry: pkgsandbox.Providers,
+		TokenStore:      store,
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "task-pause-retry"}}
+
+	// First reconcile: RevokeToken fails, but status is persisted as Paused before revocation
+	_, err := reconciler.Reconcile(ctx, req)
+	require.Error(t, err)
+
+	updated := &v1alpha1.AgentTask{}
+	require.NoError(t, fakeClient.Get(ctx, req.NamespacedName, updated))
+	assert.Equal(t, v1alpha1.AgentTaskPhasePaused, updated.Status.Phase)
+	assert.False(t, store.IsRevoked(ctx, task.Name, task.Namespace))
+
+	// Second reconcile: already Paused, retries revocation and succeeds
+	store.revokeErr = nil
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.True(t, store.IsRevoked(ctx, task.Name, task.Namespace))
+}

@@ -153,7 +153,8 @@ func secretName(taskID string) string {
 
 // revokedIndexKey returns the annotation key used in TokenIndexSecretName to record revocation.
 func revokedIndexKey(taskID string) string {
-	return fmt.Sprintf("revoked.divergedev.com/%s", taskID)
+	h := sha256.Sum256([]byte(taskID))
+	return "revoked.divergedev.com/" + hex.EncodeToString(h[:16])
 }
 
 // SaveToken creates or updates the <task-name>-token Kubernetes Secret and syncs the namespace token index.

@@ -156,8 +156,9 @@ func TestKubernetesSecretTokenStore_LongTaskID(t *testing.T) {
 
 	client := fake.NewClientBuilder().WithScheme(scheme).Build()
 	store := NewKubernetesSecretTokenStore(client, scheme)
+	indexStore := NewKubernetesSecretTokenStore(client, scheme).WithIndexOnly()
 
-	// Create a taskID with 250 characters (would exceed 253 with "-token")
+	// Create a taskID with 250 characters (would exceed 253 with "-token" and 63 for annotation name segment)
 	longTaskID := strings.Repeat("a", 250)
 	namespace := "default"
 	tokenData := []byte("long-id-token")
@@ -168,9 +169,19 @@ func TestKubernetesSecretTokenStore_LongTaskID(t *testing.T) {
 	secName := secretName(longTaskID)
 	assert.LessOrEqual(t, len(secName), 253)
 
+	annKey := revokedIndexKey(longTaskID)
+	parts := strings.SplitN(annKey, "/", 2)
+	require.Len(t, parts, 2)
+	assert.LessOrEqual(t, len(parts[1]), 63)
+
 	retrieved, err := store.GetToken(ctx, longTaskID, namespace)
 	require.NoError(t, err)
 	assert.Equal(t, tokenData, retrieved)
+
+	err = store.RevokeToken(ctx, longTaskID, namespace)
+	require.NoError(t, err)
+	assert.True(t, store.IsRevoked(ctx, longTaskID, namespace))
+	assert.True(t, indexStore.IsRevoked(ctx, longTaskID, namespace))
 
 	err = store.DeleteToken(ctx, longTaskID, namespace)
 	require.NoError(t, err)
