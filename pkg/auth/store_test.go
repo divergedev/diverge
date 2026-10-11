@@ -71,6 +71,7 @@ func TestKubernetesSecretTokenStore(t *testing.T) {
 
 	client := fake.NewClientBuilder().WithScheme(scheme).Build()
 	store := NewKubernetesSecretTokenStore(client, scheme)
+	indexStore := NewKubernetesSecretTokenStore(client, scheme).WithIndexOnly()
 
 	taskID := "task-k8s"
 	namespace := "diverge-ns"
@@ -80,6 +81,9 @@ func TestKubernetesSecretTokenStore(t *testing.T) {
 	_, err := store.GetToken(ctx, taskID, namespace)
 	assert.ErrorIs(t, err, ErrTokenNotFound)
 	assert.False(t, store.IsRevoked(ctx, taskID, namespace))
+	_, err = indexStore.GetToken(ctx, taskID, namespace)
+	assert.ErrorIs(t, err, ErrTokenNotFound)
+	assert.False(t, indexStore.IsRevoked(ctx, taskID, namespace))
 
 	// 2. Save (create)
 	err = store.SaveToken(ctx, taskID, namespace, tokenData)
@@ -88,6 +92,9 @@ func TestKubernetesSecretTokenStore(t *testing.T) {
 	retrieved, err := store.GetToken(ctx, taskID, namespace)
 	require.NoError(t, err)
 	assert.Equal(t, tokenData, retrieved)
+	retrievedIdx, err := indexStore.GetToken(ctx, taskID, namespace)
+	require.NoError(t, err)
+	assert.Equal(t, tokenData, retrievedIdx)
 
 	// 3. Update existing
 	newTokenData := []byte("updated-token-payload")
@@ -97,13 +104,19 @@ func TestKubernetesSecretTokenStore(t *testing.T) {
 	retrieved, err = store.GetToken(ctx, taskID, namespace)
 	require.NoError(t, err)
 	assert.Equal(t, newTokenData, retrieved)
+	retrievedIdx, err = indexStore.GetToken(ctx, taskID, namespace)
+	require.NoError(t, err)
+	assert.Equal(t, newTokenData, retrievedIdx)
 
 	// 4. Revoke
 	err = store.RevokeToken(ctx, taskID, namespace)
 	require.NoError(t, err)
 	assert.True(t, store.IsRevoked(ctx, taskID, namespace))
+	assert.True(t, indexStore.IsRevoked(ctx, taskID, namespace))
 
 	_, err = store.GetToken(ctx, taskID, namespace)
+	assert.ErrorIs(t, err, ErrTokenRevoked)
+	_, err = indexStore.GetToken(ctx, taskID, namespace)
 	assert.ErrorIs(t, err, ErrTokenRevoked)
 
 	// 5. Delete
@@ -111,6 +124,8 @@ func TestKubernetesSecretTokenStore(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = store.GetToken(ctx, taskID, namespace)
+	assert.ErrorIs(t, err, ErrTokenNotFound)
+	_, err = indexStore.GetToken(ctx, taskID, namespace)
 	assert.ErrorIs(t, err, ErrTokenNotFound)
 }
 
@@ -141,8 +156,9 @@ func TestKubernetesSecretTokenStore_LongTaskID(t *testing.T) {
 
 	client := fake.NewClientBuilder().WithScheme(scheme).Build()
 	store := NewKubernetesSecretTokenStore(client, scheme)
+	indexStore := NewKubernetesSecretTokenStore(client, scheme).WithIndexOnly()
 
-	// Create a taskID with 250 characters (would exceed 253 with "-token")
+	// Create a taskID with 250 characters (would exceed 253 with "-token" and 63 for annotation name segment)
 	longTaskID := strings.Repeat("a", 250)
 	namespace := "default"
 	tokenData := []byte("long-id-token")
@@ -153,9 +169,19 @@ func TestKubernetesSecretTokenStore_LongTaskID(t *testing.T) {
 	secName := secretName(longTaskID)
 	assert.LessOrEqual(t, len(secName), 253)
 
+	annKey := revokedIndexKey(longTaskID)
+	parts := strings.SplitN(annKey, "/", 2)
+	require.Len(t, parts, 2)
+	assert.LessOrEqual(t, len(parts[1]), 63)
+
 	retrieved, err := store.GetToken(ctx, longTaskID, namespace)
 	require.NoError(t, err)
 	assert.Equal(t, tokenData, retrieved)
+
+	err = store.RevokeToken(ctx, longTaskID, namespace)
+	require.NoError(t, err)
+	assert.True(t, store.IsRevoked(ctx, longTaskID, namespace))
+	assert.True(t, indexStore.IsRevoked(ctx, longTaskID, namespace))
 
 	err = store.DeleteToken(ctx, longTaskID, namespace)
 	require.NoError(t, err)

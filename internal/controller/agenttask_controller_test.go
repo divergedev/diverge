@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"io"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/divergedev/diverge/api/v1alpha1"
 	_ "github.com/divergedev/diverge/internal/sandbox"
 	"github.com/divergedev/diverge/pkg/auth"
+	"github.com/divergedev/diverge/pkg/registry"
 	pkgsandbox "github.com/divergedev/diverge/pkg/sandbox"
 )
 
@@ -295,4 +297,320 @@ func TestAgentTaskReconcilerUnknownProviderFailsClosed(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, v1alpha1.AgentTaskPhaseFailed, updatedTask.Status.Phase)
 	assert.Contains(t, updatedTask.Status.Message, "unregistered-provider")
+}
+
+type flakySandboxProvider struct {
+	failFirst bool
+	attempts  int
+	tornDown  bool
+}
+
+func (f *flakySandboxProvider) Provision(_ context.Context, task *v1alpha1.AgentTask) (*pkgsandbox.SandboxResult, error) {
+	f.attempts++
+	if f.failFirst && f.attempts == 1 {
+		return nil, assert.AnError
+	}
+	return &pkgsandbox.SandboxResult{
+		ClaimName: "claim-" + task.Name,
+		PodName:   "pod-" + task.Name,
+		PodIP:     "10.0.0.42",
+		Ready:     true,
+		Message:   "Ready",
+	}, nil
+}
+
+func (f *flakySandboxProvider) Teardown(_ context.Context, _ *v1alpha1.AgentTask) error {
+	f.tornDown = true
+	return nil
+}
+
+func (f *flakySandboxProvider) Status(_ context.Context, task *v1alpha1.AgentTask) (*pkgsandbox.SandboxStatus, error) {
+	return &pkgsandbox.SandboxStatus{
+		ClaimName: "claim-" + task.Name,
+		PodName:   "pod-" + task.Name,
+		PodIP:     "10.0.0.42",
+		Phase:     "Running",
+		Ready:     true,
+	}, nil
+}
+
+func (f *flakySandboxProvider) StreamLogs(_ context.Context, _ *v1alpha1.AgentTask, _ pkgsandbox.LogOptions) (io.ReadCloser, error) {
+	return nil, nil
+}
+
+func TestAgentTaskReconcilerBudgetTimeoutAndTransientRetry(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	_ = v1alpha1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+
+	reg := registry.New[pkgsandbox.SandboxProvider]("sandbox")
+	flaky := &flakySandboxProvider{failFirst: true}
+	reg.Register("flaky", registry.Provider[pkgsandbox.SandboxProvider]{
+		Create: func(_ registry.Deps) (pkgsandbox.SandboxProvider, error) {
+			return flaky, nil
+		},
+	})
+
+	rootKey := []byte("0123456789abcdef0123456789abcdef")
+	macProvider := auth.NewMacaroonProvider(rootKey)
+	memStore := auth.NewInMemoryTokenStore()
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "task-limits",
+			Namespace:         "default",
+			Finalizers:        []string{agentTaskFinalizer},
+			CreationTimestamp: metav1.NewTime(time.Now()),
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective:     "Fix memory leak",
+			BudgetUSD:     "5.00",
+			BudgetTokens:  100000,
+			MaxIterations: 10,
+			Repository: v1alpha1.AgentTaskRepository{
+				URL:        "https://github.com/org/repo",
+				BaseBranch: "main",
+			},
+			Sandbox: v1alpha1.AgentTaskSandbox{
+				Provider:       "flaky",
+				TimeoutSeconds: 3600,
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(task).
+		WithStatusSubresource(&v1alpha1.AgentTask{}).
+		Build()
+
+	reconciler := &AgentTaskReconciler{
+		Client:          fakeClient,
+		Scheme:          scheme,
+		SandboxRegistry: reg,
+		TokenMinter:     macProvider,
+		TokenStore:      memStore,
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "task-limits"}}
+
+	// 1. First Provision attempt fails transiently -> remains Pending (not terminal Failed) and requeues
+	res, err := reconciler.Reconcile(ctx, req)
+	require.Error(t, err)
+	assert.Equal(t, 10*time.Second, res.RequeueAfter)
+
+	updated := &v1alpha1.AgentTask{}
+	require.NoError(t, fakeClient.Get(ctx, req.NamespacedName, updated))
+	assert.Equal(t, v1alpha1.AgentTaskPhasePending, updated.Status.Phase)
+	assert.Contains(t, updated.Status.Message, "retrying")
+
+	// 2. Second Provision attempt succeeds -> transitions to Active
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	require.NoError(t, fakeClient.Get(ctx, req.NamespacedName, updated))
+	assert.Equal(t, v1alpha1.AgentTaskPhaseActive, updated.Status.Phase)
+	assert.False(t, memStore.IsRevoked(ctx, "task-limits", "default"))
+
+	// 3. Simulate CostUSD reaching BudgetUSD ($5.00 / $5.00) -> auto-pauses and revokes token
+	updated.Status.CostUSD = "5.00"
+	require.NoError(t, fakeClient.Status().Update(ctx, updated))
+
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	require.NoError(t, fakeClient.Get(ctx, req.NamespacedName, updated))
+	assert.Equal(t, v1alpha1.AgentTaskPhasePaused, updated.Status.Phase)
+	assert.Contains(t, updated.Status.Message, "Reached USD budget limit")
+	assert.True(t, memStore.IsRevoked(ctx, "task-limits", "default"))
+
+	// Reconciling while still over budget stays Paused (no infinite loop)
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	require.NoError(t, fakeClient.Get(ctx, req.NamespacedName, updated))
+	assert.Equal(t, v1alpha1.AgentTaskPhasePaused, updated.Status.Phase)
+
+	// 4. Bump BudgetUSD to $10.00 -> resumes, re-mints unrevoked token with new $10.00 MaxCostUSD
+	require.NoError(t, fakeClient.Get(ctx, req.NamespacedName, updated))
+	updated.Spec.BudgetUSD = "10.00"
+	require.NoError(t, fakeClient.Update(ctx, updated))
+
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	require.NoError(t, fakeClient.Get(ctx, req.NamespacedName, updated))
+	assert.Equal(t, v1alpha1.AgentTaskPhaseActive, updated.Status.Phase)
+	assert.False(t, memStore.IsRevoked(ctx, "task-limits", "default"))
+
+	rawTok, err := memStore.GetToken(ctx, "task-limits", "default")
+	require.NoError(t, err)
+	_, claims, err := macProvider.VerifyAndExtract(ctx, rawTok)
+	require.NoError(t, err)
+	assert.InDelta(t, 10.00, claims.MaxCostUSD, 0.001)
+	assert.Equal(t, "default", claims.Namespace)
+
+	// 5. Simulate TimeoutSeconds elapsed -> tears down sandbox, revokes token, and transitions to Failed
+	require.NoError(t, fakeClient.Get(ctx, req.NamespacedName, updated))
+	updated.Spec.Sandbox.TimeoutSeconds = 1
+	updated.CreationTimestamp = metav1.NewTime(time.Now().Add(-10 * time.Second))
+	require.NoError(t, fakeClient.Update(ctx, updated))
+
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	require.NoError(t, fakeClient.Get(ctx, req.NamespacedName, updated))
+	assert.Equal(t, v1alpha1.AgentTaskPhaseFailed, updated.Status.Phase)
+	assert.Contains(t, updated.Status.Message, "timed out")
+	assert.True(t, flaky.tornDown)
+	assert.True(t, memStore.IsRevoked(ctx, "task-limits", "default"))
+}
+
+type failingTokenMinter struct {
+	err error
+}
+
+func (f *failingTokenMinter) Mint(_ context.Context, _ auth.Claims) (auth.Token, error) {
+	return nil, f.err
+}
+
+type failingSaveTokenStore struct {
+	*auth.InMemoryTokenStore
+	saveErr error
+}
+
+func (f *failingSaveTokenStore) SaveToken(ctx context.Context, taskID, namespace string, token []byte) error {
+	if f.saveErr != nil {
+		return f.saveErr
+	}
+	return f.InMemoryTokenStore.SaveToken(ctx, taskID, namespace, token)
+}
+
+func TestAgentTaskReconcilerResumeStaysPausedWhenTokenMintFails(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	_ = v1alpha1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "task-resume-fail",
+			Namespace:  "default",
+			Finalizers: []string{agentTaskFinalizer},
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective: "Resume test",
+			Suspended: false,
+			Sandbox: v1alpha1.AgentTaskSandbox{
+				Provider: "noop",
+			},
+		},
+		Status: v1alpha1.AgentTaskStatus{
+			Phase:          v1alpha1.AgentTaskPhasePaused,
+			SandboxPodName: "noop-pod-task-resume-fail",
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(task).
+		WithStatusSubresource(&v1alpha1.AgentTask{}).
+		Build()
+
+	reconciler := &AgentTaskReconciler{
+		Client:          fakeClient,
+		Scheme:          scheme,
+		SandboxRegistry: pkgsandbox.Providers,
+		TokenMinter:     &failingTokenMinter{err: assert.AnError},
+		TokenStore:      auth.NewInMemoryTokenStore(),
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "task-resume-fail"}}
+	_, err := reconciler.Reconcile(ctx, req)
+	require.Error(t, err)
+
+	updated := &v1alpha1.AgentTask{}
+	require.NoError(t, fakeClient.Get(ctx, req.NamespacedName, updated))
+	assert.Equal(t, v1alpha1.AgentTaskPhasePaused, updated.Status.Phase)
+
+	// Also verify SaveToken persistence failure keeps the task Paused
+	reconciler.TokenMinter = auth.NewMacaroonProvider([]byte("0123456789abcdef0123456789abcdef"))
+	reconciler.TokenStore = &failingSaveTokenStore{
+		InMemoryTokenStore: auth.NewInMemoryTokenStore(),
+		saveErr:            assert.AnError,
+	}
+	_, err = reconciler.Reconcile(ctx, req)
+	require.Error(t, err)
+	require.NoError(t, fakeClient.Get(ctx, req.NamespacedName, updated))
+	assert.Equal(t, v1alpha1.AgentTaskPhasePaused, updated.Status.Phase)
+}
+
+type failingRevokeTokenStore struct {
+	*auth.InMemoryTokenStore
+	revokeErr error
+}
+
+func (f *failingRevokeTokenStore) RevokeToken(ctx context.Context, taskID, namespace string) error {
+	if f.revokeErr != nil {
+		return f.revokeErr
+	}
+	return f.InMemoryTokenStore.RevokeToken(ctx, taskID, namespace)
+}
+
+func TestAgentTaskReconcilerPausePersistsBeforeRevokeAndRetries(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	_ = v1alpha1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "task-pause-retry",
+			Namespace:  "default",
+			Finalizers: []string{agentTaskFinalizer},
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective: "Pause retry test",
+			Suspended: true,
+			Sandbox: v1alpha1.AgentTaskSandbox{
+				Provider: "noop",
+			},
+		},
+		Status: v1alpha1.AgentTaskStatus{
+			Phase: v1alpha1.AgentTaskPhaseActive,
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(task).
+		WithStatusSubresource(&v1alpha1.AgentTask{}).
+		Build()
+
+	baseStore := auth.NewInMemoryTokenStore()
+	require.NoError(t, baseStore.SaveToken(ctx, task.Name, task.Namespace, []byte("tok")))
+	store := &failingRevokeTokenStore{
+		InMemoryTokenStore: baseStore,
+		revokeErr:          assert.AnError,
+	}
+
+	reconciler := &AgentTaskReconciler{
+		Client:          fakeClient,
+		Scheme:          scheme,
+		SandboxRegistry: pkgsandbox.Providers,
+		TokenStore:      store,
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "task-pause-retry"}}
+
+	// First reconcile: RevokeToken fails, but status is persisted as Paused before revocation
+	_, err := reconciler.Reconcile(ctx, req)
+	require.Error(t, err)
+
+	updated := &v1alpha1.AgentTask{}
+	require.NoError(t, fakeClient.Get(ctx, req.NamespacedName, updated))
+	assert.Equal(t, v1alpha1.AgentTaskPhasePaused, updated.Status.Phase)
+	assert.False(t, store.IsRevoked(ctx, task.Name, task.Namespace))
+
+	// Second reconcile: already Paused, retries revocation and succeeds
+	store.revokeErr = nil
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.True(t, store.IsRevoked(ctx, task.Name, task.Namespace))
 }

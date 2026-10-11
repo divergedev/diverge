@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"unicode"
@@ -418,6 +419,81 @@ func newMCPServer(envClient divergev1alpha1connect.EnvironmentServiceClient, pgC
 	return mcpServer
 }
 
+const defaultMCPTokenFilePath = "/etc/diverge/token/token"
+
+type bearerAuthRoundTripper struct {
+	base         http.RoundTripper
+	tokenFunc    func() string
+	targetScheme string
+	targetHost   string
+}
+
+// matchesTargetOrigin reports whether u shares the configured server's scheme and host.
+func (rt *bearerAuthRoundTripper) matchesTargetOrigin(u *url.URL) bool {
+	if u == nil || rt.targetScheme == "" || rt.targetHost == "" {
+		return false
+	}
+	return strings.EqualFold(u.Scheme, rt.targetScheme) && strings.EqualFold(u.Host, rt.targetHost)
+}
+
+// RoundTrip attaches the resolved bearer token to same-origin requests over HTTPS (or loopback HTTP)
+// when no Authorization header is already present.
+func (rt *bearerAuthRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	base := rt.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	if rt.tokenFunc != nil && req.Header.Get("Authorization") == "" && rt.matchesTargetOrigin(req.URL) {
+		if token := rt.tokenFunc(); token != "" {
+			// Security: Do not transmit bearer credentials in cleartext over non-loopback HTTP.
+			if strings.EqualFold(req.URL.Scheme, "http") && !isLoopbackHost(req.URL.Host) {
+				return nil, fmt.Errorf("insecure HTTP scheme is only allowed for loopback addresses, got %q", req.URL.Host)
+			}
+			if !strings.EqualFold(req.URL.Scheme, "https") && !strings.EqualFold(req.URL.Scheme, "http") {
+				return nil, fmt.Errorf("unsupported URL scheme %q for bearer token authentication", req.URL.Scheme)
+			}
+			clone := req.Clone(req.Context())
+			clone.Header.Set("Authorization", "Bearer "+token)
+			req = clone
+		}
+	}
+	return base.RoundTrip(req)
+}
+
+// resolveMCPBearerToken reads the MCP bearer token from DIVERGE_TOKEN or the mounted token file.
+func resolveMCPBearerToken() string {
+	if token := strings.TrimSpace(os.Getenv("DIVERGE_TOKEN")); token != "" {
+		return token
+	}
+	tokenFile := strings.TrimSpace(os.Getenv("DIVERGE_TOKEN_FILE"))
+	if tokenFile == "" {
+		tokenFile = defaultMCPTokenFilePath
+	}
+	data, err := os.ReadFile(tokenFile)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// newMCPHTTPClient constructs an *http.Client that injects bearer credentials for the target server origin.
+func newMCPHTTPClient(serverURL string) *http.Client {
+	var targetScheme, targetHost string
+	if parsed, err := url.Parse(strings.TrimSpace(serverURL)); err == nil && parsed != nil {
+		targetScheme = parsed.Scheme
+		targetHost = parsed.Host
+	}
+	return &http.Client{
+		Transport: &bearerAuthRoundTripper{
+			base:         http.DefaultTransport,
+			tokenFunc:    resolveMCPBearerToken,
+			targetScheme: targetScheme,
+			targetHost:   targetHost,
+		},
+	}
+}
+
+// runMCP starts the MCP stdio server connected to the given Diverge API server URL.
 func runMCP(ctx context.Context, app *App, serverURL string, allowDestructive bool) error {
 	if serverURL == "" {
 		serverURL = os.Getenv("DIVERGE_SERVER_URL")
@@ -426,7 +502,7 @@ func runMCP(ctx context.Context, app *App, serverURL string, allowDestructive bo
 		}
 	}
 
-	httpClient := http.DefaultClient
+	httpClient := newMCPHTTPClient(serverURL)
 	envClient := divergev1alpha1connect.NewEnvironmentServiceClient(httpClient, serverURL)
 	pgClient := divergev1alpha1connect.NewPreviewGroupServiceClient(httpClient, serverURL)
 	taskClient := divergev1alpha1connect.NewAgentTaskServiceClient(httpClient, serverURL)

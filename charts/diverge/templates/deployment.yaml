@@ -51,6 +51,7 @@ spec:
 
         - /diverge-controller
         image: {{ include "diverge.image" . | quote }}
+        imagePullPolicy: {{ .Values.image.pullPolicy | default "IfNotPresent" }}
         name: diverge-controller
         securityContext:
           readOnlyRootFilesystem: true
@@ -86,6 +87,13 @@ spec:
         - name: OTEL_SERVICE_NAME
           value: {{ .Values.observability.otel.serviceName | quote }}
         {{- end }}
+        {{- end }}
+        {{- if and .Values.sandbox .Values.sandbox.macaroonSecretRef .Values.sandbox.macaroonSecretRef.name }}
+        - name: DIVERGE_MACAROON_ROOT_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.sandbox.macaroonSecretRef.name }}
+              key: {{ .Values.sandbox.macaroonSecretRef.key | default "root-key" }}
         {{- end }}
         ports:
         - containerPort: {{ .Values.webhook.port }}

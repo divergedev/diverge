@@ -19,7 +19,9 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Build
-        run: go build ./...
+        run: |
+          go build ./...
+          go build -tags=no_knative,no_schema -o /tmp/diverge-controller-slim ./cmd/controller/
       - name: Vet
         run: go vet ./...
       - name: Test
@@ -37,6 +39,13 @@ jobs:
             exit 1
           fi
           echo "✅ Coverage ${COVERAGE}% meets threshold"
+      - name: Integration Tests (envtest)
+        run: |
+          go install sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.21
+          go_path="$(go env GOPATH)"
+          KUBEBUILDER_ASSETS="$("$go_path/bin/setup-envtest" use 1.32.x --bin-dir /tmp/envtest -p path)"
+          export KUBEBUILDER_ASSETS
+          go test ./internal/controller/... ./internal/server/... -tags=integration -v -count=1
 
   lint:
     runs-on: ubuntu-latest
@@ -54,7 +63,27 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Lint Helm Chart
-        run: helm lint charts/diverge
+        run: |
+          helm lint charts/diverge
+          helm template diverge charts/diverge > /dev/null
+          helm template diverge charts/diverge \
+            --set server.enabled=true \
+            --set server.auth.oidc.enabled=true \
+            --set server.auth.oidc.issuerUrl=https://issuer.example.com \
+            --set server.auth.oidc.clientId=diverge-web \
+            --set server.auth.oidc.clientSecretSecretRef.name=oidc-secret \
+            --set server.auth.session.secretRef.name=session-secret \
+            --set sandbox.macaroonSecretRef.name=macaroon-root-key > /dev/null
+          helm template diverge charts/diverge \
+            --set rbac.namespaceScoped=true \
+            --set "rbac.managedNamespaces={dev,staging}" \
+            --set server.enabled=true \
+            --set server.rbac.clusterWidePodAccess=false \
+            --set "server.rbac.targetNamespaces={dev,staging}" \
+            --set proxy.enabled=true \
+            --set database.provider=schema \
+            --set database.host=postgres.default.svc \
+            --set database.passwordSecretName=db-secret > /dev/null
 
   file-hygiene:
     runs-on: ubuntu-latest

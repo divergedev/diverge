@@ -87,8 +87,8 @@ func TestEnvironment_HookReconcile(t *testing.T) {
 	assert.Equal(t, "hook-success", job.OwnerReferences[0].Name)
 	assert.True(t, *job.OwnerReferences[0].Controller)
 
-	// Wait for environment to reach Ready (migration succeeded → deploy continues)
-	err = f.WaitForCondition(ctx, env.Name, "Ready", metav1.ConditionTrue, 2*time.Minute)
+	// Wait for environment to reach ServicesReady (migration succeeded → deploy continues)
+	err = f.WaitForCondition(ctx, env.Name, "ServicesReady", metav1.ConditionTrue, 2*time.Minute)
 	require.NoError(t, err, "Environment did not become Ready after migration")
 
 	// Verify migration status on the Environment
@@ -217,8 +217,8 @@ func TestEnvironment_PostDeployHook(t *testing.T) {
 	assert.Equal(t, "migration", job.Labels["divergedev.com/hook-type"])
 	assert.Equal(t, "hook-nonblocking", job.Labels["divergedev.com/environment"])
 
-	// Wait for environment Ready (non-blocking migration should not delay readiness)
-	err = f.WaitForCondition(ctx, env.Name, "Ready", metav1.ConditionTrue, 2*time.Minute)
+	// Wait for environment ServicesReady (non-blocking migration should not delay readiness)
+	err = f.WaitForCondition(ctx, env.Name, "ServicesReady", metav1.ConditionTrue, 2*time.Minute)
 	require.NoError(t, err, "Environment did not become Ready with non-blocking migration")
 }
 

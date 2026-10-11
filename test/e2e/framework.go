@@ -137,6 +137,9 @@ func (f *Framework) WaitForCondition(ctx context.Context, name, condType string,
 						return nil
 					}
 				}
+				if condType == "Ready" && status == metav1.ConditionTrue && env.Status.Phase == v1alpha1.PhaseRunning {
+					return nil
+				}
 			}
 			time.Sleep(1 * time.Second)
 		}
@@ -170,13 +173,18 @@ func (f *Framework) CreateEnvironment(ctx context.Context, env *v1alpha1.Environ
 	return f.Client.Create(ctxCreate, env)
 }
 
-// ControllerRunning checks if the diverge-controller deployment exists and has ready replicas.
+// ControllerRunning checks if the diverge controller deployment exists and has ready replicas.
 func (f *Framework) ControllerRunning(ctx context.Context) bool {
-	var dep appsv1.Deployment
-	err := f.Client.Get(ctx, types.NamespacedName{
-		Name: "diverge-controller", Namespace: controllerNamespace,
-	}, &dep)
-	return err == nil && dep.Status.ReadyReplicas > 0
+	for _, name := range []string{"diverge-controller-manager", "diverge-controller"} {
+		var dep appsv1.Deployment
+		err := f.Client.Get(ctx, types.NamespacedName{
+			Name: name, Namespace: controllerNamespace,
+		}, &dep)
+		if err == nil && dep.Status.ReadyReplicas > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // AnnotateNamespace adds annotations to the test namespace (e.g. for Linkerd injection).

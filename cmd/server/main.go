@@ -30,6 +30,7 @@ import (
 	"github.com/divergedev/diverge/internal/server"
 	"github.com/divergedev/diverge/internal/server/auth"
 	"github.com/divergedev/diverge/internal/server/streaming"
+	pkgauth "github.com/divergedev/diverge/pkg/auth"
 )
 
 var (
@@ -70,6 +71,8 @@ func main() {
 		// Session flags
 		sessionSecret string
 		sessionMaxAge time.Duration
+		// Macaroon capability token auth
+		macaroonRootKey string
 	)
 
 	flag.StringVar(&addr, "addr", ":8443", "Main server listen address")
@@ -101,6 +104,7 @@ func main() {
 	// Session
 	flag.StringVar(&sessionSecret, "session-secret", "", "HMAC signing key for session JWTs (base64-encoded, or set DIVERGE_SESSION_SECRET env)")
 	flag.DurationVar(&sessionMaxAge, "session-max-age", 24*time.Hour, "Session cookie max age")
+	flag.StringVar(&macaroonRootKey, "macaroon-root-key", "", "HMAC root key for AgentTask Macaroon capability tokens (or set DIVERGE_MACAROON_ROOT_KEY env)")
 	flag.Parse()
 
 	// Structured logger
@@ -211,9 +215,26 @@ func main() {
 	if oidcClientSecret == "" {
 		oidcClientSecret = os.Getenv("DIVERGE_OIDC_CLIENT_SECRET")
 	}
+	if macaroonRootKey == "" {
+		macaroonRootKey = os.Getenv("DIVERGE_MACAROON_ROOT_KEY")
+	}
+
+	var macaroonAuthProvider *auth.MacaroonAuthProvider
+	if macaroonRootKey != "" {
+		if len(macaroonRootKey) < pkgauth.MinMacaroonRootKeyLen {
+			logger.Error("macaroon root key is too short (must be at least 32 bytes)", "length", len(macaroonRootKey))
+			os.Exit(1)
+		}
+		macaroonAuthProvider = auth.NewMacaroonAuthProvider(
+			pkgauth.NewMacaroonProvider([]byte(macaroonRootKey)),
+			pkgauth.NewKubernetesSecretTokenStore(crClient, scheme).WithIndexOnly(),
+		).WithTaskActiveCheck(crClient)
+		logger.Info("Macaroon capability token authentication enabled")
+	}
 
 	// OIDC SSO setup
 	var oidcHandler *server.OIDCHandler
+	var oidcProvider *auth.OIDCProvider
 	if oidcIssuerURL != "" {
 		logger.Info("OIDC SSO enabled", "issuer", oidcIssuerURL, "provider", oidcProviderName)
 
@@ -229,7 +250,7 @@ func main() {
 		scopes := strings.Split(oidcScopes, ",")
 
 		// Create OIDC auth provider for JWT verification
-		oidcProvider, err := auth.NewOIDCProvider(context.Background(), auth.OIDCProviderConfig{
+		oidcProvider, err = auth.NewOIDCProvider(context.Background(), auth.OIDCProviderConfig{
 			IssuerURL:     oidcIssuerURL,
 			ClientID:      oidcClientID,
 			UsernameClaim: oidcUsernameClaim,
@@ -240,12 +261,6 @@ func main() {
 			logger.Error("failed to create OIDC provider", "error", err)
 			os.Exit(1)
 		}
-
-		// Composite: OIDC/session first, then TokenReview
-		composite := auth.NewCompositeProvider(logger)
-		composite.Add("oidc", oidcProvider)
-		composite.Add("tokenreview", tokenReviewProvider)
-		authProvider = composite
 
 		// Create OIDC HTTP handler
 		cookieResolver := server.CookiePolicyResolver{
@@ -283,8 +298,21 @@ func main() {
 
 		exemptPrefixes = append(exemptPrefixes, "/auth/")
 	} else {
+		logger.Info("OIDC SSO disabled (no --oidc-issuer-url)")
+	}
+
+	if oidcProvider != nil || macaroonAuthProvider != nil {
+		composite := auth.NewCompositeProvider(logger)
+		if oidcProvider != nil {
+			composite.Add("oidc", oidcProvider)
+		}
+		if macaroonAuthProvider != nil {
+			composite.Add("macaroon", macaroonAuthProvider)
+		}
+		composite.Add("tokenreview", tokenReviewProvider)
+		authProvider = composite
+	} else {
 		authProvider = tokenReviewProvider
-		logger.Info("OIDC SSO disabled (no --oidc-issuer-url), using TokenReview only")
 	}
 
 	authMiddleware := auth.NewMiddleware(auth.MiddlewareConfig{

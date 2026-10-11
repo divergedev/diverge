@@ -26,6 +26,7 @@ type Caveat struct {
 // Claims encapsulates the authorized attributes of an AgentTask token.
 type Claims struct {
 	TaskID         string    `json:"task_id"`
+	Namespace      string    `json:"namespace,omitempty"`
 	RepoURL        string    `json:"repo_url"`
 	Branch         string    `json:"branch"`
 	AllowedTools   []string  `json:"allowed_tools,omitempty"`

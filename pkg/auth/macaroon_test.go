@@ -16,6 +16,7 @@ func TestMacaroonMintAndVerify(t *testing.T) {
 
 	claims := Claims{
 		TaskID:        "task-123",
+		Namespace:     "default",
 		RepoURL:       "https://github.com/org/repo",
 		AllowedTools:  []string{"diverge_*", "test_runner"},
 		AllowedModels: []string{"gemini-2.5-pro", "gemini-2.5-flash"},
@@ -33,6 +34,7 @@ func TestMacaroonMintAndVerify(t *testing.T) {
 	// Verify valid token
 	err = provider.Verify(ctx, raw, Claims{
 		TaskID:        "task-123",
+		Namespace:     "default",
 		RepoURL:       "https://github.com/org/repo",
 		AllowedTools:  []string{"diverge_create_preview"},
 		AllowedModels: []string{"gemini-2.5-flash"},
@@ -48,6 +50,7 @@ func TestMacaroonTamperDetection(t *testing.T) {
 
 	claims := Claims{
 		TaskID:    "task-456",
+		Namespace: "default",
 		ExpiresAt: time.Now().Add(1 * time.Hour),
 	}
 
@@ -71,6 +74,7 @@ func TestMacaroonAttenuation(t *testing.T) {
 
 	claims := Claims{
 		TaskID:       "task-789",
+		Namespace:    "default",
 		AllowedTools: []string{"diverge_*"},
 		ExpiresAt:    time.Now().Add(1 * time.Hour),
 	}
@@ -111,6 +115,7 @@ func TestMacaroonExpired(t *testing.T) {
 
 	claims := Claims{
 		TaskID:    "task-expired",
+		Namespace: "default",
 		ExpiresAt: time.Now().Add(-1 * time.Minute), // in the past
 	}
 
@@ -131,6 +136,7 @@ func TestMacaroonFailClosed(t *testing.T) {
 
 	claims := Claims{
 		TaskID:        "task-fail-closed",
+		Namespace:     "default",
 		RepoURL:       "https://github.com/org/repo",
 		AllowedTools:  []string{"diverge_get_*"},
 		AllowedModels: []string{"gemini-2.5-flash"},
@@ -168,6 +174,7 @@ func TestMacaroonTokenLimits(t *testing.T) {
 
 	claims := Claims{
 		TaskID:    "task-tokens",
+		Namespace: "default",
 		MaxTokens: 500000,
 	}
 
@@ -199,9 +206,10 @@ func TestMacaroonBranchCaveat(t *testing.T) {
 	provider := NewMacaroonProvider(rootKey)
 
 	claims := Claims{
-		TaskID:  "task-branch",
-		RepoURL: "https://github.com/org/repo",
-		Branch:  "feat/payments",
+		TaskID:    "task-branch",
+		Namespace: "default",
+		RepoURL:   "https://github.com/org/repo",
+		Branch:    "feat/payments",
 	}
 
 	tok, err := provider.Mint(ctx, claims)
@@ -233,7 +241,7 @@ func TestMacaroonOperatorAndUnknownKeyValidation(t *testing.T) {
 	rootKey := []byte("0123456789abcdef0123456789abcdef")
 	provider := NewMacaroonProvider(rootKey)
 
-	tok, err := provider.Mint(ctx, Claims{TaskID: "task-test"})
+	tok, err := provider.Mint(ctx, Claims{TaskID: "task-test", Namespace: "default"})
 	require.NoError(t, err)
 
 	// Attenuate with unknown caveat key
@@ -274,6 +282,7 @@ func TestMacaroonNonceUniqueness(t *testing.T) {
 
 	claims := Claims{
 		TaskID:    "identical-task-id",
+		Namespace: "default",
 		ExpiresAt: time.Now().Add(1 * time.Hour),
 	}
 
@@ -312,4 +321,83 @@ func TestMacaroonNonceUniqueness(t *testing.T) {
 	raw2, err := tok2.Serialize()
 	require.NoError(t, err)
 	assert.NoError(t, provider.Verify(ctx, raw2, Claims{TaskID: "identical-task-id"}))
+}
+
+func TestMacaroonVerifyAndExtract(t *testing.T) {
+	ctx := context.Background()
+	rootKey := []byte("0123456789abcdef0123456789abcdef")
+	provider := NewMacaroonProvider(rootKey)
+
+	claims := Claims{
+		TaskID:        "task-extract",
+		Namespace:     "team-alpha",
+		RepoURL:       "https://github.com/org/repo",
+		Branch:        "main",
+		AllowedTools:  []string{"diverge_*"},
+		AllowedModels: []string{"gemini-2.5-pro", "gemini-2.5-flash"},
+		MaxCostUSD:    12.50,
+		MaxTokens:     200000,
+		ExpiresAt:     time.Now().Add(1 * time.Hour),
+	}
+
+	tok, err := provider.Mint(ctx, claims)
+	require.NoError(t, err)
+
+	// Narrow via attenuation
+	attenuated, err := provider.Attenuate(ctx, tok,
+		Caveat{Key: "allowed_tools", Op: OpGlob, Value: "diverge_get_*"},
+		Caveat{Key: "max_cost_usd", Op: OpLessThan, Value: "5.00"},
+	)
+	require.NoError(t, err)
+
+	raw, err := attenuated.Serialize()
+	require.NoError(t, err)
+
+	mac, extracted, err := provider.VerifyAndExtract(ctx, raw)
+	require.NoError(t, err)
+	require.NotNil(t, mac)
+	assert.Equal(t, "task-extract", extracted.TaskID)
+	assert.Equal(t, "team-alpha", extracted.Namespace)
+	assert.Equal(t, "https://github.com/org/repo", extracted.RepoURL)
+	assert.Equal(t, "main", extracted.Branch)
+	assert.Equal(t, []string{"diverge_get_*"}, extracted.AllowedTools)
+	assert.InDelta(t, 5.00, extracted.MaxCostUSD, 0.001)
+	assert.Equal(t, int64(200000), extracted.MaxTokens)
+
+	// Attempting to widen allowed_tools via attenuation must fail closed
+	widened, err := provider.Attenuate(ctx, attenuated,
+		Caveat{Key: "allowed_tools", Op: OpGlob, Value: "kubectl_*"},
+	)
+	require.NoError(t, err)
+	widenedRaw, err := widened.Serialize()
+	require.NoError(t, err)
+	_, _, err = provider.VerifyAndExtract(ctx, widenedRaw)
+	assert.ErrorIs(t, err, ErrCaveatFailed)
+
+	// Conflicting namespace caveat must fail closed
+	conflictingNS, err := provider.Attenuate(ctx, tok,
+		Caveat{Key: "namespace", Op: OpEqual, Value: "team-beta"},
+	)
+	require.NoError(t, err)
+	conflictRaw, err := conflictingNS.Serialize()
+	require.NoError(t, err)
+	_, _, err = provider.VerifyAndExtract(ctx, conflictRaw)
+	assert.ErrorIs(t, err, ErrCaveatFailed)
+
+	// Non-positive max_cost_usd or max_tokens caveats must fail closed
+	for _, badCaveat := range []Caveat{
+		{Key: "max_cost_usd", Op: OpLessThan, Value: "0"},
+		{Key: "max_cost_usd", Op: OpLessThan, Value: "-5.00"},
+		{Key: "max_cost_usd", Op: OpLessThan, Value: "NaN"},
+		{Key: "max_cost_usd", Op: OpLessThan, Value: "+Inf"},
+		{Key: "max_tokens", Op: OpLessThan, Value: "0"},
+		{Key: "max_tokens", Op: OpLessThan, Value: "-100"},
+	} {
+		badTok, err := provider.Attenuate(ctx, tok, badCaveat)
+		require.NoError(t, err)
+		badRaw, err := badTok.Serialize()
+		require.NoError(t, err)
+		_, _, err = provider.VerifyAndExtract(ctx, badRaw)
+		assert.ErrorIs(t, err, ErrCaveatFailed, "expected ErrCaveatFailed for %+v", badCaveat)
+	}
 }

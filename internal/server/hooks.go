@@ -115,10 +115,7 @@ func (s *EnvironmentService) RetryHook(ctx context.Context, req *connect.Request
 	}
 
 	// Authorize both the job deletion and the environment annotation mutation.
-	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "create", namespace, "jobs"); err != nil {
-		return nil, err
-	}
-	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "update", namespace, "environments"); err != nil {
+	if err := AuthorizeRetryHook(ctx, s.k8sClient, s.auditLogger, namespace); err != nil {
 		return nil, err
 	}
 

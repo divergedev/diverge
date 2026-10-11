@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -173,6 +174,9 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 				return ctrl.Result{}, err
 			}
 		}
+		if err := r.revokeToken(ctx, task, "paused by spec.suspended"); err != nil {
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -195,77 +199,12 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	case "", v1alpha1.AgentTaskPhasePending:
 		logger.Info("Provisioning sandbox for AgentTask", "task", task.Name)
 
-		// Mint capability token and persist via TokenStore
-		if r.TokenMinter != nil {
-			timeoutSec := task.Spec.Sandbox.TimeoutSeconds
-			if timeoutSec <= 0 {
-				timeoutSec = 3600
-			}
-			claims := auth.Claims{
-				TaskID:        task.Name,
-				RepoURL:       task.Spec.Repository.URL,
-				Branch:        task.Spec.Repository.BaseBranch,
-				AllowedTools:  []string{"diverge_*"},
-				AllowedModels: task.Spec.Capabilities,
-				MaxTokens:     task.Spec.BudgetTokens,
-				ExpiresAt:     time.Now().Add(time.Duration(timeoutSec) * time.Second),
-			}
-			if task.Spec.BudgetUSD != "" {
-				if cost, err := strconv.ParseFloat(task.Spec.BudgetUSD, 64); err == nil {
-					claims.MaxCostUSD = cost
-				}
-			}
-
-			tok, err := r.TokenMinter.Mint(ctx, claims)
-			if err != nil {
-				logger.Error(err, "Failed to mint task token")
-				if r.TokenAuditor != nil {
-					_ = r.TokenAuditor.RecordEvent(ctx, auth.AuthEvent{
-						Type:      auth.EventMint,
-						TaskID:    task.Name,
-						Namespace: task.Namespace,
-						Principal: "diverge-controller",
-						Success:   false,
-						Reason:    err.Error(),
-						Timestamp: time.Now(),
-					})
-				}
-			} else {
-				tokBytes, err := tok.Serialize()
-				if err != nil {
-					logger.Error(err, "Failed to serialize task token")
-					if r.TokenAuditor != nil {
-						_ = r.TokenAuditor.RecordEvent(ctx, auth.AuthEvent{
-							Type:      auth.EventMint,
-							TaskID:    task.Name,
-							Namespace: task.Namespace,
-							Principal: "diverge-controller",
-							Success:   false,
-							Reason:    err.Error(),
-							Timestamp: time.Now(),
-						})
-					}
-				} else {
-					store := r.resolveTokenStore()
-					saveErr := store.SaveToken(ctx, task.Name, task.Namespace, tokBytes)
-					reason := ""
-					if saveErr != nil {
-						logger.Error(saveErr, "Failed to persist task token via TokenStore")
-						reason = saveErr.Error()
-					}
-					if r.TokenAuditor != nil {
-						_ = r.TokenAuditor.RecordEvent(ctx, auth.AuthEvent{
-							Type:      auth.EventMint,
-							TaskID:    task.Name,
-							Namespace: task.Namespace,
-							Principal: "diverge-controller",
-							Success:   saveErr == nil,
-							Reason:    reason,
-							Timestamp: time.Now(),
-						})
-					}
-				}
-			}
+		if err := r.mintAndSaveToken(ctx, task); err != nil {
+			patch := client.MergeFrom(task.DeepCopy())
+			task.Status.Phase = v1alpha1.AgentTaskPhasePending
+			task.Status.Message = fmt.Sprintf("Token provisioning failed (retrying): %v", err)
+			_ = r.Status().Patch(ctx, task, patch)
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, err
 		}
 
 		if r.LifecycleHook != nil {
@@ -277,12 +216,8 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		res, err := provider.Provision(ctx, task)
 		if err != nil {
 			patch := client.MergeFrom(task.DeepCopy())
-			oldPhase := task.Status.Phase
-			task.Status.Phase = v1alpha1.AgentTaskPhaseFailed
-			task.Status.Message = fmt.Sprintf("Provisioning failed: %v", err)
-			if r.Notifier != nil && oldPhase != task.Status.Phase {
-				_ = r.Notifier.NotifyPhaseChange(ctx, task, oldPhase, task.Status.Phase)
-			}
+			task.Status.Phase = v1alpha1.AgentTaskPhasePending
+			task.Status.Message = fmt.Sprintf("Provisioning failed (retrying): %v", err)
 			_ = r.Status().Patch(ctx, task, patch)
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, err
 		}
@@ -342,16 +277,40 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 
 	case v1alpha1.AgentTaskPhaseActive:
-		// Check iteration limits
-		if task.Spec.MaxIterations > 0 && task.Status.Iteration >= task.Spec.MaxIterations {
+		// Check sandbox execution timeout
+		if task.Spec.Sandbox.TimeoutSeconds > 0 && !task.CreationTimestamp.IsZero() {
+			if time.Since(task.CreationTimestamp.Time) > time.Duration(task.Spec.Sandbox.TimeoutSeconds)*time.Second {
+				_ = provider.Teardown(ctx, task)
+				patch := client.MergeFrom(task.DeepCopy())
+				oldPhase := task.Status.Phase
+				task.Status.Phase = v1alpha1.AgentTaskPhaseFailed
+				task.Status.Message = fmt.Sprintf("Sandbox execution timed out after %ds", task.Spec.Sandbox.TimeoutSeconds)
+				if r.Notifier != nil && oldPhase != task.Status.Phase {
+					_ = r.Notifier.NotifyPhaseChange(ctx, task, oldPhase, task.Status.Phase)
+				}
+				if err := r.Status().Patch(ctx, task, patch); err != nil {
+					return ctrl.Result{}, err
+				}
+				if err := r.revokeToken(ctx, task, "sandbox timeout exceeded"); err != nil {
+					return ctrl.Result{}, err
+				}
+				return ctrl.Result{}, nil
+			}
+		}
+
+		// Check iteration, USD budget, and token budget limits
+		if exceeded, reason := r.checkBudgetOrIterationLimit(task); exceeded {
 			patch := client.MergeFrom(task.DeepCopy())
 			oldPhase := task.Status.Phase
 			task.Status.Phase = v1alpha1.AgentTaskPhasePaused
-			task.Status.Message = fmt.Sprintf("Reached max iterations limit (%d); paused", task.Spec.MaxIterations)
+			task.Status.Message = reason
 			if r.Notifier != nil && oldPhase != task.Status.Phase {
 				_ = r.Notifier.NotifyPhaseChange(ctx, task, oldPhase, task.Status.Phase)
 			}
 			if err := r.Status().Patch(ctx, task, patch); err != nil {
+				return ctrl.Result{}, err
+			}
+			if err := r.revokeToken(ctx, task, reason); err != nil {
 				return ctrl.Result{}, err
 			}
 			return ctrl.Result{}, nil
@@ -374,9 +333,19 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	case v1alpha1.AgentTaskPhasePaused:
 		if !task.Spec.Suspended {
+			if exceeded, reason := r.checkBudgetOrIterationLimit(task); exceeded {
+				if err := r.revokeToken(ctx, task, reason); err != nil {
+					return ctrl.Result{}, err
+				}
+				return ctrl.Result{}, nil
+			}
 			patch := client.MergeFrom(task.DeepCopy())
 			oldPhase := task.Status.Phase
 			if task.Status.SandboxPodName != "" {
+				// Re-mint capability token with updated budget/token limits and fresh expiry
+				if err := r.mintAndSaveToken(ctx, task); err != nil {
+					return ctrl.Result{}, err
+				}
 				task.Status.Phase = v1alpha1.AgentTaskPhaseActive
 				task.Status.Message = "Task resumed and active"
 			} else {
@@ -394,12 +363,158 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, nil
 
 	case v1alpha1.AgentTaskPhaseCompleted, v1alpha1.AgentTaskPhaseFailed:
+		if err := r.revokeToken(ctx, task, "task in terminal phase"); err != nil {
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{}, nil
 	}
 
 	return ctrl.Result{}, nil
 }
 
+// checkBudgetOrIterationLimit reports whether the AgentTask has reached its configured
+// maxIterations, budgetUSD, or budgetTokens limit and returns the human-readable pause reason.
+func (r *AgentTaskReconciler) checkBudgetOrIterationLimit(task *v1alpha1.AgentTask) (bool, string) {
+	if task.Spec.MaxIterations > 0 && task.Status.Iteration >= task.Spec.MaxIterations {
+		return true, fmt.Sprintf("Reached max iterations limit (%d); paused", task.Spec.MaxIterations)
+	}
+	if task.Spec.BudgetUSD != "" && task.Status.CostUSD != "" {
+		budget, err1 := strconv.ParseFloat(task.Spec.BudgetUSD, 64)
+		cost, err2 := strconv.ParseFloat(task.Status.CostUSD, 64)
+		if err1 == nil && err2 == nil && budget > 0 && cost >= budget {
+			return true, fmt.Sprintf("Reached USD budget limit ($%s / $%s); paused", task.Status.CostUSD, task.Spec.BudgetUSD)
+		}
+	}
+	if task.Spec.BudgetTokens > 0 && task.Status.TokensConsumed >= task.Spec.BudgetTokens {
+		return true, fmt.Sprintf("Reached token budget limit (%d / %d); paused", task.Status.TokensConsumed, task.Spec.BudgetTokens)
+	}
+	return false, ""
+}
+
+// mintAndSaveToken mints a namespace- and task-bound Macaroon capability token for the
+// given AgentTask and persists it via the configured TokenStore.
+func (r *AgentTaskReconciler) mintAndSaveToken(ctx context.Context, task *v1alpha1.AgentTask) error {
+	if r.TokenMinter == nil {
+		return nil
+	}
+	logger := log.FromContext(ctx).WithValues("agenttask", client.ObjectKeyFromObject(task))
+	timeoutSec := task.Spec.Sandbox.TimeoutSeconds
+	if timeoutSec <= 0 {
+		timeoutSec = 3600
+	}
+	claims := auth.Claims{
+		TaskID:    task.Name,
+		Namespace: task.Namespace,
+		RepoURL:   task.Spec.Repository.URL,
+		Branch:    task.Spec.Repository.BaseBranch,
+		AllowedTools: []string{
+			"diverge_*_environment*",
+			"diverge_*_preview_group*",
+			"diverge_wait_for_ready",
+			"diverge_fetch_errors",
+			"diverge_list_hook_jobs",
+			"diverge_retry_hook",
+			"diverge_extend_ttl",
+			"diverge_doctor",
+			"diverge_loadtest",
+			"diverge_get_task",
+		},
+		AllowedModels: task.Spec.Capabilities,
+		MaxTokens:     task.Spec.BudgetTokens,
+		ExpiresAt:     time.Now().Add(time.Duration(timeoutSec) * time.Second),
+	}
+	if task.Spec.BudgetUSD != "" {
+		if cost, err := strconv.ParseFloat(task.Spec.BudgetUSD, 64); err == nil {
+			claims.MaxCostUSD = cost
+		}
+	}
+
+	tok, err := r.TokenMinter.Mint(ctx, claims)
+	if err != nil {
+		logger.Error(err, "Failed to mint task token")
+		if r.TokenAuditor != nil {
+			_ = r.TokenAuditor.RecordEvent(ctx, auth.AuthEvent{
+				Type:      auth.EventMint,
+				TaskID:    task.Name,
+				Namespace: task.Namespace,
+				Principal: "diverge-controller",
+				Success:   false,
+				Reason:    err.Error(),
+				Timestamp: time.Now(),
+			})
+		}
+		return fmt.Errorf("mint task token: %w", err)
+	}
+
+	tokBytes, err := tok.Serialize()
+	if err != nil {
+		logger.Error(err, "Failed to serialize task token")
+		if r.TokenAuditor != nil {
+			_ = r.TokenAuditor.RecordEvent(ctx, auth.AuthEvent{
+				Type:      auth.EventMint,
+				TaskID:    task.Name,
+				Namespace: task.Namespace,
+				Principal: "diverge-controller",
+				Success:   false,
+				Reason:    err.Error(),
+				Timestamp: time.Now(),
+			})
+		}
+		return fmt.Errorf("serialize task token: %w", err)
+	}
+
+	store := r.resolveTokenStore()
+	saveErr := store.SaveToken(ctx, task.Name, task.Namespace, tokBytes)
+	reason := ""
+	if saveErr != nil {
+		logger.Error(saveErr, "Failed to persist task token via TokenStore")
+		reason = saveErr.Error()
+	}
+	if r.TokenAuditor != nil {
+		_ = r.TokenAuditor.RecordEvent(ctx, auth.AuthEvent{
+			Type:      auth.EventMint,
+			TaskID:    task.Name,
+			Namespace: task.Namespace,
+			Principal: "diverge-controller",
+			Success:   saveErr == nil,
+			Reason:    reason,
+			Timestamp: time.Now(),
+		})
+	}
+	if saveErr != nil {
+		return fmt.Errorf("persist task token: %w", saveErr)
+	}
+	return nil
+}
+
+// revokeToken marks the AgentTask's capability token as revoked in the TokenStore and records an audit event.
+// Missing or already-revoked tokens are treated as idempotent success.
+func (r *AgentTaskReconciler) revokeToken(ctx context.Context, task *v1alpha1.AgentTask, reason string) error {
+	store := r.resolveTokenStore()
+	if store.IsRevoked(ctx, task.Name, task.Namespace) {
+		return nil
+	}
+	if err := store.RevokeToken(ctx, task.Name, task.Namespace); err != nil {
+		if errors.Is(err, auth.ErrTokenNotFound) || errors.Is(err, auth.ErrTokenRevoked) {
+			return nil
+		}
+		return fmt.Errorf("revoke task token: %w", err)
+	}
+	if r.TokenAuditor != nil {
+		_ = r.TokenAuditor.RecordEvent(ctx, auth.AuthEvent{
+			Type:      auth.EventRevoke,
+			TaskID:    task.Name,
+			Namespace: task.Namespace,
+			Principal: "diverge-controller",
+			Success:   true,
+			Reason:    reason,
+			Timestamp: time.Now(),
+		})
+	}
+	return nil
+}
+
+// resolveTokenStore returns the configured TokenStore or defaults to KubernetesSecretTokenStore.
 func (r *AgentTaskReconciler) resolveTokenStore() auth.TokenStore {
 	if r.TokenStore != nil {
 		return r.TokenStore
@@ -407,6 +522,7 @@ func (r *AgentTaskReconciler) resolveTokenStore() auth.TokenStore {
 	return auth.NewKubernetesSecretTokenStore(r.Client, r.Scheme)
 }
 
+// resolveSandboxProvider resolves and instantiates the SandboxProvider for the given AgentTask.
 func (r *AgentTaskReconciler) resolveSandboxProvider(task *v1alpha1.AgentTask) (pkgsandbox.SandboxProvider, error) {
 	providerName := task.Spec.Sandbox.Provider
 	if providerName == "" {

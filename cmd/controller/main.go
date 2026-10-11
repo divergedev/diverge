@@ -302,9 +302,13 @@ func main() {
 	if enableAgentSandbox {
 		var macaroonKey []byte
 		if rawKey := os.Getenv("DIVERGE_MACAROON_ROOT_KEY"); rawKey != "" {
+			if len(rawKey) < pkgauth.MinMacaroonRootKeyLen {
+				setupLog.Error(fmt.Errorf("DIVERGE_MACAROON_ROOT_KEY must be at least %d bytes (got %d)", pkgauth.MinMacaroonRootKeyLen, len(rawKey)), "invalid macaroon root key")
+				os.Exit(1)
+			}
 			macaroonKey = []byte(rawKey)
 		} else {
-			macaroonKey = make([]byte, 32)
+			macaroonKey = make([]byte, pkgauth.MinMacaroonRootKeyLen)
 			if _, err := rand.Read(macaroonKey); err != nil {
 				setupLog.Error(err, "failed to generate macaroon root key")
 				os.Exit(1)
