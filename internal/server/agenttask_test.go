@@ -361,4 +361,22 @@ func TestAgentTaskMacaroonCapabilityAuthorization(t *testing.T) {
 	if assert.ErrorAs(t, err, &connectErr) {
 		assert.Equal(t, connect.CodePermissionDenied, connectErr.Code())
 	}
+
+	// 5. Macaroon attenuated strictly to diverge_retry_hook authorizes RetryHook without authorizing CreateEnvironment
+	retryOnlyCtx := auth.ContextWithUserInfo(context.Background(), &auth.UserInfo{
+		Username: "system:agenttask:default:task-1",
+		Groups:   []string{"system:authenticated", "diverge:agenttasks"},
+		Extra: map[string]authorizationv1.ExtraValue{
+			auth.ExtraKeyAuthType:     {"macaroon"},
+			auth.ExtraKeyTaskID:       {"task-1"},
+			auth.ExtraKeyNamespace:    {"default"},
+			auth.ExtraKeyAllowedTools: {"diverge_retry_hook"},
+		},
+	})
+	require.NoError(t, AuthorizeRetryHook(retryOnlyCtx, svc.k8sClient, svc.auditLogger, "default"))
+	err = AuthorizeAction(retryOnlyCtx, svc.k8sClient, svc.auditLogger, "create", "default", "environments")
+	require.Error(t, err)
+	if assert.ErrorAs(t, err, &connectErr) {
+		assert.Equal(t, connect.CodePermissionDenied, connectErr.Code())
+	}
 }

@@ -51,10 +51,47 @@ func TestMacaroonAuthProvider(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, user.Username, userB64.Username)
 
+	// 2b. Attenuated token derived from the current stored root token succeeds
+	attenuatedTok, err := macProvider.Attenuate(ctx, tok, pkgauth.Caveat{
+		Key:   "allowed_tools",
+		Op:    pkgauth.OpGlob,
+		Value: "diverge_get_*",
+	})
+	require.NoError(t, err)
+	attenuatedRaw, err := attenuatedTok.Serialize()
+	require.NoError(t, err)
+	attenuatedUser, err := authProvider.Authenticate(ctx, string(attenuatedRaw))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"diverge_get_*"}, []string(attenuatedUser.Extra[ExtraKeyAllowedTools]))
+
 	// 3. Revoking token in TokenStore causes Authenticate to fail with ErrTokenRevoked
 	require.NoError(t, store.RevokeToken(ctx, "fix-bug", "staging"))
 	_, err = authProvider.Authenticate(ctx, b64Token)
 	assert.ErrorIs(t, err, pkgauth.ErrTokenRevoked)
+
+	// 3b. Re-minting and saving a replacement token (e.g. after pause -> resume) invalidates the previous token
+	replacementTok, err := macProvider.Mint(ctx, pkgauth.Claims{
+		TaskID:       "fix-bug",
+		Namespace:    "staging",
+		RepoURL:      "https://github.com/org/repo",
+		Branch:       "main",
+		AllowedTools: []string{"diverge_*"},
+		ExpiresAt:    time.Now().Add(30 * time.Minute),
+	})
+	require.NoError(t, err)
+	replacementRaw, err := replacementTok.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, store.SaveToken(ctx, "fix-bug", "staging", replacementRaw))
+
+	// Old root token and old attenuated token are rejected because their nonce no longer matches the stored token
+	_, err = authProvider.Authenticate(ctx, b64Token)
+	assert.ErrorIs(t, err, pkgauth.ErrTokenRevoked)
+	_, err = authProvider.Authenticate(ctx, string(attenuatedRaw))
+	assert.ErrorIs(t, err, pkgauth.ErrTokenRevoked)
+
+	// Replacement token succeeds
+	_, err = authProvider.Authenticate(ctx, string(replacementRaw))
+	require.NoError(t, err)
 
 	// 4. Malformed token is rejected
 	_, err = authProvider.Authenticate(ctx, "not-a-macaroon")

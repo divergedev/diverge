@@ -383,4 +383,21 @@ func TestMacaroonVerifyAndExtract(t *testing.T) {
 	require.NoError(t, err)
 	_, _, err = provider.VerifyAndExtract(ctx, conflictRaw)
 	assert.ErrorIs(t, err, ErrCaveatFailed)
+
+	// Non-positive max_cost_usd or max_tokens caveats must fail closed
+	for _, badCaveat := range []Caveat{
+		{Key: "max_cost_usd", Op: OpLessThan, Value: "0"},
+		{Key: "max_cost_usd", Op: OpLessThan, Value: "-5.00"},
+		{Key: "max_cost_usd", Op: OpLessThan, Value: "NaN"},
+		{Key: "max_cost_usd", Op: OpLessThan, Value: "+Inf"},
+		{Key: "max_tokens", Op: OpLessThan, Value: "0"},
+		{Key: "max_tokens", Op: OpLessThan, Value: "-100"},
+	} {
+		badTok, err := provider.Attenuate(ctx, tok, badCaveat)
+		require.NoError(t, err)
+		badRaw, err := badTok.Serialize()
+		require.NoError(t, err)
+		_, _, err = provider.VerifyAndExtract(ctx, badRaw)
+		assert.ErrorIs(t, err, ErrCaveatFailed, "expected ErrCaveatFailed for %+v", badCaveat)
+	}
 }

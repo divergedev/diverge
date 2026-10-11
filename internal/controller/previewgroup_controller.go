@@ -624,6 +624,9 @@ func (r *PreviewGroupReconciler) cleanupRoutesAndEndpoints(ctx context.Context, 
 		httpRouteList.SetAPIVersion("gateway.networking.k8s.io/v1")
 		httpRouteList.SetKind("HTTPRouteList")
 		if err := r.List(cleanupCtx, &httpRouteList, client.MatchingLabels{labelPreviewGroup: pgName}); err != nil {
+			if meta.IsNoMatchError(err) {
+				return nil
+			}
 			return fmt.Errorf("failed to list HTTPRoutes: %w", err)
 		}
 		for i := range httpRouteList.Items {
@@ -645,6 +648,9 @@ func (r *PreviewGroupReconciler) cleanupRoutesAndEndpoints(ctx context.Context, 
 		grpcRouteList.SetAPIVersion("gateway.networking.k8s.io/v1alpha2")
 		grpcRouteList.SetKind("GRPCRouteList")
 		if err := r.List(cleanupCtx, &grpcRouteList, client.MatchingLabels{labelPreviewGroup: pgName}); err != nil {
+			if meta.IsNoMatchError(err) {
+				return nil
+			}
 			return fmt.Errorf("failed to list GRPCRoutes: %w", err)
 		}
 		for i := range grpcRouteList.Items {

@@ -461,3 +461,59 @@ func TestAgentTaskReconcilerBudgetTimeoutAndTransientRetry(t *testing.T) {
 	assert.True(t, flaky.tornDown)
 	assert.True(t, memStore.IsRevoked(ctx, "task-limits", "default"))
 }
+
+type failingTokenMinter struct {
+	err error
+}
+
+func (f *failingTokenMinter) Mint(_ context.Context, _ auth.Claims) (auth.Token, error) {
+	return nil, f.err
+}
+
+func TestAgentTaskReconcilerResumeStaysPausedWhenTokenMintFails(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	_ = v1alpha1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "task-resume-fail",
+			Namespace:  "default",
+			Finalizers: []string{agentTaskFinalizer},
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective: "Resume test",
+			Suspended: false,
+			Sandbox: v1alpha1.AgentTaskSandbox{
+				Provider: "noop",
+			},
+		},
+		Status: v1alpha1.AgentTaskStatus{
+			Phase:          v1alpha1.AgentTaskPhasePaused,
+			SandboxPodName: "noop-pod-task-resume-fail",
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(task).
+		WithStatusSubresource(&v1alpha1.AgentTask{}).
+		Build()
+
+	reconciler := &AgentTaskReconciler{
+		Client:          fakeClient,
+		Scheme:          scheme,
+		SandboxRegistry: pkgsandbox.Providers,
+		TokenMinter:     &failingTokenMinter{err: assert.AnError},
+		TokenStore:      auth.NewInMemoryTokenStore(),
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "task-resume-fail"}}
+	_, err := reconciler.Reconcile(ctx, req)
+	require.Error(t, err)
+
+	updated := &v1alpha1.AgentTask{}
+	require.NoError(t, fakeClient.Get(ctx, req.NamespacedName, updated))
+	assert.Equal(t, v1alpha1.AgentTaskPhasePaused, updated.Status.Phase)
+}

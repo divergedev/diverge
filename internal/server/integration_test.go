@@ -44,6 +44,7 @@ var (
 	httpServer       *httptest.Server
 	testMux          *http.ServeMux
 	macaroonProvider *pkgauth.MacaroonProvider
+	tokenStore       pkgauth.TokenStore
 	testEnvToken     string
 	readOnlyToken    string
 	noPermsToken     string
@@ -160,8 +161,9 @@ func TestMain(m *testing.M) {
 
 	// Server setup
 	macaroonProvider = pkgauth.NewMacaroonProvider([]byte("0123456789abcdef0123456789abcdef"))
+	tokenStore = pkgauth.NewKubernetesSecretTokenStore(ctrlClient, scheme.Scheme)
 	provider := auth.NewCompositeProvider(slog.Default())
-	provider.Add("macaroon", auth.NewMacaroonAuthProvider(macaroonProvider, nil).WithTaskActiveCheck(ctrlClient))
+	provider.Add("macaroon", auth.NewMacaroonAuthProvider(macaroonProvider, tokenStore).WithTaskActiveCheck(ctrlClient))
 	provider.Add("tokenreview", auth.NewTokenReviewProvider(k8sClient, nil))
 	authMw := auth.NewMiddleware(auth.MiddlewareConfig{
 		Provider: provider,
@@ -439,6 +441,7 @@ func TestCreateEnvironment_Authorized(t *testing.T) {
 				Source: &pb.EnvironmentSource{
 					Provider: "github",
 					Project:  "divergedev/diverge",
+					Branch:   "main",
 				},
 			},
 		},
@@ -462,6 +465,7 @@ func TestCreateEnvironment_Denied(t *testing.T) {
 				Source: &pb.EnvironmentSource{
 					Provider: "github",
 					Project:  "divergedev/diverge",
+					Branch:   "main",
 				},
 			},
 		},
@@ -484,6 +488,7 @@ func TestDeleteEnvironment_Authorized(t *testing.T) {
 				Source: &pb.EnvironmentSource{
 					Provider: "github",
 					Project:  "divergedev/diverge",
+					Branch:   "main",
 				},
 			},
 		},
@@ -619,6 +624,7 @@ func TestMacaroonCapabilityToken_Integration(t *testing.T) {
 	require.NoError(t, err)
 	rawToken, err := capToken.Serialize()
 	require.NoError(t, err)
+	require.NoError(t, tokenStore.SaveToken(ctx, "task-alpha", nsA, rawToken))
 
 	macaroonTaskClient := getTaskClient(string(rawToken))
 	macaroonEnvClient := getEnvClient(string(rawToken))

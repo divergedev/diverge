@@ -196,7 +196,13 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	case "", v1alpha1.AgentTaskPhasePending:
 		logger.Info("Provisioning sandbox for AgentTask", "task", task.Name)
 
-		r.mintAndSaveToken(ctx, task)
+		if err := r.mintAndSaveToken(ctx, task); err != nil {
+			patch := client.MergeFrom(task.DeepCopy())
+			task.Status.Phase = v1alpha1.AgentTaskPhasePending
+			task.Status.Message = fmt.Sprintf("Token provisioning failed (retrying): %v", err)
+			_ = r.Status().Patch(ctx, task, patch)
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, err
+		}
 
 		if r.LifecycleHook != nil {
 			if err := r.LifecycleHook.PreProvision(ctx, task); err != nil {
@@ -327,7 +333,9 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			oldPhase := task.Status.Phase
 			if task.Status.SandboxPodName != "" {
 				// Re-mint capability token with updated budget/token limits and fresh expiry
-				r.mintAndSaveToken(ctx, task)
+				if err := r.mintAndSaveToken(ctx, task); err != nil {
+					return ctrl.Result{}, err
+				}
 				task.Status.Phase = v1alpha1.AgentTaskPhaseActive
 				task.Status.Message = "Task resumed and active"
 			} else {
@@ -369,9 +377,9 @@ func (r *AgentTaskReconciler) checkBudgetOrIterationLimit(task *v1alpha1.AgentTa
 	return false, ""
 }
 
-func (r *AgentTaskReconciler) mintAndSaveToken(ctx context.Context, task *v1alpha1.AgentTask) {
+func (r *AgentTaskReconciler) mintAndSaveToken(ctx context.Context, task *v1alpha1.AgentTask) error {
 	if r.TokenMinter == nil {
-		return
+		return nil
 	}
 	logger := log.FromContext(ctx).WithValues("agenttask", client.ObjectKeyFromObject(task))
 	timeoutSec := task.Spec.Sandbox.TimeoutSeconds
@@ -419,7 +427,7 @@ func (r *AgentTaskReconciler) mintAndSaveToken(ctx context.Context, task *v1alph
 				Timestamp: time.Now(),
 			})
 		}
-		return
+		return fmt.Errorf("mint task token: %w", err)
 	}
 
 	tokBytes, err := tok.Serialize()
@@ -436,7 +444,7 @@ func (r *AgentTaskReconciler) mintAndSaveToken(ctx context.Context, task *v1alph
 				Timestamp: time.Now(),
 			})
 		}
-		return
+		return fmt.Errorf("serialize task token: %w", err)
 	}
 
 	store := r.resolveTokenStore()
@@ -457,6 +465,10 @@ func (r *AgentTaskReconciler) mintAndSaveToken(ctx context.Context, task *v1alph
 			Timestamp: time.Now(),
 		})
 	}
+	if saveErr != nil {
+		return fmt.Errorf("persist task token: %w", saveErr)
+	}
+	return nil
 }
 
 func (r *AgentTaskReconciler) revokeToken(ctx context.Context, task *v1alpha1.AgentTask, reason string) {

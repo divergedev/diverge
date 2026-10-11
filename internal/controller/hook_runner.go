@@ -56,6 +56,7 @@ func buildJob(cfg HookJobConfig) *batchv1.Job {
 	}
 
 	nonRoot := true
+	runAsUser := int64(65534)
 	noPrivEsc := false
 	readOnly := true
 
@@ -77,6 +78,7 @@ func buildJob(cfg HookJobConfig) *batchv1.Job {
 					RestartPolicy: corev1.RestartPolicyNever,
 					SecurityContext: &corev1.PodSecurityContext{
 						RunAsNonRoot: &nonRoot,
+						RunAsUser:    &runAsUser,
 						SeccompProfile: &corev1.SeccompProfile{
 							Type: corev1.SeccompProfileTypeRuntimeDefault,
 						},
@@ -102,6 +104,7 @@ func buildJob(cfg HookJobConfig) *batchv1.Job {
 								AllowPrivilegeEscalation: &noPrivEsc,
 								ReadOnlyRootFilesystem:   &readOnly,
 								RunAsNonRoot:             &nonRoot,
+								RunAsUser:                &runAsUser,
 								Capabilities: &corev1.Capabilities{
 									Drop: []corev1.Capability{"ALL"},
 								},

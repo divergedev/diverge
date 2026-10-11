@@ -50,14 +50,28 @@ func (r *EnvironmentReconciler) runMigrationJob(ctx context.Context, env *diverg
 	logger := log.FromContext(ctx)
 	mjSpec := env.Spec.Database.MigrationJob
 
-	if dbResult == nil || dbResult.DSN == "" {
+	if dbResult == nil || (dbResult.DSN == "" && env.Spec.Database.Mode != "shared") {
 		return fmt.Errorf("migration job requires a provisioned database with DSN")
 	}
 
-	// 1. Create DSN Secret
-	secretName, err := createDSNSecret(ctx, r.Client, env.Name, env.Namespace, dbResult.DSN, env)
-	if err != nil {
-		return fmt.Errorf("failed to create DSN secret for migration: %w", err)
+	var envVars []corev1.EnvVar
+	if dbResult.DSN != "" {
+		// 1. Create DSN Secret
+		secretName, err := createDSNSecret(ctx, r.Client, env.Name, env.Namespace, dbResult.DSN, env)
+		if err != nil {
+			return fmt.Errorf("failed to create DSN secret for migration: %w", err)
+		}
+		envVars = append(envVars, corev1.EnvVar{
+			Name: "DATABASE_URL",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: secretName,
+					},
+					Key: "url",
+				},
+			},
+		})
 	}
 
 	hashInput := mjSpec.Image + strings.Join(mjSpec.Args, "")
@@ -80,19 +94,7 @@ func (r *EnvironmentReconciler) runMigrationJob(ctx context.Context, env *diverg
 			labelHookType:    hookTypeMigration,
 			labelEnvironment: env.Name,
 		},
-		EnvVars: []corev1.EnvVar{
-			{
-				Name: "DATABASE_URL",
-				ValueFrom: &corev1.EnvVarSource{
-					SecretKeyRef: &corev1.SecretKeySelector{
-						LocalObjectReference: corev1.LocalObjectReference{
-							Name: secretName,
-						},
-						Key: "url",
-					},
-				},
-			},
-		},
+		EnvVars: envVars,
 	}
 
 	for _, ref := range mjSpec.EnvFrom {
@@ -113,7 +115,7 @@ func (r *EnvironmentReconciler) runMigrationJob(ctx context.Context, env *diverg
 
 	// Create or get existing Job
 	var existingJob batchv1.Job
-	err = r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: env.Namespace}, &existingJob)
+	err := r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: env.Namespace}, &existingJob)
 	if err != nil {
 		if client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("failed to get migration job: %w", err)

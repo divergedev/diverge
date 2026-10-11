@@ -3,6 +3,8 @@ package auth
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -59,7 +61,7 @@ func (p *MacaroonAuthProvider) Authenticate(ctx context.Context, token string) (
 		return nil, err
 	}
 
-	_, claims, err := p.provider.VerifyAndExtract(ctx, raw)
+	mac, claims, err := p.provider.VerifyAndExtract(ctx, raw)
 	if err != nil {
 		return nil, fmt.Errorf("macaroon verification failed: %w", err)
 	}
@@ -69,8 +71,17 @@ func (p *MacaroonAuthProvider) Authenticate(ctx context.Context, token string) (
 		ns = "default"
 	}
 
-	if p.store != nil && p.store.IsRevoked(ctx, claims.TaskID, ns) {
-		return nil, pkgauth.ErrTokenRevoked
+	if p.store != nil {
+		storedRaw, err := p.store.GetToken(ctx, claims.TaskID, ns)
+		if err != nil {
+			if errors.Is(err, pkgauth.ErrTokenRevoked) || errors.Is(err, pkgauth.ErrTokenNotFound) {
+				return nil, pkgauth.ErrTokenRevoked
+			}
+			return nil, fmt.Errorf("verify stored token: %w", err)
+		}
+		if !matchesStoredRootToken(mac, storedRaw) {
+			return nil, pkgauth.ErrTokenRevoked
+		}
 	}
 	if p.k8s != nil {
 		var task v1alpha1.AgentTask
@@ -102,6 +113,35 @@ func (p *MacaroonAuthProvider) Authenticate(ctx context.Context, token string) (
 			ExtraKeyAllowedTools: allowedTools,
 		},
 	}, nil
+}
+
+// matchesStoredRootToken verifies that the presented Macaroon is either the current stored
+// root token or a valid attenuation derived from it (sharing the exact root caveat prefix,
+// including its cryptographic nonce).
+func matchesStoredRootToken(presented *pkgauth.Macaroon, storedRaw []byte) bool {
+	if presented == nil {
+		return false
+	}
+	decodedStored, err := decodeMacaroonToken(string(storedRaw))
+	if err != nil {
+		return false
+	}
+	var stored pkgauth.Macaroon
+	if err := json.Unmarshal(decodedStored, &stored); err != nil {
+		return false
+	}
+	if stored.TokenID == "" || presented.TokenID != stored.TokenID {
+		return false
+	}
+	if len(presented.CaveatSeq) < len(stored.CaveatSeq) {
+		return false
+	}
+	for i, c := range stored.CaveatSeq {
+		if presented.CaveatSeq[i] != c {
+			return false
+		}
+	}
+	return true
 }
 
 func decodeMacaroonToken(token string) ([]byte, error) {

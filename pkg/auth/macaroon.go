@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -226,6 +227,8 @@ func (p *MacaroonProvider) VerifyAndExtract(_ context.Context, raw []byte) (*Mac
 	claims := Claims{TaskID: mac.TokenID}
 	hasTaskID := false
 	hasNamespace := false
+	hasMaxCostUSD := false
+	hasMaxTokens := false
 
 	for i, c := range mac.CaveatSeq {
 		sig = computeHMAC(sig, serializeCaveatCanonical(c))
@@ -332,8 +335,12 @@ func (p *MacaroonProvider) VerifyAndExtract(_ context.Context, raw []byte) (*Mac
 			if err != nil {
 				return nil, Claims{}, ErrMalformedToken
 			}
-			if claims.MaxCostUSD == 0 || maxLimit < claims.MaxCostUSD {
+			if math.IsNaN(maxLimit) || math.IsInf(maxLimit, 0) || maxLimit <= 0 {
+				return nil, Claims{}, fmt.Errorf("%w: invalid non-positive max_cost_usd caveat %q", ErrCaveatFailed, c.Value)
+			}
+			if !hasMaxCostUSD || maxLimit < claims.MaxCostUSD {
 				claims.MaxCostUSD = maxLimit
+				hasMaxCostUSD = true
 			}
 		case "max_tokens":
 			if c.Op != OpLessThan {
@@ -343,8 +350,12 @@ func (p *MacaroonProvider) VerifyAndExtract(_ context.Context, raw []byte) (*Mac
 			if err != nil {
 				return nil, Claims{}, ErrMalformedToken
 			}
-			if claims.MaxTokens == 0 || maxTokens < claims.MaxTokens {
+			if maxTokens <= 0 {
+				return nil, Claims{}, fmt.Errorf("%w: invalid non-positive max_tokens caveat %q", ErrCaveatFailed, c.Value)
+			}
+			if !hasMaxTokens || maxTokens < claims.MaxTokens {
 				claims.MaxTokens = maxTokens
+				hasMaxTokens = true
 			}
 		case "nonce":
 			if c.Op != OpEqual || c.Value == "" {
@@ -455,6 +466,9 @@ func evaluateCaveat(c Caveat, req Claims) error {
 		if err != nil {
 			return ErrMalformedToken
 		}
+		if math.IsNaN(maxLimit) || math.IsInf(maxLimit, 0) || maxLimit <= 0 {
+			return fmt.Errorf("%w: invalid non-positive max_cost_usd caveat %q", ErrCaveatFailed, c.Value)
+		}
 		if req.MaxCostUSD > maxLimit {
 			return fmt.Errorf("%w: cost %.2f exceeds max limit %.2f", ErrCaveatFailed, req.MaxCostUSD, maxLimit)
 		}
@@ -465,6 +479,9 @@ func evaluateCaveat(c Caveat, req Claims) error {
 		maxTokens, err := strconv.ParseInt(c.Value, 10, 64)
 		if err != nil {
 			return ErrMalformedToken
+		}
+		if maxTokens <= 0 {
+			return fmt.Errorf("%w: invalid non-positive max_tokens caveat %q", ErrCaveatFailed, c.Value)
 		}
 		if req.TokensConsumed > maxTokens {
 			return fmt.Errorf("%w: tokens consumed %d exceeds max limit %d", ErrCaveatFailed, req.TokensConsumed, maxTokens)

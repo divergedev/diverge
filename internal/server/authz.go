@@ -54,11 +54,20 @@ func candidateToolsForAction(verb, resource string) []string {
 		case "list", "watch":
 			return []string{"diverge_list_environments", "diverge_watch_environments"}
 		case "create":
-			return []string{"diverge_create_environment", "diverge_retry_hook"}
+			return []string{"diverge_create_environment"}
 		case "update":
 			return []string{"diverge_update_environment", "diverge_extend_ttl"}
+		case "retry-hook":
+			return []string{"diverge_retry_hook"}
 		case "delete":
 			return []string{"diverge_delete_environment"}
+		}
+	case "jobs":
+		switch verb {
+		case "get", "list", "watch":
+			return []string{"diverge_list_hook_jobs", "diverge_fetch_errors"}
+		case "create", "delete", "retry-hook":
+			return []string{"diverge_retry_hook"}
 		}
 	case "previewgroups":
 		switch verb {
@@ -219,6 +228,23 @@ func AuthorizeAction(ctx context.Context, k8sClient kubernetes.Interface, auditL
 		Group:     v1alpha1.GroupVersion.Group,
 		Resource:  resource,
 	}, "permission denied")
+}
+
+// AuthorizeRetryHook checks authorization for retrying a hook Job. For Macaroon capability tokens,
+// it checks specifically for the diverge_retry_hook tool capability in the bound namespace; for
+// Kubernetes RBAC principals, it requires both jobs/create and environments/update permissions.
+func AuthorizeRetryHook(ctx context.Context, k8sClient kubernetes.Interface, auditLogger *AuditLogger, namespace string) error {
+	user, ok := auth.UserInfoFromContext(ctx)
+	if !ok {
+		return connect.NewError(connect.CodeUnauthenticated, errors.New("not authenticated"))
+	}
+	if isMacaroonUser(user) {
+		return authorizeMacaroon(ctx, auditLogger, user, "retry-hook", namespace, "environments", "permission denied")
+	}
+	if err := AuthorizeAction(ctx, k8sClient, auditLogger, "create", namespace, "jobs"); err != nil {
+		return err
+	}
+	return AuthorizeAction(ctx, k8sClient, auditLogger, "update", namespace, "environments")
 }
 
 // AuthorizePodLogs performs a SubjectAccessReview for pods/log access.

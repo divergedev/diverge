@@ -4,7 +4,9 @@ package e2e
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +22,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
+
+func childEnvName(groupName, serviceName string) string {
+	raw := strings.ToLower(fmt.Sprintf("pg-%s-%s", groupName, serviceName))
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(groupName+"/"+serviceName)))[:8]
+	if len(raw) <= 63-9 {
+		return raw + "-" + hash
+	}
+	return raw[:63-9] + "-" + hash
+}
 
 // Scenario C: Teardown cleanup
 func TestEnvironment_CreateAndDelete(t *testing.T) {
@@ -159,8 +170,8 @@ func TestPreviewGroupLifecycle(t *testing.T) {
 
 	if f.ControllerRunning(ctx) {
 		// Assert child Environments are created and transition to ServicesReady
-		envNameA := fmt.Sprintf("%s-%s", pg.Name, "svc-a")
-		envNameB := fmt.Sprintf("%s-%s", pg.Name, "svc-b")
+		envNameA := childEnvName(pg.Name, "svc-a")
+		envNameB := childEnvName(pg.Name, "svc-b")
 
 		err = f.WaitForCondition(ctx, envNameA, "ServicesReady", metav1.ConditionTrue, defaultTimeout)
 		require.NoError(t, err, "Child Environment svc-a should reach ServicesReady")
@@ -220,7 +231,7 @@ func TestMultiServicePreviewGroup(t *testing.T) {
 	if f.ControllerRunning(ctx) {
 		// Assert each gets HTTPRoute and check routing header propagation
 		for _, svc := range pg.Spec.Services {
-			envName := fmt.Sprintf("%s-%s", pg.Name, svc.Name)
+			envName := childEnvName(pg.Name, svc.Name)
 			err = f.WaitForCondition(ctx, envName, "ServicesReady", metav1.ConditionTrue, defaultTimeout)
 			require.NoError(t, err, fmt.Sprintf("Child Environment %s should reach ServicesReady", svc.Name))
 
@@ -245,6 +256,9 @@ func TestMultiServicePreviewGroup(t *testing.T) {
 
 		err = f.Client.Delete(ctx, pg)
 		require.NoError(t, err, "Failed to delete PreviewGroup")
+		for _, svc := range pg.Spec.Services {
+			_ = f.WaitForEnvironmentDeleted(ctx, childEnvName(pg.Name, svc.Name), defaultTimeout)
+		}
 	} else {
 		_ = f.Client.Delete(ctx, pg)
 	}

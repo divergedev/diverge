@@ -69,12 +69,23 @@ test-all: test test-web test-sdk-node test-sdk-python ## Run all test suites (Go
 
 .PHONY: e2e-setup e2e-run e2e-teardown e2e
 
-e2e-setup: ## Create Kind cluster and install CRDs
+e2e-setup: ## Create Kind cluster, install CRDs, and deploy controller
 	kind get clusters | grep -q diverge-e2e || kind create cluster --name diverge-e2e --config test/e2e/kind-config.yaml
 	$(MAKE) docker-build
 	kind load docker-image divergedev/diverge:latest --name diverge-e2e
+	kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/experimental-install.yaml --context kind-diverge-e2e
 	kubectl apply -f config/crd/bases/ --context kind-diverge-e2e
-	kubectl -n diverge-system wait --for=condition=available deployment/diverge-controller-manager --timeout=60s --context kind-diverge-e2e || true
+	kubectl create namespace diverge-system --dry-run=client -o yaml | kubectl apply --context kind-diverge-e2e -f -
+	openssl req -x509 -newkey rsa:2048 -nodes -keyout /tmp/diverge-e2e-tls.key -out /tmp/diverge-e2e-tls.crt -days 1 -subj "/CN=diverge-webhook.diverge-system.svc" 2>/dev/null
+	kubectl -n diverge-system create secret tls diverge-webhook-tls --cert=/tmp/diverge-e2e-tls.crt --key=/tmp/diverge-e2e-tls.key --dry-run=client -o yaml | kubectl apply --context kind-diverge-e2e -f -
+	rm -f /tmp/diverge-e2e-tls.key /tmp/diverge-e2e-tls.crt
+	helm upgrade --install diverge charts/diverge --namespace diverge-system \
+		--set image.repository=divergedev/diverge \
+		--set image.tag=latest \
+		--set image.pullPolicy=Never \
+		--set sandbox.provider=noop \
+		--kube-context kind-diverge-e2e
+	kubectl -n diverge-system wait --for=condition=available deployment/diverge-controller-manager --timeout=120s --context kind-diverge-e2e
 
 e2e-run: ## Run E2E tests
 	go test -tags=e2e -v -count=1 -timeout=10m ./test/e2e/...
