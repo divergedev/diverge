@@ -7,10 +7,14 @@ import { EmptyState } from '@/components/EmptyState'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { isSafeExternalUrl } from '@/lib/utils'
 import { Bot, Plus, Search, ExternalLink, AlertCircle } from 'lucide-react'
 
 const PAGE_SIZE = 25
 
+/**
+ * Dashboard page listing all autonomous AgentTasks with search, pagination, and task creation.
+ */
 export default function AgentTasks() {
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(0)
@@ -92,6 +96,7 @@ export default function AgentTasks() {
             <TableBody>
               {pagedTasks.map((task) => {
                 const phaseLabel = formatAgentTaskPhase(task.status?.phase)
+                const safePrUrl = isSafeExternalUrl(task.status?.prUrl) ? task.status?.prUrl : undefined
                 return (
                   <TableRow key={`${task.namespace}/${task.name}`}>
                     <TableCell>
@@ -114,11 +119,11 @@ export default function AgentTasks() {
                       ${task.status?.costUsd || '0.00'}{task.spec?.budgetUsd ? ` / $${task.spec.budgetUsd}` : ''}
                     </TableCell>
                     <TableCell>
-                      {task.status?.prUrl ? (
+                      {safePrUrl ? (
                         <a
-                          href={task.status.prUrl}
+                          href={safePrUrl}
                           target="_blank"
-                          rel="noreferrer"
+                          rel="noopener noreferrer"
                           className="inline-flex items-center gap-1 text-primary hover:underline text-xs"
                         >
                           PR <ExternalLink className="h-3 w-3" />

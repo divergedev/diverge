@@ -16,6 +16,7 @@ import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
+import { isSafeExternalUrl } from '@/lib/utils'
 import {
   ArrowLeft,
   ExternalLink,
@@ -27,6 +28,9 @@ import {
   CheckCircle,
 } from 'lucide-react'
 
+/**
+ * Detail view for an individual AgentTask with live steering, pause/resume, log streaming, and YAML inspection.
+ */
 export default function AgentTaskDetail() {
   const { namespace = '', name = '' } = useParams()
   const navigate = useNavigate()
@@ -72,7 +76,10 @@ export default function AgentTaskDetail() {
   const phase = task.status?.phase
   const phaseLabel = formatAgentTaskPhase(phase)
   const isPaused = phase === AgentTaskPhase.PAUSED || task.spec?.suspended
+  const isTerminal = phase === AgentTaskPhase.COMPLETED || phase === AgentTaskPhase.FAILED
   const canPause = !isPaused && (phase === AgentTaskPhase.ACTIVE || phase === AgentTaskPhase.PROVISIONING || phase === AgentTaskPhase.PENDING)
+  const canGuide = !isTerminal && !isPaused
+  const safePrUrl = isSafeExternalUrl(task.status?.prUrl) ? task.status?.prUrl : undefined
 
   const handleDelete = async () => {
     if (!confirm(`Delete agent task ${namespace}/${name}?`)) return
@@ -97,15 +104,24 @@ export default function AgentTaskDetail() {
 
   const handleResume = async () => {
     setMutationError(null)
+    const trimmedBump = budgetUsdBump.trim()
+    if (trimmedBump) {
+      const parsedBump = Number(trimmedBump)
+      if (!Number.isFinite(parsedBump) || parsedBump <= 0) {
+        setMutationError('Additional budget USD must be a positive number')
+        setResumeDialogOpen(false)
+        return
+      }
+    }
     try {
       await resumeTask.mutateAsync({
         namespace,
         name,
-        budgetUsdBump: budgetUsdBump.trim() || undefined,
+        budgetUsdBump: trimmedBump || undefined,
       })
       setResumeDialogOpen(false)
       setBudgetUsdBump('')
-      setSuccessMessage(budgetUsdBump.trim() ? `Task resumed (+$${budgetUsdBump.trim()} budget)` : 'Task resumed')
+      setSuccessMessage(trimmedBump ? `Task resumed (+$${trimmedBump} budget)` : 'Task resumed')
     } catch (err) {
       setMutationError(err instanceof Error ? err.message : 'Failed to resume task')
       setResumeDialogOpen(false)
@@ -114,7 +130,7 @@ export default function AgentTaskDetail() {
 
   const handleGuide = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!guidanceMessage.trim()) return
+    if (!guidanceMessage.trim() || !canGuide) return
     setMutationError(null)
     try {
       await guideTask.mutateAsync({
@@ -157,8 +173,8 @@ export default function AgentTaskDetail() {
           <p className="text-muted-foreground">{task.namespace}</p>
         </div>
         <div className="flex items-center gap-2">
-          {task.status?.prUrl && (
-            <a href={task.status.prUrl} target="_blank" rel="noreferrer">
+          {safePrUrl && (
+            <a href={safePrUrl} target="_blank" rel="noopener noreferrer">
               <Button variant="outline" size="sm"><ExternalLink className="h-4 w-4 mr-2" />Open PR</Button>
             </a>
           )}
@@ -184,12 +200,17 @@ export default function AgentTaskDetail() {
           <form onSubmit={handleGuide} className="flex items-center gap-3">
             <Input
               aria-label="Guidance message"
-              placeholder="Send live steering guidance or instructions to the agent..."
+              placeholder={
+                canGuide
+                  ? 'Send live steering guidance or instructions to the agent...'
+                  : 'Task is not active; resume the task to send live guidance'
+              }
               value={guidanceMessage}
               onChange={(e) => setGuidanceMessage(e.target.value)}
+              disabled={!canGuide}
               className="flex-1"
             />
-            <Button type="submit" size="sm" disabled={guideTask.isPending || !guidanceMessage.trim()}>
+            <Button type="submit" size="sm" disabled={!canGuide || guideTask.isPending || !guidanceMessage.trim()}>
               <Send className="h-4 w-4 mr-2" />
               {guideTask.isPending ? 'Sending...' : 'Guide Agent'}
             </Button>

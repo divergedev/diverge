@@ -9,6 +9,9 @@ interface TaskLogEntry {
   message: string
 }
 
+/**
+ * Streams and displays live container logs from an AgentTask sandbox pod.
+ */
 export function TaskLogViewer({ namespace, name, className }: { namespace: string; name: string; className?: string }) {
   const [lines, setLines] = useState<TaskLogEntry[]>([])
   const [follow, setFollow] = useState(true)

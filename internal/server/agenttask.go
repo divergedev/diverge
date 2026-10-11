@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"strconv"
 	"time"
 
@@ -88,6 +89,15 @@ func (s *AgentTaskService) CreateTask(ctx context.Context, req *connect.Request[
 	if msg.Spec.Repository == nil || msg.Spec.Repository.Url == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("repository url is required"))
 	}
+	if msg.Spec.BudgetUsd != "" {
+		budget, err := strconv.ParseFloat(msg.Spec.BudgetUsd, 64)
+		if err != nil || math.IsNaN(budget) || math.IsInf(budget, 0) || budget < 0 {
+			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("budget_usd must be a non-negative number"))
+		}
+	}
+	if msg.Spec.BudgetTokens < 0 {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("budget_tokens must be non-negative"))
+	}
 
 	task := &v1alpha1.AgentTask{
 		ObjectMeta: metav1.ObjectMeta{
@@ -164,26 +174,49 @@ func (s *AgentTaskService) GetTask(ctx context.Context, req *connect.Request[pb.
 	}), nil
 }
 
-// ListTasks returns a list of AgentTasks in a given namespace.
+// ListTasks returns a list of AgentTasks in a given namespace (or across all namespaces when namespace is empty).
 func (s *AgentTaskService) ListTasks(ctx context.Context, req *connect.Request[pb.ListTasksRequest]) (*connect.Response[pb.ListTasksResponse], error) {
 	msg := req.Msg
 	namespace := ""
+	var pageSize int32
+	var pageToken string
 	if msg != nil {
 		namespace = msg.Namespace
+		if msg.Pagination != nil {
+			pageSize = msg.Pagination.PageSize
+			pageToken = msg.Pagination.PageToken
+		}
 	}
-	if namespace == "" {
-		namespace = "default"
+	if namespace != "" {
+		if err := ValidateDNS1123Label(namespace, "namespace"); err != nil {
+			return nil, err
+		}
 	}
-	if err := ValidateDNS1123Label(namespace, "namespace"); err != nil {
-		return nil, err
+	const maxPageTokenLen = 4096
+	if len(pageToken) > maxPageTokenLen {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("page_token exceeds maximum length of %d", maxPageTokenLen))
 	}
 
 	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "list", namespace, "agenttasks"); err != nil {
 		return nil, err
 	}
 
+	opts := []client.ListOption{}
+	if namespace != "" {
+		opts = append(opts, client.InNamespace(namespace))
+	}
+	if pageSize <= 0 {
+		pageSize = 100
+	} else if pageSize > 1000 {
+		pageSize = 1000
+	}
+	opts = append(opts, client.Limit(int64(pageSize)))
+	if pageToken != "" {
+		opts = append(opts, client.Continue(pageToken))
+	}
+
 	taskList := &v1alpha1.AgentTaskList{}
-	if err := s.client.List(ctx, taskList, client.InNamespace(namespace)); err != nil {
+	if err := s.client.List(ctx, taskList, opts...); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("list agent tasks: %w", err))
 	}
 
@@ -194,6 +227,9 @@ func (s *AgentTaskService) ListTasks(ctx context.Context, req *connect.Request[p
 
 	return connect.NewResponse(&pb.ListTasksResponse{
 		Tasks: protoTasks,
+		Pagination: &pb.PaginationResponse{
+			NextPageToken: taskList.Continue,
+		},
 	}), nil
 }
 
@@ -280,6 +316,17 @@ func (s *AgentTaskService) ResumeTask(ctx context.Context, req *connect.Request[
 	if err := ValidateDNS1123Label(namespace, "namespace"); err != nil {
 		return nil, err
 	}
+	if msg.BudgetTokensBump < 0 {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("budget_tokens_bump must be non-negative"))
+	}
+	var bumpUSD float64
+	if msg.BudgetUsdBump != "" {
+		var err error
+		bumpUSD, err = strconv.ParseFloat(msg.BudgetUsdBump, 64)
+		if err != nil || math.IsNaN(bumpUSD) || math.IsInf(bumpUSD, 0) || bumpUSD <= 0 {
+			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("budget_usd_bump must be a positive number"))
+		}
+	}
 
 	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "update", namespace, "agenttasks"); err != nil {
 		return nil, err
@@ -295,16 +342,11 @@ func (s *AgentTaskService) ResumeTask(ctx context.Context, req *connect.Request[
 
 	task.Spec.Suspended = false
 	if msg.BudgetUsdBump != "" {
-		if task.Spec.BudgetUSD == "" {
-			task.Spec.BudgetUSD = msg.BudgetUsdBump
+		existing, err := strconv.ParseFloat(task.Spec.BudgetUSD, 64)
+		if err == nil && !math.IsNaN(existing) && !math.IsInf(existing, 0) {
+			task.Spec.BudgetUSD = fmt.Sprintf("%.2f", existing+bumpUSD)
 		} else {
-			existing, err1 := strconv.ParseFloat(task.Spec.BudgetUSD, 64)
-			bump, err2 := strconv.ParseFloat(msg.BudgetUsdBump, 64)
-			if err1 == nil && err2 == nil {
-				task.Spec.BudgetUSD = fmt.Sprintf("%.2f", existing+bump)
-			} else {
-				task.Spec.BudgetUSD = msg.BudgetUsdBump
-			}
+			task.Spec.BudgetUSD = fmt.Sprintf("%.2f", bumpUSD)
 		}
 	}
 	if msg.BudgetTokensBump > 0 {
@@ -344,6 +386,10 @@ func (s *AgentTaskService) GuideTask(ctx context.Context, req *connect.Request[p
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("agent task %q not found", msg.Name))
 		}
 		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	if task.Status.Phase == v1alpha1.AgentTaskPhaseCompleted || task.Status.Phase == v1alpha1.AgentTaskPhaseFailed {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("cannot guide task in terminal phase %s", task.Status.Phase))
 	}
 
 	if task.Annotations == nil {

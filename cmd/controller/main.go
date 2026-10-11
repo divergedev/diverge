@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"flag"
 	"fmt"
 	"net/http"
@@ -33,8 +34,10 @@ import (
 	"github.com/divergedev/diverge/internal/notifier"
 	"github.com/divergedev/diverge/internal/observability"
 	"github.com/divergedev/diverge/internal/routing"
+	_ "github.com/divergedev/diverge/internal/sandbox"
 	divtesting "github.com/divergedev/diverge/internal/testing"
 	"github.com/divergedev/diverge/internal/webhook"
+	pkgauth "github.com/divergedev/diverge/pkg/auth"
 	pkgdb "github.com/divergedev/diverge/pkg/database"
 	pkgfeatures "github.com/divergedev/diverge/pkg/features"
 	"github.com/divergedev/diverge/pkg/registry"
@@ -297,10 +300,22 @@ func main() {
 	}
 
 	if enableAgentSandbox {
+		var macaroonKey []byte
+		if rawKey := os.Getenv("DIVERGE_MACAROON_ROOT_KEY"); rawKey != "" {
+			macaroonKey = []byte(rawKey)
+		} else {
+			macaroonKey = make([]byte, 32)
+			if _, err := rand.Read(macaroonKey); err != nil {
+				setupLog.Error(err, "failed to generate macaroon root key")
+				os.Exit(1)
+			}
+			setupLog.Info("generated ephemeral macaroon root key; set DIVERGE_MACAROON_ROOT_KEY for persistent token verification")
+		}
 		if err = (&controller.AgentTaskReconciler{
 			Client:          mgr.GetClient(),
 			Scheme:          mgr.GetScheme(),
 			SandboxRegistry: pkgsandbox.Providers,
+			TokenMinter:     pkgauth.NewMacaroonProvider(macaroonKey),
 			FeatureGate:     &controller.StaticFeatureGate{Enabled: true},
 			DefaultProvider: sandboxProvider,
 		}).SetupWithManager(mgr); err != nil {
