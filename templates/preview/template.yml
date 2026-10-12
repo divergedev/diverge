@@ -1,0 +1,196 @@
+spec:
+  inputs:
+    diverge_services:
+      description: "Comma-separated list of services to deploy (leave empty to auto-detect with diverge diff)"
+      type: string
+      default: ""
+    diverge_header_key:
+      description: "HTTP header key to route preview traffic"
+      type: string
+      default: "x-diverge-env"
+    diverge_ttl:
+      description: "TTL for preview environments (e.g. 4h)"
+      type: string
+      default: "4h"
+    diverge_registry:
+      description: "Container registry prefix for preview images"
+      type: string
+      default: ""
+    diverge_namespace:
+      description: "Default Kubernetes namespace for preview workloads"
+      type: string
+      default: "default"
+    diverge_base_url:
+      description: "Optional staging/gateway URL to construct a shareable ?_diverge_env= preview URL"
+      type: string
+      default: ""
+    diverge_kubectl_version:
+      description: "Version of kubectl to install"
+      type: string
+      default: "v1.31.0"
+---
+diverge:preview:
+  stage: deploy
+  image:
+    name: alpine:3.20
+    entrypoint: [""]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_EVENT_TYPE != "merge_train"
+  environment:
+    name: preview/mr-${CI_MERGE_REQUEST_IID}
+    on_stop: diverge:cleanup
+    auto_stop_in: $[[ inputs.diverge_ttl ]]
+  variables:
+    DIVERGE_SERVICES: $[[ inputs.diverge_services ]]
+    DIVERGE_HEADER_KEY: $[[ inputs.diverge_header_key ]]
+    DIVERGE_TTL: $[[ inputs.diverge_ttl ]]
+    DIVERGE_REGISTRY: $[[ inputs.diverge_registry ]]
+    DIVERGE_NAMESPACE: $[[ inputs.diverge_namespace ]]
+    DIVERGE_BASE_URL: $[[ inputs.diverge_base_url ]]
+  artifacts:
+    reports:
+      dotenv: preview.env
+    paths:
+      - preview.env
+  script:
+    - |
+      set -eu
+      apk add --no-cache bash curl git jq ca-certificates >/dev/null 2>&1 || true
+      PREVIEW_NAME="mr-${CI_MERGE_REQUEST_IID}"
+      HEADER_VALUE="${PREVIEW_NAME}"
+      ROUTING_HEADER_B64="$(printf '{"%s":"%s"}' "${DIVERGE_HEADER_KEY}" "${HEADER_VALUE}" | base64 | tr -d '\n')"
+
+      if [ -z "${KUBECONFIG:-}" ] && [ -z "${KUBECONFIG_CONTENT:-}" ]; then
+        echo "Error: KUBECONFIG or KUBECONFIG_CONTENT must be set" >&2
+        exit 1
+      fi
+      if [ -n "${KUBECONFIG_CONTENT:-}" ]; then
+        KUBE_TMP="$(mktemp)"
+        chmod 600 "$KUBE_TMP"
+        echo "$KUBECONFIG_CONTENT" | base64 -d > "$KUBE_TMP"
+        export KUBECONFIG="$KUBE_TMP"
+        trap 'rm -f "$KUBE_TMP"' EXIT
+      fi
+
+      if ! command -v kubectl >/dev/null 2>&1; then
+        curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/$[[ inputs.diverge_kubectl_version ]]/bin/linux/amd64/kubectl"
+        chmod +x /usr/local/bin/kubectl
+      fi
+
+      if [ -z "$DIVERGE_SERVICES" ] && [ -f ".diverge.yaml" ]; then
+        if ! command -v diverge >/dev/null 2>&1; then
+          curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/main/install.sh | sh
+        fi
+        TARGET_BRANCH="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-main}"
+        git fetch --depth=50 origin "${TARGET_BRANCH}"
+        DIFF_JSON="$(diverge diff --base "origin/${TARGET_BRANCH}" --output json)"
+        DIVERGE_SERVICES="$(printf '%s' "$DIFF_JSON" | jq -r '.services // [] | join(",")')"
+      fi
+
+      if [ -z "$DIVERGE_SERVICES" ]; then
+        echo "No changed services detected; skipping preview deployment."
+        {
+          echo "DIVERGE_PREVIEW_NAME=${PREVIEW_NAME}"
+          echo "DIVERGE_CHANGED_SERVICES_CSV="
+          echo "DIVERGE_SKIPPED=true"
+          echo "DIVERGE_HEADER_KEY=${DIVERGE_HEADER_KEY}"
+          echo "DIVERGE_HEADER_VALUE=${HEADER_VALUE}"
+          echo "DIVERGE_ROUTING_HEADER=${DIVERGE_HEADER_KEY}: ${HEADER_VALUE}"
+          echo "DIVERGE_ROUTING_HEADER_B64=${ROUTING_HEADER_B64}"
+          echo "DIVERGE_PREVIEW_URL="
+        } > preview.env
+        exit 0
+      fi
+
+      cat <<EOF > previewgroup.yaml
+      apiVersion: divergedev.com/v1alpha1
+      kind: PreviewGroup
+      metadata:
+        name: ${PREVIEW_NAME}
+      spec:
+        source:
+          provider: gitlab
+          project: ${CI_PROJECT_PATH}
+          mr: ${CI_MERGE_REQUEST_IID}
+          branch: ${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}
+          commitSHA: ${CI_COMMIT_SHA}
+        routing:
+          mode: header
+          headerKey: ${DIVERGE_HEADER_KEY}
+          headerValue: "${HEADER_VALUE}"
+        lifecycle:
+          ttl: "${DIVERGE_TTL}"
+          cleanupOnMerge: true
+        services:
+      EOF
+
+      IMAGE_PREFIX="${DIVERGE_REGISTRY:-$CI_REGISTRY_IMAGE}"
+      IMAGE_TAG="${CI_COMMIT_SHORT_SHA:-$PREVIEW_NAME}"
+      OLD_IFS="$IFS"
+      IFS=','
+      set -f
+      for svc in $DIVERGE_SERVICES; do
+        svc="$(printf '%s' "$svc" | tr -d '[:space:]')"
+        [ -z "$svc" ] && continue
+        cat <<EOF >> previewgroup.yaml
+          - name: ${svc}
+            mode: image
+            namespace: ${DIVERGE_NAMESPACE}
+            image: ${IMAGE_PREFIX%/}/${svc}:${IMAGE_TAG}
+      EOF
+      done
+      set +f
+      IFS="$OLD_IFS"
+
+      kubectl apply -f previewgroup.yaml
+
+      PREVIEW_URL=""
+      if [ -n "${DIVERGE_BASE_URL:-}" ]; then
+        PREVIEW_URL="${DIVERGE_BASE_URL%/}/?_diverge_env=${HEADER_VALUE}"
+      fi
+      {
+        echo "DIVERGE_PREVIEW_NAME=${PREVIEW_NAME}"
+        echo "DIVERGE_CHANGED_SERVICES_CSV=${DIVERGE_SERVICES}"
+        echo "DIVERGE_SKIPPED=false"
+        echo "DIVERGE_HEADER_KEY=${DIVERGE_HEADER_KEY}"
+        echo "DIVERGE_HEADER_VALUE=${HEADER_VALUE}"
+        echo "DIVERGE_ROUTING_HEADER=${DIVERGE_HEADER_KEY}: ${HEADER_VALUE}"
+        echo "DIVERGE_ROUTING_HEADER_B64=${ROUTING_HEADER_B64}"
+        echo "DIVERGE_PREVIEW_URL=${PREVIEW_URL}"
+      } > preview.env
+
+diverge:cleanup:
+  stage: deploy
+  image:
+    name: alpine:3.20
+    entrypoint: [""]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_EVENT_TYPE != "merge_train"
+      when: manual
+      allow_failure: true
+  environment:
+    name: preview/mr-${CI_MERGE_REQUEST_IID}
+    action: stop
+  variables:
+    DIVERGE_NAMESPACE: $[[ inputs.diverge_namespace ]]
+  script:
+    - |
+      set -eu
+      apk add --no-cache curl ca-certificates >/dev/null 2>&1 || true
+      if [ -z "${KUBECONFIG:-}" ] && [ -z "${KUBECONFIG_CONTENT:-}" ]; then
+        echo "Error: KUBECONFIG or KUBECONFIG_CONTENT must be set" >&2
+        exit 1
+      fi
+      if [ -n "${KUBECONFIG_CONTENT:-}" ]; then
+        KUBE_TMP="$(mktemp)"
+        chmod 600 "$KUBE_TMP"
+        echo "$KUBECONFIG_CONTENT" | base64 -d > "$KUBE_TMP"
+        export KUBECONFIG="$KUBE_TMP"
+        trap 'rm -f "$KUBE_TMP"' EXIT
+      fi
+      if ! command -v kubectl >/dev/null 2>&1; then
+        curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/$[[ inputs.diverge_kubectl_version ]]/bin/linux/amd64/kubectl"
+        chmod +x /usr/local/bin/kubectl
+      fi
+      kubectl delete previewgroup "mr-${CI_MERGE_REQUEST_IID}" -n "${DIVERGE_NAMESPACE}" --ignore-not-found
+      kubectl delete previewgroup "preview-mr-${CI_MERGE_REQUEST_IID}" -n "${DIVERGE_NAMESPACE}" --ignore-not-found

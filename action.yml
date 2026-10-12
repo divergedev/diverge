@@ -1,0 +1,145 @@
+name: "Diverge Preview Environment"
+description: "Validate .diverge.yaml, detect changed microservices, deploy delta PreviewGroups, and tear down previews"
+author: "Diverge"
+branding:
+  icon: "git-branch"
+  color: "purple"
+
+inputs:
+  action:
+    description: "Action to execute: validate, diff, deploy, or teardown"
+    required: false
+    default: "deploy"
+  version:
+    description: "Diverge CLI version to install (e.g. latest, v0.3.2, or installed to skip download)"
+    required: false
+    default: "latest"
+  config:
+    description: "Path to .diverge.yaml configuration file"
+    required: false
+    default: ".diverge.yaml"
+  kubeconfig:
+    description: "Raw or base64-encoded kubeconfig for the target Kubernetes cluster"
+    required: false
+    default: ""
+  namespace:
+    description: "Default Kubernetes namespace for preview resources"
+    required: false
+    default: "default"
+  preview-name:
+    description: "Explicit PreviewGroup name override (default: pr-<number> or branch slug)"
+    required: false
+    default: ""
+  base-ref:
+    description: "Git base reference for diverge diff"
+    required: false
+    default: ""
+  branch:
+    description: "Source branch name override"
+    required: false
+    default: ""
+  pr-number:
+    description: "Pull request number override"
+    required: false
+    default: ""
+  services:
+    description: "Explicit comma- or newline-separated service specs (overrides diverge diff)"
+    required: false
+    default: ""
+  image-registry:
+    description: "Container registry prefix for changed service images (e.g. ghcr.io/acme)"
+    required: false
+    default: ""
+  image-tag:
+    description: "Image tag for changed services (defaults to preview-name)"
+    required: false
+    default: ""
+  header-key:
+    description: "HTTP routing header key"
+    required: false
+    default: "x-diverge-env"
+  header-value:
+    description: "HTTP routing header value (defaults to preview-name)"
+    required: false
+    default: ""
+  ttl:
+    description: "Preview environment time-to-live duration (e.g. 4h, 24h)"
+    required: false
+    default: "4h"
+  base-url:
+    description: "Optional staging/gateway base URL to construct a shareable ?_diverge_env= preview URL"
+    required: false
+    default: ""
+  wait:
+    description: "Wait for PreviewGroup Ready condition before completing"
+    required: false
+    default: "false"
+  wait-timeout:
+    description: "Timeout when waiting for PreviewGroup readiness"
+    required: false
+    default: "180s"
+  dry-run:
+    description: "Render PreviewGroup manifest without applying to Kubernetes"
+    required: false
+    default: "false"
+
+outputs:
+  preview-name:
+    description: "Resolved PreviewGroup name (e.g. pr-42)"
+    value: ${{ steps.preview.outputs.preview-name }}
+  changed-services:
+    description: "JSON array of changed service names"
+    value: ${{ steps.preview.outputs.changed-services }}
+  changed-count:
+    description: "Number of changed services detected"
+    value: ${{ steps.preview.outputs.changed-count }}
+  skipped:
+    description: "Whether deployment was skipped because no services changed"
+    value: ${{ steps.preview.outputs.skipped }}
+  routing-header:
+    description: "HTTP routing header string (e.g. x-diverge-env: pr-42)"
+    value: ${{ steps.preview.outputs.routing-header }}
+  routing-header-json:
+    description: "JSON object of the routing header for Playwright/Cypress"
+    value: ${{ steps.preview.outputs.routing-header-json }}
+  preview-url:
+    description: "Shareable zero-extension preview URL with ?_diverge_env= query parameter"
+    value: ${{ steps.preview.outputs.preview-url }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install Diverge CLI
+      shell: bash
+      env:
+        DIVERGE_VERSION: ${{ inputs.version }}
+      run: |
+        if [[ "$DIVERGE_VERSION" == "installed" ]]; then
+          echo "Using pre-installed diverge CLI: $(command -v diverge)"
+          exit 0
+        fi
+        VERSION="$DIVERGE_VERSION" sh "${{ github.action_path }}/install.sh"
+
+    - name: Run Diverge Preview Action
+      id: preview
+      shell: bash
+      env:
+        INPUT_ACTION: ${{ inputs.action }}
+        INPUT_CONFIG: ${{ inputs.config }}
+        INPUT_KUBECONFIG: ${{ inputs.kubeconfig }}
+        INPUT_NAMESPACE: ${{ inputs.namespace }}
+        INPUT_PREVIEW_NAME: ${{ inputs.preview-name }}
+        INPUT_BASE_REF: ${{ inputs.base-ref || (github.base_ref && format('origin/{0}', github.base_ref)) || 'origin/main' }}
+        INPUT_BRANCH: ${{ inputs.branch || github.head_ref || github.ref_name }}
+        INPUT_PR_NUMBER: ${{ inputs.pr-number || github.event.pull_request.number || github.event.number }}
+        INPUT_SERVICES: ${{ inputs.services }}
+        INPUT_IMAGE_REGISTRY: ${{ inputs.image-registry }}
+        INPUT_IMAGE_TAG: ${{ inputs.image-tag }}
+        INPUT_HEADER_KEY: ${{ inputs.header-key }}
+        INPUT_HEADER_VALUE: ${{ inputs.header-value }}
+        INPUT_TTL: ${{ inputs.ttl }}
+        INPUT_BASE_URL: ${{ inputs.base-url }}
+        INPUT_WAIT: ${{ inputs.wait }}
+        INPUT_WAIT_TIMEOUT: ${{ inputs.wait-timeout }}
+        INPUT_DRY_RUN: ${{ inputs.dry-run }}
+      run: "${{ github.action_path }}/scripts/ci-preview.sh"
