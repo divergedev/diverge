@@ -223,7 +223,7 @@ func TestKubernetesSecretTokenStore_ConcurrentUpsertAndRevoke(t *testing.T) {
 			defer wg.Done()
 			suffix := strings.Repeat("x", id+1)
 			taskID := "task-concurrent-" + suffix
-			_ = store.SaveToken(ctx, taskID, namespace, []byte("tok-"+suffix))
+			assert.NoError(t, store.SaveToken(ctx, taskID, namespace, []byte("tok-"+suffix)))
 		}(i)
 	}
 	wg.Wait()

@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -23,6 +25,14 @@ var (
 	ErrTokenNotFound = errors.New("token not found")
 	// ErrTokenRevoked is returned when attempting to retrieve or verify a revoked capability token.
 	ErrTokenRevoked = errors.New("token has been revoked")
+
+	// indexRetryBackoff configures conflict retry steps for the shared per-namespace token index Secret.
+	indexRetryBackoff = wait.Backoff{
+		Steps:    25,
+		Duration: 2 * time.Millisecond,
+		Factor:   1.2,
+		Jitter:   0.2,
+	}
 )
 
 const (
@@ -126,6 +136,7 @@ type KubernetesSecretTokenStore struct {
 	client    client.Client
 	scheme    *runtime.Scheme
 	indexOnly bool
+	indexMu   sync.Mutex
 }
 
 var _ TokenStore = (*KubernetesSecretTokenStore)(nil)
@@ -339,7 +350,9 @@ func (s *KubernetesSecretTokenStore) IsRevoked(ctx context.Context, taskID, name
 
 // upsertTokenIndex records or updates a task's active token in the namespace TokenIndexSecretName Secret.
 func (s *KubernetesSecretTokenStore) upsertTokenIndex(ctx context.Context, taskID, namespace string, token []byte) error {
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
+	return retry.RetryOnConflict(indexRetryBackoff, func() error {
 		idx := &corev1.Secret{}
 		err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: TokenIndexSecretName}, idx)
 		if err != nil {
@@ -379,7 +392,9 @@ func (s *KubernetesSecretTokenStore) upsertTokenIndex(ctx context.Context, taskI
 
 // markRevokedInIndex marks a task's token as revoked in the namespace TokenIndexSecretName Secret.
 func (s *KubernetesSecretTokenStore) markRevokedInIndex(ctx context.Context, taskID, namespace string) error {
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
+	return retry.RetryOnConflict(indexRetryBackoff, func() error {
 		idx := &corev1.Secret{}
 		err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: TokenIndexSecretName}, idx)
 		if err != nil {
@@ -399,7 +414,9 @@ func (s *KubernetesSecretTokenStore) markRevokedInIndex(ctx context.Context, tas
 
 // removeFromTokenIndex removes a task's token and revocation state from the namespace TokenIndexSecretName Secret.
 func (s *KubernetesSecretTokenStore) removeFromTokenIndex(ctx context.Context, taskID, namespace string) error {
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
+	return retry.RetryOnConflict(indexRetryBackoff, func() error {
 		idx := &corev1.Secret{}
 		err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: TokenIndexSecretName}, idx)
 		if err != nil {
