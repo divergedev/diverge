@@ -1,6 +1,6 @@
 # Microservices Architecture Example
 
-This example demonstrates how to configure and manage a multi-service architecture with **Diverge v0.8.0**. It showcases static topology modeling, git-based delta change detection, request route simulation, and lightweight preview environments.
+This example demonstrates how to configure and manage a multi-service architecture with **Diverge v0.14.0**. It showcases static topology modeling, git-based delta change detection, request route simulation, and lightweight preview environments.
 
 ---
 
