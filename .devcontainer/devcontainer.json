@@ -15,7 +15,7 @@
       "version": "3.12"
     }
   },
-  "postCreateCommand": "go install sigs.k8s.io/kind@v0.29.0 && go install github.com/bufbuild/buf/cmd/buf@latest && curl -LsSf https://astral.sh/uv/install.sh | sh",
+  "postCreateCommand": "go install sigs.k8s.io/kind@v0.29.0 && go install github.com/bufbuild/buf/cmd/buf@v1.50.0",
   "customizations": {
     "vscode": {
       "extensions": [

@@ -16,19 +16,19 @@ flowchart LR
     Claim -->|Spawns Pod| Pod["Agent Sandbox Pod\n(RuntimeClass: gvisor / kata)"]
     Sec -->|Mounted Read-Only| Pod
     Pod -->|Bearer Macaroon| Srv
-    NP["NetworkPolicy:\ndiverge-agent-sandbox-isolation"] -.->|Blocks 169.254.169.254\n& K8s API 10.96.0.1| Pod
+    NP["NetworkPolicy:\ndiverge-sandbox-isolation"] -.->|Blocks 169.254.169.254\n& K8s API 10.96.0.1| Pod
 ```
 
 ### Key Security Properties
 1. **Attenuated Macaroon Capability Tokens**:
    - Minted by `diverge-controller` using HMAC-SHA256 chained caveats (`task_id`, `namespace`, `repo`, `branch`, `tools`, `models`, `max_cost_usd`, `max_tokens`, `expires`).
-   - Mounted read-only into the sandbox pod at `/var/run/secrets/diverge/token`.
+   - Mounted read-only into the sandbox pod at `/etc/diverge/token/token`.
    - Verified by `diverge-server` against the namespace-scoped index Secret (`diverge-agenttask-tokens`) and live `AgentTask` phase (`Active`).
-2. **Instant Revocation on Pause, Budget Exceeded, or Completion**:
-   - Setting `spec.suspended: true` or exceeding `maxIterations`, `budgetUSD`, or `budgetTokens` transitions the task to `Paused` and marks the token revoked in `diverge-agenttask-tokens`.
+2. **Revocation on Pause, Budget Exceeded, or Completion**:
+   - Setting `spec.suspended: true` or exceeding `maxIterations`, `budgetUSD`, or `budgetTokens` transitions the task to `Paused` and marks the token revoked in `diverge-agenttask-tokens` once reconciled by the controller.
    - Resuming a paused task mints a fresh capability token with updated budget/expiry caveats.
 3. **Defense-in-Depth Network Isolation**:
-   - The default `NetworkPolicy` (`diverge-agent-sandbox-isolation`) denies all ingress to sandbox pods, restricts egress to DNS (53) and HTTPS/HTTP (443/80), and blocks cloud metadata (`169.254.169.254/32`, `fd00:ec2::254/128`) and the in-cluster Kubernetes API (`10.96.0.1/32`).
+   - The default `NetworkPolicy` (`<release>-sandbox-isolation`) denies all ingress to sandbox pods, restricts egress to DNS (53) and HTTPS/SSH (443/22), and blocks cloud metadata (`169.254.169.254/32`, `169.254.0.0/16`) and the in-cluster Kubernetes API (`10.96.0.1/32`).
    - Pod specs set `AutomountServiceAccountToken: false`, `ReadOnlyRootFilesystem: true`, `RunAsNonRoot: true`, and drop `ALL` Linux capabilities.
 
 ---
@@ -46,12 +46,12 @@ kubectl create secret generic diverge-macaroon-root-key \
 2. Install or upgrade the Diverge Helm chart with `sandbox.enabled=true` and `server.enabled=true`:
 
 ```bash
+kubectl apply -f charts/diverge/crds/
 helm upgrade --install diverge charts/diverge \
   --namespace diverge-system --create-namespace \
   --set server.enabled=true \
   --set sandbox.enabled=true \
   --set sandbox.provider=agent-sandbox \
-  --set sandbox.runtimeClass=gvisor \
   --set sandbox.macaroonSecretRef.name=diverge-macaroon-root-key \
   --set sandbox.networkPolicy.enabled=true
 ```
@@ -73,11 +73,11 @@ metadata:
   namespace: default
 spec:
   objective: "Diagnose and fix N+1 query in /api/v1/checkout and verify in a preview environment"
+  draftPR: true
   repository:
     url: https://github.com/myorg/checkout-service
     baseBranch: main
-    targetBranch: fix/checkout-n-plus-1
-    draftPR: true
+    workingBranch: fix/checkout-n-plus-1
   maxIterations: 8
   budgetUSD: "5.00"
   budgetTokens: 200000
@@ -86,15 +86,9 @@ spec:
     - gemini-2.5-pro
   sandbox:
     provider: agent-sandbox
-    runtimeClass: gvisor
-    image: ghcr.io/divergedev/agent-runner:latest
+    templateName: default
+    serviceAccountName: default
     timeoutSeconds: 1800
-    resources:
-      cpu: "2"
-      memory: 4Gi
-  previewTemplate:
-    database:
-      mode: schema
 ```
 
 ---
@@ -102,7 +96,7 @@ spec:
 ## 4. Steering & Pausing Tasks (`Paused` / `Active`)
 
 ### Pause Execution (`spec.suspended: true`)
-Pausing an `AgentTask` immediately revokes its Macaroon token so any in-flight tool calls to `diverge-server` are rejected with `401 Unauthenticated`:
+Once the controller reconciles `spec.suspended: true`, it transitions the `AgentTask` to `Paused` and revokes its Macaroon token so subsequent tool calls to `diverge-server` are rejected with `401 Unauthenticated`:
 
 ```bash
 kubectl patch agenttask fix-checkout-latency --type=merge -p '{"spec":{"suspended":true}}'

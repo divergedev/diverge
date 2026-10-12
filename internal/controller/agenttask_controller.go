@@ -289,6 +289,7 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			if time.Since(task.CreationTimestamp.Time) > time.Duration(task.Spec.Sandbox.TimeoutSeconds)*time.Second {
 				if err := provider.Teardown(ctx, task); err != nil {
 					logger.Error(err, "Failed to teardown timed-out sandbox")
+					_ = r.revokeToken(ctx, task, "sandbox timeout exceeded")
 					return ctrl.Result{RequeueAfter: 5 * time.Second}, err
 				}
 				patch := client.MergeFrom(task.DeepCopy())

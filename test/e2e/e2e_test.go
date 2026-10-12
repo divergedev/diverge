@@ -5,12 +5,14 @@ package e2e
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/pkg/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
@@ -353,13 +355,23 @@ func TestAgentTaskLifecycle(t *testing.T) {
 	tokenSecretKey := types.NamespacedName{Name: task.Name + "-token", Namespace: f.Namespace}
 	err = f.Client.Get(ctx, tokenSecretKey, &tokenSecret)
 	require.NoError(t, err, "Expected <task>-token Secret to exist")
-	assert.NotEmpty(t, tokenSecret.Data["token"], "Expected non-empty token in <task>-token Secret")
+	require.NotEmpty(t, tokenSecret.Data["token"], "Expected non-empty token in <task>-token Secret")
 
 	var indexSecret corev1.Secret
 	indexSecretKey := types.NamespacedName{Name: "diverge-agenttask-tokens", Namespace: f.Namespace}
 	err = f.Client.Get(ctx, indexSecretKey, &indexSecret)
 	require.NoError(t, err, "Expected diverge-agenttask-tokens Secret to exist")
-	assert.NotEmpty(t, indexSecret.Data[task.Name], "Expected task token in diverge-agenttask-tokens index Secret")
+	assert.Equal(t, tokenSecret.Data["token"], indexSecret.Data[task.Name], "Expected index token to match <task>-token Secret")
+
+	var macTok auth.Macaroon
+	err = json.Unmarshal(tokenSecret.Data["token"], &macTok)
+	require.NoError(t, err, "Expected valid serialized Macaroon token")
+	caveatMap := make(map[string]string, len(macTok.Caveats()))
+	for _, c := range macTok.Caveats() {
+		caveatMap[c.Key] = c.Value
+	}
+	assert.Equal(t, task.Name, caveatMap["task_id"])
+	assert.Equal(t, f.Namespace, caveatMap["namespace"])
 
 	// 3. Suspend the task (spec.suspended = true) and wait for phase Paused
 	err = wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {

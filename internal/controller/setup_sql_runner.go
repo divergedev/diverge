@@ -6,6 +6,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -33,7 +34,11 @@ func (r *EnvironmentReconciler) runSetupSQLJob(ctx context.Context, env *diverge
 	jobName := sanitizeK8sName(fmt.Sprintf("setup-sql-%s", env.Name), env.Name, 63)
 
 	existingJob := &batchv1.Job{}
-	if err := r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: env.Namespace}, existingJob); err == nil {
+	if err := r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: env.Namespace}, existingJob); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("getting setup-sql job %s: %w", jobName, err)
+		}
+	} else {
 		// Job already exists — check completion
 		for _, cond := range existingJob.Status.Conditions {
 			if cond.Type == batchv1.JobComplete && cond.Status == corev1.ConditionTrue {

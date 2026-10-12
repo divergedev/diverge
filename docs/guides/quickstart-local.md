@@ -16,23 +16,18 @@ Spin up a complete local Diverge environment — including `diverge-controller`,
 
 ## Step 1: Boot Local Cluster & Install Diverge
 
-From a clone of this repository, run the built-in E2E bootstrap target:
-
-```bash
-make e2e-setup
-```
-
-Or install manually on any Kind/k3d cluster:
+Run the steps below to create a Kind cluster, install Envoy Gateway, apply the Diverge CRDs, and deploy the operator + API server:
 
 ```bash
 # 1. Create a Kind cluster
 kind create cluster --name diverge-local
 
-# 2. Install Envoy Gateway (Gateway API + GRPCRoute support)
+# 2. Install Envoy Gateway (Gateway API CRDs + GRPCRoute support)
 helm install eg oci://docker.io/envoyproxy/gateway-helm \
   --version v1.3.0 -n envoy-gateway-system --create-namespace --wait
 
-# 3. Install Diverge Operator + API Server + Dashboard
+# 3. Apply CRDs and install Diverge Operator + API Server + Dashboard
+kubectl apply -f charts/diverge/crds/
 helm upgrade --install diverge ./charts/diverge \
   --namespace diverge-system --create-namespace \
   --set server.enabled=true \
@@ -41,6 +36,9 @@ helm upgrade --install diverge ./charts/diverge \
   --set sandbox.provider=noop \
   --wait
 ```
+
+> [!TIP]
+> If you only need CRD + controller reconciliation (without Envoy Gateway data-plane pods), you can run `make e2e-setup` from a clone of this repository.
 
 ---
 
@@ -109,6 +107,4 @@ kubectl port-forward -n diverge-system svc/diverge-server 8443:8443
 
 ```bash
 kind delete cluster --name diverge-local
-# or if started with make e2e-setup:
-make e2e-teardown
 ```

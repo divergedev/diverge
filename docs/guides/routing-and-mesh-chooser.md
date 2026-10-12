@@ -1,40 +1,40 @@
 # Service Mesh & Gateway API Chooser
 
-Diverge supports pluggable routing providers via `--routing-provider` (`routingProvider` in Helm). Use this matrix to choose the best routing backend for your cluster.
+Diverge supports pluggable routing providers via `--routing-provider` (`routingProvider` in Helm). Registered provider names are `gateway`, `istio`, `composite`, `noop`, and comma-separated combinations (such as `"gateway,istio"`). Use this matrix to choose the best routing backend for your cluster.
 
 ---
 
 ## 1. Comparison Matrix
 
-| Feature | `gateway-api` (Envoy Gateway / Cilium / Istio GW) | `istio` (Sidecar / Ambient) | `cilium` (eBPF L7) | `linkerd` (HTTPRoute) | `diverge-proxy` |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **Helm Value** | `routingProvider: gateway-api` | `routingProvider: istio` | `routingProvider: cilium` | `routingProvider: linkerd` | `proxy.enabled: true` |
-| **HTTP Header Routing** | Yes (`HTTPRoute`) | Yes (`HTTPRoute` + `AuthorizationPolicy`) | Yes (`HTTPRoute` / `CiliumEnvoyConfig`) | Yes (`HTTPRoute`) | Yes (Reverse Proxy) |
-| **gRPC / ConnectRPC Routing** | Yes (`GRPCRoute`) | Yes (`GRPCRoute`) | Yes (`GRPCRoute`) | Yes (`GRPCRoute`) | HTTP/1.1 + h2c |
-| **East-West (Pod-to-Pod) Header Routing** | Via Mesh GAMMA | Yes | Yes | Yes | Via Proxy Service URL |
-| **Zero-Trust mTLS Isolation** | No | Yes (Ambient / Sidecar) | Yes (WireGuard / Spire) | Yes | No |
-| **Scale-to-Zero Compatible** | Yes | Yes | Yes | Yes | Yes |
+| Feature | Gateway API (Envoy Gateway / Cilium / Linkerd) | Istio (Sidecar / Ambient) | Gateway API + Istio | `diverge-proxy` |
+| :--- | :--- | :--- | :--- | :--- |
+| **Helm Value** | `routingProvider: gateway` | `routingProvider: istio` | `routingProvider: "gateway,istio"` | `routingProvider: noop` + `proxy.enabled: true` |
+| **HTTP Header Routing** | Yes (`HTTPRoute`) | Yes (`HTTPRoute` + `AuthorizationPolicy`) | Yes (`HTTPRoute` + `AuthorizationPolicy`) | Yes (Reverse Proxy) |
+| **gRPC / ConnectRPC Routing** | Yes (`GRPCRoute`) | Yes (`GRPCRoute`) | Yes (`GRPCRoute`) | HTTP/1.1 + h2c |
+| **East-West (Pod-to-Pod) Header Routing** | Via Mesh GAMMA (Cilium / Linkerd) | Yes | Yes | Via Proxy Service URL |
+| **Zero-Trust mTLS Isolation** | Via Mesh (Cilium WireGuard / Linkerd) | Yes (Ambient / Sidecar) | Yes (Ambient / Sidecar) | No |
+| **Scale-to-Zero Compatible** | Yes | Yes | Yes | Yes |
 
 ---
 
 ## 2. Recommended Configurations
 
-### Default: Envoy Gateway (`gateway-api`)
-Best for most Kubernetes clusters that want standard Kubernetes Gateway API (`HTTPRoute` + `GRPCRoute`) without a full service mesh:
+### Default: Kubernetes Gateway API (`gateway`)
+Best for clusters running Envoy Gateway, Cilium Gateway API, or Linkerd with standard Kubernetes Gateway API (`HTTPRoute` + `GRPCRoute`):
 
 ```yaml
-routingProvider: gateway-api
+routingProvider: gateway
 gateway:
   name: diverge-gateway
   namespace: default
   className: eg
 ```
 
-### Zero-Trust Multi-Tenant: Istio Ambient Mesh (`gateway-api,istio`)
-Combine `gateway-api` and `istio` so Diverge generates both Gateway API `HTTPRoute`s and Istio `AuthorizationPolicy` rules while labeling preview namespaces with `istio.io/dataplane-mode: ambient`:
+### Zero-Trust Multi-Tenant: Istio Ambient Mesh (`"gateway,istio"`)
+Combine `gateway` and `istio` so Diverge generates both Gateway API `HTTPRoute`s and Istio `AuthorizationPolicy` rules while labeling preview namespaces with `istio.io/dataplane-mode: ambient`:
 
 ```yaml
-routingProvider: "gateway-api,istio"
+routingProvider: "gateway,istio"
 namespaceLabels:
   istio.io/dataplane-mode: ambient
 ```

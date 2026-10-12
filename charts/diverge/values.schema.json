@@ -312,6 +312,7 @@
     },
     "sandbox": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "enabled": { "type": "boolean" },
         "provider": {
@@ -321,6 +322,7 @@
         "poolRef": { "type": "string" },
         "macaroonSecretRef": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "name": { "type": "string" },
             "key": { "type": "string" }
@@ -328,6 +330,7 @@
         },
         "networkPolicy": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "enabled": { "type": "boolean" },
             "blockCloudMetadata": { "type": "boolean" },

@@ -16,13 +16,13 @@ server:
   dashboard:
     enabled: true
   cors:
-    allowedOrigins:
-      - https://diverge.example.com
+    allowedOrigins: "https://diverge.example.com"
 ```
 
 Install or upgrade the release:
 
 ```bash
+kubectl apply -f charts/diverge/crds/
 helm upgrade --install diverge charts/diverge \
   -n diverge-system --create-namespace \
   -f values-production.yaml
@@ -34,56 +34,47 @@ helm upgrade --install diverge charts/diverge \
 
 `diverge-server` supports a composable authentication chain:
 
-1. **OIDC Browser Login + JWT Bearer Auth** (`--oidc-issuer`) — For human users via Okta, Google Workspace, GitHub/Dex, or Keycloak.
-2. **Kubernetes `TokenReview` Auth** (`--enable-k8s-token-auth=true`) — For CI runners and `kubectl` service account tokens.
+1. **OIDC Browser Login + JWT Bearer Auth** (`--oidc-issuer-url`) — For human users via Okta, Google Workspace, GitHub/Dex, or Keycloak.
+2. **Kubernetes `TokenReview` Auth** (always enabled) — For CI runners and `kubectl` service account tokens.
 3. **Macaroon Capability Auth** (`DIVERGE_MACAROON_ROOT_KEY`) — For sandboxed `AgentTask` pods calling back into `diverge-server`.
 
 ---
 
 ## 3. Configuring OIDC (Okta / Google / Dex / Keycloak)
 
-1. Create Secrets for your OIDC client secret and 32-byte session encryption key:
+1. Create a Secret for your OIDC client secret:
 
 ```bash
 kubectl create secret generic diverge-oidc-client \
   -n diverge-system \
   --from-literal=client-secret="YOUR_OIDC_CLIENT_SECRET"
-
-kubectl create secret generic diverge-session-key \
-  -n diverge-system \
-  --from-literal=session-key="$(openssl rand -hex 32)"
 ```
 
-2. Configure `server.auth` in Helm:
+2. Configure `server.auth` in Helm (matching `charts/diverge/values.yaml`):
 
 ```yaml
 server:
   enabled: true
   dashboard:
     enabled: true
+  cors:
+    allowedOrigins: "https://diverge.example.com"
   auth:
     audiences:
       - diverge-api
-    enableK8sTokenAuth: true
     secureCookies: true
     oidc:
       enabled: true
-      issuer: https://sso.example.com/oauth2/default
-      clientID: diverge-web
-      redirectURI: https://diverge.example.com/auth/callback
-      allowedGroups:
-        - platform-engineering
-        - developers
-      clientSecretRef:
+      issuerUrl: https://sso.example.com/oauth2/default
+      clientId: diverge-web
+      redirectUrl: https://diverge.example.com/auth/callback
+      allowedGroups: "platform-engineering,developers"
+      clientSecretSecretRef:
         name: diverge-oidc-client
         key: client-secret
-    session:
-      secretRef:
-        name: diverge-session-key
-        key: session-key
 ```
 
 ### Security Highlights
-- **PKCE + State Validation**: `/auth/login` generates a cryptographic state and PKCE verifier encrypted with AES-256-GCM using the session secret.
-- **Group Enforcement**: When `allowedGroups` is configured, `/auth/callback` verifies group membership before issuing the `HttpOnly`, `Secure`, `SameSite=Lax` session cookie.
-- **Namespace-Scoped RBAC**: When `server.rbac.enforceUserRBAC=true`, every API call is checked against Kubernetes `SubjectAccessReview` for the authenticated user and groups.
+- **CSRF State + Sanitized Redirects**: `/auth/login` generates a cryptographic random state stored in an `HttpOnly`, `SameSite=Lax` cookie and sanitizes `return_url` to prevent open redirects.
+- **Group Enforcement**: When `allowedGroups` is configured, `/auth/callback` verifies group membership before issuing the `diverge_token` session cookie.
+- **Namespace-Scoped RBAC**: Every API call is checked against Kubernetes RBAC / `SubjectAccessReview` for the authenticated principal.

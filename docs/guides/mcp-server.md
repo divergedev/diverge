@@ -134,7 +134,7 @@ The MCP server provides the following tools grouped by service:
 | `diverge_create_task` | Spawn a new sandboxed `AgentTask` with repository, branch, model capabilities, and USD/token/iteration budgets. |
 | `diverge_get_task` | Retrieve the current phase (`Pending`, `Provisioning`, `Active`, `Paused`, `Completed`, `Failed`), iteration count, token usage, and sandbox pod status. |
 | `diverge_list_tasks` | List `AgentTask` resources in a namespace with optional phase filtering. |
-| `diverge_pause_task` | Suspend an active `AgentTask` (`spec.suspended: true`) and immediately revoke its Macaroon capability token. |
+| `diverge_pause_task` | Suspend an active `AgentTask` (`spec.suspended: true`) so the controller transitions it to `Paused` and revokes its Macaroon capability token upon reconciliation. |
 | `diverge_resume_task` | Resume a paused `AgentTask` and mint a fresh Macaroon capability token. |
 | `diverge_guide_task` | Send steering instructions or updated budget/iteration limits to an `AgentTask` and resume execution. |
 | `diverge_cancel_task` | Cancel and tear down an `AgentTask` sandbox (*requires `--allow-destructive`*). |

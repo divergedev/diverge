@@ -221,17 +221,19 @@ func TestKubernetesSecretTokenStore_ConcurrentUpsertAndRevoke(t *testing.T) {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			taskID := "task-concurrent-" + strings.Repeat("x", id+1)
-			_ = store.SaveToken(ctx, taskID, namespace, []byte("tok"))
+			suffix := strings.Repeat("x", id+1)
+			taskID := "task-concurrent-" + suffix
+			_ = store.SaveToken(ctx, taskID, namespace, []byte("tok-"+suffix))
 		}(i)
 	}
 	wg.Wait()
 
 	for i := 0; i < 10; i++ {
-		taskID := "task-concurrent-" + strings.Repeat("x", i+1)
+		suffix := strings.Repeat("x", i+1)
+		taskID := "task-concurrent-" + suffix
 		tok, err := indexStore.GetToken(ctx, taskID, namespace)
 		require.NoError(t, err)
-		assert.Equal(t, []byte("tok"), tok)
+		assert.Equal(t, []byte("tok-"+suffix), tok)
 	}
 }
 

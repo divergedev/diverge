@@ -13,7 +13,7 @@ spec:
     matchLabels:
       control-plane: controller-manager
   endpoints:
-    - port: http
+    - port: metrics
       interval: {{ .Values.metrics.serviceMonitor.interval }}
 {{- end }}
 

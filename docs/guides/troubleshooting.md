@@ -1,6 +1,6 @@
 # Troubleshooting & `diverge doctor` Playbook
 
-Use `diverge doctor` (or the `diverge_doctor` MCP tool) as your first step whenever an environment or preview group fails to reconcile.
+Use `diverge doctor` (or the `diverge_doctor` MCP tool) as your first step whenever an environment fails to reconcile.
 
 ```bash
 diverge doctor

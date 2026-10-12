@@ -7,7 +7,7 @@ Thank you for contributing to **Diverge**! This guide covers setting up your dev
 ## 1. Development Environment Setup
 
 ### Option A: 1-Click Dev Container / GitHub Codespaces (No Nix Required)
-Open this repository in **GitHub Codespaces** or VS Code with the **Dev Containers** extension (`.devcontainer/devcontainer.json`). It pre-installs Go 1.26, `kubectl`, `helm`, `kind`, `buf`, `golangci-lint`, Node.js 22, and `uv`.
+Open this repository in **GitHub Codespaces** or VS Code with the **Dev Containers** extension (`.devcontainer/devcontainer.json`). It pre-installs Go 1.24, `kubectl`, `helm`, `kind`, `buf`, Node.js 22, and Python 3.12.
 
 ### Option B: Nix Flake (Recommended for Local macOS / Linux)
 Diverge provides a reproducible `flake.nix` dev shell that installs all Go, Kubernetes, Protobuf, and linting tools and configures `lefthook` git hooks automatically:
@@ -50,8 +50,8 @@ nix develop -c make test
 # Run unit tests
 nix develop -c make test
 
-# Run envtest integration tests (controller + server)
-nix develop -c go test ./internal/controller/... ./internal/server/... -tags=integration
+# Run envtest integration tests (controller + server; requires KUBEBUILDER_ASSETS from setup-envtest)
+nix develop -c make test-integration
 
 # Regenerate CRDs, DeepCopy, and Protobuf code
 nix develop -c make generate manifests proto

@@ -94,22 +94,24 @@ app.get('/checkout', async (_req, res) => {
 
 ### Python (`pkg/sdk/python` — FastAPI / Starlette & `httpx`)
 
-Use the official `diverge-sdk` package (`contextvars`-backed ASGI middleware + `httpx` event hook):
+Use the official `diverge-sdk` package (`contextvars`-backed ASGI middleware):
 
 ```python
 from fastapi import FastAPI
 import httpx
-from diverge_sdk import DivergeASGIMiddleware, inject_diverge_headers
+from diverge_sdk import DivergASGIMiddleware, get_current_headers
 
 app = FastAPI()
-app.add_middleware(DivergeASGIMiddleware)
-
-client = httpx.AsyncClient(event_hooks={"request": [inject_diverge_headers]})
+app.add_middleware(DivergASGIMiddleware)
 
 @app.get("/orders")
 async def list_orders():
-    resp = await client.get("http://inventory-api:8080/items")
-    return resp.json()
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            "http://inventory-api:8080/items",
+            headers=get_current_headers(),
+        )
+        return resp.json()
 ```
 
 ### Go ConnectRPC & gRPC (`pkg/sdk/connect` & `pkg/sdk/grpc`)
@@ -143,11 +145,10 @@ opts := divergetemporal.ConfigureClientOptions(client.Options{})
 c, err := client.Dial(opts)
 ```
 
-### Go Kafka & OpenFeature (`pkg/sdk/kafka` & `pkg/sdk/openfeature`)
+### Go OpenFeature (`pkg/sdk/openfeature`)
 
 ```go
 import (
-	divergekafka "github.com/divergedev/diverge/pkg/sdk/kafka"
 	divergeof "github.com/divergedev/diverge/pkg/sdk/openfeature"
 	"github.com/open-feature/go-sdk/openfeature"
 )

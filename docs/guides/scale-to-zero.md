@@ -24,9 +24,9 @@ sequenceDiagram
     Pod-->>Client: 200 OK
 ```
 
- Diverge supports two scale-to-zero mechanisms:
-1. **Built-in `activator-proxy`** (`activatorProxy.enabled: true`) — Uses a Kubernetes shared informer to track pod readiness in-memory, scales sleeping deployments up on demand, holds the HTTP request until the pod passes readiness probes, and injects `X-Preview-Env`.
-2. **KEDA HTTP Add-on (`HTTPScaledObject`)** — Reconciles a KEDA `HTTPScaledObject` per `Environment` when `spec.scaleToZero.enabled: true`.
+Diverge supports two scale-to-zero mechanisms:
+1. **Built-in `activator-proxy`** (`activatorProxy.enabled: true`) — Uses a Kubernetes shared informer to track pod readiness in-memory, holds the HTTP request until the pod passes readiness probes, and injects `X-Preview-Env`.
+2. **KEDA HTTP Add-on (`HTTPScaledObject`)** — Reconciles a KEDA `HTTPScaledObject` per `Environment` when `spec.serviceConfig.keda.enabled: true`.
 
 ---
 
@@ -40,16 +40,17 @@ sequenceDiagram
 
 ---
 
-## 3. Enabling the Activator Proxy in Helm
+## 3. Enabling Scale-to-Zero in Helm & Environment CRs
+
+Enable the activator proxy in your Helm values:
 
 ```yaml
 activatorProxy:
   enabled: true
   replicaCount: 2
-  readyTimeout: 60s
 ```
 
-And enable `scaleToZero` on your `Environment` or `PreviewGroup`:
+And configure KEDA scale-to-zero on your `Environment` via `spec.serviceConfig.keda`:
 
 ```yaml
 apiVersion: divergedev.com/v1alpha1
@@ -59,7 +60,10 @@ metadata:
 spec:
   serviceName: payments-api
   image: ghcr.io/acme/payments:pr-42
-  scaleToZero:
-    enabled: true
-    idleTimeout: 15m
+  serviceConfig:
+    keda:
+      enabled: true
+      cooldownPeriod: 300
+      minReplicas: 0
+      maxReplicas: 5
 ```

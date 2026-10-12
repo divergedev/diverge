@@ -20,6 +20,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
 	pkgdb "github.com/divergedev/diverge/pkg/database"
@@ -28,20 +29,26 @@ import (
 
 func init() {
 	pkgdb.Providers.Register("my-cloud-db", func(deps registry.Deps) (pkgdb.DatabaseProvider, error) {
-		return &MyCloudDBProvider{}, nil
+		return &MyCloudDBProvider{baseURI: os.Getenv("MY_CLOUD_DB_BASE_URI")}, nil
 	})
 }
 
-type MyCloudDBProvider struct{}
+type MyCloudDBProvider struct {
+	baseURI string
+}
 
 func (p *MyCloudDBProvider) Provision(ctx context.Context, env *v1alpha1.Environment) (*pkgdb.DatabaseResult, error) {
 	dbName := fmt.Sprintf("preview_%s", env.Name)
-	dsn := fmt.Sprintf("postgres://user:pass@my-cloud-db.internal:5432/%s?sslmode=require", dbName)
+	dsn := fmt.Sprintf("%s/%s?sslmode=require", p.baseURI, dbName)
 	return &pkgdb.DatabaseResult{
 		DSN:        dsn,
 		SchemaName: dbName,
 		Ready:      true,
 	}, nil
+}
+
+func (p *MyCloudDBProvider) Status(ctx context.Context, env *v1alpha1.Environment) (bool, error) {
+	return true, nil
 }
 
 func (p *MyCloudDBProvider) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
@@ -54,4 +61,4 @@ func (p *MyCloudDBProvider) Teardown(ctx context.Context, env *v1alpha1.Environm
 
 ## Using Your Provider
 
-Pass `--db-provider=my-cloud-db` to `diverge-controller` or set `database.provider: my-cloud-db` in `charts/diverge/values.yaml`.
+Pass `--database-provider=my-cloud-db` to `diverge-controller` or set `database.provider: my-cloud-db` in `charts/diverge/values.yaml`.

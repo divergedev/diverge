@@ -4,16 +4,18 @@ Diverge isolates database state per preview environment so schema changes and se
 
 ---
 
-## 1. Choosing a Database Isolation Mode
+## 1. Database Isolation Modes & Providers
 
-| Mode | Provisioning Time | Storage Overhead | Best For |
+`spec.database.mode` controls how the `Environment` isolates its database (`shared`, `schema`, `snapshot`, or `fresh`), while the controller's `--database-provider` (`database.provider` in Helm) selects the backing implementation:
+
+| Helm `database.provider` | Supported `spec.database.mode` | Provisioning Time | Best For |
 | :--- | :--- | :--- | :--- |
-| `shared` | Instant (0s) | Zero | Stateless PRs with no schema or data changes |
-| `schema` | < 1s | Minimal | Postgres schema-per-PR (`SET search_path TO preview_mr_42`) |
-| `snapshot` | 2–10s | Copy-on-Write / Dump | Full DDL + seed data isolation inside Postgres |
-| `neon` | 1–2s | Serverless CoW Branch | Teams using [Neon](https://neon.tech) serverless Postgres |
-| `cnpg` | 10–30s | Dedicated K8s Pod | Full [CloudNativePG](https://cloudnative-pg.io) cluster per PR |
-| `cockroach` | 1–3s | Logical DB | CockroachDB multi-tenant preview databases |
+| `noop` | `shared` | Instant (0s) | Stateless PRs with no schema or data changes |
+| `schema` | `schema` | < 1s | Postgres schema-per-PR (`SET search_path TO preview_mr_42`) |
+| `snapshot` | `snapshot`, `fresh` | 2–10s | Full DDL + seed data isolation inside Postgres |
+| `neon` | `snapshot`, `fresh` | 1–2s | Serverless Copy-on-Write Postgres branches on [Neon](https://neon.tech) |
+| `cnpg` | `fresh`, `snapshot` | 10–30s | Dedicated [CloudNativePG](https://cloudnative-pg.io) cluster per PR |
+| `cockroach` | `schema`, `fresh` | 1–3s | CockroachDB multi-tenant preview databases |
 
 ---
 
@@ -32,7 +34,7 @@ spec:
   image: ghcr.io/acme/payments-api:pr-42
   database:
     mode: schema
-    migration:
+    migrationJob:
       image: ghcr.io/acme/payments-migrations:pr-42
       command: ["goose", "up"]
       blocking: true
@@ -42,11 +44,11 @@ spec:
 
 ## 3. Declarative Schema Migrations with Atlas Operator
 
-In addition to imperative migration `Job`s (`database.migration.command`), Diverge natively integrates with the [Atlas Kubernetes Operator](https://atlasgo.io/integrations/kubernetes/operator) (`db.atlasgo.io/v1alpha1`) for both versioned (`AtlasMigration`) and declarative (`AtlasSchema`) workflows.
+In addition to imperative migration `Job`s (`database.migrationJob`), Diverge natively integrates with the [Atlas Kubernetes Operator](https://atlasgo.io/integrations/kubernetes/operator) (`db.atlasgo.io/v1alpha1`) via `spec.database.atlas` for both versioned (`AtlasMigration`) and declarative (`AtlasSchema`) workflows.
 
 ### Option A: Versioned Migrations (`AtlasMigration`)
 
-Reference a ConfigMap or Atlas Cloud directory containing SQL migration files:
+Reference a ConfigMap (`configMap`) or remote URL (`url`) containing SQL migration files:
 
 ```yaml
 apiVersion: divergedev.com/v1alpha1
@@ -59,15 +61,16 @@ spec:
   image: ghcr.io/acme/payments-api:pr-42
   database:
     mode: schema
-    migration:
-      engine: atlas
-      atlas:
-        dirConfigMapRef: payments-migrations-cm
+    atlas:
+      enabled: true
+      mode: versioned
+      configMap: payments-migrations-cm
+      blocking: true
 ```
 
 ### Option B: Declarative Schema (`AtlasSchema`)
 
-Provide the desired SQL schema inline or via ConfigMap; Atlas computes and applies the safe diff automatically against the preview database DSN:
+Provide the desired SQL/HCL schema via `schema` (or a `configMap`); Atlas computes and applies the safe diff automatically against the preview database DSN:
 
 ```yaml
 apiVersion: divergedev.com/v1alpha1
@@ -80,15 +83,15 @@ spec:
   image: ghcr.io/acme/users-api:pr-42
   database:
     mode: schema
-    migration:
-      engine: atlas
-      atlas:
-        schemaSQL: |
-          CREATE TABLE users (
-            id UUID PRIMARY KEY,
-            email TEXT NOT NULL UNIQUE,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-          );
+    atlas:
+      enabled: true
+      mode: declarative
+      schema: |
+        CREATE TABLE users (
+          id UUID PRIMARY KEY,
+          email TEXT NOT NULL UNIQUE,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
 ```
 
 ---

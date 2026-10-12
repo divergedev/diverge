@@ -9,20 +9,20 @@ Drop-in pipeline templates that detect changed services with `diverge diff`, dep
 Place `.diverge.yaml` at the root of your repository so `diverge diff` maps file paths to Kubernetes services:
 
 ```yaml
-version: v1
-routing:
-  headerKey: x-preview-env
+version: "1"
+service: payments-api
 services:
-  - name: payments-api
-    path: services/payments/**
+  payments-api:
+    paths:
+      - services/payments/**
     port: 8080
-    database:
-      mode: schema
-  - name: checkout-web
-    path: apps/checkout/**
+  checkout-web:
+    paths:
+      - apps/checkout/**
     port: 3000
-  - name: ledger-worker
-    path: services/ledger/**
+  ledger-worker:
+    paths:
+      - services/ledger/**
     port: 9090
 ```
 
@@ -54,23 +54,22 @@ jobs:
       - name: Install Diverge CLI
         run: curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/main/install.sh | sh
 
-      - name: Detect Changed Services
-        id: diff
-        run: |
-          CHANGED=$(diverge diff --base origin/${{ github.base_ref }} --format json)
-          echo "services=$CHANGED" >> "$GITHUB_OUTPUT"
-
-      - name: Deploy Delta PreviewGroup
+      - name: Detect Changed Services & Deploy Delta PreviewGroup
         env:
           KUBECONFIG_DATA: ${{ secrets.PREVIEW_KUBECONFIG }}
         run: |
           mkdir -p ~/.kube && echo "$KUBECONFIG_DATA" | base64 -d > ~/.kube/config
-          diverge preview \
-            --name "pr-${{ github.event.number }}" \
+          DIFF_JSON=$(diverge diff --base "origin/${{ github.base_ref }}" --output json)
+          mapfile -t SVC_ARGS < <(echo "$DIFF_JSON" | jq -r '.changedServices[]? | "--service=\(.)=ghcr.io/acme/\(.):pr-${{ github.event.number }}"')
+          if [ "${#SVC_ARGS[@]}" -eq 0 ]; then
+            echo "No service changes detected; skipping preview deployment."
+            exit 0
+          fi
+          diverge preview create "pr-${{ github.event.number }}" \
             --branch "${{ github.head_ref }}" \
             --mr-id "${{ github.event.number }}" \
             --ttl 4h \
-            --wait
+            "${SVC_ARGS[@]}"
 
       - name: Run Playwright E2E Against Preview
         run: |
@@ -109,13 +108,16 @@ deploy_preview:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
   script:
-    - diverge diff --base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
-    - diverge preview
-        --name "mr-${CI_MERGE_REQUEST_IID}"
-        --branch "${CI_COMMIT_REF_NAME}"
-        --mr-id "${CI_MERGE_REQUEST_IID}"
-        --ttl 4h
-        --wait
+    - DIFF_JSON=$(diverge diff --base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" --output json)
+    - SVC_ARGS=$(echo "$DIFF_JSON" | jq -r '.changedServices[]? | "--service=\(.)=registry.example.com/\(.):mr-'"${CI_MERGE_REQUEST_IID}"'"')
+    - |
+      if [ -n "$SVC_ARGS" ]; then
+        diverge preview create "mr-${CI_MERGE_REQUEST_IID}" \
+          --branch "${CI_COMMIT_REF_NAME}" \
+          --mr-id "${CI_MERGE_REQUEST_IID}" \
+          --ttl 4h \
+          $SVC_ARGS
+      fi
 
 e2e_preview:
   stage: test
