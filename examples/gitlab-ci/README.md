@@ -58,7 +58,7 @@ Register webhooks in GitLab: **Settings → Webhooks** → URL: `https://<diverg
 ## Quick Start
 
 1. Copy `.gitlab-ci.yml` and `.diverge.yaml` to your repository root
-2. Optionally pin the CLI image tag (default: `latest`): `image: ghcr.io/divergedev/diverge-cli:v0.8.2`
+2. Optionally pin the CLI image tag (default: `latest`): `image: ghcr.io/divergedev/diverge-cli:v0.14.0`
 3. Update the `REGISTRY` variable if not using GitLab Container Registry
 4. Configure CI/CD variables (`KUBECONFIG`, `DIVERGE_GITLAB_TOKEN`)
 5. Open a Merge Request — the pipeline will automatically deploy a preview
