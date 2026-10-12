@@ -179,7 +179,8 @@ func TestExecuteSlashCommand_Lifecycle(t *testing.T) {
 		},
 		Spec: v1alpha1.PreviewGroupSpec{
 			Source: v1alpha1.EnvironmentSource{
-				MR: 42,
+				Project: "divergedev/demo-payments-api",
+				MR:      42,
 			},
 		},
 	}
@@ -190,6 +191,57 @@ func TestExecuteSlashCommand_Lifecycle(t *testing.T) {
 	require.NotNil(t, updatedPG.Spec.Lifecycle)
 	require.NotNil(t, updatedPG.Spec.Lifecycle.TTL)
 	assert.Equal(t, 72*time.Hour, updatedPG.Spec.Lifecycle.TTL.Duration)
+}
+
+func TestExecuteSlashCommand_RepoIsolation(t *testing.T) {
+	ctx := context.Background()
+	c := newTestClient()
+
+	repoA := "https://github.com/divergedev/repo-a"
+	repoB := "https://github.com/divergedev/repo-b"
+	prNumber := 42
+
+	// Create resources for repoB with the same PR #42
+	fixCmd, _ := ParseSlashCommand("/diverge fix fix repo-b issue")
+	require.NoError(t, ExecuteSlashCommand(ctx, c, "default", fixCmd, repoB, "feat/b", prNumber))
+
+	previewCmd, _ := ParseSlashCommand("/diverge preview")
+	require.NoError(t, ExecuteSlashCommand(ctx, c, "default", previewCmd, repoB, "feat/b", prNumber))
+
+	pgB := &v1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "pg-repo-b-42",
+			Annotations: map[string]string{
+				"divergedev.com/pr-number": "42",
+			},
+		},
+		Spec: v1alpha1.PreviewGroupSpec{
+			Source: v1alpha1.EnvironmentSource{
+				Project: "divergedev/repo-b",
+				MR:      42,
+			},
+		},
+	}
+	require.NoError(t, c.Create(ctx, pgB))
+
+	// Run pause and teardown for repoA PR #42 — repoB resources must remain untouched
+	pauseCmd, _ := ParseSlashCommand("/diverge pause")
+	require.NoError(t, ExecuteSlashCommand(ctx, c, "default", pauseCmd, repoA, "feat/a", prNumber))
+
+	teardownCmd, _ := ParseSlashCommand("/diverge teardown")
+	require.NoError(t, ExecuteSlashCommand(ctx, c, "default", teardownCmd, repoA, "feat/a", prNumber))
+
+	var taskList v1alpha1.AgentTaskList
+	require.NoError(t, c.List(ctx, &taskList, client.InNamespace("default")))
+	require.Len(t, taskList.Items, 1)
+	assert.False(t, taskList.Items[0].Spec.Suspended, "repoB AgentTask must not be suspended by repoA command")
+
+	envBName := previewEnvName("pr", "divergedev/repo-b", prNumber)
+	var envB v1alpha1.Environment
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: envBName, Namespace: "default"}, &envB), "repoB Environment must not be deleted by repoA teardown")
+
+	var checkPGB v1alpha1.PreviewGroup
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "pg-repo-b-42"}, &checkPGB), "repoB PreviewGroup must not be deleted by repoA teardown")
 }
 
 func prNumberStringToBranch(b string) string { return b }

@@ -6,18 +6,23 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
 	pkgauth "github.com/divergedev/diverge/pkg/auth"
@@ -175,6 +180,23 @@ func TestLLMMeterHandler_DisallowedModel(t *testing.T) {
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
 	assert.False(t, resp.Allowed)
 	assert.Contains(t, resp.Reason, "claude-opus-4")
+
+	// Empty model when AllowedModels is restricted must also be rejected
+	emptyModelBody, _ := json.Marshal(LLMMeterRequest{
+		Model:      "   ",
+		TokensUsed: 1000,
+		CostUSD:    0.10,
+	})
+	emptyReq := httptest.NewRequest(http.MethodPost, "/api/v1/agenttask/meter", bytes.NewReader(emptyModelBody))
+	emptyReq.Header.Set("Authorization", "Bearer "+token)
+	emptyRec := httptest.NewRecorder()
+	handler.ServeHTTP(emptyRec, emptyReq)
+
+	require.Equal(t, http.StatusForbidden, emptyRec.Code)
+	var emptyResp LLMMeterResponse
+	require.NoError(t, json.NewDecoder(emptyRec.Body).Decode(&emptyResp))
+	assert.False(t, emptyResp.Allowed)
+	assert.Equal(t, "model is required when token restricts allowed_models", emptyResp.Reason)
 }
 
 func TestLLMMeterHandler_BudgetExceededAutoPauseAndRevoke(t *testing.T) {
@@ -294,4 +316,77 @@ func TestLLMMeterHandler_RevokedAndNegativeInputs(t *testing.T) {
 	revRec := httptest.NewRecorder()
 	handler.ServeHTTP(revRec, revReq)
 	assert.Equal(t, http.StatusUnauthorized, revRec.Code)
+}
+
+func TestLLMMeterHandler_TokensOverflowAndConflictRetry(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1alpha1.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	var statusUpdateAttempts atomic.Int32
+	crdClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1alpha1.AgentTask{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourceUpdate: func(ctx context.Context, c client.Client, subResourceName string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+				if subResourceName == "status" && statusUpdateAttempts.Add(1) == 1 {
+					return apierrors.NewConflict(schema.GroupResource{Group: "divergedev.com", Resource: "agenttasks"}, obj.GetName(), nil)
+				}
+				return c.Status().Update(ctx, obj, opts...)
+			},
+		}).
+		Build()
+
+	rootKey := []byte("0123456789abcdef0123456789abcdef")
+	verifier := pkgauth.NewMacaroonProvider(rootKey)
+	store := pkgauth.NewInMemoryTokenStore()
+	handler := NewLLMMeterHandler(crdClient, verifier, store, slog.Default())
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "task-overflow-retry",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective: "Test overflow and conflict retry",
+			Repository: v1alpha1.AgentTaskRepository{
+				URL: "https://github.com/divergedev/diverge",
+			},
+		},
+	}
+	require.NoError(t, crdClient.Create(ctx, task))
+
+	token := mintTestMeterToken(t, verifier, store, pkgauth.Claims{
+		TaskID:    "task-overflow-retry",
+		Namespace: "default",
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+
+	// 1. First request succeeds after retrying the initial 409 Conflict
+	body1, _ := json.Marshal(LLMMeterRequest{
+		TokensUsed: 500,
+		CostUSD:    0.05,
+	})
+	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/agenttask/meter", bytes.NewReader(body1))
+	req1.Header.Set("Authorization", "Bearer "+token)
+	rec1 := httptest.NewRecorder()
+	handler.ServeHTTP(rec1, req1)
+	require.Equal(t, http.StatusOK, rec1.Code)
+	assert.GreaterOrEqual(t, statusUpdateAttempts.Load(), int32(2))
+
+	// 2. Overflow request (500 + MaxInt64 > MaxInt64) is rejected with 400 Bad Request
+	overflowBody, _ := json.Marshal(LLMMeterRequest{
+		TokensUsed: math.MaxInt64,
+		CostUSD:    0.01,
+	})
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/agenttask/meter", bytes.NewReader(overflowBody))
+	req2.Header.Set("Authorization", "Bearer "+token)
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, req2)
+	require.Equal(t, http.StatusBadRequest, rec2.Code)
+	var overflowResp LLMMeterResponse
+	require.NoError(t, json.NewDecoder(rec2.Body).Decode(&overflowResp))
+	assert.False(t, overflowResp.Allowed)
+	assert.Equal(t, "tokensUsed overflows accumulated usage", overflowResp.Reason)
 }

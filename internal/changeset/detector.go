@@ -3,6 +3,7 @@ package changeset
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -43,8 +44,11 @@ func (g *GitChangeDetector) gitDiffFiles(ctx context.Context, baseRef string) ([
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
+	gitEnv := cleanGitEnv(os.Environ())
+
 	args := []string{"diff", "--name-only", baseRef + "...HEAD"}
 	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Env = gitEnv
 	if g.WorkDir != "" {
 		cmd.Dir = g.WorkDir
 	}
@@ -54,6 +58,7 @@ func (g *GitChangeDetector) gitDiffFiles(ctx context.Context, baseRef string) ([
 		// Fallback: try two-dot diff if three-dot fails (no merge base)
 		args = []string{"diff", "--name-only", baseRef}
 		cmd = exec.CommandContext(ctx, "git", args...)
+		cmd.Env = gitEnv
 		if g.WorkDir != "" {
 			cmd.Dir = g.WorkDir
 		}
@@ -72,6 +77,29 @@ func (g *GitChangeDetector) gitDiffFiles(ctx context.Context, baseRef string) ([
 		}
 	}
 	return files, nil
+}
+
+// cleanGitEnv strips inherited git repository-location environment variables so
+// subprocess git commands always operate on cmd.Dir instead of an outer repo
+// (e.g., when invoked inside git pre-commit / pre-push hooks).
+func cleanGitEnv(environ []string) []string {
+	filtered := make([]string, 0, len(environ))
+	for _, kv := range environ {
+		key, _, _ := strings.Cut(kv, "=")
+		switch key {
+		case "GIT_DIR",
+			"GIT_WORK_TREE",
+			"GIT_INDEX_FILE",
+			"GIT_OBJECT_DIRECTORY",
+			"GIT_ALTERNATE_OBJECT_DIRECTORIES",
+			"GIT_COMMON_DIR",
+			"GIT_PREFIX":
+			continue
+		default:
+			filtered = append(filtered, kv)
+		}
+	}
+	return filtered
 }
 
 func matchServicesToFiles(changedFiles []string, servicePaths map[string][]string) []string {

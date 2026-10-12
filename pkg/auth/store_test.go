@@ -279,3 +279,66 @@ func TestKubernetesSecretTokenStore_OwnershipValidation(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not owned by")
 }
+
+func TestKubernetesSecretTokenStore_IndexOnlyRevoke(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	store := NewKubernetesSecretTokenStore(fakeClient, scheme)
+	indexStore := NewKubernetesSecretTokenStore(fakeClient, scheme).WithIndexOnly()
+
+	taskID := "task-index-revoke"
+	namespace := "default"
+
+	// Revoke before index exists returns ErrTokenNotFound in indexOnly mode
+	err := indexStore.RevokeToken(ctx, taskID, namespace)
+	assert.ErrorIs(t, err, ErrTokenNotFound)
+
+	// Save via controller store, then revoke via server index-only store
+	require.NoError(t, store.SaveToken(ctx, taskID, namespace, []byte("tok-payload")))
+	assert.False(t, indexStore.IsRevoked(ctx, taskID, namespace))
+
+	require.NoError(t, indexStore.RevokeToken(ctx, taskID, namespace))
+	assert.True(t, indexStore.IsRevoked(ctx, taskID, namespace))
+
+	_, err = indexStore.GetToken(ctx, taskID, namespace)
+	assert.ErrorIs(t, err, ErrTokenRevoked)
+}
+
+func TestKubernetesSecretTokenStore_LegacyLabelMigration(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	store := NewKubernetesSecretTokenStore(fakeClient, scheme)
+
+	// Construct a >63 char taskID with a hyphen at position 45 so legacyTaskLabelValue
+	// differs from TaskLabelValue (which trims trailing hyphens from prefix).
+	taskID := strings.Repeat("a", 45) + "-" + strings.Repeat("b", 30)
+	namespace := "default"
+
+	legacyLabel := legacyTaskLabelValue(taskID)
+	currentLabel := TaskLabelValue(taskID)
+	require.NotEqual(t, legacyLabel, currentLabel)
+
+	require.NoError(t, store.SaveToken(ctx, taskID, namespace, []byte("v1")))
+
+	// Downgrade the secret's label to the legacy format
+	sec := &corev1.Secret{}
+	require.NoError(t, fakeClient.Get(ctx, objectKey(namespace, SecretName(taskID)), sec))
+	sec.Labels[LabelAgentTask] = legacyLabel
+	require.NoError(t, fakeClient.Update(ctx, sec))
+
+	// GetToken still succeeds with legacy label
+	tok, err := store.GetToken(ctx, taskID, namespace)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("v1"), tok)
+
+	// SaveToken succeeds and migrates the label to the current TaskLabelValue format
+	require.NoError(t, store.SaveToken(ctx, taskID, namespace, []byte("v2")))
+	require.NoError(t, fakeClient.Get(ctx, objectKey(namespace, SecretName(taskID)), sec))
+	assert.Equal(t, currentLabel, sec.Labels[LabelAgentTask])
+}

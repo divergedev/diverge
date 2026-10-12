@@ -354,20 +354,29 @@ func TestGitHubWebhookDeletesEnvironmentError(t *testing.T) {
 func TestGitHubWebhookIssueCommentSlashCommand(t *testing.T) {
 	fakeK8s := newTestClient()
 
+	prServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"head":{"ref":"feat/race-fix"}}`))
+	}))
+	defer prServer.Close()
+
 	handler := &GitHubWebhookHandler{
-		Client:    fakeK8s,
-		Config:    WebhookConfig{SecretToken: "secret"},
-		DefaultNS: "preview",
+		Client:     fakeK8s,
+		Config:     WebhookConfig{SecretToken: "secret"},
+		HTTPClient: prServer.Client(),
+		DefaultNS:  "preview",
 	}
 
 	body := `{
 		"action": "created",
 		"issue": {
 			"number": 77,
-			"pull_request": {"url": "https://api.github.com/repos/divergedev/demo-api/pulls/77"}
+			"pull_request": {"url": "` + prServer.URL + `/repos/divergedev/demo-api/pulls/77"}
 		},
 		"comment": {
-			"body": "/diverge fix resolve race condition in worker pool"
+			"body": "/diverge fix resolve race condition in worker pool",
+			"author_association": "MEMBER"
 		},
 		"repository": {
 			"full_name": "divergedev/demo-api",
@@ -398,7 +407,77 @@ func TestGitHubWebhookIssueCommentSlashCommand(t *testing.T) {
 	if tasks.Items[0].Spec.Objective != "resolve race condition in worker pool" {
 		t.Errorf("Unexpected objective: %s", tasks.Items[0].Spec.Objective)
 	}
+	if tasks.Items[0].Spec.Repository.BaseBranch != "feat/race-fix" {
+		t.Errorf("Expected resolved PR head branch feat/race-fix, got %s", tasks.Items[0].Spec.Repository.BaseBranch)
+	}
 	if tasks.Items[0].Annotations["divergedev.com/pr-number"] != "77" {
 		t.Errorf("Expected pr-number annotation 77, got %s", tasks.Items[0].Annotations["divergedev.com/pr-number"])
+	}
+}
+
+func TestGitHubWebhookIssueCommentAuthorization(t *testing.T) {
+	fakeK8s := newTestClient()
+
+	handler := &GitHubWebhookHandler{
+		Client:    fakeK8s,
+		Config:    WebhookConfig{SecretToken: "secret"},
+		DefaultNS: "preview",
+	}
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "plain issue comment without pull_request is ignored",
+			body: `{
+				"action": "created",
+				"issue": {"number": 77},
+				"comment": {
+					"body": "/diverge fix should not run on plain issues",
+					"author_association": "OWNER"
+				},
+				"repository": {"full_name": "divergedev/demo-api"}
+			}`,
+		},
+		{
+			name: "untrusted commenter NONE is ignored",
+			body: `{
+				"action": "created",
+				"issue": {
+					"number": 77,
+					"pull_request": {"url": "https://api.github.com/repos/divergedev/demo-api/pulls/77"}
+				},
+				"comment": {
+					"body": "/diverge fix should not run for untrusted user",
+					"author_association": "NONE"
+				},
+				"repository": {"full_name": "divergedev/demo-api"}
+			}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sig := generateSignature("secret", tc.body)
+			req, _ := http.NewRequest(http.MethodPost, "/", bytes.NewBufferString(tc.body))
+			req.Header.Set("X-Hub-Signature-256", sig)
+			req.Header.Set("X-GitHub-Event", "issue_comment")
+
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusOK {
+				t.Fatalf("Expected 200, got %d", rr.Code)
+			}
+
+			var tasks divergeiov1alpha1.AgentTaskList
+			if err := fakeK8s.List(context.Background(), &tasks, client.InNamespace("preview")); err != nil {
+				t.Fatalf("Failed to list AgentTasks: %v", err)
+			}
+			if len(tasks.Items) != 0 {
+				t.Fatalf("Expected 0 AgentTasks created, got %d", len(tasks.Items))
+			}
+		})
 	}
 }

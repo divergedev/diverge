@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -285,6 +287,9 @@ func executeSuspendTaskCommand(ctx context.Context, c client.Client, ns, repoURL
 }
 
 func matchesTaskPR(task *v1alpha1.AgentTask, repoURL string, prNumber int, prStr string) bool {
+	if repoURL != "" && normalizeRepoURL(task.Spec.Repository.URL) != normalizeRepoURL(repoURL) {
+		return false
+	}
 	if prNumber > 0 {
 		if task.Annotations[prNumberAnnotationKey] == prStr || task.Labels[prNumberAnnotationKey] == prStr {
 			return true
@@ -292,17 +297,23 @@ func matchesTaskPR(task *v1alpha1.AgentTask, repoURL string, prNumber int, prStr
 		if task.Spec.Repository.WorkingBranch == fmt.Sprintf("pr-%d", prNumber) {
 			return true
 		}
+		return false
 	}
-	if repoURL != "" && task.Spec.Repository.URL == repoURL && prNumber == 0 {
-		return true
-	}
-	return false
+	return repoURL != ""
+}
+
+func normalizeRepoURL(raw string) string {
+	return strings.TrimSuffix(strings.TrimSuffix(strings.ToLower(strings.TrimSpace(raw)), "/"), ".git")
 }
 
 func findMatchingEnvironments(ctx context.Context, c client.Client, ns, repoURL string, prNumber int) ([]v1alpha1.Environment, error) {
 	var envList v1alpha1.EnvironmentList
 	if err := c.List(ctx, &envList, client.InNamespace(ns)); err != nil {
 		return nil, err
+	}
+
+	if prNumber <= 0 {
+		return nil, nil
 	}
 
 	project := projectFromRepoURL(repoURL)
@@ -312,11 +323,20 @@ func findMatchingEnvironments(ctx context.Context, c client.Client, ns, repoURL 
 
 	var matched []v1alpha1.Environment
 	for _, env := range envList.Items {
-		if prNumber > 0 && (env.Spec.Source.MR == prNumber ||
+		if project != "" {
+			if env.Spec.Source.Project != "" {
+				if !strings.EqualFold(env.Spec.Source.Project, project) {
+					continue
+				}
+			} else if env.Name != expectedPRName && env.Name != expectedMRName {
+				continue
+			}
+		}
+		if env.Spec.Source.MR == prNumber ||
 			env.Annotations[prNumberAnnotationKey] == prStr ||
 			env.Labels[prNumberAnnotationKey] == prStr ||
 			env.Name == expectedPRName ||
-			env.Name == expectedMRName) {
+			env.Name == expectedMRName {
 			matched = append(matched, env)
 		}
 	}
@@ -326,16 +346,26 @@ func findMatchingEnvironments(ctx context.Context, c client.Client, ns, repoURL 
 func findMatchingPreviewGroups(ctx context.Context, c client.Client, repoURL string, prNumber int) ([]v1alpha1.PreviewGroup, error) {
 	var pgList v1alpha1.PreviewGroupList
 	if err := c.List(ctx, &pgList); err != nil {
-		// Ignore scheme error if PreviewGroup is not registered in a minimal test scheme
+		if meta.IsNoMatchError(err) || runtime.IsNotRegisteredError(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	if prNumber <= 0 {
 		return nil, nil
 	}
 
+	project := projectFromRepoURL(repoURL)
 	prStr := strconv.Itoa(prNumber)
 	var matched []v1alpha1.PreviewGroup
 	for _, pg := range pgList.Items {
-		if prNumber > 0 && (pg.Spec.Source.MR == prNumber ||
+		if project != "" && !strings.EqualFold(pg.Spec.Source.Project, project) {
+			continue
+		}
+		if pg.Spec.Source.MR == prNumber ||
 			pg.Annotations[prNumberAnnotationKey] == prStr ||
-			pg.Labels[prNumberAnnotationKey] == prStr) {
+			pg.Labels[prNumberAnnotationKey] == prStr {
 			matched = append(matched, pg)
 		}
 	}

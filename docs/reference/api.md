@@ -375,6 +375,46 @@ sequenceDiagram
 
 ---
 
+## 6. AgentTask Live LLM Metering (`POST /api/v1/agenttask/meter`)
+
+REST JSON endpoint on `diverge-server` used by sandbox agents and LLM proxies to report live token and cost usage and enforce model/budget guardrails.
+
+- **Auth:** `Authorization: Bearer <macaroon-token>` (validated against `MacaroonProvider` HMAC-SHA256 caveats and `diverge-agenttask-tokens` revocation store).
+
+### Request Body (`LLMMeterRequest`)
+| Field | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `model` | `string` | Conditional | LLM model identifier (e.g., `"claude-3-7-sonnet"`). Required when the Macaroon token specifies `allowed_models` caveats. |
+| `tokensUsed` | `int64` | **Yes** | Incremental tokens consumed (`>= 0`). |
+| `costUSD` | `float64` | **Yes** | Incremental USD cost (`>= 0`, finite). |
+
+### Response Body (`LLMMeterResponse`)
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `allowed` | `bool` | `true` if within budget and model constraints; `false` otherwise. |
+| `suspended` | `bool` | `true` if the `AgentTask` was suspended due to budget exhaustion. |
+| `reason` | `string` | Error or suspension reason (e.g., `"budget exceeded"`, `"model \"gpt-4\" is not allowed"`). |
+| `totalTokensUsed` | `int64` | Cumulative tokens consumed by the `AgentTask`. |
+| `totalCostUSD` | `float64` | Cumulative USD cost consumed by the `AgentTask`. |
+
+### HTTP Status Codes
+| Status Code | Condition |
+| :--- | :--- |
+| `200 OK` | Usage recorded; task remains within budget. |
+| `400 Bad Request` | Malformed JSON or negative/non-finite `tokensUsed` / `costUSD`. |
+| `401 Unauthorized` | Missing, malformed, expired, or revoked Macaroon capability token. |
+| `403 Forbidden` | `model` is omitted or not permitted by the token's `allowed_models` caveats. |
+| `429 Too Many Requests` | Cumulative `costUSD` or `tokensUsed` exceeded budget; `AgentTask` transitions to `Paused`, sets `spec.suspended = true`, and revokes its token in `diverge-agenttask-tokens`. |
+
+```bash
+curl -X POST https://diverge.example.com/api/v1/agenttask/meter \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $MACAROON_TOKEN" \
+  -d '{"model": "claude-3-7-sonnet", "tokensUsed": 1500, "costUSD": 0.0225}'
+```
+
+---
+
 ## Data Schema Reference
 
 ### `Environment`

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -76,6 +77,7 @@ type ActivatorServer struct {
 	activatorProxy *httputil.ReverseProxy
 	podLister      listerscorev1.PodLister
 	informerCancel context.CancelFunc
+	waking         atomic.Bool
 }
 
 // NewActivatorServer creates a new ActivatorServer.
@@ -164,7 +166,12 @@ func (s *ActivatorServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if (s.config.EnableWakeSplash || r.Header.Get("X-Diverge-Wake-Splash") == "true") &&
 		r.Method == http.MethodGet &&
 		strings.Contains(r.Header.Get("Accept"), "text/html") {
-		go s.triggerBackgroundWake(r.Host)
+		if s.waking.CompareAndSwap(false, true) {
+			go func(host string) {
+				defer s.waking.Store(false)
+				s.triggerBackgroundWake(host)
+			}(r.Host)
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Retry-After", "2")
 		w.WriteHeader(http.StatusAccepted)

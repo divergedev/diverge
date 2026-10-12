@@ -633,6 +633,11 @@ func TestDirectDeployer_WithAllowedKinds_CustomAllowlist(t *testing.T) {
 	err := d.Deploy(context.Background(), env)
 	require.Error(t, err, "Deployment should be rejected when custom allowlist only permits Service")
 
+	// Empty map override must deny all kinds (not fall back to defaultAllowedKinds)
+	d.WithAllowedKinds(map[string]bool{})
+	err = d.Deploy(context.Background(), env)
+	require.Error(t, err, "Deployment should be rejected when custom allowlist is empty")
+
 	d.WithAllowedKinds(map[string]bool{"Deployment": true})
 	err = d.Deploy(context.Background(), env)
 	require.NoError(t, err)

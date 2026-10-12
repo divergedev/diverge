@@ -28,6 +28,11 @@ func init() {
 	ctrlmetrics.Registry.MustRegister(EnvironmentEstimatedHourlyCostUSD)
 }
 
+// DeleteEnvironmentCostMetric removes the estimated hourly cost gauge series for a torn-down environment.
+func DeleteEnvironmentCostMetric(name, namespace string) {
+	EnvironmentEstimatedHourlyCostUSD.DeleteLabelValues(name, namespace)
+}
+
 // CostRateCard defines the unit hourly resource pricing for preview environments.
 type CostRateCard struct {
 	VCPUHourUSD         float64

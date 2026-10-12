@@ -20,11 +20,11 @@ helm install diverge diverge/diverge \
 ```
 
 ## 2. Configure GitLab Webhook
-To enable automatic environment creation, configure a webhook in your GitLab project:
+To enable automatic environment creation and interactive MR slash commands, configure a webhook in your GitLab project:
 1. Go to your GitLab Project -> **Settings** -> **Webhooks**.
 2. URL: `https://diverge.yourdomain.com/gitlab-webhook` (replace with your Diverge ingress endpoint).
 3. Secret Token: Your configured webhook secret token.
-4. Trigger events: Check **Merge request events**.
+4. Trigger events: Check **Merge request events** and **Comments** (`Note Hook` on Merge Requests).
 5. Click **Add webhook**.
 
 For **PreviewGroups** support (multi-service environments), add a second webhook pointing to:
@@ -66,7 +66,30 @@ When the PreviewGroup webhook is triggered:
 - MR comments are posted to summarize the collective state and provide the routing header (e.g., `x-preview-env: 123`).
 - Teardown of the PreviewGroup happens automatically when the MR is closed or merged.
 
-## 7. GitLab CI/CD Pipeline
+## 7. Interactive MR Slash Commands
+
+With **Comments** (`Note Hook` on Merge Requests) enabled on your GitLab webhook (or **Issue comments** (`issue_comment`) on GitHub, restricted to repository `OWNER`, `MEMBER`, or `COLLABORATOR` roles), developers can trigger preview and agent actions directly from Merge Request comments:
+
+| Slash Command | Action |
+| :--- | :--- |
+| `/diverge preview` | Provisions or reconciles an `Environment` (`mr-<iid>`) for the Merge Request branch. |
+| `/diverge fix <objective>` | Creates or updates an autonomous `AgentTask` (with an automatic linked preview environment) targeting the MR branch. |
+| `/diverge extend-ttl [duration]` | Extends the TTL (`spec.lifecycle.ttl`) of the MR's `Environment` and `PreviewGroup` resources (defaults to `24h` when `[duration]` is omitted). |
+| `/diverge teardown` | Immediately deletes all `Environment` and `PreviewGroup` resources tied to the MR. |
+| `/diverge pause` | Suspends active `AgentTask` execution for the MR (`spec.suspended = true`). |
+| `/diverge resume` | Resumes paused `AgentTask` execution for the MR (`spec.suspended = false`). |
+
+Example MR comment commands:
+```text
+/diverge preview
+/diverge fix Fix N+1 query in user settings endpoint
+/diverge extend-ttl 48h
+/diverge pause
+/diverge resume
+/diverge teardown
+```
+
+## 8. GitLab CI/CD Pipeline
 You can integrate Diverge into your GitLab CI pipelines to build your container images and push them to the registry before environments are provisioned.
 
 Example `.gitlab-ci.yml`:
@@ -89,23 +112,24 @@ build-preview:
 ```
 Refer to the `ci/gitlab/` directory for full examples.
 
-## 8. Self-Hosted GitLab
+## 9. Self-Hosted GitLab
 If you are running a self-hosted GitLab instance, ensure the following are configured:
 - **Custom URL configuration**: You must pass the `--gitlab-url` flag to the controller manager deployment args. The base URL handling for the standard notifier is currently unconfigurable via env var or Helm value.
 - **Internal CA certificates**: If your instance uses self-signed certs, mount your CA bundle into the controller pod.
 - **Private registry authentication**: Ensure Diverge has the correct image pull secrets for your internal container registry.
 - **Network considerations**: The webhook delivery must be able to reach your Kubernetes cluster from the GitLab instance. You may need to configure local network access in GitLab's Admin Area (`Settings` > `Network` > `Outbound requests`).
 
-## 9. GitLab vs GitHub Feature Parity
+## 10. GitLab vs GitHub Feature Parity
 | Feature | GitHub | GitLab |
 |---------|--------|--------|
 | Environment MR comments | ✅ | ✅ |
 | PreviewGroup MR comments | ✅ | ✅ |
+| Interactive `/diverge` slash commands | ✅ (`issue_comment`) | ✅ (`Note Hook`) |
 | Webhook signature validation | ✅ HMAC-SHA256 | ✅ Token |
 | CI/CD integration | GitHub Actions | GitLab CI/CD |
 | Container registry | ghcr.io | registry.gitlab.com |
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 - **Webhook 404** → Check that your webhook URL endpoint is correct and accessible.
 - **No MR comments** → Verify your `DIVERGE_NOTIFIER_TOKEN` permissions; it requires the `api` scope to post notes.
 - **Self-hosted cert errors** → You likely need to mount your custom CA bundle in the controller.

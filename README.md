@@ -60,27 +60,27 @@ helm install diverge oci://ghcr.io/divergedev/charts/diverge --version <version>
 See [charts/diverge/values.yaml](charts/diverge/values.yaml) for configuration options.
 
 ## Key Features
-*   **Autonomous Agent Sandboxes (`AgentTask`)**: Run AI coding agents inside isolated Kubernetes sandboxes (`gvisor` / `kata` / `agent-sandbox`) with attenuated **Macaroon capability tokens**, network policy egress lockdowns, and USD/token/iteration budget guardrails.
+*   **Autonomous Agent Sandboxes (`AgentTask`)**: Run AI coding agents inside isolated Kubernetes sandboxes (`gvisor` / `kata` / `agent-sandbox`) with attenuated **Macaroon capability tokens**, network policy egress lockdowns, automatic linked preview environments (`PreviewEnvironmentReady` condition, `divergedev.com/preview-url` annotation), and live LLM cost/token metering via `POST /api/v1/agenttask/meter`.
 *   **PreviewGroup Orchestration**: Manage multiple child environments and services under a single CR tied directly to an MR/PR. Automatic orphan cleanup and label-based ownership.
 *   **Provider Registry**: Pluggable, extensible architecture — add new routing, deployer, notifier, sandbox, or database providers with a single file. Zero changes to the controller.
-*   **Scale-to-Zero**: Idle preview environments automatically scale to zero via KEDA HTTP Add-on (`HTTPScaledObject`). The interceptor wakes up pods on the first request, resulting in 90%+ resource savings for idle MRs.
-*   **Activator Proxy**: Smart routing that directs traffic to the pod when ready. Includes `X-Preview-Env` header injection and a shared informer for efficient pod state tracking.
+*   **Scale-to-Zero**: Idle preview environments automatically scale to zero via KEDA HTTP Add-on (`HTTPScaledObject`) or annotation-based idle hibernation (`divergedev.com/hibernate-after`, `divergedev.com/last-traffic-at`). The interceptor wakes up pods on the first request, resulting in 90%+ resource savings for idle MRs.
+*   **Activator Proxy (`activator-proxy`)**: Smart routing that directs traffic to the pod when ready. Includes `X-Preview-Env` header injection, a shared informer for efficient pod state tracking, and an optional auto-refreshing HTML wake-up splash page (`--wake-splash` flag / `X-Diverge-Wake-Splash: true` header and `GET /-/wakeup-status` readiness endpoint).
 *   **Delta Deployment**: Only deploy what changed, falling back to a baseline for unmodified services.
 *   **Header-Based Routing & Gateway API**: Leverages Gateway API (`HTTPRoute` + `GRPCRoute`), Istio, Cilium, Linkerd, and the Diverge Proxy to route traffic seamlessly using HTTP/gRPC headers.
 *   **Configurable DB Modes & Atlas Migrations**: Options for `shared`, `schema`, `snapshot`, `neon`, `cnpg`, or `cockroach` databases, plus native [Atlas Operator](docs/guides/database-branching-atlas.md) (`AtlasMigration` / `AtlasSchema`) integration.
-*   **Schema-per-Environment**: Actual execution of SQL-based schema provisioning (via `SQLExecutor`), regex-validated naming, injection prevention, and automated migration Jobs.
+*   **Schema-per-Environment**: Actual execution of SQL-based schema provisioning (via `SQLExecutor`), regex-validated naming, injection prevention, auto-generated `diverge-db-env-<env>` Secret (`DATABASE_URL` and `DIVERGE_PREVIEW_SCHEMA`), and automated migration Jobs.
 *   **MR-Triggered Lifecycle**: Environments spin up when a Merge Request opens and tear down upon merge/close.
 *   **Merge Gating**: GitLab/GitHub commit status checks (`diverge/preview`) block merges until environments are healthy.
 *   **Argo CD & Direct Deploy**: Argo CD GitOps (`Application` CRs) and No-ArgoCD mode (`DirectDeployer`) for Helm charts and Kustomize overlays.
 *   **Feature Flags & OpenFeature**: Isolated flag evaluation per preview environment. Out-of-the-box support for in-cluster `flagd` ConfigMaps and remote [Flipt](https://flipt.io) ephemeral namespaces with automated cleanup on MR merge.
 *   **Environment Export**: `diverge env export` extracts environment variables from preview pods for local development (dotenv, JSON, shell formats).
 *   **Test Integration**: CI trigger and polling support to run automated tests against preview environments.
-*   **Prometheus Metrics**: Reconciliation duration, deployment status, route counts, active environments, and preview group gauges.
+*   **Prometheus Metrics**: Reconciliation duration, deployment status, route counts, active environments, preview group gauges, per-environment cost estimation (`diverge_environment_estimated_hourly_cost_usd`), and idle hibernation tracking (`divergedev.com/hibernate-after`, `divergedev.com/last-traffic-at`).
 *   **Namespace Labels**: Custom labels on preview namespaces (e.g., `istio.io/dataplane-mode: ambient` for zero-trust mTLS).
 *   **Security Hardened**: Macaroon capability tokens, webhook secret constant-time comparison, RFC 7230 header validation, safe SHA handling, ArgoCD namespace bypass prevention, IPv6-safe pod URLs, typed Server-Side Apply (SSA), and strict label validation.
 *   **Finalizer-Based Lifecycle**: Kubernetes finalizers ensure clean teardown of all resources (routing, database, sandboxes, ArgoCD apps) even during force-deletes.
 *   **TTL Auto-Expiry**: Automatic environment cleanup after configurable TTL with requeue-based expiry.
-*   **Multi-SCM Notifiers**: GitLab MR comments and GitHub PR comments with status updates.
+*   **Multi-SCM Notifiers & Webhooks**: GitLab MR comments and GitHub PR comments with status updates and interactive PR/MR slash commands (`/diverge preview`, `/diverge fix <objective>`, `/diverge extend-ttl [duration]`, `/diverge teardown`, `/diverge pause`, `/diverge resume`).
 *   **E2E Tested**: End-to-end tests with Kind/k3d, Envoy Gateway, Istio, Cilium, Linkerd, and real CRD reconciliation.
 *   **ConnectRPC API Server & Web Dashboard**: Opt-in API server (`server.enabled: true` in Helm) featuring an embedded React Web UI (`server.dashboard.enabled: true`), ConnectRPC (HTTP/1.1 + HTTP/2), OIDC JWT + K8s TokenReview + Macaroon authentication, namespace-scoped RBAC authorization, structured audit logging, list pagination, optimistic concurrency, and HTTP reverse tunnels.
 *   **Service Topology & Route Simulation**: `diverge route <service>` traces request paths through your service graph. `diverge graph show` renders the topology as Mermaid, DOT, or JSON.

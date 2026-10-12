@@ -253,8 +253,9 @@ func resolveDBSecret(env *v1alpha1.Environment) string {
 		return db.ConnectionRef
 	}
 
-	// Auto-provisioned secret for schema mode
-	if db.Mode == "schema" {
+	// Auto-provisioned secret for schema mode (when database provisioning has
+	// recorded status or when evaluated standalone without controller status conditions)
+	if db.Mode == "schema" && (env.Status.DatabaseStatus != "" || len(env.Status.Conditions) == 0) {
 		return sanitizeDBEnvSecretName(fmt.Sprintf("diverge-db-env-%s", env.Name), env.Name, 63)
 	}
 

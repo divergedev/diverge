@@ -14,7 +14,7 @@ Diverge provides first-class support for [Ariga Atlas](https://atlasgo.io) to ma
   - **Versioned Migrations (`mode: versioned`)**: Apply ordered SQL migration scripts (`atlas migrate apply`).
   - **Declarative Schemas (`mode: declarative`)**: Align database state with a target schema definition (`atlas schema apply`).
 - **Strict Lifecycle Gating**: With `blocking: true` (default), environments enter the `Migrating` phase with a pulsing status badge. Workload application pods are scheduled **only after** migrations report `Succeeded`. If migrations fail, the environment transitions to `Failed` and halts deployment to protect against broken database states.
-- **Ephemeral Isolation & Clean Teardown**: Each preview environment operates in its own isolated PostgreSQL schema (`search_path=preview_<env>,public`). Deleting the preview environment drops the entire schema cascade, deleting all tables and Atlas migration tracking records cleanly.
+- **Ephemeral Isolation & Clean Teardown**: Each preview environment operates in its own isolated PostgreSQL schema (`search_path=preview_<env>,public`). When `spec.database.connectionRef` is omitted in `schema` mode, the controller auto-provisions an owned Secret named `diverge-db-env-<env>-<hash8>` containing `DATABASE_URL` (scoped to `diverge_preview_<schema>` with `search_path=preview_<env>,public`) and `DIVERGE_PREVIEW_SCHEMA` (`preview_<env>`), which `ServiceConfigFetcher` automatically injects into preview pods and Atlas migration jobs. Deleting the preview environment drops the entire schema cascade, deleting all tables and Atlas migration tracking records cleanly.
 
 ---
 
@@ -36,8 +36,10 @@ Diverge provides first-class support for [Ariga Atlas](https://atlasgo.io) to ma
 ┌────────────────────────────────────────────────────────────────────────┐
 │                     DIVERGE CONTROLLER                                 │
 │                                                                        │
-│  1. Provisions per-preview PostgreSQL schema (preview_<env>)           │
-│  2. Attaches OwnerReference to ConfigMap for automated cleanup         │
+│  1. Provisions per-preview PostgreSQL schema (preview_<env>) &         │
+│     auto-creates Secret diverge-db-env-<env>-<hash8>                   │
+│     (DATABASE_URL + DIVERGE_PREVIEW_SCHEMA) when connectionRef omitted │
+│  2. Attaches OwnerReference to ConfigMap & Secret for auto-cleanup     │
 │  3. Dispatches Atlas Job / CR with DATABASE_URL (search_path set)      │
 │  4. Lifecycle Gating: Sets Phase = "Migrating", MigrationStatus = "Running"│
 │  5. Requeues and WAITS for Job Completion before Deploying Workloads   │

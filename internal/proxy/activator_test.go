@@ -112,12 +112,13 @@ func TestActivatorServer_WakeupStatus(t *testing.T) {
 }
 
 func TestActivatorServer_WakeupSplashPage(t *testing.T) {
-	wakeCh := make(chan string, 1)
+	wakeCh := make(chan string, 4)
+	releaseWake := make(chan struct{})
+	var wakeCount atomic.Int32
 	activatorBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case wakeCh <- r.Header.Get("Knative-Serving-Revision"):
-		default:
-		}
+		wakeCount.Add(1)
+		wakeCh <- r.Header.Get("Knative-Serving-Revision")
+		<-releaseWake
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer activatorBackend.Close()
@@ -153,6 +154,17 @@ func TestActivatorServer_WakeupSplashPage(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected background wake request to reach Knative activator")
 	}
+
+	// Second splash request while the first background wake is still in flight must be deduplicated
+	req2 := httptest.NewRequest(http.MethodGet, "http://pr-99.preview.example.com/", nil)
+	req2.Header.Set("Accept", "text/html,application/xhtml+xml")
+	req2.Header.Set("X-Diverge-Wake-Splash", "true")
+	rr2 := httptest.NewRecorder()
+	server.ServeHTTP(rr2, req2)
+	assert.Equal(t, http.StatusAccepted, rr2.Code)
+
+	close(releaseWake)
+	assert.Equal(t, int32(1), wakeCount.Load(), "in-flight background wake must be deduplicated")
 }
 
 func TestActivatorServer_ConnectionHeaderProtection(t *testing.T) {

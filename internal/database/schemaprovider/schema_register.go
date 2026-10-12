@@ -53,7 +53,9 @@ func init() {
 			_ = db.Close()
 
 			return &SchemaDatabaseProvider{
-				AdminDSN: dsn,
+				AdminDSN:  dsn,
+				Client:    deps.Client,
+				passwords: make(map[string]string),
 			}, nil
 		},
 		Description: "Schema-per-environment database provisioning",

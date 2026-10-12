@@ -45,6 +45,20 @@ func TestResolveDBSecret_SchemaMode(t *testing.T) {
 	assert.Equal(t, expected, secret, "schema mode should return deterministic auto-provisioned secret name")
 }
 
+func TestResolveDBSecret_SchemaModeWithoutDatabaseStatus(t *testing.T) {
+	env := testEnvWithDB("preview-42", "schema", "", "")
+	env.Status.Conditions = []metav1.Condition{{
+		Type:   "NamespaceReady",
+		Status: metav1.ConditionTrue,
+	}}
+	// DatabaseStatus is empty while controller conditions exist -> do not reference unprovisioned secret
+	assert.Empty(t, resolveDBSecret(env))
+
+	env.Status.DatabaseStatus = "Schema Provisioned SQL executed"
+	expected := sanitizeDBEnvSecretName("diverge-db-env-preview-42", "preview-42", 63)
+	assert.Equal(t, expected, resolveDBSecret(env))
+}
+
 func TestResolveDBSecret_NoDatabase(t *testing.T) {
 	env := testEnvWithDB("preview-42", "", "", "")
 	secret := resolveDBSecret(env)

@@ -132,8 +132,8 @@ func TestPBT_JobName(t *testing.T) {
 		suffix := hegel.Draw(ht, hegel.Text())
 
 		jobName := generateHookJobName(name, suffix)
-		assert.LessOrEqual(t, len(jobName), 63)
-		assert.True(t, dnsRegex.MatchString(jobName), "Job name %q must be a valid DNS-1123 label", jobName)
+		require.LessOrEqual(ht, len(jobName), 63)
+		require.True(ht, dnsRegex.MatchString(jobName), "Job name %q must be a valid DNS-1123 label", jobName)
 	})
 }
 
@@ -150,8 +150,8 @@ func TestPBT_DSNSecret(t *testing.T) {
 	hegel.Test(t, func(ht *hegel.T) {
 		dsn := hegel.Draw(ht, hegel.Text())
 		secretName, err := createDSNSecret(ctx, c, "test-env", "default", dsn, env)
-		assert.NoError(t, err)
-		assert.NotEmpty(t, secretName)
+		require.NoError(ht, err)
+		require.NotEmpty(ht, secretName)
 
 		secret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
@@ -163,7 +163,7 @@ func TestPBT_DSNSecret(t *testing.T) {
 			},
 		}
 
-		assert.Equal(t, dsn, secret.StringData["url"])
+		require.Equal(ht, dsn, secret.StringData["url"])
 	})
 }
 
@@ -180,9 +180,9 @@ func TestPBT_SanitizeK8sName(t *testing.T) {
 		if effectiveMax < 10 {
 			effectiveMax = 10
 		}
-		assert.LessOrEqual(t, len(out), effectiveMax)
-		assert.NotContains(t, out, "--", "sanitized name %q must not contain consecutive hyphens", out)
-		assert.True(t, dnsRegex.MatchString(out), "sanitized name %q must be a valid DNS-1123 label", out)
+		require.LessOrEqual(ht, len(out), effectiveMax)
+		require.NotContains(ht, out, "--", "sanitized name %q must not contain consecutive hyphens", out)
+		require.True(ht, dnsRegex.MatchString(out), "sanitized name %q must be a valid DNS-1123 label", out)
 	})
 }
 
@@ -190,10 +190,10 @@ func TestPBT_TruncateLabel(t *testing.T) {
 	hegel.Test(t, func(ht *hegel.T) {
 		val := hegel.Draw(ht, hegel.Text())
 		out := truncateLabel(val)
-		assert.LessOrEqual(t, len(out), 63)
+		require.LessOrEqual(ht, len(out), 63)
 		if len(out) > 0 {
 			last := out[len(out)-1]
-			assert.NotContains(t, "-_.", string(last), "truncated label %q must not end with -_.", out)
+			require.NotContains(ht, "-_.", string(last), "truncated label %q must not end with -_.", out)
 		}
 	})
 }

@@ -146,8 +146,14 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 		})
 		env.Status.DatabaseStatus = dbStatus.Message
 
-		if len(dbStatus.EnvVars) > 0 && env.Spec.Database.ConnectionRef == "" {
-			if err := r.ensureDatabaseEnvSecret(ctx, env, dbStatus.EnvVars); err != nil {
+		if env.Spec.Database.ConnectionRef == "" && (len(dbStatus.EnvVars) > 0 || env.Spec.Database.Mode == "schema") {
+			envVars := dbStatus.EnvVars
+			if len(envVars) == 0 {
+				envVars = map[string]string{
+					"DATABASE_URL": dbStatus.DSN,
+				}
+			}
+			if err := r.ensureDatabaseEnvSecret(ctx, env, envVars); err != nil {
 				meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 					Type:    "DatabaseReady",
 					Status:  metav1.ConditionFalse,
@@ -536,10 +542,15 @@ func (r *EnvironmentReconciler) ensureBannerConfigMap(ctx context.Context, env *
 func (r *EnvironmentReconciler) ensureDatabaseEnvSecret(ctx context.Context, env *divergeiov1alpha1.Environment, envVars map[string]string) error {
 	secretName := sanitizeK8sName(fmt.Sprintf("diverge-db-env-%s", env.Name), env.Name, 63)
 
+	targetNS := env.Namespace
+	if env.Spec.Deploy.Namespace == "create" {
+		targetNS = env.PreviewNamespace()
+	}
+
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      secretName,
-			Namespace: env.Namespace,
+			Namespace: targetNS,
 		},
 	}
 
@@ -550,40 +561,37 @@ func (r *EnvironmentReconciler) ensureDatabaseEnvSecret(ctx context.Context, env
 		secret.Labels["divergedev.com/environment"] = truncateLabel(env.Name)
 		secret.Labels["divergedev.com/managed-by"] = "diverge"
 
-		if r.Scheme != nil {
-			if err := controllerutil.SetControllerReference(env, secret, r.Scheme); err != nil {
-				isCtrl := true
-				secret.OwnerReferences = []metav1.OwnerReference{{
-					APIVersion:         "divergedev.com/v1alpha1",
-					Kind:               "Environment",
-					Name:               env.Name,
-					UID:                env.UID,
-					Controller:         &isCtrl,
-					BlockOwnerDeletion: &isCtrl,
-				}}
+		if targetNS == env.Namespace {
+			if r.Scheme != nil {
+				if err := controllerutil.SetControllerReference(env, secret, r.Scheme); err != nil {
+					return err
+				}
+			} else {
+				for _, ref := range secret.OwnerReferences {
+					if ref.Controller != nil && *ref.Controller && (ref.Kind != "Environment" || ref.Name != env.Name) {
+						return fmt.Errorf("secret %s is already owned by %s/%s", secret.Name, ref.Kind, ref.Name)
+					}
+				}
+				if env.UID != "" {
+					isCtrl := true
+					secret.OwnerReferences = []metav1.OwnerReference{{
+						APIVersion:         "divergedev.com/v1alpha1",
+						Kind:               "Environment",
+						Name:               env.Name,
+						UID:                env.UID,
+						Controller:         &isCtrl,
+						BlockOwnerDeletion: &isCtrl,
+					}}
+				}
 			}
-		} else {
-			isCtrl := true
-			secret.OwnerReferences = []metav1.OwnerReference{{
-				APIVersion:         "divergedev.com/v1alpha1",
-				Kind:               "Environment",
-				Name:               env.Name,
-				UID:                env.UID,
-				Controller:         &isCtrl,
-				BlockOwnerDeletion: &isCtrl,
-			}}
 		}
 
-		if secret.StringData == nil {
-			secret.StringData = make(map[string]string, len(envVars))
-		}
-		if secret.Data == nil {
-			secret.Data = make(map[string][]byte, len(envVars))
-		}
+		newData := make(map[string][]byte, len(envVars))
 		for k, v := range envVars {
-			secret.StringData[k] = v
-			secret.Data[k] = []byte(v)
+			newData[k] = []byte(v)
 		}
+		secret.Data = newData
+		secret.StringData = nil
 		return nil
 	})
 	if err != nil {

@@ -221,6 +221,21 @@ curl -N -X POST "$SERVER_URL/diverge.v1alpha1.EnvironmentService/StreamLogs" \
   -d '{"namespace": "default", "environment_name": "preview-mr-42", "service_name": "api", "follow": true, "tail_lines": 100}'
 ```
 
+#### AgentTask Live LLM Metering (`POST /api/v1/agenttask/meter`)
+
+Sandbox agents and LLM gateways report incremental token and USD spend to `POST /api/v1/agenttask/meter` using the task's Macaroon capability token:
+
+```bash
+curl -s -X POST "$SERVER_URL/api/v1/agenttask/meter" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $MACAROON_TOKEN" \
+  -d '{"model": "claude-3-7-sonnet", "tokensUsed": 1500, "costUSD": 0.0225}' | jq .
+```
+
+- **`200 OK`**: Returns `{"allowed": true, "suspended": false, "totalTokensUsed": 1500, "totalCostUSD": 0.0225}`.
+- **`403 Forbidden`**: Returned when `model` is omitted or not listed in the token's `allowed_models` caveats (`spec.capabilities`).
+- **`429 Too Many Requests`**: Returned when cumulative token or USD usage exceeds the task budget (`"allowed": false, "suspended": true, "reason": "budget exceeded"`), automatically transitioning the `AgentTask` to `Paused`, setting `spec.suspended = true`, and revoking the token in `diverge-agenttask-tokens`.
+
 ### 2. TypeScript (`@connectrpc/connect-web`)
 
 ```typescript

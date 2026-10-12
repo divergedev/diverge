@@ -48,3 +48,29 @@ proxy:
   enabled: true
   defaultBackend: http://production-gateway.default.svc.cluster.local:8080
 ```
+
+> [!TIP]
+> Pass `--hide-environment-list` (`--hide-environment-list=true`) to `diverge-proxy` in multi-tenant or public-facing environments to suppress the list of active preview environments on the 404 landing page.
+
+---
+
+## 3. Proxy Flags & Routing Annotations
+
+### `diverge-proxy` & `activator-proxy` Flags
+| Binary | Flag | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `diverge-proxy` | `--hide-environment-list` | `false` | Hide the list of active preview environments on the 404 landing page. |
+| `activator-proxy` | `--wake-splash` | `false` | Serve a `202 Accepted` auto-refreshing HTML splash page (polling `GET /-/wakeup-status`) while waking scaled-to-zero pods. Can also be enabled per request via `X-Diverge-Wake-Splash: true`. |
+
+### Environment & AgentTask Routing Annotations
+| Resource | Annotation | Description |
+| :--- | :--- | :--- |
+| `Environment` | `divergedev.com/hibernate-after` | Idle duration (e.g., `"30m"`) after which the environment scales its preview Deployment down to `0` replicas (`Phase: Hibernating`). |
+| `Environment` | `divergedev.com/last-traffic-at` | RFC 3339 timestamp of the last observed request (used with `divergedev.com/hibernate-after`). |
+| `AgentTask` | `divergedev.com/preview-enabled` | `"true"` / `"false"` — Controls automatic provisioning of a linked preview `Environment` (`agent-preview-<taskName>`). |
+| `AgentTask` | `divergedev.com/preview-service` | Target service name for the `AgentTask`'s linked preview environment. |
+| `AgentTask` | `divergedev.com/preview-image` | Container image for the linked preview environment (defaults to `nginx:alpine` on port `80`). |
+| `AgentTask` | `divergedev.com/preview-branch` | Branch override for the linked preview environment. |
+| `AgentTask` | `divergedev.com/preview-environment` | Output annotation written by the controller with the linked `Environment` name. |
+| `AgentTask` | `divergedev.com/preview-url` | Output annotation written by the controller with the live preview URL once ready. |
+

@@ -23,8 +23,9 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 	ctx, span := otel.Tracer("diverge").Start(ctx, "handleTeardown")
 	defer span.End()
 
-	// Clean up per-environment TTL gauge to prevent cardinality leak
+	// Clean up per-environment TTL and cost gauges to prevent cardinality leak
 	metrics.EnvironmentTTLRemaining.DeleteLabelValues(env.Name, env.Namespace)
+	metrics.DeleteEnvironmentCostMetric(env.Name, env.Namespace)
 
 	if controllerutil.ContainsFinalizer(env, environmentFinalizer) {
 		r.Recorder.Event(env, "Normal", "Terminating", "Teardown started")
@@ -96,6 +97,24 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 			}
 		}
+
+		// Delete auto-provisioned database env Secret (after workloads have terminated)
+		targetNS := env.Namespace
+		if env.Spec.Deploy.Namespace == "create" {
+			targetNS = env.PreviewNamespace()
+		}
+		dbSecretName := sanitizeK8sName(fmt.Sprintf("diverge-db-env-%s", env.Name), env.Name, 63)
+		dbSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      dbSecretName,
+				Namespace: targetNS,
+			},
+		}
+		delSecCtx, cancelDelSec := context.WithTimeout(ctx, 15*time.Second)
+		if err := r.Delete(delSecCtx, dbSecret); err != nil && !apierrors.IsNotFound(err) {
+			errs = append(errs, fmt.Errorf("failed to delete database env secret: %w", err))
+		}
+		cancelDelSec()
 
 		// Teardown features (executed only after deployer workloads have terminated)
 		if fp, err := r.getFeatureProvider(env); err == nil && fp != nil {

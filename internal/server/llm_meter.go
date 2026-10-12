@@ -14,11 +14,14 @@ import (
 	"sync"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
 	pkgauth "github.com/divergedev/diverge/pkg/auth"
 )
+
+var errTokensOverflow = errors.New("tokensUsed overflows accumulated usage")
 
 // LLMMeterRequest is the JSON payload sent by a sandbox LLM proxy or agent to report token and cost usage.
 type LLMMeterRequest struct {
@@ -140,7 +143,15 @@ func (h *LLMMeterHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(claims.AllowedModels) > 0 && req.Model != "" {
+	if len(claims.AllowedModels) > 0 {
+		if strings.TrimSpace(req.Model) == "" {
+			writeMeterJSON(w, http.StatusForbidden, LLMMeterResponse{
+				Allowed:   false,
+				Suspended: false,
+				Reason:    "model is required when token restricts allowed_models",
+			})
+			return
+		}
 		modelAllowed := false
 		for _, m := range claims.AllowedModels {
 			if m == req.Model {
@@ -177,8 +188,64 @@ func (h *LLMMeterHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var task v1alpha1.AgentTask
-	if err := h.crdClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: claims.TaskID}, &task); err != nil {
+	var (
+		task           v1alpha1.AgentTask
+		totalCost      float64
+		totalTokens    int64
+		budgetExceeded bool
+		loadFailed     bool
+	)
+
+	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		loadFailed = true
+		task = v1alpha1.AgentTask{}
+		if getErr := h.crdClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: claims.TaskID}, &task); getErr != nil {
+			return getErr
+		}
+		loadFailed = false
+
+		if req.TokensUsed > math.MaxInt64-task.Status.TokensConsumed {
+			return errTokensOverflow
+		}
+
+		var prevCost float64
+		if task.Status.CostUSD != "" {
+			if parsed, parseErr := strconv.ParseFloat(task.Status.CostUSD, 64); parseErr == nil && !math.IsNaN(parsed) && !math.IsInf(parsed, 0) {
+				prevCost = parsed
+			}
+		}
+
+		totalCost = prevCost + req.CostUSD
+		totalTokens = task.Status.TokensConsumed + req.TokensUsed
+
+		task.Status.TokensConsumed = totalTokens
+		task.Status.CostUSD = fmt.Sprintf("%.4f", totalCost)
+
+		budgetExceeded = (claims.MaxCostUSD > 0 && totalCost > claims.MaxCostUSD) ||
+			(claims.MaxTokens > 0 && totalTokens > claims.MaxTokens)
+		if task.Spec.BudgetUSD != "" {
+			if specBudgetUSD, parseErr := strconv.ParseFloat(task.Spec.BudgetUSD, 64); parseErr == nil && specBudgetUSD > 0 && totalCost > specBudgetUSD {
+				budgetExceeded = true
+			}
+		}
+		if task.Spec.BudgetTokens > 0 && totalTokens > task.Spec.BudgetTokens {
+			budgetExceeded = true
+		}
+
+		if budgetExceeded {
+			task.Status.Phase = v1alpha1.AgentTaskPhasePaused
+			task.Status.Message = "Budget exceeded"
+		}
+		return h.updateTaskStatus(ctx, &task)
+	})
+	if err != nil {
+		if errors.Is(err, errTokensOverflow) {
+			writeMeterJSON(w, http.StatusBadRequest, LLMMeterResponse{
+				Allowed: false,
+				Reason:  "tokensUsed overflows accumulated usage",
+			})
+			return
+		}
 		if apierrors.IsNotFound(err) {
 			writeMeterJSON(w, http.StatusNotFound, LLMMeterResponse{
 				Allowed: false,
@@ -186,52 +253,31 @@ func (h *LLMMeterHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		h.logger.Error("failed to get AgentTask for metering", "task", claims.TaskID, "namespace", ns, "error", err)
+		if loadFailed {
+			h.logger.Error("failed to get AgentTask for metering", "task", claims.TaskID, "namespace", ns, "error", err)
+			writeMeterJSON(w, http.StatusInternalServerError, LLMMeterResponse{
+				Allowed: false,
+				Reason:  "failed to load agent task",
+			})
+			return
+		}
+		h.logger.Error("failed to update AgentTask status", "task", claims.TaskID, "namespace", ns, "error", err)
 		writeMeterJSON(w, http.StatusInternalServerError, LLMMeterResponse{
 			Allowed: false,
-			Reason:  "failed to load agent task",
+			Reason:  "failed to update task status",
 		})
 		return
 	}
 
-	var prevCost float64
-	if task.Status.CostUSD != "" {
-		if parsed, parseErr := strconv.ParseFloat(task.Status.CostUSD, 64); parseErr == nil && !math.IsNaN(parsed) && !math.IsInf(parsed, 0) {
-			prevCost = parsed
-		}
-	}
-
-	totalCost := prevCost + req.CostUSD
-	totalTokens := task.Status.TokensConsumed + req.TokensUsed
-
-	task.Status.TokensConsumed = totalTokens
-	task.Status.CostUSD = fmt.Sprintf("%.4f", totalCost)
-
-	budgetExceeded := (claims.MaxCostUSD > 0 && totalCost > claims.MaxCostUSD) ||
-		(claims.MaxTokens > 0 && totalTokens > claims.MaxTokens)
-	if task.Spec.BudgetUSD != "" {
-		if specBudgetUSD, parseErr := strconv.ParseFloat(task.Spec.BudgetUSD, 64); parseErr == nil && specBudgetUSD > 0 && totalCost > specBudgetUSD {
-			budgetExceeded = true
-		}
-	}
-	if task.Spec.BudgetTokens > 0 && totalTokens > task.Spec.BudgetTokens {
-		budgetExceeded = true
-	}
-
 	if budgetExceeded {
-		task.Status.Phase = v1alpha1.AgentTaskPhasePaused
-		task.Status.Message = "Budget exceeded"
-		if err := h.updateTaskStatus(ctx, &task); err != nil {
-			h.logger.Error("failed to update AgentTask status on budget exceeded", "task", claims.TaskID, "namespace", ns, "error", err)
-			writeMeterJSON(w, http.StatusInternalServerError, LLMMeterResponse{
-				Allowed: false,
-				Reason:  "failed to update task status",
-			})
-			return
-		}
-
-		task.Spec.Suspended = true
-		if err := h.crdClient.Update(ctx, &task); err != nil {
+		if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			var latest v1alpha1.AgentTask
+			if err := h.crdClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: claims.TaskID}, &latest); err != nil {
+				return err
+			}
+			latest.Spec.Suspended = true
+			return h.crdClient.Update(ctx, &latest)
+		}); err != nil {
 			h.logger.Error("failed to suspend AgentTask spec on budget exceeded", "task", claims.TaskID, "namespace", ns, "error", err)
 			writeMeterJSON(w, http.StatusInternalServerError, LLMMeterResponse{
 				Allowed: false,
@@ -252,15 +298,6 @@ func (h *LLMMeterHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Reason:          "budget exceeded",
 			TotalTokensUsed: totalTokens,
 			TotalCostUSD:    totalCost,
-		})
-		return
-	}
-
-	if err := h.updateTaskStatus(ctx, &task); err != nil {
-		h.logger.Error("failed to update AgentTask status", "task", claims.TaskID, "namespace", ns, "error", err)
-		writeMeterJSON(w, http.StatusInternalServerError, LLMMeterResponse{
-			Allowed: false,
-			Reason:  "failed to update task status",
 		})
 		return
 	}

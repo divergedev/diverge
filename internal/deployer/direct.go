@@ -49,15 +49,17 @@ func WithAllowedKinds(kinds map[string]bool) DirectDeployerOption {
 			cloned[k] = v
 		}
 		d.AllowedKinds = cloned
+		d.customAllowedKinds = true
 	}
 }
 
 // DirectDeployer applies pre-rendered Kubernetes manifests directly
 // via Server-Side Apply, without requiring ArgoCD.
 type DirectDeployer struct {
-	Client       client.Client
-	Fetcher      ManifestFetcher
-	AllowedKinds map[string]bool
+	Client             client.Client
+	Fetcher            ManifestFetcher
+	AllowedKinds       map[string]bool
+	customAllowedKinds bool
 }
 
 // NewDirectDeployer creates a new DirectDeployer with optional configuration.
@@ -81,7 +83,7 @@ func (d *DirectDeployer) WithAllowedKinds(kinds map[string]bool) *DirectDeployer
 }
 
 func (d *DirectDeployer) isKindPermitted(kind string) bool {
-	if len(d.AllowedKinds) > 0 {
+	if d.customAllowedKinds || d.AllowedKinds != nil {
 		return d.AllowedKinds[kind]
 	}
 	return defaultAllowedKinds[kind]

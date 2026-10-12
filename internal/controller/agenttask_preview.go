@@ -75,12 +75,55 @@ func linkedPreviewEnvironmentName(taskName string) string {
 	return sanitizeK8sName("agent-preview-"+taskName, taskName, 63)
 }
 
+func isOwnedByAgentTask(env *v1alpha1.Environment, task *v1alpha1.AgentTask) bool {
+	if env == nil || task == nil {
+		return false
+	}
+	if env.Labels[labelManagedBy] == managedByAgentTask && env.Labels[labelAgentTask] == truncateLabel(task.Name) {
+		return true
+	}
+	for _, ref := range env.OwnerReferences {
+		if ref.Kind == "AgentTask" && ref.Name == task.Name {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *AgentTaskReconciler) reconcileLinkedPreviewEnvironment(ctx context.Context, task *v1alpha1.AgentTask) error {
-	if !isPreviewEnabledForTask(task) {
+	if task == nil {
 		return nil
 	}
 
 	envName := linkedPreviewEnvironmentName(task.Name)
+
+	if !isPreviewEnabledForTask(task) {
+		var existingEnv v1alpha1.Environment
+		if err := r.Get(ctx, types.NamespacedName{Name: envName, Namespace: task.Namespace}, &existingEnv); err == nil {
+			if isOwnedByAgentTask(&existingEnv, task) {
+				if delErr := client.IgnoreNotFound(r.Delete(ctx, &existingEnv)); delErr != nil {
+					return fmt.Errorf("failed to delete linked preview environment %s: %w", envName, delErr)
+				}
+			}
+		} else if client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to check linked preview environment %s: %w", envName, err)
+		}
+
+		if task.Annotations[annotationPreviewEnvironment] != "" || task.Annotations[annotationPreviewURL] != "" {
+			metaPatch := client.MergeFrom(task.DeepCopy())
+			delete(task.Annotations, annotationPreviewEnvironment)
+			delete(task.Annotations, annotationPreviewURL)
+			savedStatus := task.Status.DeepCopy()
+			if err := r.Patch(ctx, task, metaPatch); err != nil {
+				return fmt.Errorf("failed to clear task preview annotations: %w", err)
+			}
+			task.Status = *savedStatus
+		}
+
+		meta.RemoveStatusCondition(&task.Status.Conditions, conditionPreviewEnvReady)
+		return nil
+	}
+
 	branch := resolveTaskPreviewBranch(task)
 	serviceName := resolveTaskPreviewService(task)
 	image := resolveTaskPreviewImage(task)
@@ -101,6 +144,15 @@ func (r *AgentTaskReconciler) reconcileLinkedPreviewEnvironment(ctx context.Cont
 
 		if r.Scheme != nil {
 			if err := controllerutil.SetControllerReference(task, env, r.Scheme); err != nil {
+				return err
+			}
+		} else {
+			for _, ref := range env.OwnerReferences {
+				if ref.Controller != nil && *ref.Controller && (ref.Kind != "AgentTask" || ref.Name != task.Name) {
+					return fmt.Errorf("environment %s is already owned by %s/%s", env.Name, ref.Kind, ref.Name)
+				}
+			}
+			if task.UID != "" {
 				isCtrl := true
 				env.OwnerReferences = []metav1.OwnerReference{{
 					APIVersion:         "divergedev.com/v1alpha1",
@@ -111,16 +163,6 @@ func (r *AgentTaskReconciler) reconcileLinkedPreviewEnvironment(ctx context.Cont
 					BlockOwnerDeletion: &isCtrl,
 				}}
 			}
-		} else {
-			isCtrl := true
-			env.OwnerReferences = []metav1.OwnerReference{{
-				APIVersion:         "divergedev.com/v1alpha1",
-				Kind:               "AgentTask",
-				Name:               task.Name,
-				UID:                task.UID,
-				Controller:         &isCtrl,
-				BlockOwnerDeletion: &isCtrl,
-			}}
 		}
 
 		env.Spec.Source.Branch = branch
@@ -130,7 +172,11 @@ func (r *AgentTaskReconciler) reconcileLinkedPreviewEnvironment(ctx context.Cont
 		env.Spec.ServiceConfig.ServiceName = serviceName
 		env.Spec.ServiceConfig.Image = image
 		if env.Spec.ServiceConfig.Port == 0 {
-			env.Spec.ServiceConfig.Port = 8080
+			if task.Annotations[annotationPreviewImage] == "" {
+				env.Spec.ServiceConfig.Port = 80
+			} else {
+				env.Spec.ServiceConfig.Port = 8080
+			}
 		}
 		return nil
 	})
@@ -157,7 +203,9 @@ func (r *AgentTaskReconciler) reconcileLinkedPreviewEnvironment(ctx context.Cont
 	}
 	if needAnnoPatch {
 		savedStatus := task.Status.DeepCopy()
-		_ = r.Patch(ctx, task, metaPatch)
+		if err := r.Patch(ctx, task, metaPatch); err != nil {
+			return fmt.Errorf("failed to patch task preview annotations: %w", err)
+		}
 		task.Status = *savedStatus
 	}
 
@@ -169,10 +217,14 @@ func (r *AgentTaskReconciler) reconcileLinkedPreviewEnvironment(ctx context.Cont
 		Reason:             "EnvironmentProvisioning",
 		Message:            fmt.Sprintf("Linked preview environment %s is provisioning", envName),
 	}
-	if env.Status.Phase == v1alpha1.PhaseRunning || env.Status.URL != "" {
+	if env.Status.Phase == v1alpha1.PhaseRunning && env.Status.URL != "" {
 		cond.Status = metav1.ConditionTrue
 		cond.Reason = "EnvironmentRunning"
 		cond.Message = fmt.Sprintf("Linked preview environment %s is ready (%s)", envName, env.Status.URL)
+	} else if env.Status.Phase == v1alpha1.PhaseFailed {
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = "EnvironmentFailed"
+		cond.Message = fmt.Sprintf("Linked preview environment %s failed", envName)
 	}
 	meta.SetStatusCondition(&task.Status.Conditions, cond)
 

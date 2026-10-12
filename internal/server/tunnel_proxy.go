@@ -32,6 +32,9 @@ func NewTunnelProxyServer(tm *TunnelManager, port int, logger *slog.Logger) *htt
 
 // ListenAndServeTunnelProxy starts the tunnel proxy server on the given port.
 func ListenAndServeTunnelProxy(tm *TunnelManager, port int, logger *slog.Logger) error {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	srv := NewTunnelProxyServer(tm, port, logger)
 	ln, err := net.Listen("tcp", srv.Addr)
 	if err != nil {

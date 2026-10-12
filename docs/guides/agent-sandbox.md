@@ -179,3 +179,59 @@ diverge task pause task-1718902842
 # Resume with a budget bump
 diverge task resume task-1718902842 --budget 15.00 --tokens 2000000
 ```
+
+---
+
+## 7. Live LLM Cost & Token Enforcement (`POST /api/v1/agenttask/meter`)
+
+Sandbox agents and in-cluster LLM proxies report real-time model token and cost usage to `diverge-server` via `POST /api/v1/agenttask/meter`, authenticating with `Authorization: Bearer <macaroon-token>`.
+
+### Request Payload
+```json
+{
+  "model": "claude-3-7-sonnet",
+  "tokensUsed": 1500,
+  "costUSD": 0.0225
+}
+```
+
+### Response Payload (`200 OK`)
+```json
+{
+  "allowed": true,
+  "suspended": false,
+  "totalTokensUsed": 1500,
+  "totalCostUSD": 0.0225
+}
+```
+
+### Enforcement Behavior
+- **Model Restriction (`403 Forbidden`)**: If the task's Macaroon token includes `allowed_models` caveats (`spec.capabilities`), omitting `model` or requesting a model outside `allowed_models` returns `403 Forbidden`.
+- **Budget Exhaustion (`429 Too Many Requests`)**: If the updated `totalCostUSD` or `totalTokensUsed` exceeds the Macaroon caveats or `AgentTask` spec (`budgetUSD` / `budgetTokens`), `diverge-server` atomically transitions the `AgentTask` to `Paused`, sets `spec.suspended = true`, revokes the token in `diverge-agenttask-tokens`, and responds with `429 Too Many Requests` (`"suspended": true, "reason": "budget exceeded"`).
+
+---
+
+## 8. Automatic Linked Preview Environments
+
+When `spec.repository.url` is set on an `AgentTask`, `diverge-controller` automatically provisions and owns a linked `Environment` named `agent-preview-<taskName>` so the agent can test its changes against a live preview URL.
+
+### Input Annotations
+- `divergedev.com/preview-enabled`: `"true"` or `"false"` (defaults to `"true"` when `spec.repository.url` is set).
+- `divergedev.com/preview-service`: Target service name (defaults to `<task.name>`).
+- `divergedev.com/preview-image`: Preview container image (defaults to `nginx:alpine` on port `80`).
+- `divergedev.com/preview-branch`: Branch override (defaults to `spec.repository.workingBranch` or `baseBranch`).
+
+### Output Annotations & Conditions
+- **Output Annotations**: The controller populates `divergedev.com/preview-environment` and `divergedev.com/preview-url` on the `AgentTask`.
+- **Status Condition**: Sets `PreviewEnvironmentReady` (`EnvironmentProvisioning` -> `EnvironmentRunning`).
+
+---
+
+## 9. PR / MR Slash Commands
+
+You can trigger and control `AgentTask` workflows directly from GitHub PR or GitLab MR comments:
+
+- `/diverge fix <objective>` — Spawns or updates an `AgentTask` for the PR/MR branch with the specified objective.
+- `/diverge pause` — Pauses the active `AgentTask` associated with the PR/MR (`spec.suspended = true`).
+- `/diverge resume` — Resumes a paused `AgentTask` associated with the PR/MR (`spec.suspended = false`).
+

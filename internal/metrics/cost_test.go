@@ -5,7 +5,9 @@ import (
 	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"hegel.dev/go/hegel"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -48,6 +50,9 @@ func TestEstimateEnvironmentCost_Unit(t *testing.T) {
 	assert.InDelta(t, 0.34, est.ProjectedTTLUSD, 1e-6)
 	assert.Equal(t, 90*time.Minute, est.IdleDuration)
 	assert.True(t, est.ShouldHibernate)
+
+	DeleteEnvironmentCostMetric("pr-42", "default")
+	assert.Equal(t, 0, testutil.CollectAndCount(EnvironmentEstimatedHourlyCostUSD))
 }
 
 func TestShouldHibernateIdleEnvironment(t *testing.T) {
@@ -113,10 +118,12 @@ func TestEstimateEnvironmentCost_PropertyMonotonicity(t *testing.T) {
 
 		est1 := EstimateEnvironmentCost(env1, baseTime.Add(time.Duration(minutes1)*time.Minute), DefaultCostRateCard())
 		est2 := EstimateEnvironmentCost(env2, baseTime.Add(time.Duration(minutes2)*time.Minute), DefaultCostRateCard())
+		DeleteEnvironmentCostMetric("env-1", "default")
+		DeleteEnvironmentCostMetric("env-2", "default")
 
-		assert.GreaterOrEqual(t, est1.HourlyUSD, 0.0)
-		assert.GreaterOrEqual(t, est1.AccruedUSD, 0.0)
-		assert.GreaterOrEqual(t, est2.HourlyUSD, est1.HourlyUSD, "more services must not decrease hourly cost")
-		assert.GreaterOrEqual(t, est2.AccruedUSD, est1.AccruedUSD, "longer runtime and more services must not decrease accrued cost")
+		require.GreaterOrEqual(ht, est1.HourlyUSD, 0.0)
+		require.GreaterOrEqual(ht, est1.AccruedUSD, 0.0)
+		require.GreaterOrEqual(ht, est2.HourlyUSD, est1.HourlyUSD, "more services must not decrease hourly cost")
+		require.GreaterOrEqual(ht, est2.AccruedUSD, est1.AccruedUSD, "longer runtime and more services must not decrease accrued cost")
 	})
 }

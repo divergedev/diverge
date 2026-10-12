@@ -27,6 +27,7 @@ type GitLabWebhookHandler struct {
 	Client        client.Client
 	Config        WebhookConfig
 	ConfigFetcher ConfigFetcher
+	AllowedUsers  []string
 	DefaultNS     string
 	Dedup         *DeliveryDedup
 }
@@ -54,12 +55,17 @@ type GitLabMRPayload struct {
 
 // GitLabNotePayload decodes GitLab Note Hook (MR comment) webhook payloads.
 type GitLabNotePayload struct {
-	ObjectKind       string `json:"object_kind"`
+	ObjectKind string `json:"object_kind"`
+	User       struct {
+		ID       int    `json:"id"`
+		Username string `json:"username"`
+	} `json:"user"`
 	ObjectAttributes struct {
-		IID          int    `json:"iid"`
-		SourceBranch string `json:"source_branch"`
-		Note         string `json:"note"`
-		NoteableType string `json:"noteable_type"`
+		IID               int    `json:"iid"`
+		SourceBranch      string `json:"source_branch"`
+		Note              string `json:"note"`
+		NoteableType      string `json:"noteable_type"`
+		AuthorAssociation string `json:"author_association,omitempty"`
 	} `json:"object_attributes"`
 	MergeRequest struct {
 		IID          int    `json:"iid"`
@@ -72,6 +78,32 @@ type GitLabNotePayload struct {
 		WebURL            string `json:"web_url"`
 		GitHTTPURL        string `json:"git_http_url"`
 	} `json:"project"`
+}
+
+func (h *GitLabWebhookHandler) isAuthorizedGitLabCommenter(payload *GitLabNotePayload) bool {
+	if payload == nil {
+		return false
+	}
+	username := strings.TrimSpace(payload.User.Username)
+	if username == "" && payload.User.ID <= 0 {
+		return false
+	}
+	if assoc := strings.ToUpper(strings.TrimSpace(payload.ObjectAttributes.AuthorAssociation)); assoc != "" {
+		switch assoc {
+		case "OWNER", "MEMBER", "COLLABORATOR", "MAINTAINER", "DEVELOPER":
+		default:
+			return false
+		}
+	}
+	if len(h.AllowedUsers) > 0 {
+		for _, allowed := range h.AllowedUsers {
+			if strings.EqualFold(strings.TrimSpace(allowed), username) {
+				return true
+			}
+		}
+		return false
+	}
+	return true
 }
 
 func (h *GitLabWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -162,7 +194,13 @@ func (h *GitLabWebhookHandler) handleNoteEvent(ctx context.Context, w http.Respo
 		return
 	}
 
-	if payload.ObjectAttributes.NoteableType != "" && payload.ObjectAttributes.NoteableType != "MergeRequest" {
+	if payload.ObjectAttributes.NoteableType != "MergeRequest" || (payload.MergeRequest.IID <= 0 && payload.ObjectAttributes.IID <= 0) {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if !h.isAuthorizedGitLabCommenter(&payload) {
+		logger.Info("Ignoring slash command from unauthorized GitLab commenter", "username", payload.User.Username)
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -186,9 +224,20 @@ func (h *GitLabWebhookHandler) handleNoteEvent(ctx context.Context, w http.Respo
 		repoURL = "https://gitlab.com/" + payload.Project.PathWithNamespace
 	}
 
-	branch := payload.MergeRequest.SourceBranch
+	branch := strings.TrimSpace(payload.MergeRequest.SourceBranch)
 	if branch == "" {
-		branch = payload.ObjectAttributes.SourceBranch
+		branch = strings.TrimSpace(payload.ObjectAttributes.SourceBranch)
+	}
+	if branch == "" && h.Client != nil && payload.Project.PathWithNamespace != "" && mrIID > 0 {
+		ns := h.DefaultNS
+		if ns == "" {
+			ns = "default"
+		}
+		var existingEnv v1alpha1.Environment
+		envName := previewEnvName("mr", payload.Project.PathWithNamespace, mrIID)
+		if err := h.Client.Get(ctx, client.ObjectKey{Name: envName, Namespace: ns}, &existingEnv); err == nil && existingEnv.Spec.Source.Branch != "" {
+			branch = existingEnv.Spec.Source.Branch
+		}
 	}
 	if branch == "" {
 		branch = "main"

@@ -137,3 +137,108 @@ func TestAgentTaskPreview_DisabledByAnnotation(t *testing.T) {
 	require.NoError(t, c.List(ctx, &envList))
 	assert.Empty(t, envList.Items)
 }
+
+func TestAgentTaskPreview_DisablingAfterCreationDeletesLinkedEnvironment(t *testing.T) {
+	ctx := context.Background()
+	s := newAgentTaskTestScheme(t)
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "toggle-preview-task",
+			Namespace: "default",
+			UID:       "task-uid-toggle",
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective: "Toggle preview task",
+			Repository: v1alpha1.AgentTaskRepository{
+				URL: "https://github.com/org/repo",
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(task).
+		WithStatusSubresource(&v1alpha1.AgentTask{}, &v1alpha1.Environment{}).
+		Build()
+	reconciler := &AgentTaskReconciler{Client: c, Scheme: s}
+
+	// First reconcile with preview enabled creates Environment with default nginx:alpine and port 80
+	require.NoError(t, reconciler.reconcileLinkedPreviewEnvironment(ctx, task))
+
+	expectedEnvName := linkedPreviewEnvironmentName(task.Name)
+	var env v1alpha1.Environment
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: expectedEnvName, Namespace: "default"}, &env))
+	require.NotNil(t, env.Spec.ServiceConfig)
+	assert.Equal(t, "nginx:alpine", env.Spec.ServiceConfig.Image)
+	assert.Equal(t, int32(80), env.Spec.ServiceConfig.Port)
+
+	// Simulate URL present while PhaseFailed -> PreviewEnvironmentReady must remain False
+	env.Status.Phase = v1alpha1.PhaseFailed
+	env.Status.URL = "https://stale.preview.example.com"
+	require.NoError(t, c.Status().Update(ctx, &env))
+
+	require.NoError(t, reconciler.reconcileLinkedPreviewEnvironment(ctx, task))
+	cond := meta.FindStatusCondition(task.Status.Conditions, conditionPreviewEnvReady)
+	require.NotNil(t, cond)
+	assert.Equal(t, metav1.ConditionFalse, cond.Status)
+	assert.Equal(t, "EnvironmentFailed", cond.Reason)
+
+	// Disable preview via annotation -> should delete Environment, clear annotations, remove condition
+	task.Annotations[annotationPreviewEnabled] = "false"
+	require.NoError(t, c.Update(ctx, task))
+
+	require.NoError(t, reconciler.reconcileLinkedPreviewEnvironment(ctx, task))
+
+	var envList v1alpha1.EnvironmentList
+	require.NoError(t, c.List(ctx, &envList))
+	assert.Empty(t, envList.Items)
+	assert.Empty(t, task.Annotations[annotationPreviewEnvironment])
+	assert.Empty(t, task.Annotations[annotationPreviewURL])
+	assert.Nil(t, meta.FindStatusCondition(task.Status.Conditions, conditionPreviewEnvReady))
+}
+
+func TestAgentTaskPreview_DoesNotOverwriteConflictingControllerOwner(t *testing.T) {
+	ctx := context.Background()
+	s := newAgentTaskTestScheme(t)
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "task-a",
+			Namespace: "default",
+			UID:       "uid-a",
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective: "Task A",
+			Repository: v1alpha1.AgentTaskRepository{
+				URL: "https://github.com/org/repo",
+			},
+		},
+	}
+
+	isCtrl := true
+	existingEnv := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      linkedPreviewEnvironmentName(task.Name),
+			Namespace: "default",
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "divergedev.com/v1alpha1",
+				Kind:       "AgentTask",
+				Name:       "other-task",
+				UID:        "uid-other",
+				Controller: &isCtrl,
+			}},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(task, existingEnv).Build()
+	reconciler := &AgentTaskReconciler{Client: c, Scheme: s}
+
+	err := reconciler.reconcileLinkedPreviewEnvironment(ctx, task)
+	require.Error(t, err)
+
+	var fetched v1alpha1.Environment
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: existingEnv.Name, Namespace: "default"}, &fetched))
+	require.Len(t, fetched.OwnerReferences, 1)
+	assert.Equal(t, "other-task", fetched.OwnerReferences[0].Name)
+}

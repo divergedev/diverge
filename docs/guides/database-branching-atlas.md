@@ -21,7 +21,13 @@ Diverge isolates database state per preview environment so schema changes and se
 
 ## 2. Schema-per-Environment (`mode: schema`)
 
-In `schema` mode, Diverge connects to your baseline Postgres instance, creates an isolated schema (`preview_<sanitized_env_name>`) and scoped credentials, writes a Kubernetes `Secret` (`<env>-db-dsn`) containing `DATABASE_URL`, and drops the schema automatically when the `Environment` CR is deleted.
+In `schema` mode, Diverge connects to your baseline Postgres instance, creates an isolated schema (`preview_<sanitized_env_name>`) and scoped credentials (`diverge_preview_<schema>`), and drops the schema automatically when the `Environment` CR is deleted.
+
+When `spec.database.connectionRef` is omitted, `diverge-controller` automatically provisions an owned Kubernetes `Secret` named `diverge-db-env-<env>-<hash8>` containing:
+- `DATABASE_URL`: Scoped connection string (`postgres://diverge_preview_<schema>:.../postgres?sslmode=disable&search_path=preview_<env>,public`).
+- `DIVERGE_PREVIEW_SCHEMA`: The isolated schema name (`preview_<env>`).
+
+The controller sets `spec.database.connectionRef` to this generated Secret, and `ServiceConfigFetcher` automatically injects `DATABASE_URL` (or `spec.serviceConfig.databaseEnvKey`) into your preview pods and migration jobs.
 
 ```yaml
 apiVersion: divergedev.com/v1alpha1

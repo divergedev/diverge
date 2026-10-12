@@ -141,3 +141,36 @@ stop_preview:
   script:
     - kubectl delete previewgroup "mr-${CI_MERGE_REQUEST_IID}" --ignore-not-found
 ```
+
+---
+
+## 4. Interactive PR / MR Slash Commands
+
+In addition to CI-driven preview deployments, Diverge's webhook handlers execute interactive `/diverge` slash commands posted in GitHub Pull Request and GitLab Merge Request comments.
+
+### Webhook Event Subscriptions
+- **GitHub**: Subscribe your webhook (`/github-webhook`) to **Issue comments** (`issue_comment`) in addition to **Pull requests** (`pull_request`). For security, only comments on Pull Requests from repository `OWNER`, `MEMBER`, or `COLLABORATOR` accounts are executed.
+- **GitLab**: Enable **Comments** (`Note Hook` on Merge Requests) in addition to **Merge request events** on `/gitlab-webhook`.
+
+### PR / MR Slash Commands Reference
+
+| Slash Command | Target Resource(s) | Description |
+| :--- | :--- | :--- |
+| `/diverge preview` | `Environment` | Creates or reconciles an `Environment` (`pr-<num>` / `mr-<num>`) for the current PR/MR branch. |
+| `/diverge fix <objective>` | `AgentTask` | Spawns or updates an autonomous `AgentTask` (and linked preview environment) targeting the PR/MR branch with `<objective>`. |
+| `/diverge extend-ttl [duration]` | `Environment`, `PreviewGroup` | Extends `spec.lifecycle.ttl` for all preview environments and preview groups matching the PR/MR (defaults to `24h` if `[duration]` is omitted, e.g., `/diverge extend-ttl 48h`). |
+| `/diverge teardown` | `Environment`, `PreviewGroup` | Immediately deletes all `Environment` and `PreviewGroup` resources associated with the PR/MR. |
+| `/diverge pause` | `AgentTask` | Suspends active `AgentTask` runs associated with the PR/MR (`spec.suspended = true`). |
+| `/diverge resume` | `AgentTask` | Resumes paused `AgentTask` runs associated with the PR/MR (`spec.suspended = false`). |
+
+### Examples
+
+```text
+/diverge preview
+/diverge fix Resolve the flaky checkout integration test and update currency rounding
+/diverge extend-ttl 48h
+/diverge pause
+/diverge resume
+/diverge teardown
+```
+
