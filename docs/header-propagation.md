@@ -72,22 +72,88 @@ func main() {
 }
 ```
 
-### Node.js/Express
+### Node.js / TypeScript (`pkg/sdk/node` — Express, Fastify & Fetch)
 
-```javascript
-app.use((req, res, next) => {
-  const divergeEnv = req.headers['x-diverge-env'];
-  if (divergeEnv) {
-    // Store for outbound HTTP calls
-    req.divergeEnv = divergeEnv;
-  }
-  next();
-});
+Use the official `@divergedev/sdk` package powered by `AsyncLocalStorage` for zero-boilerplate propagation across `Express`, `Fastify`, and outbound `fetch`:
 
-// When making outbound calls:
-axios.get('http://downstream-service/api', {
-  headers: { 'x-diverge-env': req.divergeEnv }
+```typescript
+import express from 'express';
+import { divergeExpressMiddleware, divergeFetch } from '@divergedev/sdk';
+
+const app = express();
+app.use(divergeExpressMiddleware());
+
+app.get('/checkout', async (_req, res) => {
+  // Automatically attaches x-diverge-env / x-preview-env from AsyncLocalStorage
+  const upstream = await divergeFetch('http://payments-api:8080/charge', {
+    method: 'POST',
+  });
+  res.json(await upstream.json());
 });
+```
+
+### Python (`pkg/sdk/python` — FastAPI / Starlette & `httpx`)
+
+Use the official `diverge-sdk` package (`contextvars`-backed ASGI middleware + `httpx` event hook):
+
+```python
+from fastapi import FastAPI
+import httpx
+from diverge_sdk import DivergeASGIMiddleware, inject_diverge_headers
+
+app = FastAPI()
+app.add_middleware(DivergeASGIMiddleware)
+
+client = httpx.AsyncClient(event_hooks={"request": [inject_diverge_headers]})
+
+@app.get("/orders")
+async def list_orders():
+    resp = await client.get("http://inventory-api:8080/items")
+    return resp.json()
+```
+
+### Go ConnectRPC & gRPC (`pkg/sdk/connect` & `pkg/sdk/grpc`)
+
+```go
+import (
+	divergeconnect "github.com/divergedev/diverge/pkg/sdk/connect"
+	divergegrpc "github.com/divergedev/diverge/pkg/sdk/grpc"
+	"connectrpc.com/connect"
+	"google.golang.org/grpc"
+)
+
+// ConnectRPC Server + Client Interceptor
+interceptors := connect.WithInterceptors(divergeconnect.NewInterceptor())
+
+// gRPC Server + Client Unary/Stream Interceptors
+grpcServer := grpc.NewServer(
+	grpc.UnaryInterceptor(divergegrpc.UnaryServerInterceptor()),
+	grpc.StreamInterceptor(divergegrpc.StreamServerInterceptor()),
+)
+```
+
+### Go Temporal Workflows (`pkg/sdk/temporal`)
+
+Propagate preview routing headers across Temporal workflow and activity boundaries and route preview workflows to isolated task queues:
+
+```go
+import divergetemporal "github.com/divergedev/diverge/pkg/sdk/temporal"
+
+opts := divergetemporal.ConfigureClientOptions(client.Options{})
+c, err := client.Dial(opts)
+```
+
+### Go Kafka & OpenFeature (`pkg/sdk/kafka` & `pkg/sdk/openfeature`)
+
+```go
+import (
+	divergekafka "github.com/divergedev/diverge/pkg/sdk/kafka"
+	divergeof "github.com/divergedev/diverge/pkg/sdk/openfeature"
+	"github.com/open-feature/go-sdk/openfeature"
+)
+
+// Register OpenFeature hook to automatically scope flag evaluations to the active preview environment
+openfeature.AddHooks(divergeof.NewHook())
 ```
 
 ### Java/Spring Boot
@@ -109,22 +175,6 @@ public class DivergeHeaderFilter implements Filter {
         }
     }
 }
-```
-
-### Python/FastAPI
-
-```python
-from starlette.middleware.base import BaseHTTPMiddleware
-import contextvars
-
-diverge_env = contextvars.ContextVar('diverge_env', default=None)
-
-class DivergeMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request, call_next):
-        env = request.headers.get('x-diverge-env')
-        if env:
-            diverge_env.set(env)
-        return await call_next(request)
 ```
 
 ## Using `diverge route` to Verify

@@ -614,3 +614,81 @@ func TestAgentTaskReconcilerPausePersistsBeforeRevokeAndRetries(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, store.IsRevoked(ctx, task.Name, task.Namespace))
 }
+
+type failingDeleteTokenStore struct {
+	*auth.InMemoryTokenStore
+	deleteErr error
+}
+
+func (f *failingDeleteTokenStore) DeleteToken(ctx context.Context, taskID, namespace string) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
+	return f.InMemoryTokenStore.DeleteToken(ctx, taskID, namespace)
+}
+
+func TestAgentTaskReconcilerDeletionBlocksFinalizerOnDeleteTokenError(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	_ = v1alpha1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "task-delete-token-err",
+			Namespace:  "default",
+			Finalizers: []string{agentTaskFinalizer},
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective: "Delete token retry test",
+			Sandbox: v1alpha1.AgentTaskSandbox{
+				Provider: "noop",
+			},
+		},
+		Status: v1alpha1.AgentTaskStatus{
+			Phase: v1alpha1.AgentTaskPhaseActive,
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(task).
+		WithStatusSubresource(&v1alpha1.AgentTask{}).
+		Build()
+
+	baseStore := auth.NewInMemoryTokenStore()
+	require.NoError(t, baseStore.SaveToken(ctx, task.Name, task.Namespace, []byte("secret-tok")))
+	store := &failingDeleteTokenStore{
+		InMemoryTokenStore: baseStore,
+		deleteErr:          assert.AnError,
+	}
+
+	reconciler := &AgentTaskReconciler{
+		Client:          fakeClient,
+		Scheme:          scheme,
+		SandboxRegistry: pkgsandbox.Providers,
+		TokenStore:      store,
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "task-delete-token-err"}}
+
+	require.NoError(t, fakeClient.Delete(ctx, task))
+
+	// First reconcile: DeleteToken fails transiently -> finalizer must remain, requeue after 5s
+	res, err := reconciler.Reconcile(ctx, req)
+	require.ErrorIs(t, err, assert.AnError)
+	assert.Equal(t, 5*time.Second, res.RequeueAfter)
+
+	stillThere := &v1alpha1.AgentTask{}
+	require.NoError(t, fakeClient.Get(ctx, req.NamespacedName, stillThere))
+	assert.Contains(t, stillThere.Finalizers, agentTaskFinalizer)
+
+	// Second reconcile: DeleteToken succeeds -> finalizer removed and object deleted
+	store.deleteErr = nil
+	res, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.True(t, res.IsZero())
+
+	err = fakeClient.Get(ctx, req.NamespacedName, stillThere)
+	assert.True(t, apierrors.IsNotFound(err))
+}

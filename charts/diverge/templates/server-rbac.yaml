@@ -154,7 +154,7 @@ subjects:
 {{- end }}
 {{- end }}
 ---
-# Tunnel resources (leases, services, endpointslices) for diverge dev tunnel proxy
+# Tunnel resources (leases, services, endpoints, endpointslices) for diverge dev tunnel proxy
 {{- if .Values.server.rbac.clusterWidePodAccess }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -168,7 +168,7 @@ rules:
     resources: ["leases"]
     verbs: ["get", "create", "update", "delete", "list"]
   - apiGroups: [""]
-    resources: ["services"]
+    resources: ["services", "endpoints"]
     verbs: ["get", "create", "update", "delete", "list"]
   - apiGroups: ["discovery.k8s.io"]
     resources: ["endpointslices"]
@@ -207,7 +207,7 @@ rules:
     resources: ["leases"]
     verbs: ["get", "create", "update", "delete", "list"]
   - apiGroups: [""]
-    resources: ["services"]
+    resources: ["services", "endpoints"]
     verbs: ["get", "create", "update", "delete", "list"]
   - apiGroups: ["discovery.k8s.io"]
     resources: ["endpointslices"]

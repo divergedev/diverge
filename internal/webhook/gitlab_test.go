@@ -65,6 +65,35 @@ func TestGitLabWebhookTokenValidation(t *testing.T) {
 	}
 }
 
+func TestGitLabWebhookEmptySecretTokenRejected(t *testing.T) {
+	fakeK8s := newTestClient()
+	body := `{"object_kind": "merge_request", "object_attributes": {"iid": 1, "action": "open", "source_branch": "feat/test", "last_commit": {"id": "abc123def456"}}, "project": {"path_with_namespace": "team/repo"}}`
+
+	for _, secret := range []string{"", "   "} {
+		handler := &GitLabWebhookHandler{
+			Client:    fakeK8s,
+			Config:    WebhookConfig{SecretToken: secret},
+			DefaultNS: "default",
+		}
+		req, err := http.NewRequest(http.MethodPost, "/", bytes.NewBufferString(body))
+		if err != nil {
+			t.Fatalf("Failed to create request: %v", err)
+		}
+		req.Header.Set("X-Gitlab-Token", secret)
+
+		if ValidateGitLabWebhookToken(req, secret) {
+			t.Errorf("ValidateGitLabWebhookToken should return false for empty/whitespace secret %q", secret)
+		}
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("secret=%q: expected status %d, got %d", secret, http.StatusUnauthorized, rr.Code)
+		}
+	}
+}
+
 func TestGitLabWebhookMalformedJSON(t *testing.T) {
 	config := WebhookConfig{SecretToken: "secret"}
 	handler := &GitLabWebhookHandler{Config: config}

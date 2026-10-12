@@ -170,13 +170,13 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	for _, svc := range pg.Spec.Services {
 		envName := childEnvironmentName(pg.Name, svc.Name)
-		desiredEnvNames[envName] = true
 
 		// Determine target namespace — use service's namespace or default
 		targetNS := svc.Namespace
 		if targetNS == "" {
 			targetNS = "default"
 		}
+		desiredEnvNames[targetNS+"/"+envName] = true
 
 		svcStatus := divergeiov1alpha1.PreviewGroupServiceStatus{
 			Name:            svc.Name,
@@ -526,13 +526,16 @@ func (r *PreviewGroupReconciler) needsUpdate(existing, desired *divergeiov1alpha
 // listChildEnvironments returns all Environments owned by this PreviewGroup.
 func (r *PreviewGroupReconciler) listChildEnvironments(ctx context.Context, pg *divergeiov1alpha1.PreviewGroup) ([]divergeiov1alpha1.Environment, error) {
 	var envList divergeiov1alpha1.EnvironmentList
-	if err := r.List(ctx, &envList,
-		client.InNamespace(pg.Namespace),
+	opts := []client.ListOption{
 		client.MatchingLabels{
 			labelPreviewGroup: pg.Name,
 			labelManagedBy:    "diverge-previewgroup",
 		},
-	); err != nil {
+	}
+	if pg.Namespace != "" {
+		opts = append(opts, client.InNamespace(pg.Namespace))
+	}
+	if err := r.List(ctx, &envList, opts...); err != nil {
 		return nil, err
 	}
 	return envList.Items, nil
@@ -549,7 +552,7 @@ func (r *PreviewGroupReconciler) deleteOrphanedEnvironments(ctx context.Context,
 
 	for i := range children {
 		child := &children[i]
-		if !desired[child.Name] {
+		if !desired[child.Namespace+"/"+child.Name] && !desired[child.Name] {
 			logger.Info("Deleting orphaned Environment", "name", child.Name, "namespace", child.Namespace)
 			if err := r.Delete(ctx, child); err != nil && !apierrors.IsNotFound(err) {
 				return fmt.Errorf("failed to delete orphaned Environment %s/%s: %w", child.Namespace, child.Name, err)

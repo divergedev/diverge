@@ -13,7 +13,7 @@ spec:
     matchLabels:
       control-plane: controller-manager
   endpoints:
-    - port: metrics
+    - port: http
       interval: {{ .Values.metrics.serviceMonitor.interval }}
 {{- end }}
 
@@ -31,7 +31,7 @@ spec:
       {{- include "diverge.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: server
   endpoints:
-    - port: http
+    - port: metrics
       path: /metrics
       interval: {{ .Values.server.metrics.serviceMonitor.interval | default "30s" }}
 {{- end }}

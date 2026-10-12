@@ -70,6 +70,12 @@ func (h *GitHubWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if strings.TrimSpace(h.Config.SecretToken) == "" {
+		logger.Info("Webhook secret token is not configured")
+		http.Error(w, "webhook secret token is not configured", http.StatusUnauthorized)
+		return
+	}
+
 	signature := r.Header.Get("X-Hub-Signature-256")
 	if signature == "" {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)

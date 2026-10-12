@@ -161,6 +161,7 @@ func main() {
 	// Initialize streaming components
 	broadcasterMetrics := server.GetBroadcasterMetrics()
 	informerMgr := streaming.NewInformerManager(logger, broadcasterMetrics)
+	informerMgr.StartPolling(ctx, crClient, 2*time.Second)
 	logStreamer := streaming.NewLogStreamer(k8sClient)
 
 	// Create stream limiter (per-user + global quotas)
@@ -169,7 +170,13 @@ func main() {
 
 	// Auth setup
 	tokenCache := auth.NewTokenCache(1024, tokenCacheTTL)
-	tokenReviewProvider := auth.NewTokenReviewProvider(k8sClient, []string{audiences})
+	var parsedAudiences []string
+	for _, aud := range strings.Split(audiences, ",") {
+		if trimmed := strings.TrimSpace(aud); trimmed != "" {
+			parsedAudiences = append(parsedAudiences, trimmed)
+		}
+	}
+	tokenReviewProvider := auth.NewTokenReviewProvider(k8sClient, parsedAudiences)
 
 	authMetrics := server.NewAuthMetrics()
 	auditLogger := server.NewAuditLogger(logger)
@@ -289,6 +296,7 @@ func main() {
 			SecureCookies:  cookiePolicy.Secure,
 			UsernameClaim:  oidcUsernameClaim,
 			GroupsClaim:    oidcGroupsClaim,
+			AllowedGroups:  allowedGroups,
 			Logger:         logger,
 		})
 		if err != nil {
@@ -350,6 +358,19 @@ func main() {
 		Version:          version,
 		DashboardEnabled: dashboardEnabled,
 	})
+
+	if tunnelMgr != nil {
+		gcNamespaces := []string{"default"}
+		if watchNS := strings.TrimSpace(os.Getenv("WATCH_NAMESPACE")); watchNS != "" {
+			gcNamespaces = nil
+			for _, ns := range strings.Split(watchNS, ",") {
+				if trimmed := strings.TrimSpace(ns); trimmed != "" {
+					gcNamespaces = append(gcNamespaces, trimmed)
+				}
+			}
+		}
+		tunnelMgr.StartGC(ctx, gcNamespaces)
+	}
 
 	// Register OIDC auth routes (exempt from auth middleware)
 	if oidcHandler != nil {

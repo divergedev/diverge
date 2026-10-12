@@ -20,6 +20,7 @@ var (
 	ErrInvalidSignature = errors.New("invalid token signature")
 	ErrTokenExpired     = errors.New("token has expired")
 	ErrCaveatFailed     = errors.New("caveat check failed")
+	ErrInvalidCaveat    = ErrCaveatFailed
 	ErrMalformedToken   = errors.New("malformed token")
 )
 
@@ -199,9 +200,22 @@ func (p *MacaroonProvider) Verify(_ context.Context, raw []byte, required Claims
 
 	// Replay signature chain from root key
 	sig := computeHMAC(p.rootKey, []byte(mac.TokenID))
+	hasTaskID := false
+	hasNamespace := false
 
 	for _, c := range mac.CaveatSeq {
 		sig = computeHMAC(sig, serializeCaveatCanonical(c))
+
+		switch c.Key {
+		case "task_id":
+			if c.Value != "" {
+				hasTaskID = true
+			}
+		case "namespace":
+			if c.Value != "" {
+				hasNamespace = true
+			}
+		}
 
 		// Evaluate caveat
 		if err := evaluateCaveat(c, required); err != nil {
@@ -212,6 +226,12 @@ func (p *MacaroonProvider) Verify(_ context.Context, raw []byte, required Claims
 	expectedSig := hex.EncodeToString(sig)
 	if !hmac.Equal([]byte(expectedSig), []byte(mac.Signature)) {
 		return ErrInvalidSignature
+	}
+	if !hasTaskID {
+		return fmt.Errorf("%w: missing task_id caveat", ErrInvalidCaveat)
+	}
+	if !hasNamespace {
+		return fmt.Errorf("%w: missing namespace caveat", ErrInvalidCaveat)
 	}
 
 	return nil

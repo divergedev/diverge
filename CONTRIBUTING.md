@@ -1,63 +1,78 @@
 # Contributing to Diverge
 
-Welcome! We are excited to have you contribute to Diverge, an environment-as-a-service engine for Kubernetes.
+Thank you for contributing to **Diverge**! This guide covers setting up your development environment (with either **GitHub Codespaces / VS Code Dev Containers** or **Nix**), running tests, and submitting pull requests.
 
-## Prerequisites
-Before you begin, ensure you have the following installed:
-- Go 1.26+
-- Docker
-- kubectl
-- kind
-- **Nix** (required — manages Go, kubectl, helm, lefthook)
+---
 
-## Development Setup
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/divergedev/diverge.git
-   cd diverge
-   ```
-2. Set up your environment (using Nix):
-   ```bash
-   direnv allow
-   # or
-   nix develop
-   ```
-   *Note: All commands must be prefixed with `nix develop -c` when running outside the nix shell.*
-3. Build and test the project:
-   ```bash
-   nix develop -c make build
-   nix develop -c make test
-   ```
-4. If editing `.proto` files, regenerate types:
-   ```bash
-   nix develop -c make proto
-   ```
+## 1. Development Environment Setup
 
-## Making Changes
-1. Fork the repository.
-2. Create a new feature branch for your changes.
-3. Make your changes in the codebase.
-4. Run formatting, tests, and linting before committing:
-   ```bash
-   nix develop -c make fmt
-   nix develop -c make test
-   nix develop -c make lint
-   ```
-   *Note: Lefthook pre-commit hooks run automatically. Do NOT use `--no-verify` with `git commit`.*
+### Option A: 1-Click Dev Container / GitHub Codespaces (No Nix Required)
+Open this repository in **GitHub Codespaces** or VS Code with the **Dev Containers** extension (`.devcontainer/devcontainer.json`). It pre-installs Go 1.26, `kubectl`, `helm`, `kind`, `buf`, `golangci-lint`, Node.js 22, and `uv`.
 
-## Pull Request Process
-- Use descriptive titles for your Pull Requests that follow [Conventional Commits](https://www.conventionalcommits.org/).
-- Provide a clear description of what the PR does and why the changes are needed.
-- Link any relevant GitHub issues to your PR.
+### Option B: Nix Flake (Recommended for Local macOS / Linux)
+Diverge provides a reproducible `flake.nix` dev shell that installs all Go, Kubernetes, Protobuf, and linting tools and configures `lefthook` git hooks automatically:
 
-## Code Style
-- Follow standard Go conventions.
-- Run `nix develop -c golangci-lint run` to ensure code quality.
-- Write tests for any new features or bug fixes.
-- **Property-Based Tests:** When touching security-critical code, add Hegel PBT to the corresponding `property_test.go`.
+```bash
+nix develop
+```
 
-## License
-Diverge is licensed under the Apache 2.0 License. By contributing to this project, you agree that your contributions will be licensed under the same license.
+To run any command inside the Nix shell without entering it interactively:
 
-## Getting Help
-Found a bug or want to request a feature? Please open an issue on our [GitHub Issues](https://github.com/divergedev/diverge/issues).
+```bash
+nix develop -c make test
+```
+
+---
+
+## 2. Repository Structure
+
+| Path | Description |
+| :--- | :--- |
+| `api/v1alpha1/` | Kubernetes CRD Go types (`Environment`, `PreviewGroup`, `AgentTask`) |
+| `proto/` | Protobuf / ConnectRPC service definitions (`diverge/v1alpha1`) |
+| `cmd/controller/` | `diverge-controller` Kubernetes operator entrypoint |
+| `cmd/server/` | `diverge-server` ConnectRPC API server + embedded Web UI + HTTP tunnel server |
+| `cmd/proxy/` | `diverge-proxy` L7 header-routing reverse proxy |
+| `cmd/activator-proxy/` | `activator-proxy` scale-to-zero wake-up proxy |
+| `cmd/diverge/` | `diverge` CLI + MCP server (`diverge mcp`) |
+| `internal/` | Controller reconcilers, routing/DB/deployer/sandbox providers, server handlers |
+| `pkg/auth/` | Macaroon capability tokens & Kubernetes Secret token store |
+| `pkg/sdk/` | Context propagation SDKs (`http`, `grpc`, `connect`, `kafka`, `openfeature`, `temporal`, `node`, `python`) |
+| `charts/diverge/` | Official Helm chart |
+| `web/` | React + TypeScript + Vite Web Dashboard |
+| `test/e2e/` | Kind + Envoy Gateway end-to-end test suite |
+
+---
+
+## 3. Common Development Commands
+
+```bash
+# Run unit tests
+nix develop -c make test
+
+# Run envtest integration tests (controller + server)
+nix develop -c go test ./internal/controller/... ./internal/server/... -tags=integration
+
+# Regenerate CRDs, DeepCopy, and Protobuf code
+nix develop -c make generate manifests proto
+
+# Lint Go code and Helm chart
+nix develop -c golangci-lint run
+nix develop -c ./scripts/test-helm.sh
+
+# Run full Kind E2E suite locally
+nix develop -c make e2e-setup
+nix develop -c make e2e-run
+nix develop -c make e2e-teardown
+```
+
+---
+
+## 4. Testing & Guardrail Conventions
+
+1. **Unit & Property-Based Testing (PBT)**:
+   - Every new `.go` file must have a corresponding `_test.go` file (enforced by `./scripts/check-test-coverage.sh`).
+   - Core packages use table-driven tests (`stretchr/testify`) and property-based tests via `hegel.dev/go/hegel` (`*_property_test.go`).
+2. **Conventional Commits**:
+   - Commit messages must follow Conventional Commits (`feat(scope): ...`, `fix(scope): ...`, `docs: ...`), enforced by `lefthook` `commit-msg`.
+   - Do **not** bypass pre-commit hooks with `--no-verify`.

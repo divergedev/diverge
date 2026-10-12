@@ -213,5 +213,8 @@ func normalizeGitLabAction(action string) string {
 // ValidateGitLabWebhookToken validates a GitLab webhook payload token.
 func ValidateGitLabWebhookToken(r *http.Request, expectedToken string) bool {
 	token := r.Header.Get("X-Gitlab-Token")
+	if strings.TrimSpace(expectedToken) == "" || strings.TrimSpace(token) == "" {
+		return false
+	}
 	return subtle.ConstantTimeCompare([]byte(token), []byte(expectedToken)) == 1
 }

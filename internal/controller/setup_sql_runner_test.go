@@ -41,18 +41,20 @@ func TestRunSetupSQLJob_CreatesConfigMapAndJob(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrHookInProgress)
 
-	// Verify ConfigMap was created
+	// Verify ConfigMap was created with a single OwnerReference
 	cmList := &corev1.ConfigMapList{}
 	require.NoError(t, c.List(context.Background(), cmList))
 	require.Len(t, cmList.Items, 1)
 	assert.Equal(t, "CREATE SCHEMA foo;", cmList.Items[0].Data["setup.sql"])
 	assert.Equal(t, hookTypeSetupSQL, cmList.Items[0].Labels[labelHookType])
+	assert.Len(t, cmList.Items[0].OwnerReferences, 1)
 
-	// Verify Job was created
+	// Verify Job was created with a single OwnerReference (not duplicated)
 	jobList := &batchv1.JobList{}
 	require.NoError(t, c.List(context.Background(), jobList))
 	require.Len(t, jobList.Items, 1)
 	assert.Contains(t, jobList.Items[0].Name, "setup-sql-test-env")
+	assert.Len(t, jobList.Items[0].OwnerReferences, 1)
 	assert.Equal(t, defaultSetupJobImage, jobList.Items[0].Spec.Template.Spec.Containers[0].Image)
 	assert.Equal(t, []string{"psql", "-v", "ON_ERROR_STOP=1", "-d", "$(DATABASE_URL)", "-f", "/setup/setup.sql"}, jobList.Items[0].Spec.Template.Spec.Containers[0].Args)
 
@@ -66,6 +68,13 @@ func TestRunSetupSQLJob_CreatesConfigMapAndJob(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "setup-sql volume should be mounted")
+
+	// Re-running runSetupSQLJob while Job already exists (even with new random password in setupSQL)
+	// must NOT create additional ConfigMaps.
+	err = r.runSetupSQLJob(context.Background(), env, "CREATE SCHEMA foo; ALTER USER u PASSWORD 'new-rand';", "postgres://admin:pass@localhost/db")
+	require.ErrorIs(t, err, ErrHookInProgress)
+	require.NoError(t, c.List(context.Background(), cmList))
+	assert.Len(t, cmList.Items, 1, "re-running while Job exists should not leak additional ConfigMaps")
 }
 
 func TestRunSetupSQLJob_CompletedJob(t *testing.T) {

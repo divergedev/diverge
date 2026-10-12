@@ -171,10 +171,10 @@ build: manifests generate fmt vet ## Build manager binary.
 
 .PHONY: build-slim
 build-slim: ## Build slim manager binary without heavy providers
-	go build -tags=no_knative,no_schema -o /tmp/diverge-controller-slim ./cmd/controller/
+	go build -tags=no_knative,no_schema,no_temporal,no_kafka -o /tmp/diverge-controller-slim ./cmd/controller/
 
 .PHONY: build-all
-build-all: build build-cli build-proxy build-server ## Build all binaries.
+build-all: build build-cli build-proxy build-activator-proxy build-server ## Build all binaries.
 
 .PHONY: build-cli
 build-cli: fmt vet ## Build diverge CLI binary.
@@ -183,6 +183,10 @@ build-cli: fmt vet ## Build diverge CLI binary.
 .PHONY: build-proxy
 build-proxy: fmt vet ## Build diverge proxy binary.
 	go build -ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT)" -o bin/diverge-proxy cmd/proxy/main.go
+
+.PHONY: build-activator-proxy
+build-activator-proxy: fmt vet ## Build activator-proxy binary.
+	go build -o bin/activator-proxy ./cmd/activator-proxy
 
 .PHONY: web-install
 web-install: ## Install web dashboard dependencies.

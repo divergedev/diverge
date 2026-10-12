@@ -28,47 +28,8 @@ func (r *EnvironmentReconciler) runSetupSQLJob(ctx context.Context, env *diverge
 		return nil
 	}
 
-	// 1. Create ConfigMap with the SetupSQL content
-	cmName := sanitizeK8sName(fmt.Sprintf("diverge-setup-sql-%s", env.Name), setupSQL, 253)
-
-	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      cmName,
-			Namespace: env.Namespace,
-			Labels: map[string]string{
-				labelHookType:    hookTypeSetupSQL,
-				labelEnvironment: truncateLabel(env.Name),
-			},
-		},
-		Data: map[string]string{
-			"setup.sql": setupSQL,
-		},
-	}
-
-	t := true
-	cm.OwnerReferences = append(cm.OwnerReferences, metav1.OwnerReference{
-		APIVersion:         "divergedev.com/v1alpha1",
-		Kind:               "Environment",
-		Name:               env.GetName(),
-		UID:                env.GetUID(),
-		Controller:         &t,
-		BlockOwnerDeletion: &t,
-	})
-
-	if err := r.Create(ctx, cm); err != nil {
-		if client.IgnoreAlreadyExists(err) != nil {
-			return fmt.Errorf("failed to create setup-sql configmap: %w", err)
-		}
-	}
-
-	// 2. Create admin DSN Secret
-	secretName, err := createDSNSecret(ctx, r.Client, fmt.Sprintf("%s-admin", env.Name), env.Namespace, adminDSN, env)
-	if err != nil {
-		return fmt.Errorf("failed to create admin DSN secret for setup-sql: %w", err)
-	}
-
-	// 3. Build and create Job — derive name from env (stable), not SQL content
-	// (which changes each requeue due to random password generation).
+	// 1. Check if the setup-sql Job already exists — derive name from env (stable),
+	// not SQL content (which changes each requeue due to random password generation).
 	jobName := sanitizeK8sName(fmt.Sprintf("setup-sql-%s", env.Name), env.Name, 63)
 
 	existingJob := &batchv1.Job{}
@@ -85,6 +46,49 @@ func (r *EnvironmentReconciler) runSetupSQLJob(ctx context.Context, env *diverge
 		}
 		logger.Info("SetupSQL job is still running", "job", jobName)
 		return fmt.Errorf("setup-sql job %s is still running: %w", jobName, ErrHookInProgress)
+	}
+
+	// 2. Create ConfigMap with the SetupSQL content
+	cmName := sanitizeK8sName(fmt.Sprintf("diverge-setup-sql-%s", env.Name), setupSQL, 253)
+
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      cmName,
+			Namespace: env.Namespace,
+			Labels: map[string]string{
+				labelHookType:    hookTypeSetupSQL,
+				labelEnvironment: truncateLabel(env.Name),
+			},
+		},
+		Data: map[string]string{
+			"setup.sql": setupSQL,
+		},
+	}
+
+	if env.GetUID() != "" {
+		t := true
+		cm.OwnerReferences = []metav1.OwnerReference{
+			{
+				APIVersion:         "divergedev.com/v1alpha1",
+				Kind:               "Environment",
+				Name:               env.GetName(),
+				UID:                env.GetUID(),
+				Controller:         &t,
+				BlockOwnerDeletion: &t,
+			},
+		}
+	}
+
+	if err := r.Create(ctx, cm); err != nil {
+		if client.IgnoreAlreadyExists(err) != nil {
+			return fmt.Errorf("failed to create setup-sql configmap: %w", err)
+		}
+	}
+
+	// 3. Create admin DSN Secret
+	secretName, err := createDSNSecret(ctx, r.Client, fmt.Sprintf("%s-admin", env.Name), env.Namespace, adminDSN, env)
+	if err != nil {
+		return fmt.Errorf("failed to create admin DSN secret for setup-sql: %w", err)
 	}
 
 	image := r.SetupJobImage
@@ -133,16 +137,6 @@ func (r *EnvironmentReconciler) runSetupSQLJob(ctx context.Context, env *diverge
 			ReadOnly:  true,
 		},
 	)
-
-	// Set owner reference for GC
-	job.OwnerReferences = append(job.OwnerReferences, metav1.OwnerReference{
-		APIVersion:         "divergedev.com/v1alpha1",
-		Kind:               "Environment",
-		Name:               env.GetName(),
-		UID:                env.GetUID(),
-		Controller:         &t,
-		BlockOwnerDeletion: &t,
-	})
 
 	if err := r.Create(ctx, job); err != nil {
 		if client.IgnoreAlreadyExists(err) != nil {

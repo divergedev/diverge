@@ -318,7 +318,7 @@ type PreviewGroupServiceStatus struct {
 // PreviewGroupStatus describes the observed state of a PreviewGroup.
 type PreviewGroupStatus struct {
 	// Phase is the aggregated phase across all services.
-	// +kubebuilder:validation:Enum=Pending;Deploying;Running;Degraded;Failed;Terminating
+	// +kubebuilder:validation:Enum=Pending;Deploying;Running;Degraded;Failed;Terminating;Abandoned
 	Phase PreviewGroupPhase `json:"phase,omitempty"`
 
 	// ServiceCount is the total number of services in the group.

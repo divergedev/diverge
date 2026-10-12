@@ -21,14 +21,23 @@ curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/main/install.sh 
 ```
 
 Documentation: [https://divergedev.com](https://divergedev.com)
+- [2-Minute Local Quickstart (Kind + Helm)](docs/guides/quickstart-local.md)
+- [Autonomous Agent Sandboxes & Capability Auth](docs/guides/agent-sandboxes.md)
+- [MCP Server & IDE Integration Guide](docs/guides/mcp-server.md)
+- [Database Branching & Atlas Migrations](docs/guides/database-branching-atlas.md)
+- [CI/CD Workflows (GitHub Actions & GitLab CI)](docs/guides/ci-cd-workflows.md)
+- [Web Dashboard & OIDC Setup](docs/guides/dashboard-and-oidc.md)
+- [Service Mesh & Gateway API Chooser](docs/guides/routing-and-mesh-chooser.md)
+- [Scale-to-Zero & Activator Proxy Guide](docs/guides/scale-to-zero.md)
+- [Feature Flags & OpenFeature Guide](docs/guides/feature-flags.md)
 - [Multi-User Dev & Conflict Detection (Pro)](docs/guides/multi-user-dev.md)
-- [Feature Flags Guide](docs/guides/feature-flags.md)
 - [Hot Reload Guide](docs/guides/hot-reload.md)
 - [Observability Guide](docs/guides/observability.md)
-- [MCP Server Guide](docs/guides/mcp-server.md)
 - [CLI Reference](docs/guides/cli-reference.md)
 - [Topology & Route Simulation](docs/guides/cli-reference.md#diverge-route)
-- [Header Propagation](docs/header-propagation.md)
+- [Header Propagation & SDK Starter Kits](docs/header-propagation.md)
+- [Write a Custom Provider in 50 Lines](docs/guides/custom-providers.md)
+- [Troubleshooting & `diverge doctor` Playbook](docs/guides/troubleshooting.md)
 
 ## Try It
 
@@ -51,13 +60,14 @@ helm install diverge oci://ghcr.io/divergedev/charts/diverge --version <version>
 See [charts/diverge/values.yaml](charts/diverge/values.yaml) for configuration options.
 
 ## Key Features
+*   **Autonomous Agent Sandboxes (`AgentTask`)**: Run AI coding agents inside isolated Kubernetes sandboxes (`gvisor` / `kata` / `agent-sandbox`) with attenuated **Macaroon capability tokens**, network policy egress lockdowns, and USD/token/iteration budget guardrails.
 *   **PreviewGroup Orchestration**: Manage multiple child environments and services under a single CR tied directly to an MR/PR. Automatic orphan cleanup and label-based ownership.
-*   **Provider Registry**: Pluggable, extensible architecture — add new routing, deployer, notifier, or database providers with a single file. Zero changes to the controller.
+*   **Provider Registry**: Pluggable, extensible architecture — add new routing, deployer, notifier, sandbox, or database providers with a single file. Zero changes to the controller.
 *   **Scale-to-Zero**: Idle preview environments automatically scale to zero via KEDA HTTP Add-on (`HTTPScaledObject`). The interceptor wakes up pods on the first request, resulting in 90%+ resource savings for idle MRs.
 *   **Activator Proxy**: Smart routing that directs traffic to the pod when ready. Includes `X-Preview-Env` header injection and a shared informer for efficient pod state tracking.
 *   **Delta Deployment**: Only deploy what changed, falling back to a baseline for unmodified services.
-*   **Header-Based Routing & Gateway API**: Leverages Gateway API, Istio, and the Diverge Proxy to route traffic seamlessly using HTTP headers.
-*   **Configurable DB Modes**: Options for shared, schema, snapshot, or fresh databases for your environments.
+*   **Header-Based Routing & Gateway API**: Leverages Gateway API (`HTTPRoute` + `GRPCRoute`), Istio, Cilium, Linkerd, and the Diverge Proxy to route traffic seamlessly using HTTP/gRPC headers.
+*   **Configurable DB Modes & Atlas Migrations**: Options for `shared`, `schema`, `snapshot`, `neon`, `cnpg`, or `cockroach` databases, plus native [Atlas Operator](docs/guides/database-branching-atlas.md) (`AtlasMigration` / `AtlasSchema`) integration.
 *   **Schema-per-Environment**: Actual execution of SQL-based schema provisioning (via `SQLExecutor`), regex-validated naming, injection prevention, and automated migration Jobs.
 *   **MR-Triggered Lifecycle**: Environments spin up when a Merge Request opens and tear down upon merge/close.
 *   **Merge Gating**: GitLab/GitHub commit status checks (`diverge/preview`) block merges until environments are healthy.
@@ -67,12 +77,12 @@ See [charts/diverge/values.yaml](charts/diverge/values.yaml) for configuration o
 *   **Test Integration**: CI trigger and polling support to run automated tests against preview environments.
 *   **Prometheus Metrics**: Reconciliation duration, deployment status, route counts, active environments, and preview group gauges.
 *   **Namespace Labels**: Custom labels on preview namespaces (e.g., `istio.io/dataplane-mode: ambient` for zero-trust mTLS).
-*   **Security Hardened**: Webhook secret constant-time comparison, RFC 7230 header validation, safe SHA handling, ArgoCD namespace bypass prevention, IPv6-safe pod URLs, typed Server-Side Apply (SSA), and strict label validation.
-*   **Finalizer-Based Lifecycle**: Kubernetes finalizers ensure clean teardown of all resources (routing, database, ArgoCD apps) even during force-deletes.
+*   **Security Hardened**: Macaroon capability tokens, webhook secret constant-time comparison, RFC 7230 header validation, safe SHA handling, ArgoCD namespace bypass prevention, IPv6-safe pod URLs, typed Server-Side Apply (SSA), and strict label validation.
+*   **Finalizer-Based Lifecycle**: Kubernetes finalizers ensure clean teardown of all resources (routing, database, sandboxes, ArgoCD apps) even during force-deletes.
 *   **TTL Auto-Expiry**: Automatic environment cleanup after configurable TTL with requeue-based expiry.
 *   **Multi-SCM Notifiers**: GitLab MR comments and GitHub PR comments with status updates.
-*   **E2E Tested**: Dual-cluster end-to-end tests with k3d, Envoy Gateway, and real CRD reconciliation.
-*   **ConnectRPC API Server**: Opt-in API server (`server.enabled: true` in Helm) featuring ConnectRPC (HTTP/1.1 + HTTP/2, browser-native, curlable), OIDC JWT + K8s TokenReview authentication, namespace-scoped RBAC authorization, structured audit logging, list pagination, optimistic concurrency, and CORS for browser/SPA clients.
+*   **E2E Tested**: End-to-end tests with Kind/k3d, Envoy Gateway, Istio, Cilium, Linkerd, and real CRD reconciliation.
+*   **ConnectRPC API Server & Web Dashboard**: Opt-in API server (`server.enabled: true` in Helm) featuring an embedded React Web UI (`server.dashboard.enabled: true`), ConnectRPC (HTTP/1.1 + HTTP/2), OIDC JWT + K8s TokenReview + Macaroon authentication, namespace-scoped RBAC authorization, structured audit logging, list pagination, optimistic concurrency, and HTTP reverse tunnels.
 *   **Service Topology & Route Simulation**: `diverge route <service>` traces request paths through your service graph. `diverge graph show` renders the topology as Mermaid, DOT, or JSON.
 *   **Changed-Service Detection**: `diverge diff` identifies which services are affected by your code changes using git diff + path-based service mapping. Outputs JSON for CI integration.
 *   **Prometheus Topology Discovery**: Auto-discovers service dependencies from Istio, Linkerd, or Cilium mesh metrics. Background cache with stale-while-revalidate for zero-latency CLI responses.
@@ -88,7 +98,7 @@ See the [Async Routing Guide](docs/async-routing.md) for full configuration deta
 
 ## Security
 
-Diverge takes security seriously. The platform features strict CRD OpenAPI validation, context timeouts on all external calls, and prevention mechanisms for shell/markdown injection in templates. The controller uses RBAC-scoped clients to ensure it only has the permissions it needs. Webhook interactions are secured using constant-time comparisons for secrets and RFC 7230-compliant header validation. Recent hardening includes ArgoCD namespace bypass prevention, safe SHA handling to eliminate panics, IPv6-safe pod URLs, comprehensive label validation, and Typed Server-Side Apply (SSA) to ensure safe resource updates.
+Diverge takes security seriously. The platform features strict CRD OpenAPI validation, context timeouts on all external calls, and prevention mechanisms for shell/markdown injection in templates. The controller uses RBAC-scoped clients to ensure it only has the permissions it needs. Webhook interactions are secured using constant-time comparisons for secrets and RFC 7230-compliant header validation. Recent hardening includes Macaroon capability auth with namespace-scoped secret indexing, ArgoCD namespace bypass prevention, safe SHA handling to eliminate panics, IPv6-safe pod URLs, comprehensive label validation, and Typed Server-Side Apply (SSA) to ensure safe resource updates.
 
 - Container images are signed with [cosign](https://github.com/sigstore/cosign) using keyless (OIDC) identity
 - Every release includes an SBOM (SPDX) attached to the container image
@@ -98,12 +108,13 @@ Diverge takes security seriously. The platform features strict CRD OpenAPI valid
 
 ## Architecture
 
-Diverge consists of 4 main components compiled into a single consolidated Docker image (`ghcr.io/divergedev/diverge:latest`), released via `goreleaser`:
+Diverge consists of 5 core binaries and an embedded Web UI compiled and released via `goreleaser`:
 
-1.  **Controller (`diverge-controller`)**: The Kubernetes operator that watches for `PreviewGroup` and `Environment` Custom Resources (CRs), reconciles them, and provisions the necessary resources (like Argo CD `Application` CRs, databases, etc.).
-2.  **Proxy (`diverge-proxy`)**: A reverse proxy that helps facilitate header-based routing to preview environments.
-3.  **Activator (`diverge-activator`)**: A proxy for scale-to-zero workloads. Wakes up sleeping pods on the first request and seamlessly routes traffic once they are ready.
-4.  **CLI (`diverge`)**: A powerful CLI to interact with Diverge environments directly from your terminal.
+1.  **Controller (`diverge-controller`)**: The Kubernetes operator that watches `PreviewGroup`, `Environment`, and `AgentTask` Custom Resources (CRs), reconciles them, and provisions routing, databases, sandboxes, and GitOps resources.
+2.  **API Server & Web UI (`diverge-server`)**: ConnectRPC server (`server.enabled: true`) serving the embedded React Web Dashboard, OIDC/TokenReview/Macaroon authentication, real-time environment/log streaming, and local-to-cluster HTTP tunnels.
+3.  **Proxy (`diverge-proxy`)**: A reverse proxy that facilitates header-based L7 routing to preview environments.
+4.  **Activator (`activator-proxy`)**: A proxy for scale-to-zero workloads. Wakes up sleeping pods on the first request and seamlessly routes traffic once they are ready.
+5.  **CLI & MCP Server (`diverge`)**: Terminal CLI and stdio Model Context Protocol (`diverge mcp`) server for AI agents and IDEs.
 
 ## PreviewGroup Example
 
@@ -141,6 +152,7 @@ The `diverge` CLI helps you manage environments efficiently:
 *   `diverge open` - Open the preview URL in your browser
 *   `diverge logs` - Stream logs for a preview environment
 *   `diverge dev` - Local development mode with preview routing
+*   `diverge doctor` - Diagnose cluster, CRD, Gateway, and environment health
 *   `diverge env export` - Export environment variables (dotenv, JSON, shell)
 *   `diverge mcp` - Run MCP server over stdio for AI agent integration
 *   `diverge preview` - Create preview environments from CLI
@@ -166,7 +178,7 @@ sh install.sh
 Or install via Go:
 
 ```bash
-go install github.com/divergedev/diverge/cmd/diverge@v0.8.0
+go install github.com/divergedev/diverge/cmd/diverge@latest
 ```
 
 ### Install via Helm (Kubernetes Operator)
@@ -179,16 +191,16 @@ helm install diverge diverge/diverge --namespace diverge-system --create-namespa
 
 ### Docker Images (for reference)
 
-The controller and proxy images are available at:
+The controller, server, and proxy images are available at:
 ```bash
-docker pull ghcr.io/divergedev/diverge:v0.8.0
+docker pull ghcr.io/divergedev/diverge:latest
 ```
 
 Or download the binary from [Releases](https://github.com/divergedev/diverge/releases).
 
 ## Development
 
-Diverge requires Go 1.26+. The project uses Nix to manage development dependencies.
+Diverge supports both **1-click GitHub Codespaces / VS Code Dev Containers** (`.devcontainer/devcontainer.json`) and **Nix** (`flake.nix`).
 
 ```bash
 # Enter the Nix development shell
@@ -199,11 +211,11 @@ nix develop -c make install
 nix develop -c make run
 ```
 
-Currently, the project contains **943 tests** utilizing table-driven tests, `testify/assert`, and Property-Based Testing (PBT) using the Hegel framework (`hegel.dev/go/hegel`).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full developer guide, testing conventions, and Property-Based Testing (PBT) workflow using the Hegel framework (`hegel.dev/go/hegel`).
 
 ## Contributing
 
-See [GitHub Issues](https://github.com/divergedev/diverge/issues) for planned features and open work.
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [GitHub Issues](https://github.com/divergedev/diverge/issues) for planned features and open work.
 
 ## License
 Apache 2.0
