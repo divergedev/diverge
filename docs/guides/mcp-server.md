@@ -211,13 +211,13 @@ Add the server entry to `.vscode/mcp.json` in your project workspace:
 
 ## 6. Destructive Operations
 
-By default, the Diverge MCP server operates in **safe mode**:
-- Destructive tools (`diverge_delete_environment` and `diverge_delete_preview_group`) are **omitted** from the registered tool registry.
-- AI agents cannot accidentally delete active preview environments or teardown running PreviewGroups.
+By default, the CLI `diverge mcp` `stdio` server operates in **safe mode**:
+- Destructive tools (`diverge_delete_environment`, `diverge_delete_preview_group`, and `diverge_cancel_task`) are **omitted** from the CLI's registered tool registry.
+- AI assistants connected over `stdio` cannot accidentally delete active preview environments, tear down running `PreviewGroup`s, or cancel running `AgentTask`s unless `--allow-destructive` is set.
 
-### Enabling Destructive Tools
+### Enabling Destructive Tools on the CLI
 
-To allow your AI assistant to delete environments and preview groups, append the `--allow-destructive` flag:
+To allow your AI assistant to use `diverge_delete_environment`, `diverge_delete_preview_group`, and `diverge_cancel_task` over `diverge mcp`, append the `--allow-destructive` flag:
 
 ```json
 {
@@ -235,7 +235,7 @@ To allow your AI assistant to delete environments and preview groups, append the
 ```
 
 > [!WARNING]
-> Enabling `--allow-destructive` allows the AI agent to initiate irreversible deletions and cleanup of Kubernetes preview namespaces and databases.
+> Enabling `--allow-destructive` allows the AI agent to initiate irreversible deletions and cleanup of Kubernetes preview namespaces, databases, and `AgentTask` sandboxes.
 
 ---
 
@@ -246,7 +246,7 @@ To allow your AI assistant to delete environments and preview groups, append the
 | Flag | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `--server-url` | `string` | `""` | Diverge API server URL. If empty, falls back to `DIVERGE_SERVER_URL` environment variable. |
-| `--allow-destructive` | `bool` | `false` | Enable destructive tools (`delete` methods). |
+| `--allow-destructive` | `bool` | `false` | Enable destructive tools (`delete` / `cancel` methods). |
 
 ### Global Flags
 

@@ -19,9 +19,10 @@ server:
     allowedOrigins: "https://diverge.example.com"
 ```
 
-Install or upgrade the release:
+Install or upgrade the release from the root of your `diverge` repository checkout:
 
 ```bash
+# Run from the root of the diverge repository checkout
 kubectl apply -f charts/diverge/crds/
 helm upgrade --install diverge charts/diverge \
   -n diverge-system --create-namespace \
@@ -77,4 +78,4 @@ server:
 ### Security Highlights
 - **CSRF State + Sanitized Redirects**: `/auth/login` generates a cryptographic random state stored in an `HttpOnly`, `SameSite=Lax` cookie and sanitizes `return_url` to prevent open redirects.
 - **Group Enforcement**: When `allowedGroups` is configured, `/auth/callback` verifies group membership before issuing the `diverge_token` session cookie.
-- **Namespace-Scoped RBAC**: Every API call is checked against Kubernetes RBAC / `SubjectAccessReview` for the authenticated principal.
+- **Namespace-Scoped Authorization**: Human and `ServiceAccount` principals are checked with Kubernetes RBAC / `SubjectAccessReview`; Macaroon callers are checked against their caveats.
