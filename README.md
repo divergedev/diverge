@@ -49,10 +49,41 @@ Documentation: [https://divergedev.com](https://divergedev.com)
 
 ## Quick Start
 
+<p align="center">
+  <img src="docs/assets/terminal-quickstart-demo.svg" alt="Diverge CLI Quickstart Demo" width="100%">
+</p>
+
 You can quickly test Diverge locally with the CLI:
 
 ```bash
 diverge dev --service my-app
+```
+
+### How It Works: Delta Previews vs. Full-Stack Duplication
+
+<p align="center">
+  <img src="docs/assets/delta-vs-duplicated.svg" alt="Delta Preview vs Traditional Full-Stack Duplication" width="100%">
+</p>
+
+### Turnkey CI/CD (`divergedev/diverge@v1`)
+
+Deploy a delta `PreviewGroup` for only the services modified in a Pull Request and pass `routing-header-json` directly into Playwright E2E tests:
+
+```yaml
+- name: Deploy Diverge Delta Preview
+  id: diverge
+  uses: divergedev/diverge@v1
+  with:
+    kubeconfig: ${{ secrets.PREVIEW_KUBECONFIG }}
+    image-registry: ghcr.io/acme
+    base-url: https://staging.example.com
+
+- name: Run Playwright E2E Against Preview
+  if: steps.diverge.outputs.skipped != 'true'
+  run: npx playwright test
+  env:
+    PREVIEW_URL: ${{ steps.diverge.outputs.preview-url }}
+    EXTRA_HTTP_HEADERS: ${{ steps.diverge.outputs.routing-header-json }}
 ```
 
 ## Helm Install
@@ -111,6 +142,10 @@ Diverge takes security seriously. The platform features strict CRD OpenAPI valid
 - GitHub Actions are pinned to commit SHAs
 
 ## Architecture
+
+<p align="center">
+  <img src="docs/assets/architecture-overview.svg" alt="Diverge End-to-End Architecture Overview" width="100%">
+</p>
 
 Diverge consists of 5 core binaries and an embedded Web UI compiled and released via `goreleaser`:
 

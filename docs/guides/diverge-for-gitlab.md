@@ -90,12 +90,19 @@ Example MR comment commands:
 ```
 
 ## 8. GitLab CI/CD Pipeline
-You can integrate Diverge into your GitLab CI pipelines to build your container images and push them to the registry before environments are provisioned.
+Include the official Diverge GitLab CI/CD Component (`templates/preview/template.yml`) to automatically detect changed microservices via `diverge diff`, apply a `PreviewGroup` CR, and export `preview.env` (`DIVERGE_PREVIEW_NAME`, `DIVERGE_ROUTING_HEADER_JSON`, `DIVERGE_PREVIEW_URL`) to downstream test jobs:
 
-Example `.gitlab-ci.yml`:
 ```yaml
+include:
+  - component: $CI_SERVER_FQDN/divergedev/diverge/preview@v1
+    inputs:
+      diverge_registry: "$CI_REGISTRY_IMAGE"
+      diverge_base_url: "https://staging.example.com"
+
 stages:
   - build
+  - deploy
+  - test
 
 build-preview:
   stage: build
@@ -104,13 +111,21 @@ build-preview:
     - docker:24.0.5-dind
   script:
     - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
-    - IMAGE_TAG=${CI_COMMIT_SHA:0:12}
-    - docker build -t $CI_REGISTRY_IMAGE:$IMAGE_TAG .
-    - docker push $CI_REGISTRY_IMAGE:$IMAGE_TAG
+    - docker build -t $CI_REGISTRY_IMAGE/frontend:$CI_COMMIT_SHORT_SHA .
+    - docker push $CI_REGISTRY_IMAGE/frontend:$CI_COMMIT_SHORT_SHA
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+e2e-preview:
+  stage: test
+  needs: ["diverge:preview"]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  script:
+    - if [ "$DIVERGE_SKIPPED" = "true" ]; then exit 0; fi
+    - EXTRA_HTTP_HEADERS="$DIVERGE_ROUTING_HEADER_JSON" npx playwright test
 ```
-Refer to the `ci/gitlab/` directory for full examples.
+Refer to [`ci/gitlab/README.md`](../../ci/gitlab/README.md) and [`docs/guides/ci-cd-workflows.md`](ci-cd-workflows.md) for full input and output documentation.
 
 ## 9. Self-Hosted GitLab
 If you are running a self-hosted GitLab instance, ensure the following are configured:

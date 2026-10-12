@@ -1,12 +1,18 @@
 # Architecture
 
-Diverge is built as a Kubernetes controller paired with a powerful CLI and SDK for developers.
+Diverge is built as a Kubernetes controller paired with a powerful CLI, ConnectRPC API server, L7 routing proxies, and SDKs for developers and autonomous AI agents.
+
+![Diverge End-to-End Architecture](./assets/architecture-overview.svg)
 
 ## High-Level Architecture
-1. **Controller**: The Diverge controller watches `Environment` CRDs and reconciles them.
-2. **Provisioner**: Async routing resources are provisioned on-the-fly (e.g. Kafka topics, Temporal queues).
-3. **Status**: The controller updates the `Environment` status, reporting `AsyncRoutingReady`.
-4. **CLI**: The developer CLI interacts with the cluster, blocking on ready states and streaming logs.
+1. **Controller**: The Diverge controller watches `PreviewGroup`, `Environment`, and `AgentTask` CRDs and reconciles them.
+2. **Provisioner**: Database schemas (`preview_<env>`), feature flag rules, and async routing resources are provisioned on-the-fly (e.g. Kafka topics, Temporal queues).
+3. **Status**: The controller updates the `Environment` and `PreviewGroup` status, reporting `AsyncRoutingReady` and `PreviewEnvironmentReady`.
+4. **CLI & MCP**: The developer CLI (`diverge`) and MCP server interact with the cluster, blocking on ready states, tracing routes, and streaming logs.
+
+## Delta Previews vs. Full-Stack Duplication
+
+![Delta Previews vs. Full-Stack Duplication](./assets/delta-vs-duplicated.svg)
 
 ## Async Routing Flow
 

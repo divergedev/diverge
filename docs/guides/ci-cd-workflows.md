@@ -10,25 +10,31 @@ Place `.diverge.yaml` at the root of your repository so `diverge diff` maps file
 
 ```yaml
 version: "1"
-service: payments-api
 services:
   payments-api:
     paths:
       - services/payments/**
-    port: 8080
+    image:
+      repository: ghcr.io/acme/payments-api
   checkout-web:
     paths:
       - apps/checkout/**
-    port: 3000
+    image:
+      repository: ghcr.io/acme/checkout-web
   ledger-worker:
     paths:
       - services/ledger/**
-    port: 9090
+    image:
+      repository: ghcr.io/acme/ledger-worker
 ```
 
 ---
 
 ## 2. GitHub Actions Workflow (`.github/workflows/preview.yml`)
+
+### Turnkey Composite Action (Recommended)
+
+Use the official `divergedev/diverge@v1` GitHub Action to validate `.diverge.yaml`, run `diverge diff`, deploy a delta `PreviewGroup`, and expose routing headers to Playwright or Cypress:
 
 ```yaml
 name: Preview Environment
@@ -36,11 +42,6 @@ name: Preview Environment
 on:
   pull_request:
     types: [opened, synchronize, reopened, closed]
-
-permissions:
-  contents: read
-  pull-requests: write
-  statuses: write
 
 jobs:
   preview:
@@ -51,6 +52,61 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Deploy Diverge Delta Preview
+        id: diverge
+        uses: divergedev/diverge@v1
+        with:
+          action: deploy
+          kubeconfig: ${{ secrets.PREVIEW_KUBECONFIG }}
+          image-registry: ghcr.io/acme
+          base-url: https://staging.example.com
+          wait: "true"
+
+      - name: Run Playwright E2E Against Preview
+        if: steps.diverge.outputs.skipped != 'true'
+        run: npx playwright test
+        env:
+          PREVIEW_URL: ${{ steps.diverge.outputs.preview-url }}
+          EXTRA_HTTP_HEADERS: ${{ steps.diverge.outputs.routing-header-json }}
+
+  cleanup:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: divergedev/diverge@v1
+        with:
+          action: teardown
+          kubeconfig: ${{ secrets.PREVIEW_KUBECONFIG }}
+```
+
+### Action Inputs & Outputs
+
+| Input | Default | Description |
+| :--- | :--- | :--- |
+| `action` | `deploy` | `validate`, `diff`, `deploy`, or `teardown` |
+| `kubeconfig` | `""` | Raw or base64-encoded kubeconfig for target cluster |
+| `image-registry` | `""` | Registry prefix for changed services (e.g. `ghcr.io/acme`) |
+| `image-tag` | `pr-<number>` | Image tag for changed services |
+| `header-key` | `x-diverge-env` | HTTP routing header key |
+| `ttl` | `4h` | Preview environment TTL |
+| `base-url` | `""` | Optional gateway base URL to emit `preview-url` (`?_diverge_env=`) |
+| `wait` | `false` | Wait for `PreviewGroup` `Ready` condition |
+
+| Output | Example | Description |
+| :--- | :--- | :--- |
+| `preview-name` | `pr-42` | Resolved `PreviewGroup` name |
+| `changed-services` | `["payments-api"]` | JSON array of changed services from `diverge diff` |
+| `skipped` | `false` | `true` when 0 services changed |
+| `routing-header` | `x-diverge-env: pr-42` | HTTP header for curl / API tests |
+| `routing-header-json` | `{"x-diverge-env":"pr-42"}` | JSON header map for Playwright / Cypress |
+| `preview-url` | `https://staging.example.com/?_diverge_env=pr-42` | Zero-extension browser preview link |
+
+### Manual CLI Workflow
+
+If you prefer calling the `diverge` CLI directly without the composite action:
+
+```yaml
       - name: Install Diverge CLI
         run: curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/main/install.sh | sh
 
@@ -60,41 +116,44 @@ jobs:
         run: |
           mkdir -p ~/.kube && echo "$KUBECONFIG_DATA" | base64 -d > ~/.kube/config
           DIFF_JSON=$(diverge diff --base "origin/${{ github.base_ref }}" --output json)
-          mapfile -t SVC_ARGS < <(echo "$DIFF_JSON" | jq -r '.changedServices[]? | "--service=\(.)=ghcr.io/acme/\(.):pr-${{ github.event.number }}"')
+          mapfile -t SVC_ARGS < <(echo "$DIFF_JSON" | jq -r '.services[]? | "--service=\(.)=ghcr.io/acme/\(.):pr-${{ github.event.number }}"')
           if [ "${#SVC_ARGS[@]}" -eq 0 ]; then
             echo "No service changes detected; skipping preview deployment."
             exit 0
           fi
-          diverge preview create "pr-${{ github.event.number }}" \
-            --branch "${{ github.head_ref }}" \
-            --mr-id "${{ github.event.number }}" \
+          diverge preview create \
+            --name "pr-${{ github.event.number }}" \
+            --mr "${{ github.event.number }}" \
             --ttl 4h \
             "${SVC_ARGS[@]}"
-
-      - name: Run Playwright E2E Against Preview
-        run: |
-          npx playwright test
-        env:
-          EXTRA_HTTP_HEADERS: '{"x-preview-env":"pr-${{ github.event.number }}"}'
-
-  cleanup:
-    if: github.event.action == 'closed'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Install Diverge CLI
-        run: curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/main/install.sh | sh
-
-      - name: Delete PreviewGroup
-        env:
-          KUBECONFIG_DATA: ${{ secrets.PREVIEW_KUBECONFIG }}
-        run: |
-          mkdir -p ~/.kube && echo "$KUBECONFIG_DATA" | base64 -d > ~/.kube/config
-          kubectl delete previewgroup "pr-${{ github.event.number }}" --ignore-not-found
 ```
 
 ---
 
 ## 3. GitLab CI Pipeline (`.gitlab-ci.yml`)
+
+### Turnkey GitLab CI/CD Component (Recommended)
+
+Include the official component (`templates/preview/template.yml`). It automatically runs `diverge diff` when `diverge_services` is omitted and exports `preview.env` (`DIVERGE_PREVIEW_NAME`, `DIVERGE_ROUTING_HEADER_JSON`, `DIVERGE_PREVIEW_URL`) as a `dotenv` artifact to downstream jobs:
+
+```yaml
+include:
+  - component: $CI_SERVER_FQDN/divergedev/diverge/preview@v1
+    inputs:
+      diverge_registry: "$CI_REGISTRY_IMAGE"
+      diverge_base_url: "https://staging.example.com"
+
+e2e_preview:
+  stage: test
+  needs: ["diverge:preview"]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  script:
+    - if [ "$DIVERGE_SKIPPED" = "true" ]; then exit 0; fi
+    - EXTRA_HTTP_HEADERS="$DIVERGE_ROUTING_HEADER_JSON" npx playwright test
+```
+
+### Manual CLI Pipeline
 
 ```yaml
 stages:
@@ -109,12 +168,12 @@ deploy_preview:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
   script:
     - DIFF_JSON=$(diverge diff --base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" --output json)
-    - SVC_ARGS=$(echo "$DIFF_JSON" | jq -r '.changedServices[]? | "--service=\(.)=registry.example.com/\(.):mr-'"${CI_MERGE_REQUEST_IID}"'"')
+    - SVC_ARGS=$(echo "$DIFF_JSON" | jq -r '.services[]? | "--service=\(.)=registry.example.com/\(.):mr-'"${CI_MERGE_REQUEST_IID}"'"')
     - |
       if [ -n "$SVC_ARGS" ]; then
-        diverge preview create "mr-${CI_MERGE_REQUEST_IID}" \
-          --branch "${CI_COMMIT_REF_NAME}" \
-          --mr-id "${CI_MERGE_REQUEST_IID}" \
+        diverge preview create \
+          --name "mr-${CI_MERGE_REQUEST_IID}" \
+          --mr "${CI_MERGE_REQUEST_IID}" \
           --ttl 4h \
           $SVC_ARGS
       fi
@@ -124,7 +183,7 @@ e2e_preview:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
   variables:
-    DIVERGE_HEADER: "x-preview-env: mr-${CI_MERGE_REQUEST_IID}"
+    DIVERGE_HEADER: "x-diverge-env: mr-${CI_MERGE_REQUEST_IID}"
   script:
     - npm ci
     - npx playwright test
@@ -173,4 +232,3 @@ In addition to CI-driven preview deployments, Diverge's webhook handlers execute
 /diverge resume
 /diverge teardown
 ```
-

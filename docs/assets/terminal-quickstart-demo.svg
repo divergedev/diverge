@@ -1,0 +1,176 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 520" width="100%" height="100%" role="img" aria-labelledby="term-title term-desc">
+  <title id="term-title">Diverge CLI Quickstart Terminal Session</title>
+  <desc id="term-desc">Animated macOS terminal window showing diverge init, diverge diff --base origin/main, diverge preview create for pr-42, and diverge trace pr-42 with L7 hop table, Postgres schema preview_pr_42, and preview URL.</desc>
+  <defs>
+    <style>
+      .mono {
+        font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 12.5px;
+      }
+      .sans {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      }
+      .prompt { fill: #10b981; font-weight: 700; }
+      .cmd { fill: #f8fafc; font-weight: 600; }
+      .flag { fill: #38bdf8; }
+      .muted { fill: #94a3b8; }
+      .success { fill: #34d399; font-weight: 600; }
+      .accent { fill: #a78bfa; font-weight: 600; }
+      .warn { fill: #fbbf24; }
+      .step { opacity: 1; }
+
+      @media (prefers-reduced-motion: no-preference) {
+        .s1 { animation: reveal1 18s infinite; }
+        .s2 { animation: reveal2 18s infinite; }
+        .s3 { animation: reveal3 18s infinite; }
+        .s4 { animation: reveal4 18s infinite; }
+        .s5 { animation: reveal5 18s infinite; }
+        .s6 { animation: reveal6 18s infinite; }
+        .s7 { animation: reveal7 18s infinite; }
+        .s8 { animation: reveal8 18s infinite; }
+        .cursor { animation: blink 1s step-end infinite; }
+      }
+
+      @keyframes reveal1 { 0%, 2% { opacity: 0; } 4%, 96% { opacity: 1; } 99%, 100% { opacity: 0; } }
+      @keyframes reveal2 { 0%, 8% { opacity: 0; } 11%, 96% { opacity: 1; } 99%, 100% { opacity: 0; } }
+      @keyframes reveal3 { 0%, 18% { opacity: 0; } 21%, 96% { opacity: 1; } 99%, 100% { opacity: 0; } }
+      @keyframes reveal4 { 0%, 26% { opacity: 0; } 29%, 96% { opacity: 1; } 99%, 100% { opacity: 0; } }
+      @keyframes reveal5 { 0%, 38% { opacity: 0; } 41%, 96% { opacity: 1; } 99%, 100% { opacity: 0; } }
+      @keyframes reveal6 { 0%, 46% { opacity: 0; } 49%, 96% { opacity: 1; } 99%, 100% { opacity: 0; } }
+      @keyframes reveal7 { 0%, 58% { opacity: 0; } 61%, 96% { opacity: 1; } 99%, 100% { opacity: 0; } }
+      @keyframes reveal8 { 0%, 66% { opacity: 0; } 69%, 96% { opacity: 1; } 99%, 100% { opacity: 0; } }
+      @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+    </style>
+
+    <linearGradient id="term-bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="100%" stop-color="#090d16" />
+    </linearGradient>
+  </defs>
+
+  <!-- Outer Window Frame -->
+  <rect x="0" y="0" width="960" height="520" rx="14" fill="url(#term-bg)" />
+  <rect x="1" y="1" width="958" height="518" rx="13" fill="none" stroke="#334155" stroke-width="1.5" />
+
+  <!-- macOS Titlebar -->
+  <path d="M 1 14 Q 1 1 14 1 L 946 1 Q 959 1 959 14 L 959 42 L 1 42 Z" fill="#1e293b" />
+  <line x1="1" y1="42" x2="959" y2="42" stroke="#334155" stroke-width="1" />
+
+  <!-- Window Traffic Lights -->
+  <circle cx="24" cy="21" r="6.5" fill="#ef4444" />
+  <circle cx="44" cy="21" r="6.5" fill="#f59e0b" />
+  <circle cx="64" cy="21" r="6.5" fill="#10b981" />
+
+  <!-- Window Title -->
+  <text x="480" y="26" text-anchor="middle" class="mono" font-size="12" fill="#94a3b8">acme/commerce-monorepo — zsh — diverge v0.14.0</text>
+  <rect x="832" y="11" width="110" height="20" rx="4" fill="#064e3b" stroke="#10b981" stroke-width="0.8" />
+  <text x="887" y="25" text-anchor="middle" class="mono" font-size="10" font-weight="700" fill="#a7f3d0">DELTA MODE</text>
+
+  <!-- Step 1: diverge init -->
+  <g class="step s1">
+    <text x="24" y="72" class="mono">
+      <tspan class="prompt">❯</tspan>
+      <tspan class="cmd"> diverge init</tspan>
+      <tspan class="flag"> --config</tspan>
+    </text>
+  </g>
+
+  <g class="step s2">
+    <text x="24" y="93" class="mono muted">  Discovered 3 services: storefront-web, checkout-api, fulfillment-worker</text>
+    <text x="24" y="113" class="mono success">  ✅ Generated .diverge.yaml with JSON Schema header ($schema=https://divergedev.com/schemas/diverge.schema.json)</text>
+  </g>
+
+  <!-- Step 2: diverge diff -->
+  <g class="step s3">
+    <text x="24" y="145" class="mono">
+      <tspan class="prompt">❯</tspan>
+      <tspan class="cmd"> diverge diff</tspan>
+      <tspan class="flag"> --base origin/main</tspan>
+    </text>
+  </g>
+
+  <g class="step s4">
+    <text x="24" y="166" class="mono muted">  Changed services (compared to origin/main):</text>
+    <text x="24" y="186" class="mono">
+      <tspan fill="#34d399" font-weight="700">    • checkout-api</tspan>
+      <tspan class="muted">  (Ingress path: </tspan>
+      <tspan fill="#7dd3fc">storefront-web → checkout-api → fulfillment-worker</tspan>
+      <tspan class="muted">)</tspan>
+    </text>
+  </g>
+
+  <!-- Step 3: diverge preview create -->
+  <g class="step s5">
+    <text x="24" y="218" class="mono">
+      <tspan class="prompt">❯</tspan>
+      <tspan class="cmd"> diverge preview create</tspan>
+      <tspan class="flag"> --name pr-42 --service checkout-api=ghcr.io/acme/checkout-api:pr-42 --mr 42</tspan>
+    </text>
+  </g>
+
+  <g class="step s6">
+    <text x="24" y="239" class="mono success">  ✅ PreviewGroup "pr-42" created (1 delta pod, 2 shared baseline services)</text>
+    <text x="24" y="259" class="mono muted">     Header: x-diverge-env: pr-42   •   Database Schema: preview_pr_42 (Atlas migrations applied)</text>
+  </g>
+
+  <!-- Step 4: diverge trace pr-42 -->
+  <g class="step s7">
+    <text x="24" y="291" class="mono">
+      <tspan class="prompt">❯</tspan>
+      <tspan class="cmd"> diverge trace</tspan>
+      <tspan class="flag"> pr-42</tspan>
+    </text>
+  </g>
+
+  <g class="step s8">
+    <!-- Trace Table Card -->
+    <rect x="24" y="304" width="912" height="162" rx="8" fill="#1e293b" fill-opacity="0.7" stroke="#334155" stroke-width="1" />
+    <text x="40" y="326" class="mono" fill="#94a3b8" font-weight="700">HOP   SERVICE              WORKLOAD TARGET                  ROUTING &amp; STATE CONTEXT</text>
+    <line x1="40" y1="334" x2="920" y2="334" stroke="#334155" stroke-width="1" />
+
+    <text x="40" y="355" class="mono">
+      <tspan fill="#64748b">01 </tspan>
+      <tspan fill="#f8fafc">   storefront-web       </tspan>
+      <tspan fill="#38bdf8">[baseline] </tspan>
+      <tspan fill="#94a3b8">v1.14.0               </tspan>
+      <tspan fill="#cbd5e1">Entrypoint • propagates x-diverge-env: pr-42</tspan>
+    </text>
+
+    <text x="40" y="379" class="mono">
+      <tspan fill="#10b981" font-weight="700">02 </tspan>
+      <tspan fill="#ecfdf5" font-weight="700">   checkout-api         </tspan>
+      <tspan fill="#34d399" font-weight="700">[preview:pr-42] </tspan>
+      <tspan fill="#6ee7b7">pr-42 (Ready)    </tspan>
+      <tspan fill="#a7f3d0">Postgres: preview_pr_42 • Flipt: pr-42</tspan>
+    </text>
+
+    <text x="40" y="403" class="mono">
+      <tspan fill="#64748b">03 </tspan>
+      <tspan fill="#f8fafc">   fulfillment-worker   </tspan>
+      <tspan fill="#38bdf8">[baseline] </tspan>
+      <tspan fill="#94a3b8">v1.14.0               </tspan>
+      <tspan fill="#cbd5e1">Kafka virtual topic: orders-events-pr-42</tspan>
+    </text>
+
+    <line x1="40" y1="416" x2="920" y2="416" stroke="#334155" stroke-width="1" />
+
+    <text x="40" y="437" class="mono">
+      <tspan fill="#94a3b8">Postgres Schema: </tspan>
+      <tspan fill="#6ee7b7" font-weight="700">preview_pr_42</tspan>
+      <tspan fill="#94a3b8"> (diverge-db-env-pr-42)   •   Preview URL: </tspan>
+      <tspan fill="#38bdf8" font-weight="700">http://localhost:8080/?_diverge_env=pr-42</tspan>
+    </text>
+    <text x="40" y="456" class="mono">
+      <tspan fill="#94a3b8">W3C Baggage:     </tspan>
+      <tspan fill="#d8b4fe">baggage: diverge.env=pr-42</tspan>
+      <tspan fill="#94a3b8">                  •   Playwright:  </tspan>
+      <tspan fill="#fcd34d">{"x-diverge-env": "pr-42"}</tspan>
+    </text>
+
+    <!-- Active Prompt Line -->
+    <text x="24" y="494" class="mono">
+      <tspan class="prompt">❯ </tspan>
+    </text>
+    <rect x="40" y="481" width="8" height="16" fill="#10b981" class="cursor" />
+  </g>
+</svg>

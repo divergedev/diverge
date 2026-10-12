@@ -1,38 +1,75 @@
-# Diverge GitLab CI Component
+# Diverge GitLab CI/CD Component
 
-This is a GitLab CI Component that provides reusable jobs to integrate Diverge Preview Environments into your project.
+This directory and [`templates/preview/template.yml`](../../templates/preview/template.yml) provide the official GitLab CI/CD Component for deploying and tearing down Diverge `PreviewGroup` environments on Merge Requests.
 
 ## Usage
 
-Include this component in your `.gitlab-ci.yml` file:
+### GitLab CI/CD Catalog Component (`templates/preview/template.yml`)
+
+Include the component in your `.gitlab-ci.yml` file:
+
+```yaml
+include:
+  - component: $CI_SERVER_FQDN/divergedev/diverge/preview@v1
+    inputs:
+      diverge_registry: "$CI_REGISTRY_IMAGE"
+      diverge_base_url: "https://staging.example.com"
+```
+
+### Direct Component Path (`ci/gitlab/.gitlab-ci-component.yml`)
+
+If referencing the component directly from a repository fork or legacy path:
 
 ```yaml
 include:
   - component: $CI_SERVER_FQDN/divergedev/diverge/ci/gitlab/.gitlab-ci-component@main
     inputs:
-      diverge_services: "my-service"
-      diverge_registry: "$CI_REGISTRY/my-group/my-project"
+      diverge_registry: "$CI_REGISTRY_IMAGE"
 ```
 
-> **Note**: If you are publishing this component to the GitLab CI/CD catalog, users will need to reference the actual file path `ci/gitlab/.gitlab-ci-component.yml` in their configuration depending on how it's published.
+## Automatic `diverge diff` Delta Detection
+
+When `diverge_services` is left empty (the default) and `.diverge.yaml` is present at the repository root, `diverge:preview` automatically runs:
+
+```bash
+diverge diff --base "origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-main}" --output json
+```
+
+- Only modified microservices are deployed in `mode: image`.
+- If no service paths were modified in the Merge Request, `diverge:preview` sets `DIVERGE_SKIPPED=true` and exits `0` without creating cluster resources.
 
 ## Inputs
 
 | Input | Description | Default |
-|-------|-------------|---------|
-| `diverge_services` | Comma-separated list of services to deploy | `""` |
-| `diverge_header_key` | Header key to route traffic | `"x-preview-env"` |
-| `diverge_ttl` | TTL for preview environments (e.g. 2h) | `"2h"` |
-| `diverge_registry` | Container registry to push images to | (Required) |
-| `diverge_kubectl_version` | Version of kubectl to install | `"v1.30.4"` |
+| :--- | :--- | :--- |
+| `diverge_services` | Comma-separated list of services to deploy (leave empty to auto-detect via `diverge diff`) | `""` |
+| `diverge_header_key` | HTTP header key to route preview traffic | `"x-diverge-env"` |
+| `diverge_ttl` | TTL for preview environments (e.g. `4h`) | `"4h"` |
+| `diverge_registry` | Container registry prefix for preview images | `""` (falls back to `$CI_REGISTRY_IMAGE`) |
+| `diverge_namespace` | Default Kubernetes namespace for preview workloads | `"default"` |
+| `diverge_base_url` | Optional staging/gateway URL to construct a shareable `?_diverge_env=` preview URL | `""` |
+| `diverge_kubectl_version` | Version of `kubectl` to install if not present | `"v1.31.0"` |
+
+## Exported Dotenv Variables (`preview.env`)
+
+The `diverge:preview` job exports `preview.env` via `artifacts: reports: dotenv: preview.env`, making the following variables available to downstream E2E test jobs:
+
+| Variable | Example | Description |
+| :--- | :--- | :--- |
+| `DIVERGE_PREVIEW_NAME` | `mr-42` | Name of the `PreviewGroup` resource |
+| `DIVERGE_CHANGED_SERVICES` | `["checkout-api"]` | JSON array of deployed services |
+| `DIVERGE_SKIPPED` | `false` | `true` when 0 services changed and deployment was skipped |
+| `DIVERGE_ROUTING_HEADER` | `x-diverge-env: mr-42` | HTTP routing header string |
+| `DIVERGE_ROUTING_HEADER_JSON` | `{"x-diverge-env":"mr-42"}` | JSON object for Playwright / Cypress `extraHTTPHeaders` |
+| `DIVERGE_PREVIEW_URL` | `https://staging.example.com/?_diverge_env=mr-42` | Shareable browser URL with `?_diverge_env=` cookie bootstrap |
 
 ## Cluster Authentication
 
-The component requires access to your Kubernetes cluster. You must provide either:
-- `KUBECONFIG`: Path to a kubeconfig file.
-- `KUBECONFIG_CONTENT`: Base64 encoded kubeconfig content provided as a CI/CD variable.
+Provide access to your Kubernetes cluster using one of:
+- `KUBECONFIG`: Path to a kubeconfig file variable.
+- `KUBECONFIG_CONTENT`: Base64-encoded kubeconfig content provided as a masked CI/CD variable.
 
 ## Jobs Provided
 
-- `diverge:preview`: Runs on Merge Request events. Builds your image using Kaniko and applies a `PreviewGroup` CR.
-- `diverge:cleanup`: Runs when an MR is merged or closed, automatically deleting the `PreviewGroup` to free up resources.
+- `diverge:preview`: Runs on Merge Request events (`merge_request_event`, excluding merge trains). Detects changed services, applies the `PreviewGroup` CR, and exports `preview.env`.
+- `diverge:cleanup`: Runs when a Merge Request is merged or closed, deleting the `PreviewGroup` to free cluster resources immediately.
