@@ -23,6 +23,7 @@ curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/main/install.sh 
 Documentation: [https://divergedev.com](https://divergedev.com)
 - [Why Diverge? (Architecture & Cost Comparison)](docs/guides/why-diverge.md)
 - [2-Minute Local Quickstart (Kind + Helm)](docs/guides/quickstart-local.md)
+- [Fullstack Multi-Service Demo Monorepo (`examples/fullstack-demo/`)](docs/guides/fullstack-demo.md)
 - [Autonomous Agent Sandboxes & Capability Auth](docs/guides/agent-sandboxes.md)
 - [MCP Server & IDE Integration Guide](docs/guides/mcp-server.md)
 - [Database Branching & Atlas Migrations](docs/guides/database-branching-atlas.md)
@@ -42,6 +43,8 @@ Documentation: [https://divergedev.com](https://divergedev.com)
 
 ## Try It
 
+> **[In-Repo Fullstack Demo (`examples/fullstack-demo/`) →](examples/fullstack-demo/)** — Runnable 3-service Go monorepo (`storefront-web`, `checkout-api`, `fulfillment-worker`) showcasing delta `PreviewGroup` deploys, header propagation, PostgreSQL schema-per-PR + Atlas migrations, Flipt feature overrides, scale-to-zero hibernation, and `AgentTask` gVisor sandboxes.
+>
 > **[5-minute demo →](https://github.com/divergedev/demo)** — Multi-repo preview environments with k3d + Envoy Gateway. Features a complete hands-on bank-demo showcasing database schema isolation and automated migration jobs!
 
 ## Quick Start
