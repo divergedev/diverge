@@ -1,0 +1,29 @@
+apiVersion: divergedev.com/v1alpha1
+kind: AgentTask
+metadata:
+  name: fix-pr-42-rounding
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: diverge-fullstack-demo
+  annotations:
+    divergedev.com/preview-enabled: "true"
+    divergedev.com/preview-service: "checkout-api"
+    divergedev.com/runtime-class: "gvisor"
+spec:
+  objective: "Fix currency rounding discrepancy for instant payouts in checkout-api and add table-driven unit tests"
+  repository:
+    url: "https://github.com/divergedev/fullstack-demo.git"
+    baseBranch: "main"
+    workingBranch: "agent/fix-pr-42-rounding"
+  sandbox:
+    provider: "agent-sandbox"
+    poolRef: "gvisor-warm-pool"
+    templateRef: "gvisor"
+    timeoutSeconds: 1800
+  budgetUSD: "5.00"
+  budgetTokens: 200000
+  maxIterations: 5
+  capabilities:
+    - "fast"
+    - "smart"
+  draftPR: true

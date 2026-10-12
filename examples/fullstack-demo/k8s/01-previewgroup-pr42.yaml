@@ -1,0 +1,80 @@
+apiVersion: divergedev.com/v1alpha1
+kind: PreviewGroup
+metadata:
+  name: pr-42
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: diverge-fullstack-demo
+spec:
+  owner: alice
+  source:
+    provider: github
+    project: divergedev/fullstack-demo
+    mr: 42
+    branch: feat/instant-payouts
+    commitSHA: a1b2c3d4e5f6
+  routing:
+    mode: header
+    headerKey: x-diverge-env
+    headerValue: pr-42
+    externalUrl: http://pr-42.preview.localhost
+  services:
+    - name: storefront-web
+      mode: baseline
+      namespace: default
+      port: 8080
+      pathPrefix: /
+    - name: checkout-api
+      mode: image
+      image: ghcr.io/divergedev/demo-checkout-api:pr-42
+      namespace: default
+      port: 8081
+      pathPrefix: /checkout
+      env:
+        - name: DIVERGE_ENV
+          value: "pr-42"
+        - name: DIVERGE_PREVIEW_SCHEMA
+          value: "preview_pr_42"
+        - name: FEATURE_INSTANT_PAYOUTS
+          value: "true"
+        - name: FEATURE_CHECKOUT_V2_BANNER
+          value: "true"
+        - name: ORDERS_QUEUE_TOPIC
+          value: "orders-events-pr-42"
+      asyncRoutes:
+        - protocol: kafka
+          target: orders-events
+          envVarMapping:
+            orders-events: ORDERS_QUEUE_TOPIC
+      database:
+        mode: schema
+        connectionRef: postgres-admin
+        atlas:
+          mode: versioned
+          engine: job
+          migrationConfigMap: checkout-migrations
+          blocking: true
+          policy:
+            destructive: error
+    - name: fulfillment-worker
+      mode: baseline
+      namespace: default
+      port: 8082
+      asyncRoutes:
+        - protocol: kafka
+          target: orders-events
+          envVarMapping:
+            orders-events: ORDERS_QUEUE_TOPIC
+  database:
+    mode: schema
+    connectionRef: postgres-admin
+  lifecycle:
+    ttl: 24h
+    cleanupOnMerge: true
+  topologyOverrides:
+    - from: storefront-web
+      to: checkout-api
+      protocol: http
+    - from: checkout-api
+      to: fulfillment-worker
+      protocol: async

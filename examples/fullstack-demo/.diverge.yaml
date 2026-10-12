@@ -1,0 +1,81 @@
+# yaml-language-server: $schema=https://divergedev.com/schemas/diverge.schema.json
+version: "1"
+
+services:
+  storefront-web:
+    entrypoint: true
+    paths:
+      - "services/storefront-web/**"
+    image:
+      repository: "ghcr.io/divergedev/demo-storefront-web"
+      tag_template: "pr-{{.MR}}"
+    dependsOn:
+      - "checkout-api"
+
+  checkout-api:
+    paths:
+      - "services/checkout-api/**"
+      - "migrations/**"
+    image:
+      repository: "ghcr.io/divergedev/demo-checkout-api"
+      tag_template: "pr-{{.MR}}"
+    dependsOn:
+      - "fulfillment-worker"
+    asyncRoutes:
+      # Provisioned per-preview with consumer group prefix orders-cg
+      - protocol: kafka
+        target: orders-events
+        envVarMapping:
+          orders-events: ORDERS_QUEUE_TOPIC
+
+  fulfillment-worker:
+    paths:
+      - "services/fulfillment-worker/**"
+    image:
+      repository: "ghcr.io/divergedev/demo-fulfillment-worker"
+      tag_template: "pr-{{.MR}}"
+    asyncRoutes:
+      # Provisioned per-preview with consumer group prefix orders-cg
+      - protocol: kafka
+        target: orders-events
+        envVarMapping:
+          orders-events: ORDERS_QUEUE_TOPIC
+
+defaults:
+  deploy:
+    mode: delta
+    namespace: same
+  routing:
+    mode: header
+    baseline_namespace: default
+    header_key: x-diverge-env
+    domain: preview.localhost
+    banner:
+      enabled: true
+      text: "Diverge Preview Environment"
+      position: bottom
+      color: "#FF5500"
+  database:
+    mode: schema
+    connection_ref: postgres-admin
+    atlas:
+      mode: versioned
+      engine: job
+      migration_config_map: checkout-migrations
+      policy:
+        destructive: error
+  features:
+    provider: flipt
+    overrides:
+      instant_payouts: "true"
+      checkout_v2_banner: "true"
+  lifecycle:
+    ttl: 24h
+    cleanup_on_merge: true
+  dev:
+    on_conflict: warn
+
+notifications:
+  provider: github
+  comment_on_create: true
+  comment_on_ready: true

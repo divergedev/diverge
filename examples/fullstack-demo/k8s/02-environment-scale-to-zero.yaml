@@ -1,0 +1,65 @@
+apiVersion: divergedev.com/v1alpha1
+kind: Environment
+metadata:
+  name: pr-42-checkout-api
+  namespace: default
+  labels:
+    divergedev.com/preview-group: pr-42
+    app.kubernetes.io/part-of: diverge-fullstack-demo
+  annotations:
+    divergedev.com/hibernate-after: "15m"
+spec:
+  source:
+    provider: github
+    project: divergedev/fullstack-demo
+    mr: 42
+    branch: feat/instant-payouts
+    commitSHA: a1b2c3d4e5f6
+  deploy:
+    mode: delta
+    namespace: same
+    changedServices:
+      - checkout-api
+  routing:
+    provider: gateway
+    mode: header
+    headerKey: x-diverge-env
+    headerValue: pr-42
+    banner:
+      enabled: true
+      text: "Diverge Preview Environment (PR #42)"
+      position: bottom
+      color: "#FF5500"
+    asyncRoutes:
+      - protocol: kafka
+        target: orders-events
+        envVarMapping:
+          orders-events: ORDERS_QUEUE_TOPIC
+  database:
+    mode: schema
+    connectionRef: postgres-admin
+    atlas:
+      mode: versioned
+      engine: job
+      migrationConfigMap: checkout-migrations
+      blocking: true
+      policy:
+        destructive: error
+  features:
+    provider: flipt
+    overrides:
+      instant_payouts: "true"
+      checkout_v2_banner: "true"
+  serviceConfig:
+    serviceName: checkout-api
+    namespace: default
+    port: 8081
+    image: ghcr.io/divergedev/demo-checkout-api:pr-42
+    keda:
+      enabled: true
+      minReplicas: 0
+      maxReplicas: 5
+      cooldownPeriod: 300
+  lifecycle:
+    ttl: 24h
+    cleanupOnMerge: true
