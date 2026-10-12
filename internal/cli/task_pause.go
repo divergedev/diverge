@@ -11,9 +11,10 @@ import (
 
 func newTaskPauseCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "pause <name>",
-		Short: "Pause execution of an AgentTask",
-		Args:  cobra.ExactArgs(1),
+		Use:               "pause <name>",
+		Short:             "Pause execution of an AgentTask",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeAgentTaskNames(app),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runTaskSetSuspended(cmd.Context(), app, args[0], true)
 		},
@@ -28,9 +29,10 @@ func newTaskResumeCmd(app *App) *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "resume <name>",
-		Short: "Resume execution of a paused AgentTask",
-		Args:  cobra.ExactArgs(1),
+		Use:               "resume <name>",
+		Short:             "Resume execution of a paused AgentTask",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeAgentTaskNames(app),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runTaskResume(cmd.Context(), app, args[0], budgetUSD, tokens)
 		},

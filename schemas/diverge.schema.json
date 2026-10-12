@@ -1,0 +1,852 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://divergedev.com/schemas/diverge.schema.json",
+  "title": "Diverge Config",
+  "description": "Configuration for Diverge preview environments (generated from diverge.v1alpha1.DivergeConfig protobuf)",
+  "type": "object",
+  "properties": {
+    "defaults": {
+      "description": "Default environment settings.",
+      "type": "object",
+      "properties": {
+        "database": {
+          "type": "object",
+          "properties": {
+            "atlas": {
+              "description": "Atlas schema management and migration settings.",
+              "type": "object",
+              "properties": {
+                "blocking": {
+                  "type": "boolean"
+                },
+                "dir": {
+                  "description": "Local path to migrations directory for versioned mode.",
+                  "type": "string"
+                },
+                "engine": {
+                  "type": "string",
+                  "enum": [
+                    "operator",
+                    "job"
+                  ]
+                },
+                "extra_args": {
+                  "description": "Additional command-line arguments to pass to the Atlas CLI.",
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "image": {
+                  "type": "string"
+                },
+                "migration_config_map": {
+                  "type": "string"
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "versioned",
+                    "declarative"
+                  ]
+                },
+                "policy": {
+                  "type": "object",
+                  "properties": {
+                    "destructive": {
+                      "type": "string",
+                      "enum": [
+                        "error",
+                        "warn",
+                        "allow"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "schema": {
+                  "description": "Local path to schema file (SQL or HCL) for declarative mode.",
+                  "type": "string"
+                },
+                "schema_config_map": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
+            "connection_ref": {
+              "type": "string"
+            },
+            "migration_command": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "shared",
+                "schema",
+                "snapshot",
+                "fresh"
+              ]
+            },
+            "seed_source": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "deploy": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "delta",
+                "full"
+              ]
+            },
+            "namespace": {
+              "type": "string",
+              "enum": [
+                "same",
+                "create"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "dev": {
+          "description": "Local development conflict resolution settings (diverge dev).",
+          "type": "object",
+          "properties": {
+            "on_conflict": {
+              "type": "string",
+              "enum": [
+                "warn",
+                "block",
+                "allow"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "features": {
+          "description": "Feature flag overrides and remote configuration.",
+          "type": "object",
+          "properties": {
+            "connection_ref": {
+              "type": "string"
+            },
+            "overrides": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "provider": {
+              "type": "string",
+              "enum": [
+                "configmap",
+                "flipt",
+                "flagsmith",
+                "unleash",
+                "noop",
+                "none"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "lifecycle": {
+          "type": "object",
+          "properties": {
+            "cleanup_on_merge": {
+              "type": "boolean"
+            },
+            "ttl": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "routing": {
+          "type": "object",
+          "properties": {
+            "banner": {
+              "type": "object",
+              "properties": {
+                "color": {
+                  "type": "string",
+                  "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "position": {
+                  "type": "string",
+                  "enum": [
+                    "top",
+                    "bottom"
+                  ]
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
+            "baseline_namespace": {
+              "type": "string"
+            },
+            "domain": {
+              "type": "string"
+            },
+            "header_key": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "header",
+                "namespace",
+                "subdomain"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "environments": {
+      "description": "Environment type overrides.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "branch": {
+            "type": "string"
+          },
+          "database": {
+            "type": "object",
+            "properties": {
+              "atlas": {
+                "description": "Atlas schema management and migration settings.",
+                "type": "object",
+                "properties": {
+                  "blocking": {
+                    "type": "boolean"
+                  },
+                  "dir": {
+                    "description": "Local path to migrations directory for versioned mode.",
+                    "type": "string"
+                  },
+                  "engine": {
+                    "type": "string",
+                    "enum": [
+                      "operator",
+                      "job"
+                    ]
+                  },
+                  "extra_args": {
+                    "description": "Additional command-line arguments to pass to the Atlas CLI.",
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "image": {
+                    "type": "string"
+                  },
+                  "migration_config_map": {
+                    "type": "string"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "versioned",
+                      "declarative"
+                    ]
+                  },
+                  "policy": {
+                    "type": "object",
+                    "properties": {
+                      "destructive": {
+                        "type": "string",
+                        "enum": [
+                          "error",
+                          "warn",
+                          "allow"
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "schema": {
+                    "description": "Local path to schema file (SQL or HCL) for declarative mode.",
+                    "type": "string"
+                  },
+                  "schema_config_map": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "connection_ref": {
+                "type": "string"
+              },
+              "migration_command": {
+                "type": "string"
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "shared",
+                  "schema",
+                  "snapshot",
+                  "fresh"
+                ]
+              },
+              "seed_source": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "deploy": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "delta",
+                  "full"
+                ]
+              },
+              "namespace": {
+                "type": "string",
+                "enum": [
+                  "same",
+                  "create"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "dev": {
+            "description": "Local development conflict resolution settings (diverge dev).",
+            "type": "object",
+            "properties": {
+              "on_conflict": {
+                "type": "string",
+                "enum": [
+                  "warn",
+                  "block",
+                  "allow"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "features": {
+            "description": "Feature flag overrides and remote configuration.",
+            "type": "object",
+            "properties": {
+              "connection_ref": {
+                "type": "string"
+              },
+              "overrides": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "provider": {
+                "type": "string",
+                "enum": [
+                  "configmap",
+                  "flipt",
+                  "flagsmith",
+                  "unleash",
+                  "noop",
+                  "none"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "label": {
+            "type": "string"
+          },
+          "lifecycle": {
+            "type": "object",
+            "properties": {
+              "cleanup_on_merge": {
+                "type": "boolean"
+              },
+              "ttl": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "routing": {
+            "type": "object",
+            "properties": {
+              "banner": {
+                "type": "object",
+                "properties": {
+                  "color": {
+                    "type": "string",
+                    "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "position": {
+                    "type": "string",
+                    "enum": [
+                      "top",
+                      "bottom"
+                    ]
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "baseline_namespace": {
+                "type": "string"
+              },
+              "domain": {
+                "type": "string"
+              },
+              "header_key": {
+                "type": "string"
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "header",
+                  "namespace",
+                  "subdomain"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "trigger": {
+            "type": "string",
+            "enum": [
+              "label",
+              "auto",
+              "manual",
+              "branch",
+              "schedule"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "label_overrides": {
+      "description": "MR label overrides mapping.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "object",
+            "properties": {
+              "atlas": {
+                "description": "Atlas schema management and migration settings.",
+                "type": "object",
+                "properties": {
+                  "blocking": {
+                    "type": "boolean"
+                  },
+                  "dir": {
+                    "description": "Local path to migrations directory for versioned mode.",
+                    "type": "string"
+                  },
+                  "engine": {
+                    "type": "string",
+                    "enum": [
+                      "operator",
+                      "job"
+                    ]
+                  },
+                  "extra_args": {
+                    "description": "Additional command-line arguments to pass to the Atlas CLI.",
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "image": {
+                    "type": "string"
+                  },
+                  "migration_config_map": {
+                    "type": "string"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "versioned",
+                      "declarative"
+                    ]
+                  },
+                  "policy": {
+                    "type": "object",
+                    "properties": {
+                      "destructive": {
+                        "type": "string",
+                        "enum": [
+                          "error",
+                          "warn",
+                          "allow"
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "schema": {
+                    "description": "Local path to schema file (SQL or HCL) for declarative mode.",
+                    "type": "string"
+                  },
+                  "schema_config_map": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "connection_ref": {
+                "type": "string"
+              },
+              "migration_command": {
+                "type": "string"
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "shared",
+                  "schema",
+                  "snapshot",
+                  "fresh"
+                ]
+              },
+              "seed_source": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "deploy": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "delta",
+                  "full"
+                ]
+              },
+              "namespace": {
+                "type": "string",
+                "enum": [
+                  "same",
+                  "create"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "dev": {
+            "description": "Local development conflict resolution settings (diverge dev).",
+            "type": "object",
+            "properties": {
+              "on_conflict": {
+                "type": "string",
+                "enum": [
+                  "warn",
+                  "block",
+                  "allow"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "features": {
+            "description": "Feature flag overrides and remote configuration.",
+            "type": "object",
+            "properties": {
+              "connection_ref": {
+                "type": "string"
+              },
+              "overrides": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "provider": {
+                "type": "string",
+                "enum": [
+                  "configmap",
+                  "flipt",
+                  "flagsmith",
+                  "unleash",
+                  "noop",
+                  "none"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "lifecycle": {
+            "type": "object",
+            "properties": {
+              "cleanup_on_merge": {
+                "type": "boolean"
+              },
+              "ttl": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "routing": {
+            "type": "object",
+            "properties": {
+              "banner": {
+                "type": "object",
+                "properties": {
+                  "color": {
+                    "type": "string",
+                    "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "position": {
+                    "type": "string",
+                    "enum": [
+                      "top",
+                      "bottom"
+                    ]
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "baseline_namespace": {
+                "type": "string"
+              },
+              "domain": {
+                "type": "string"
+              },
+              "header_key": {
+                "type": "string"
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "header",
+                  "namespace",
+                  "subdomain"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "skip": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "notifications": {
+      "description": "Notification settings for Git providers.",
+      "type": "object",
+      "properties": {
+        "comment_on_create": {
+          "type": "boolean"
+        },
+        "comment_on_destroy": {
+          "type": "boolean"
+        },
+        "comment_on_ready": {
+          "type": "boolean"
+        },
+        "provider": {
+          "type": "string",
+          "enum": [
+            "gitlab",
+            "github"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "services": {
+      "description": "Service discovery mapping service names to source paths.",
+      "type": "object",
+      "additionalProperties": {
+        "description": "Service discovery and container/Helm configuration.",
+        "type": "object",
+        "properties": {
+          "asyncRoutes": {
+            "description": "Async routing targets (Temporal task queues, Kafka topics) for event-driven services.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "envVarMapping": {
+                  "description": "Maps provisioned targets to environment variable names.",
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "protocol": {
+                  "description": "Async protocol type.",
+                  "type": "string",
+                  "enum": [
+                    "temporal",
+                    "kafka"
+                  ]
+                },
+                "target": {
+                  "description": "Baseline resource name (e.g., Temporal task queue or Kafka topic).",
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "protocol",
+                "target"
+              ]
+            }
+          },
+          "dependsOn": {
+            "description": "Services that this service calls at runtime.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "entrypoint": {
+            "description": "Marks this service as an ingress gateway entrypoint for topology path resolution.",
+            "type": "boolean"
+          },
+          "helm": {
+            "description": "Optional Helm chart location.",
+            "type": "object",
+            "properties": {
+              "path": {
+                "description": "Relative path to chart in repo",
+                "type": "string"
+              },
+              "values_file": {
+                "description": "Optional override values",
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "image": {
+            "description": "Container image template settings.",
+            "type": "object",
+            "properties": {
+              "repository": {
+                "type": "string"
+              },
+              "tag_template": {
+                "type": "string",
+                "default": "mr-{{.MR}}"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "repository"
+            ]
+          },
+          "paths": {
+            "description": "Glob patterns for change detection.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "paths",
+          "image"
+        ]
+      }
+    },
+    "topology": {
+      "description": "Service dependency topology discovery configuration.",
+      "type": "object",
+      "properties": {
+        "prometheus": {
+          "description": "Prometheus-backed service dependency discovery settings.",
+          "type": "object",
+          "properties": {
+            "address": {
+              "type": "string"
+            },
+            "caBundle": {
+              "type": "string"
+            },
+            "cacheTTL": {
+              "type": "string"
+            },
+            "insecureTLS": {
+              "type": "boolean"
+            },
+            "lookbackWindow": {
+              "type": "string"
+            },
+            "meshType": {
+              "type": "string"
+            },
+            "namespaces": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "pollInterval": {
+              "type": "string"
+            },
+            "tokenEnv": {
+              "type": "string"
+            },
+            "tokenFile": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "version": {
+      "description": "Configuration schema version.",
+      "type": "string",
+      "enum": [
+        "1"
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "version"
+  ]
+}

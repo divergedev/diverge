@@ -319,6 +319,24 @@ release:
     name: diverge
   extra_files:
     - glob: config/crd/bases/*.yaml
+brews:
+  - name: diverge
+    ids:
+      - full
+    repository:
+      owner: divergedev
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    skip_upload: "{{ eq .Env.HOMEBREW_TAP_GITHUB_TOKEN \"\" }}"
+    directory: Formula
+    homepage: "https://divergedev.com"
+    description: "Branch your infrastructure, not just your code — ephemeral preview environments for Kubernetes"
+    license: "Apache-2.0"
+    install: |
+      bin.install "diverge"
+      generate_completions_from_executable(bin/"diverge", "completion")
+    test: |
+      system "#{bin}/diverge", "version"
 sboms:
   - artifacts: archive
     args: ["$artifact", "--output", "spdx-json=$document"]

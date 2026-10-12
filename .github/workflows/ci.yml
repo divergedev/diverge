@@ -90,6 +90,10 @@ jobs:
             --set database.provider=schema \
             --set database.host=postgres.default.svc \
             --set database.passwordSecretName=db-secret > /dev/null
+          helm template diverge charts/diverge \
+            --set grafana.dashboards.enabled=true \
+            --set prometheus.alerts.enabled=true > /dev/null
+          python3 -m json.tool charts/diverge/dashboards/diverge-overview.json > /dev/null
 
   file-hygiene:
     runs-on: ubuntu-latest

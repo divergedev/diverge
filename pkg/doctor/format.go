@@ -48,8 +48,14 @@ func FormatTable(w io.Writer, report *Report) error {
 		if issue.Severity == SeverityCritical {
 			badge = "🔴 CRIT"
 		}
-		if _, err := fmt.Fprintf(w, "\n  [%d] %s: %s\n", i+1, badge, issue.Component); err != nil {
-			return err
+		if issue.Code != "" {
+			if _, err := fmt.Fprintf(w, "\n  [%d] %s [%s]: %s\n", i+1, badge, issue.Code, issue.Component); err != nil {
+				return err
+			}
+		} else {
+			if _, err := fmt.Fprintf(w, "\n  [%d] %s: %s\n", i+1, badge, issue.Component); err != nil {
+				return err
+			}
 		}
 		if _, err := fmt.Fprintf(w, "      Problem:     %s\n", issue.Summary); err != nil {
 			return err
@@ -61,6 +67,11 @@ func FormatTable(w io.Writer, report *Report) error {
 		}
 		if _, err := fmt.Fprintf(w, "      Remedy:      💡 %s\n", issue.Remediation); err != nil {
 			return err
+		}
+		if issue.DocsURL != "" {
+			if _, err := fmt.Fprintf(w, "      Docs:        🔗 %s\n", issue.DocsURL); err != nil {
+				return err
+			}
 		}
 	}
 

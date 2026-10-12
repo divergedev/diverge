@@ -25,7 +25,8 @@ failures, and missing configurations with actionable remediation advice.`,
 
 	# Machine-readable output for AI agents & CI
 	diverge doctor pr-42 --json`,
-		Args: cobra.MaximumNArgs(1),
+		Args:              cobra.MaximumNArgs(1),
+		ValidArgsFunction: completeEnvironmentNames(app),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var envName string
 			if len(args) > 0 {

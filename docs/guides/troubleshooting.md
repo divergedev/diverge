@@ -73,3 +73,148 @@ diverge route <service-name>
   ```
 - **`403 Forbidden` (`model not allowed`)**: The `AgentTask` restricts allowed LLM models via `spec.capabilities` (encoded as `allowed_models` caveats in the Macaroon token), and the metering request either omitted the `"model"` field or specified a model not listed in `spec.capabilities`. Add the model to `spec.capabilities` on the `AgentTask` (or `.diverge/agent.yaml`) so the controller mints a capability token permitting that model.
 
+---
+
+## Diagnostic Error Codes (`DIV-101` – `DIV-110`)
+
+When `diverge doctor` (or `diverge doctor --json`) inspects a namespace, preview `Environment`, or `AgentTask`, every finding includes a stable diagnostic code (`DIV-101` through `DIV-110`) and a direct documentation link (`https://divergedev.com/guides/troubleshooting/#...`) to the corresponding section below.
+
+| Code | Severity | Component | Summary |
+| :--- | :--- | :--- | :--- |
+| [`DIV-101`](#div-101-environment-failed) | `CRITICAL` | `Environment/<name>` | Environment phase is `Failed` or `Error` |
+| [`DIV-102`](#div-102-migration-failed) | `CRITICAL` | `Environment/<name> (Migration)` | Database migration hook job failed |
+| [`DIV-103`](#div-103-condition-false) | `WARNING` | `EnvironmentCondition/<type>` | Environment status condition is `False` |
+| [`DIV-104`](#div-104-pod-unschedulable) | `CRITICAL` | `Pod/<name>` | Pod unschedulable (`PodScheduled: False`) |
+| [`DIV-105`](#div-105-crashloopbackoff) | `CRITICAL` | `Container/<name>` | Container is repeatedly crashing (`CrashLoopBackOff`) |
+| [`DIV-106`](#div-106-imagepullbackoff) | `CRITICAL` | `Container/<name>` | Container image pull failed (`ImagePullBackOff` / `ErrImagePull`) |
+| [`DIV-107`](#div-107-container-config-error) | `CRITICAL` | `Container/<name>` | Missing `ConfigMap` or `Secret` (`CreateContainerConfigError`) |
+| [`DIV-108`](#div-108-oomkilled) | `CRITICAL` / `WARNING` | `Container/<name>` | Container terminated due to Out Of Memory (`OOMKilled`) |
+| [`DIV-109`](#div-109-container-exit) | `CRITICAL` / `WARNING` | `Container/<name>` | Container terminated with non-zero exit code |
+| [`DIV-110`](#div-110-agenttask-budget-or-failure) | `CRITICAL` / `WARNING` | `AgentTask/<name>` | `AgentTask` failed or paused due to LLM budget exceeded |
+
+### DIV-101: Environment Failed
+
+- **Trigger**: The `Environment` Custom Resource has `status.phase` set to `Failed` or `Error`.
+- **Common Causes**:
+  - Deployment rollout exceeded its progress deadline because pods failed readiness/liveness probes.
+  - Database schema provisioning (`CREATE SCHEMA`) or routing rule reconciliation (`HTTPRoute` / `GRPCRoute`) returned an unrecoverable error.
+- **Remediation**:
+  ```bash
+  diverge status <env-name>
+  diverge logs <env-name> --tail=100
+  kubectl describe environment <env-name>
+  ```
+
+### DIV-102: Migration Failed
+
+- **Trigger**: `status.migrationStatus` on the `Environment` CR is `Failed`.
+- **Common Causes**:
+  - A pre-deploy SQL migration script or `AtlasMigration` / `AtlasSchema` resource encountered a syntax error, lock timeout, or conflicting DDL statement.
+  - The database credentials in `diverge-db-env-<env-name>` lack DDL privileges on the target database.
+- **Remediation**:
+  ```bash
+  # Inspect the migration Job logs
+  kubectl logs -l divergedev.com/environment=<env-name>,divergedev.com/hook=migration --tail=100
+  # After fixing the migration or DB state, re-trigger via MCP tool `diverge_retry_hook` or re-apply the Environment
+  ```
+
+### DIV-103: Condition False
+
+- **Trigger**: One or more entries in `status.conditions` on the `Environment` CR has `status: "False"` (for example, `DatabaseReady`, `DeploymentReady`, `RouteReady`, or `FeatureFlagsReady`).
+- **Common Causes**:
+  - Upstream infrastructure dependency (Gateway API controller, PostgreSQL instance, Flipt server, or Kafka/Temporal broker) is unreachable or misconfigured.
+- **Remediation**:
+  ```bash
+  kubectl get environment <env-name> -o json | jq '.status.conditions'
+  ```
+  Inspect the `reason` and `message` fields on the failing condition and verify the corresponding provider configuration.
+
+### DIV-104: Pod Unschedulable
+
+- **Trigger**: A preview pod is stuck in `Phase: Pending` with condition `PodScheduled: False`.
+- **Common Causes**:
+  - Insufficient cluster CPU or memory capacity (`Insufficient cpu` / `Insufficient memory`).
+  - Node selector, node affinity, or taint/toleration mismatch (for example, requesting a `gvisor` or `kata` `RuntimeClass` on nodes without the runtime installed).
+- **Remediation**:
+  ```bash
+  kubectl describe pod <pod-name>
+  kubectl get nodes -o wide
+  ```
+  Lower resource `requests` in `.diverge.yaml`, enable **Scale-to-Zero** (`divergedev.com/hibernate-after: "30m"`) so idle PRs free node capacity, or scale up your node pool.
+
+### DIV-105: CrashLoopBackOff
+
+- **Trigger**: A container or init container is in `Waiting` state with `reason: CrashLoopBackOff`.
+- **Common Causes**:
+  - Application panicked on startup due to missing environment variables, invalid configuration, or failed database connection.
+  - Liveness probe is failing too aggressively before the application finishes booting.
+- **Remediation**:
+  ```bash
+  diverge logs <env-name> --service <service-name>
+  kubectl logs <pod-name> --previous
+  ```
+
+### DIV-106: ImagePullBackOff
+
+- **Trigger**: A container or init container is in `Waiting` state with `reason: ImagePullBackOff` or `ErrImagePull`.
+- **Common Causes**:
+  - The CI build has not yet pushed the PR image tag (e.g., `ghcr.io/org/service:pr-42`), or the image tag is misspelled.
+  - The preview namespace is missing `imagePullSecrets` for your private container registry.
+- **Remediation**:
+  ```bash
+  kubectl describe pod <pod-name>
+  ```
+  Confirm the image tag exists in your registry and ensure `imagePullSecrets` are configured on the service deployment or default `ServiceAccount`.
+
+### DIV-107: Container Config Error
+
+- **Trigger**: A container or init container is in `Waiting` state with `reason: CreateContainerConfigError`.
+- **Common Causes**:
+  - A `Secret` or `ConfigMap` referenced by `envFrom` or `env[].valueFrom` does not exist in the preview namespace, or a specific key is missing.
+- **Remediation**:
+  ```bash
+  kubectl get secrets,configmaps -n <namespace>
+  kubectl describe pod <pod-name>
+  ```
+  Verify that required secrets (such as `diverge-db-env-<env-name>` or application secrets) exist in the target namespace.
+
+### DIV-108: OOMKilled
+
+- **Trigger**: A container terminated (currently or in `lastState.terminated`) with `reason: OOMKilled` or an Out-Of-Memory kernel message.
+- **Common Causes**:
+  - Container memory usage exceeded `resources.limits.memory` during startup, asset compilation, or heavy query execution.
+- **Remediation**:
+  Increase the service's memory limit in `.diverge.yaml` or the `Environment` / `PreviewGroup` spec:
+  ```yaml
+  resources:
+    requests:
+      memory: "256Mi"
+    limits:
+      memory: "512Mi"
+  ```
+
+### DIV-109: Container Exit
+
+- **Trigger**: A container or init container terminated with a non-zero exit code (`exitCode != 0`) for a reason other than `OOMKilled`.
+- **Common Causes**:
+  - Unhandled runtime exception, failed command entrypoint, or init container pre-check failure.
+- **Remediation**:
+  ```bash
+  kubectl logs <pod-name> -c <container-name> --previous
+  ```
+
+### DIV-110: AgentTask Budget or Failure
+
+- **Trigger**: An `AgentTask` Custom Resource is in `status.phase: Failed`, or is in `status.phase: Paused` with an active `BudgetExceeded` condition (`status: "True"`) or a budget-exceeded status message.
+- **Common Causes**:
+  - Live LLM metering (`POST /api/v1/agenttask/meter`) recorded `totalCostUSD` or `totalTokensUsed` exceeding `spec.budgetUSD`, `spec.budgetTokens`, or the Macaroon token's `max_cost_usd` / `max_tokens` caveats.
+  - The sandbox job exited with an error or exceeded `spec.maxIterations` (entering `Failed` phase).
+- **Remediation**:
+  ```bash
+  kubectl get agenttask <task-name> -o yaml
+  # Resume a paused task with an increased budget:
+  diverge task resume <task-name> --budget 15.00 --tokens 500000
+  ```
+  Or comment `/diverge resume` on the pull request after updating the budget on the `AgentTask`.
+
+

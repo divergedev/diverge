@@ -83,8 +83,10 @@ func TestDoctorCmd_FailingPod(t *testing.T) {
 	err := root.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "doctor detected 1 issue(s)")
+	assert.Contains(t, stdout.String(), "[DIV-105]")
 	assert.Contains(t, stdout.String(), "CrashLoopBackOff")
 	assert.Contains(t, stdout.String(), "diverge logs")
+	assert.Contains(t, stdout.String(), "https://divergedev.com/guides/troubleshooting/#div-105-crashloopbackoff")
 }
 
 func TestDoctorCmd_JSONOutput(t *testing.T) {

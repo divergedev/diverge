@@ -1,0 +1,31 @@
+apiVersion: divergedev.com/v1alpha1
+kind: Environment
+metadata:
+  name: preview-mr-415-flipt
+  namespace: default
+spec:
+  source:
+    provider: github
+    project: example-org/storefront
+    mr: 415
+    branch: feat/new-checkout-flow
+  deploy:
+    mode: delta
+    namespace: same
+    changedServices:
+      - storefront-web
+  routing:
+    provider: gateway
+    mode: header
+    headerKey: x-diverge-env
+    headerValue: preview-mr-415-flipt
+  features:
+    provider: flipt
+    connectionRef: flipt-credentials
+    overrides:
+      new_checkout_flow: "true"
+      stripe_elements_v3: "true"
+      legacy_cart_banner: "false"
+  lifecycle:
+    ttl: 72h
+    cleanupOnMerge: true

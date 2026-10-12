@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -125,6 +127,56 @@ func TestSingleJoiningSlash_Property(t *testing.T) {
 		}
 		if !strings.Contains(left, "//") && !strings.Contains(right, "//") && strings.Contains(got, "//") {
 			ht.Fatalf("singleJoiningSlash(%q, %q) = %q produced unexpected double slash", a, b, got)
+		}
+	})
+}
+
+func TestIsValidPreviewEnvName_Property(t *testing.T) {
+	hegel.Test(t, func(ht *hegel.T) {
+		validLabel := hegel.Draw(ht, hegel.FromRegex(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`, true))
+		if !isValidPreviewEnvName(validLabel) {
+			ht.Fatalf("expected valid DNS-1123 label %q to pass isValidPreviewEnvName", validLabel)
+		}
+
+		if isValidPreviewEnvName("-" + validLabel) {
+			ht.Fatalf("expected leading hyphen to be rejected")
+		}
+		if isValidPreviewEnvName(validLabel + "-") {
+			ht.Fatalf("expected trailing hyphen to be rejected")
+		}
+		if isValidPreviewEnvName(strings.ToUpper(validLabel) + "A") {
+			ht.Fatalf("expected uppercase characters to be rejected")
+		}
+		if isValidPreviewEnvName(strings.Repeat("a", 64)) {
+			ht.Fatalf("expected >63 char label to be rejected")
+		}
+	})
+}
+
+func TestCleanRedirectTarget_Property(t *testing.T) {
+	hegel.Test(t, func(ht *hegel.T) {
+		segment := hegel.Draw(ht, hegel.FromRegex(`^[a-zA-Z0-9_-]{1,16}$`, true))
+		envVal := hegel.Draw(ht, hegel.FromRegex(`^[a-z0-9]{1,12}$`, true))
+		keepVal := hegel.Draw(ht, hegel.FromRegex(`^[a-z0-9]{1,12}$`, true))
+
+		// 1. Escaped question mark (%3F) in path must remain %3F in redirect target
+		req := httptest.NewRequest(http.MethodGet, "http://preview.example.com/docs/"+segment+"%3Fpart?_diverge_env="+envVal+"&keep="+keepVal, nil)
+		target := cleanRedirectTarget(req)
+		if !strings.HasPrefix(target, "/docs/"+segment+"%3Fpart") {
+			ht.Fatalf("expected escaped %%3F to be preserved in %q", target)
+		}
+		if strings.Contains(target, "_diverge_env=") {
+			ht.Fatalf("expected _diverge_env to be stripped from %q", target)
+		}
+		if !strings.Contains(target, "keep="+keepVal) {
+			ht.Fatalf("expected unrelated query param keep=%s to be preserved in %q", keepVal, target)
+		}
+
+		// 2. Open redirect paths starting with // or /%2f must be reset to /
+		reqOpen := httptest.NewRequest(http.MethodGet, "http://preview.example.com//evil.example.com?_diverge_env="+envVal, nil)
+		targetOpen := cleanRedirectTarget(reqOpen)
+		if strings.HasPrefix(targetOpen, "//") {
+			ht.Fatalf("expected protocol-relative redirect %q to be sanitized to /", targetOpen)
 		}
 	})
 }

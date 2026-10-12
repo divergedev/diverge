@@ -7,7 +7,9 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
@@ -22,13 +24,32 @@ const (
 	SeverityCritical Severity = "CRITICAL"
 )
 
+// DocsBaseURL is the base URL for Diverge troubleshooting documentation.
+const DocsBaseURL = "https://divergedev.com/guides/troubleshooting/"
+
+// Diagnostic error codes for Diverge doctor issues.
+const (
+	CodeEnvironmentFailed    = "DIV-101"
+	CodeMigrationFailed      = "DIV-102"
+	CodeConditionFalse       = "DIV-103"
+	CodePodUnschedulable     = "DIV-104"
+	CodeCrashLoopBackOff     = "DIV-105"
+	CodeImagePullBackOff     = "DIV-106"
+	CodeContainerConfigError = "DIV-107"
+	CodeOOMKilled            = "DIV-108"
+	CodeContainerExit        = "DIV-109"
+	CodeAgentTaskFailure     = "DIV-110"
+)
+
 // Issue describes a detected cluster or workload problem and suggested remediation.
 type Issue struct {
+	Code        string   `json:"code,omitempty"`
 	Severity    Severity `json:"severity"`
 	Component   string   `json:"component"`
 	Summary     string   `json:"summary"`
 	Details     string   `json:"details,omitempty"`
 	Remediation string   `json:"remediation"`
+	DocsURL     string   `json:"docs_url,omitempty"`
 }
 
 // Report holds the full cluster diagnostic summary.
@@ -89,6 +110,21 @@ func (d *Diagnoser) Diagnose(ctx context.Context, namespace, envName string) (*R
 		for i := range podList.Items {
 			d.checkPod(&podList.Items[i], report)
 		}
+
+		// 3. Inspect AgentTasks in the namespace (if registered in scheme)
+		var taskList divergeiov1alpha1.AgentTaskList
+		if err := d.client.List(ctx, &taskList, client.InNamespace(namespace)); err != nil {
+			if !meta.IsNoMatchError(err) && !runtime.IsNotRegisteredError(err) {
+				return nil, fmt.Errorf("failed to list agent tasks in namespace %s: %w", namespace, err)
+			}
+		} else {
+			for i := range taskList.Items {
+				if envName != "" && taskList.Items[i].Annotations["divergedev.com/preview-environment"] != envName {
+					continue
+				}
+				d.checkAgentTask(&taskList.Items[i], report)
+			}
+		}
 	}
 
 	if len(report.Issues) > 0 {
@@ -109,31 +145,37 @@ func (d *Diagnoser) checkEnvironment(env *divergeiov1alpha1.Environment, report 
 			}
 		}
 		report.Issues = append(report.Issues, Issue{
+			Code:        CodeEnvironmentFailed,
 			Severity:    SeverityCritical,
 			Component:   fmt.Sprintf("Environment/%s", env.Name),
 			Summary:     fmt.Sprintf("Environment phase is %s", phase),
 			Details:     details,
 			Remediation: "Check container logs, health check probes, and init container status.",
+			DocsURL:     DocsBaseURL + "#div-101-environment-failed",
 		})
 	}
 
 	if env.Status.MigrationStatus == "Failed" {
 		report.Issues = append(report.Issues, Issue{
+			Code:        CodeMigrationFailed,
 			Severity:    SeverityCritical,
 			Component:   fmt.Sprintf("Environment/%s (Migration)", env.Name),
 			Summary:     "Database migration hook failed",
 			Remediation: "Inspect migration Job logs to fix SQL syntax or schema conflicts.",
+			DocsURL:     DocsBaseURL + "#div-102-migration-failed",
 		})
 	}
 
 	for _, cond := range env.Status.Conditions {
 		if cond.Status == metav1.ConditionFalse {
 			report.Issues = append(report.Issues, Issue{
+				Code:        CodeConditionFalse,
 				Severity:    SeverityWarning,
 				Component:   fmt.Sprintf("EnvironmentCondition/%s", cond.Type),
 				Summary:     fmt.Sprintf("Condition %s is False: %s", cond.Type, cond.Reason),
 				Details:     cond.Message,
 				Remediation: fmt.Sprintf("Verify that %s dependencies are healthy.", cond.Type),
+				DocsURL:     DocsBaseURL + "#div-103-condition-false",
 			})
 		}
 	}
@@ -145,11 +187,13 @@ func (d *Diagnoser) checkPod(pod *corev1.Pod, report *Report) {
 		for _, cond := range pod.Status.Conditions {
 			if cond.Type == corev1.PodScheduled && cond.Status == corev1.ConditionFalse {
 				report.Issues = append(report.Issues, Issue{
+					Code:        CodePodUnschedulable,
 					Severity:    SeverityCritical,
 					Component:   fmt.Sprintf("Pod/%s", pod.Name),
 					Summary:     "Pod unschedulable (insufficient resources or node selector mismatch)",
 					Details:     cond.Message,
 					Remediation: "Verify node capacity or adjust CPU/memory requests in diverge.yaml.",
+					DocsURL:     DocsBaseURL + "#div-104-pod-unschedulable",
 				})
 			}
 		}
@@ -180,27 +224,33 @@ func (d *Diagnoser) checkContainerStatus(podName string, cs corev1.ContainerStat
 		switch reason {
 		case "CrashLoopBackOff":
 			report.Issues = append(report.Issues, Issue{
+				Code:        CodeCrashLoopBackOff,
 				Severity:    SeverityCritical,
 				Component:   fmt.Sprintf("%s/%s (%s)", tag, cs.Name, podName),
 				Summary:     "Container is repeatedly crashing (CrashLoopBackOff)",
 				Details:     msg,
 				Remediation: "Inspect recent application logs with `diverge logs` or verify startup command & env variables.",
+				DocsURL:     DocsBaseURL + "#div-105-crashloopbackoff",
 			})
 		case "ImagePullBackOff", "ErrImagePull":
 			report.Issues = append(report.Issues, Issue{
+				Code:        CodeImagePullBackOff,
 				Severity:    SeverityCritical,
 				Component:   fmt.Sprintf("%s/%s (%s)", tag, cs.Name, podName),
 				Summary:     "Container image pull failed",
 				Details:     msg,
 				Remediation: "Verify image repository, tag existence, and imagePullSecrets in the cluster.",
+				DocsURL:     DocsBaseURL + "#div-106-imagepullbackoff",
 			})
 		case "CreateContainerConfigError":
 			report.Issues = append(report.Issues, Issue{
+				Code:        CodeContainerConfigError,
 				Severity:    SeverityCritical,
 				Component:   fmt.Sprintf("%s/%s (%s)", tag, cs.Name, podName),
 				Summary:     "Container configuration error (missing ConfigMap or Secret)",
 				Details:     msg,
 				Remediation: "Check that all ConfigMaps and Secrets referenced by envFrom or env exist.",
+				DocsURL:     DocsBaseURL + "#div-107-container-config-error",
 			})
 		}
 	}
@@ -208,40 +258,92 @@ func (d *Diagnoser) checkContainerStatus(podName string, cs corev1.ContainerStat
 	// Check Terminated state
 	if cs.State.Terminated != nil && cs.State.Terminated.ExitCode != 0 {
 		term := cs.State.Terminated
+		code := CodeContainerExit
+		docsURL := DocsBaseURL + "#div-109-container-exit"
 		summary := fmt.Sprintf("Container terminated with exit code %d (Reason: %s)", term.ExitCode, term.Reason)
 		remediation := "Check container logs to diagnose unhandled exceptions."
 
 		if term.Reason == "OOMKilled" || strings.Contains(strings.ToLower(term.Message), "oom") {
+			code = CodeOOMKilled
+			docsURL = DocsBaseURL + "#div-108-oomkilled"
 			summary = "Container was terminated due to Out Of Memory (OOMKilled)"
 			remediation = "Increase container memory limit in diverge.yaml."
 		}
 
 		report.Issues = append(report.Issues, Issue{
+			Code:        code,
 			Severity:    SeverityCritical,
 			Component:   fmt.Sprintf("%s/%s (%s)", tag, cs.Name, podName),
 			Summary:     summary,
 			Details:     term.Message,
 			Remediation: remediation,
+			DocsURL:     docsURL,
 		})
 	}
 
 	// Check LastTerminationState (previous crashes before restart)
 	if cs.State.Waiting == nil && cs.State.Terminated == nil && cs.LastTerminationState.Terminated != nil && cs.LastTerminationState.Terminated.ExitCode != 0 {
 		term := cs.LastTerminationState.Terminated
+		code := CodeContainerExit
+		docsURL := DocsBaseURL + "#div-109-container-exit"
 		summary := fmt.Sprintf("Container previously terminated with exit code %d (Reason: %s)", term.ExitCode, term.Reason)
 		remediation := "Check container logs to diagnose unhandled exceptions."
 
 		if term.Reason == "OOMKilled" || strings.Contains(strings.ToLower(term.Message), "oom") {
+			code = CodeOOMKilled
+			docsURL = DocsBaseURL + "#div-108-oomkilled"
 			summary = "Container was previously terminated due to Out Of Memory (OOMKilled)"
 			remediation = "Increase container memory limit in diverge.yaml."
 		}
 
 		report.Issues = append(report.Issues, Issue{
+			Code:        code,
 			Severity:    SeverityWarning,
 			Component:   fmt.Sprintf("%s/%s (%s)", tag, cs.Name, podName),
 			Summary:     summary,
 			Details:     term.Message,
 			Remediation: remediation,
+			DocsURL:     docsURL,
 		})
+	}
+}
+
+func (d *Diagnoser) checkAgentTask(task *divergeiov1alpha1.AgentTask, report *Report) {
+	if task.Status.Phase == divergeiov1alpha1.AgentTaskPhaseFailed {
+		report.Issues = append(report.Issues, Issue{
+			Code:        CodeAgentTaskFailure,
+			Severity:    SeverityCritical,
+			Component:   fmt.Sprintf("AgentTask/%s", task.Name),
+			Summary:     "AgentTask execution failed",
+			Details:     task.Status.Message,
+			Remediation: fmt.Sprintf("Inspect sandbox logs with `diverge task logs %s` or check task status with `diverge task status %s`.", task.Name, task.Name),
+			DocsURL:     DocsBaseURL + "#div-110-agenttask-budget-or-failure",
+		})
+		return
+	}
+
+	if task.Status.Phase == divergeiov1alpha1.AgentTaskPhasePaused {
+		budgetExceeded := strings.Contains(strings.ToLower(task.Status.Message), "budget")
+		details := task.Status.Message
+		for _, cond := range task.Status.Conditions {
+			if (cond.Type == "BudgetExceeded" || cond.Reason == "BudgetExceeded") && cond.Status == metav1.ConditionTrue {
+				budgetExceeded = true
+				if cond.Message != "" {
+					details = cond.Message
+				}
+				break
+			}
+		}
+		if budgetExceeded {
+			report.Issues = append(report.Issues, Issue{
+				Code:        CodeAgentTaskFailure,
+				Severity:    SeverityWarning,
+				Component:   fmt.Sprintf("AgentTask/%s", task.Name),
+				Summary:     "AgentTask paused due to budget exceeded",
+				Details:     details,
+				Remediation: fmt.Sprintf("Resume the task with a higher budget using `diverge task resume %s --budget <USD>`.", task.Name),
+				DocsURL:     DocsBaseURL + "#div-110-agenttask-budget-or-failure",
+			})
+		}
 	}
 }

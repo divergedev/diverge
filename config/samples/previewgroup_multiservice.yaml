@@ -1,0 +1,42 @@
+apiVersion: divergedev.com/v1alpha1
+kind: PreviewGroup
+metadata:
+  name: mr-42-payments-preview
+spec:
+  owner: alice
+  source:
+    provider: gitlab
+    project: example-org/platform
+    mr: 42
+    branch: feat/split-payment-settlement
+  routing:
+    mode: header
+    headerKey: x-preview-env
+    headerValue: mr-42
+    externalUrl: https://mr-42.preview.example.com
+  services:
+    - name: payments-api
+      mode: image
+      image: registry.example.com/payments-api:mr-42
+      namespace: payments
+      port: 8080
+      pathPrefix: /api/payments
+    - name: billing-worker
+      mode: image
+      image: registry.example.com/billing-worker:mr-42
+      namespace: payments
+      port: 8081
+      asyncRoutes:
+        - protocol: temporal
+          target: billing-tasks
+    - name: auth-service
+      mode: baseline
+      namespace: auth
+      port: 8080
+      pathPrefix: /api/auth
+  database:
+    mode: schema
+    connectionRef: staging-db-secret
+  lifecycle:
+    ttl: 72h
+    cleanupOnMerge: true

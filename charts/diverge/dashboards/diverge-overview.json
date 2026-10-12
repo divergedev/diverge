@@ -195,7 +195,7 @@
             "type": "prometheus",
             "uid": ""
           },
-          "expr": "rate(diverge_subsystem_errors_total{namespace=~\"$namespace\"}[5m{namespace=~\"$namespace\"}])",
+          "expr": "rate(diverge_subsystem_errors_total{namespace=~\"$namespace\"}[5m])",
           "refId": "A"
         }
       ],
@@ -289,7 +289,7 @@
             "type": "prometheus",
             "uid": ""
           },
-          "expr": "histogram_quantile(0.99, sum{namespace=~\"$namespace\"} by{namespace=~\"$namespace\"} (le, controller{namespace=~\"$namespace\"}) (rate(diverge_reconcile_duration_seconds_bucket{namespace=~\"$namespace\"}[5m{namespace=~\"$namespace\"}])))",
+          "expr": "histogram_quantile(0.99, sum by (le, controller) (rate(diverge_reconcile_duration_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
           "refId": "A"
         }
       ],
@@ -370,7 +370,7 @@
             "type": "prometheus",
             "uid": ""
           },
-          "expr": "rate(diverge_reconcile_total{namespace=~\"$namespace\"}[5m{namespace=~\"$namespace\"}])",
+          "expr": "rate(diverge_reconcile_total{namespace=~\"$namespace\"}[5m])",
           "refId": "A"
         }
       ],
@@ -415,7 +415,7 @@
             "type": "prometheus",
             "uid": ""
           },
-          "expr": "increase(diverge_reconcile_outcomes_total{namespace=~\"$namespace\"}[1h{namespace=~\"$namespace\"}])",
+          "expr": "increase(diverge_reconcile_outcomes_total{namespace=~\"$namespace\"}[1h])",
           "refId": "A"
         }
       ],
@@ -509,7 +509,7 @@
             "type": "prometheus",
             "uid": ""
           },
-          "expr": "histogram_quantile(0.95, sum{namespace=~\"$namespace\"} by{namespace=~\"$namespace\"} (le, deployer{namespace=~\"$namespace\"}) (rate(diverge_deploy_duration_seconds_bucket{namespace=~\"$namespace\"}[5m{namespace=~\"$namespace\"}])))",
+          "expr": "histogram_quantile(0.95, sum by (le, deployer) (rate(diverge_deploy_duration_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
           "refId": "A"
         }
       ],
@@ -590,7 +590,7 @@
             "type": "prometheus",
             "uid": ""
           },
-          "expr": "histogram_quantile(0.95, sum{namespace=~\"$namespace\"} by{namespace=~\"$namespace\"} (le, mode{namespace=~\"$namespace\"}) (rate(diverge_routing_reconcile_duration_seconds_bucket{namespace=~\"$namespace\"}[5m{namespace=~\"$namespace\"}])))",
+          "expr": "histogram_quantile(0.95, sum by (le, mode) (rate(diverge_routing_reconcile_duration_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
           "refId": "A"
         }
       ],
@@ -729,7 +729,7 @@
             "type": "prometheus",
             "uid": ""
           },
-          "expr": "histogram_quantile(0.95, sum{namespace=~\"$namespace\"} by{namespace=~\"$namespace\"} (le, mode{namespace=~\"$namespace\"}) (rate(diverge_database_provision_duration_seconds_bucket{namespace=~\"$namespace\"}[5m{namespace=~\"$namespace\"}])))",
+          "expr": "histogram_quantile(0.95, sum by (le, mode) (rate(diverge_database_provision_duration_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
           "refId": "A"
         }
       ],
@@ -810,7 +810,7 @@
             "type": "prometheus",
             "uid": ""
           },
-          "expr": "histogram_quantile(0.95, sum{namespace=~\"$namespace\"} by{namespace=~\"$namespace\"} (le, provider, action{namespace=~\"$namespace\"}) (rate(diverge_webhook_process_duration_seconds_bucket{namespace=~\"$namespace\"}[5m{namespace=~\"$namespace\"}])))",
+          "expr": "histogram_quantile(0.95, sum by (le, provider, action) (rate(diverge_webhook_process_duration_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
           "refId": "A"
         }
       ],
@@ -946,7 +946,7 @@
             "type": "prometheus",
             "uid": ""
           },
-          "expr": "histogram_quantile(0.95, sum{namespace=~\"$namespace\"} by{namespace=~\"$namespace\"} (le, protocol{namespace=~\"$namespace\"}) (rate(diverge_async_provision_duration_seconds_bucket{namespace=~\"$namespace\"}[5m{namespace=~\"$namespace\"}])))",
+          "expr": "histogram_quantile(0.95, sum by (le, protocol) (rate(diverge_async_provision_duration_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
           "refId": "A"
         }
       ],
@@ -1027,7 +1027,7 @@
             "type": "prometheus",
             "uid": ""
           },
-          "expr": "rate(diverge_async_provision_errors_total{namespace=~\"$namespace\"}[5m{namespace=~\"$namespace\"}])",
+          "expr": "rate(diverge_async_provision_errors_total{namespace=~\"$namespace\"}[5m])",
           "refId": "A"
         }
       ],
@@ -1166,7 +1166,7 @@
             "type": "prometheus",
             "uid": ""
           },
-          "expr": "rate(diverge_environment_transitions_total{namespace=~\"$namespace\"}[5m{namespace=~\"$namespace\"}])",
+          "expr": "rate(diverge_environment_transitions_total{namespace=~\"$namespace\"}[5m])",
           "refId": "A"
         }
       ],
@@ -1247,11 +1247,198 @@
             "type": "prometheus",
             "uid": ""
           },
-          "expr": "rate(diverge_subsystem_errors_total{namespace=~\"$namespace\"}[5m{namespace=~\"$namespace\"}])",
+          "expr": "rate(diverge_subsystem_errors_total{namespace=~\"$namespace\"}[5m])",
           "refId": "A"
         }
       ],
       "title": "Subsystem Errors",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 50
+      },
+      "id": 106,
+      "panels": [],
+      "title": "Cost & FinOps",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": ""
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": []
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 51
+      },
+      "id": 19,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": ""
+          },
+          "expr": "sum(diverge_environment_estimated_hourly_cost_usd{namespace=~\"$namespace\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "Total Estimated Hourly Cost (USD/hr)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": ""
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": []
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 6,
+        "y": 51
+      },
+      "id": 20,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": ""
+          },
+          "expr": "sum(diverge_environment_estimated_hourly_cost_usd{namespace=~\"$namespace\"}) * 730",
+          "refId": "A"
+        }
+      ],
+      "title": "Estimated Monthly Run-Rate (USD/mo)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": ""
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": []
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 51
+      },
+      "id": 21,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": ""
+          },
+          "expr": "diverge_environment_estimated_hourly_cost_usd{namespace=~\"$namespace\"}",
+          "refId": "A"
+        }
+      ],
+      "title": "Hourly Cost by Environment",
       "type": "timeseries"
     }
   ],

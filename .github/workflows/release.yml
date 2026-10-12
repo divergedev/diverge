@@ -40,6 +40,7 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
       - name: Extract tag
         id: tag
         run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
@@ -79,3 +80,45 @@ jobs:
           cosign attach sbom --sbom diverge-sbom.spdx.json "ghcr.io/divergedev/diverge:${RELEASE_TAG}"
           cosign attach sbom --sbom activator-proxy-sbom.spdx.json "ghcr.io/divergedev/activator-proxy:${RELEASE_TAG}"
           cosign attach sbom --sbom diverge-cli-sbom.spdx.json "ghcr.io/divergedev/diverge-cli:${RELEASE_TAG}"
+
+  release-sdks:
+    runs-on: ubuntu-latest
+    needs: release
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Build and publish Node.js SDK (@divergedev/sdk)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          cd pkg/sdk/node
+          npm version "${VERSION}" --no-git-tag-version --allow-same-version
+          PKG_VERSION="$(jq -r .version package.json)"
+          if [ "${PKG_VERSION}" != "${VERSION}" ]; then
+            echo "ERROR: pkg/sdk/node/package.json version (${PKG_VERSION}) does not match release tag (${VERSION})"
+            exit 1
+          fi
+          npm ci && npm run build && npm test && npm pack
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            npm publish --provenance --access public
+          else
+            echo "NPM_TOKEN not set, skipping npm publish"
+          fi
+      - name: Build Python SDK (diverge-sdk)
+        run: |
+          cd pkg/sdk/python && pip install build && python -m build
+      - name: Upload SDK distributions to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release upload "${RELEASE_TAG}" pkg/sdk/node/*.tgz pkg/sdk/python/dist/* --clobber

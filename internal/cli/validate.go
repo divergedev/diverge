@@ -21,23 +21,29 @@ var schemaFS embed.FS
 func newValidateCmd(app *App) *cobra.Command {
 	var configPath string
 	var outputFormat string
+	var printSchema bool
 
 	cmd := &cobra.Command{
 
 		Use:   "validate",
 		Short: "Validate .diverge.yaml against the JSON Schema",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			schemaBytes, err := schemaFS.ReadFile("schema/diverge-config.schema.json")
+			if err != nil {
+				return fmt.Errorf("failed to read embedded schema: %w", err)
+			}
+
+			if printSchema {
+				_, err := cmd.OutOrStdout().Write(schemaBytes)
+				return err
+			}
+
 			isRemote := strings.HasPrefix(configPath, "http://") || strings.HasPrefix(configPath, "https://")
 
 			if !isRemote {
 				if _, err := os.Stat(configPath); os.IsNotExist(err) {
 					return fmt.Errorf("no %s found in current directory", configPath)
 				}
-			}
-
-			schemaBytes, err := schemaFS.ReadFile("schema/diverge-config.schema.json")
-			if err != nil {
-				return fmt.Errorf("failed to read embedded schema: %w", err)
 			}
 
 			schemaLoader := gojsonschema.NewBytesLoader(schemaBytes)
@@ -142,6 +148,7 @@ func newValidateCmd(app *App) *cobra.Command {
 
 	cmd.Flags().StringVarP(&configPath, "config", "c", ".diverge.yaml", "Path to config file")
 	cmd.Flags().StringVarP(&outputFormat, "output", "o", "text", "Output format (text, json)")
+	cmd.Flags().BoolVar(&printSchema, "print-schema", false, "Print the embedded JSON Schema for .diverge.yaml and exit")
 
 	return cmd
 }
