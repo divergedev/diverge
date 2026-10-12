@@ -6,8 +6,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"html"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -41,12 +44,16 @@ type OIDCHandlerConfig struct {
 	UsernameClaim string
 	// GroupsClaim is the JWT claim used for group membership.
 	GroupsClaim string
+	// AllowedGroups restricts login to users whose groups intersect this list.
+	// Empty list means all authenticated users are allowed.
+	AllowedGroups []string
 	// Logger for request logging.
 	Logger *slog.Logger
 }
 
 // OIDCHandler implements the OIDC authorization code flow endpoints.
 type OIDCHandler struct {
+	config         OIDCHandlerConfig
 	provider       *oidc.Provider
 	oauth2Config   oauth2.Config
 	verifier       *oidc.IDTokenVerifier
@@ -55,6 +62,7 @@ type OIDCHandler struct {
 	secureCookies  bool
 	usernameClaim  string
 	groupsClaim    string
+	allowedGroups  []string
 	providerName   string
 	logger         *slog.Logger
 }
@@ -92,6 +100,7 @@ func NewOIDCHandler(cfg OIDCHandlerConfig) (*OIDCHandler, error) {
 	}
 
 	return &OIDCHandler{
+		config:   cfg,
 		provider: provider,
 		oauth2Config: oauth2.Config{
 			ClientID:     cfg.ClientID,
@@ -106,9 +115,22 @@ func NewOIDCHandler(cfg OIDCHandlerConfig) (*OIDCHandler, error) {
 		secureCookies:  cfg.SecureCookies,
 		usernameClaim:  usernameClaim,
 		groupsClaim:    groupsClaim,
+		allowedGroups:  cfg.AllowedGroups,
 		providerName:   providerName,
 		logger:         cfg.Logger,
 	}, nil
+}
+
+// sanitizeReturnURL ensures a return URL is a safe relative path and prevents open redirects.
+func sanitizeReturnURL(raw string) string {
+	if raw == "" || !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") ||
+		strings.ContainsAny(raw, "\\\t\r\n") {
+		return "/"
+	}
+	if u, err := url.Parse(raw); err != nil || u.Scheme != "" || u.Host != "" {
+		return "/"
+	}
+	return raw
 }
 
 // RegisterRoutes registers the OIDC auth endpoints on the given mux.
@@ -124,17 +146,16 @@ func (h *OIDCHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	// Generate CSRF state
 	stateBytes := make([]byte, 16)
 	if _, err := rand.Read(stateBytes); err != nil {
-		h.logger.Error("failed to generate state", "error", err)
+		if h.logger != nil {
+			h.logger.Error("failed to generate state", "error", err)
+		}
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 	state := base64.RawURLEncoding.EncodeToString(stateBytes)
 
-	// Store return URL in state cookie
-	returnURL := r.URL.Query().Get("return_url")
-	if returnURL == "" {
-		returnURL = "/"
-	}
+	// Store sanitized return URL in state cookie
+	returnURL := sanitizeReturnURL(r.URL.Query().Get("return_url"))
 
 	// Set state cookie (SameSite=Strict for CSRF protection)
 	http.SetCookie(w, &http.Cookie{
@@ -168,60 +189,81 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	// Check for errors from the IdP
 	if errParam := r.URL.Query().Get("error"); errParam != "" {
 		errDesc := r.URL.Query().Get("error_description")
-		h.logger.Warn("oidc callback error", "error", errParam, "description", errDesc)
-		h.renderCallbackError(w, r, fmt.Sprintf("%s: %s", errParam, errDesc))
+		if h.logger != nil {
+			h.logger.Warn("oidc callback error", "error", errParam, "description", errDesc)
+		}
+		h.renderCallbackError(w, http.StatusBadRequest, fmt.Sprintf("%s: %s", errParam, errDesc))
 		return
 	}
 
 	// Verify CSRF state
 	stateCookie, err := r.Cookie("diverge_oauthstate")
 	if err != nil {
-		h.renderCallbackError(w, r, "Missing OAuth state cookie. Please try logging in again.")
+		h.renderCallbackError(w, http.StatusBadRequest, "Missing OAuth state cookie. Please try logging in again.")
 		return
 	}
 
 	state := r.URL.Query().Get("state")
 	if state == "" || state != stateCookie.Value {
-		h.renderCallbackError(w, r, "Invalid OAuth state. This may be a CSRF attack. Please try again.")
+		h.renderCallbackError(w, http.StatusBadRequest, "Invalid OAuth state. This may be a CSRF attack. Please try again.")
 		return
 	}
 
 	// Exchange authorization code for tokens
 	code := r.URL.Query().Get("code")
 	if code == "" {
-		h.renderCallbackError(w, r, "Missing authorization code. Please try again.")
+		h.renderCallbackError(w, http.StatusBadRequest, "Missing authorization code. Please try again.")
 		return
 	}
 
 	oauth2Token, err := h.oauth2Config.Exchange(r.Context(), code)
 	if err != nil {
-		h.logger.Error("oidc code exchange failed", "error", err)
-		h.renderCallbackError(w, r, fmt.Sprintf("Failed to exchange authorization code: %v", err))
+		if h.logger != nil {
+			h.logger.Error("oidc code exchange failed", "error", err)
+		}
+		h.renderCallbackError(w, http.StatusBadRequest, fmt.Sprintf("Failed to exchange authorization code: %v", err))
 		return
 	}
 
 	// Extract and verify ID token
 	rawIDToken, ok := oauth2Token.Extra("id_token").(string)
 	if !ok {
-		h.renderCallbackError(w, r, "No ID token in response from identity provider.")
+		h.renderCallbackError(w, http.StatusBadRequest, "No ID token in response from identity provider.")
 		return
 	}
 
 	idToken, err := h.verifier.Verify(r.Context(), rawIDToken)
 	if err != nil {
-		h.logger.Error("oidc id_token verification failed", "error", err)
-		h.renderCallbackError(w, r, fmt.Sprintf("ID token verification failed: %v", err))
+		if h.logger != nil {
+			h.logger.Error("oidc id_token verification failed", "error", err)
+		}
+		h.renderCallbackError(w, http.StatusBadRequest, fmt.Sprintf("ID token verification failed: %v", err))
 		return
 	}
 
 	// Extract claims
 	var rawClaims map[string]interface{}
 	if err := idToken.Claims(&rawClaims); err != nil {
-		h.renderCallbackError(w, r, "Failed to parse identity token claims.")
+		h.renderCallbackError(w, http.StatusBadRequest, "Failed to parse identity token claims.")
 		return
 	}
 
-	username := auth.ClaimString(rawClaims, h.usernameClaim)
+	usernameClaim := h.usernameClaim
+	if usernameClaim == "" {
+		usernameClaim = h.config.UsernameClaim
+	}
+	if usernameClaim == "" {
+		usernameClaim = "preferred_username"
+	}
+	groupsClaim := h.groupsClaim
+	if groupsClaim == "" {
+		groupsClaim = h.config.GroupsClaim
+	}
+	if groupsClaim == "" {
+		groupsClaim = "groups"
+	}
+
+	username := auth.ClaimString(rawClaims, usernameClaim)
 	if username == "" {
 		username = auth.ClaimString(rawClaims, "email")
 	}
@@ -229,13 +271,40 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		username = idToken.Subject
 	}
 	email := auth.ClaimString(rawClaims, "email")
-	groups := auth.ClaimStringSlice(rawClaims, h.groupsClaim)
+	groups := auth.ClaimStringSlice(rawClaims, groupsClaim)
+
+	allowedGroups := h.config.AllowedGroups
+	if len(allowedGroups) == 0 {
+		allowedGroups = h.allowedGroups
+	}
+	if len(allowedGroups) > 0 {
+		allowed := false
+		for _, g := range groups {
+			for _, ag := range allowedGroups {
+				if g == ag {
+					allowed = true
+					break
+				}
+			}
+			if allowed {
+				break
+			}
+		}
+		if !allowed {
+			h.clearCookie(w, "diverge_oauthstate", "/auth/callback")
+			h.clearCookie(w, "diverge_returnurl", "/auth/callback")
+			h.renderCallbackError(w, http.StatusForbidden, "User is not a member of any allowed group")
+			return
+		}
+	}
 
 	// Mint session JWT
 	sessionToken, err := h.sessionManager.Mint(username, email, "oidc", groups)
 	if err != nil {
-		h.logger.Error("failed to mint session token", "error", err, "user", username)
-		h.renderCallbackError(w, r, "Failed to create session. Please try again.")
+		if h.logger != nil {
+			h.logger.Error("failed to mint session token", "error", err, "user", username)
+		}
+		h.renderCallbackError(w, http.StatusBadRequest, "Failed to create session. Please try again.")
 		return
 	}
 
@@ -254,13 +323,16 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 	})
 
-	h.logger.Info("oidc login successful", "user", username, "email", email, "groups", groups)
+	if h.logger != nil {
+		h.logger.Info("oidc login successful", "user", username, "email", email, "groups", groups)
+	}
 
-	// Redirect to return URL
+	// Redirect to sanitized return URL
 	returnURL := "/"
 	if cookie, err := r.Cookie("diverge_returnurl"); err == nil && cookie.Value != "" {
 		returnURL = cookie.Value
 	}
+	returnURL = sanitizeReturnURL(returnURL)
 	http.Redirect(w, r, returnURL, http.StatusFound)
 }
 
@@ -289,9 +361,9 @@ func (h *OIDCHandler) HandleConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 // renderCallbackError shows an actionable error page on callback failures.
-func (h *OIDCHandler) renderCallbackError(w http.ResponseWriter, r *http.Request, message string) {
+func (h *OIDCHandler) renderCallbackError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusBadRequest)
+	w.WriteHeader(status)
 	_, _ = fmt.Fprintf(w, `<!DOCTYPE html>
 <html>
 <head><title>Authentication Error — Diverge</title>
@@ -316,7 +388,7 @@ func (h *OIDCHandler) renderCallbackError(w http.ResponseWriter, r *http.Request
 		<a href="/docs/guides/sso-setup" class="btn btn-outline">SSO Setup Guide</a>
 	</div>
 </body>
-</html>`, message)
+</html>`, html.EscapeString(message))
 }
 
 func (h *OIDCHandler) clearCookie(w http.ResponseWriter, name, path string) {

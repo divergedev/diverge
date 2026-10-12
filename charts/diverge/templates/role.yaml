@@ -18,7 +18,7 @@ rules:
 
   # Core K8s - Workloads
   - apiGroups: [""]
-    resources: [services, secrets, configmaps, serviceaccounts]
+    resources: [services, secrets, configmaps, serviceaccounts, limitranges, resourcequotas]
     verbs: [get, list, watch, create, update, patch, delete]
   - apiGroups: ["apps"]
     resources: [deployments, statefulsets]
@@ -27,13 +27,17 @@ rules:
   - apiGroups: ["batch"]
     resources: [jobs]
     verbs: [get, list, watch, create, update, patch, delete]
-  # Istio networking
-  - apiGroups: ["networking.istio.io"]
-    resources: [virtualservices, destinationrules]
+  # Istio - AuthorizationPolicy written by the istio routing provider
+  - apiGroups: ["security.istio.io"]
+    resources: [authorizationpolicies]
     verbs: [get, list, watch, create, update, patch, delete]
   # Gateway API
   - apiGroups: ["gateway.networking.k8s.io"]
     resources: [httproutes, grpcroutes]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # NetworkPolicies
+  - apiGroups: ["networking.k8s.io"]
+    resources: [networkpolicies]
     verbs: [get, list, watch, create, update, patch, delete]
   # EndpointSlices (PreviewGroup cleanup)
   - apiGroups: ["discovery.k8s.io"]
@@ -57,6 +61,10 @@ rules:
   # KEDA HTTP Add-on
   - apiGroups: ["http.keda.sh"]
     resources: [httpscaledobjects]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # Atlas DB migrations
+  - apiGroups: ["db.atlasgo.io"]
+    resources: [atlasmigrations, atlasschemas]
     verbs: [get, list, watch, create, update, patch, delete]
   # Agent Sandbox CRDs
   - apiGroups: ["extensions.agents.x-k8s.io"]

@@ -24,8 +24,8 @@ spec:
     name: {{ .Values.certManager.issuerName | default (printf "%s-selfsigned" (include "diverge.fullname" .)) }}
     kind: {{ .Values.certManager.issuerKind | default "Issuer" }}
   dnsNames:
-    - {{ include "diverge.fullname" . }}-webhook.{{ .Release.Namespace }}.svc
-    - {{ include "diverge.fullname" . }}-webhook.{{ .Release.Namespace }}.svc.cluster.local
+    - {{ include "diverge.fullname" . }}-webhook-service.{{ .Release.Namespace }}.svc
+    - {{ include "diverge.fullname" . }}-webhook-service.{{ .Release.Namespace }}.svc.cluster.local
   duration: 8760h  # 1 year
   renewBefore: 720h  # 30 days
 {{- end }}

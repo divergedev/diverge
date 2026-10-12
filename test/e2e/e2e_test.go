@@ -5,12 +5,14 @@ package e2e
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/pkg/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
@@ -264,7 +266,7 @@ func TestMultiServicePreviewGroup(t *testing.T) {
 	}
 }
 
-// Scenario E: AgentTask CRD creation and OpenAPI schema defaults
+// Scenario E: AgentTask CRD creation, OpenAPI schema defaults, and reconciliation lifecycle
 func TestAgentTaskCRDValidation(t *testing.T) {
 	f := NewFramework(t)
 	ctx := context.Background()
@@ -282,6 +284,9 @@ func TestAgentTaskCRDValidation(t *testing.T) {
 				URL: "https://github.com/divergedev/diverge",
 			},
 			BudgetUSD: "10.00",
+			Sandbox: v1alpha1.AgentTaskSandbox{
+				Provider: "noop",
+			},
 		},
 	}
 
@@ -300,3 +305,108 @@ func TestAgentTaskCRDValidation(t *testing.T) {
 	require.NoError(t, err, "Failed to delete AgentTask")
 }
 
+// Scenario F: Full AgentTask reconciliation lifecycle (Active -> Paused -> Teardown)
+func TestAgentTaskLifecycle(t *testing.T) {
+	f := NewFramework(t)
+	ctx := context.Background()
+	f.CreateNamespace(ctx)
+	defer f.CleanupNamespace(ctx)
+
+	if !f.ControllerRunning(ctx) {
+		t.Skip("controller not deployed — skipping AgentTask reconciliation assertions")
+	}
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "e2e-lifecycle-task",
+			Namespace: f.Namespace,
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective: "Verify AgentTask reconciliation lifecycle in Kind",
+			Repository: v1alpha1.AgentTaskRepository{
+				URL: "https://github.com/divergedev/diverge",
+			},
+			BudgetUSD: "10.00",
+			Sandbox: v1alpha1.AgentTaskSandbox{
+				Provider: "noop",
+			},
+		},
+	}
+
+	err := f.Client.Create(ctx, task)
+	require.NoError(t, err, "Failed to create AgentTask")
+
+	taskKey := types.NamespacedName{Name: task.Name, Namespace: f.Namespace}
+	fetched := &v1alpha1.AgentTask{}
+
+	// 1. Wait for AgentTaskReconciler to reconcile the AgentTask to Active
+	err = wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, defaultTimeout, true, func(ctx context.Context) (bool, error) {
+		if getErr := f.Client.Get(ctx, taskKey, fetched); getErr != nil {
+			return false, getErr
+		}
+		return fetched.Status.Phase == v1alpha1.AgentTaskPhaseActive, nil
+	})
+	require.NoError(t, err, "AgentTask did not reach Active phase")
+	assert.Equal(t, "noop-claim-e2e-lifecycle-task", fetched.Status.SandboxClaimRef)
+	assert.Equal(t, "noop-pod-e2e-lifecycle-task", fetched.Status.SandboxPodName)
+
+	// 2. Verify <task>-token Secret and diverge-agenttask-tokens Secret exist in the namespace
+	var tokenSecret corev1.Secret
+	tokenSecretKey := types.NamespacedName{Name: task.Name + "-token", Namespace: f.Namespace}
+	err = f.Client.Get(ctx, tokenSecretKey, &tokenSecret)
+	require.NoError(t, err, "Expected <task>-token Secret to exist")
+	require.NotEmpty(t, tokenSecret.Data["token"], "Expected non-empty token in <task>-token Secret")
+
+	var indexSecret corev1.Secret
+	indexSecretKey := types.NamespacedName{Name: "diverge-agenttask-tokens", Namespace: f.Namespace}
+	err = f.Client.Get(ctx, indexSecretKey, &indexSecret)
+	require.NoError(t, err, "Expected diverge-agenttask-tokens Secret to exist")
+	assert.Equal(t, tokenSecret.Data["token"], indexSecret.Data[task.Name], "Expected index token to match <task>-token Secret")
+
+	var macTok auth.Macaroon
+	err = json.Unmarshal(tokenSecret.Data["token"], &macTok)
+	require.NoError(t, err, "Expected valid serialized Macaroon token")
+	caveatMap := make(map[string]string, len(macTok.Caveats()))
+	for _, c := range macTok.Caveats() {
+		caveatMap[c.Key] = c.Value
+	}
+	assert.Equal(t, task.Name, caveatMap["task_id"])
+	assert.Equal(t, f.Namespace, caveatMap["namespace"])
+
+	// 3. Suspend the task (spec.suspended = true) and wait for phase Paused
+	err = wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+		if getErr := f.Client.Get(ctx, taskKey, fetched); getErr != nil {
+			return false, getErr
+		}
+		fetched.Spec.Suspended = true
+		if updateErr := f.Client.Update(ctx, fetched); updateErr != nil {
+			if apierrors.IsConflict(updateErr) {
+				return false, nil
+			}
+			return false, updateErr
+		}
+		return true, nil
+	})
+	require.NoError(t, err, "Failed to update AgentTask spec.suspended = true")
+
+	err = wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, defaultTimeout, true, func(ctx context.Context) (bool, error) {
+		if getErr := f.Client.Get(ctx, taskKey, fetched); getErr != nil {
+			return false, getErr
+		}
+		return fetched.Status.Phase == v1alpha1.AgentTaskPhasePaused, nil
+	})
+	require.NoError(t, err, "AgentTask did not transition to Paused phase")
+
+	// 4. Delete the task and verify cleanup on deletion
+	err = f.Client.Delete(ctx, fetched)
+	require.NoError(t, err, "Failed to delete AgentTask")
+
+	err = wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, defaultTimeout, true, func(ctx context.Context) (bool, error) {
+		getErr := f.Client.Get(ctx, taskKey, fetched)
+		return apierrors.IsNotFound(getErr), nil
+	})
+	require.NoError(t, err, "AgentTask was not deleted in time")
+
+	err = f.Client.Get(ctx, tokenSecretKey, &tokenSecret)
+	assert.True(t, apierrors.IsNotFound(err), "Expected <task>-token Secret to be deleted upon AgentTask deletion")
+}

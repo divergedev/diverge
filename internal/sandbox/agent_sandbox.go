@@ -59,7 +59,7 @@ func (p *AgentSandboxProvider) Provision(ctx context.Context, task *v1alpha1.Age
 
 	claim.Object["spec"] = BuildSandboxClaimSpec(task)
 	claim.SetLabels(map[string]string{
-		"divergedev.com/agent-task":    task.Name,
+		"divergedev.com/agent-task":    pkgauth.TaskLabelValue(task.Name),
 		"app.kubernetes.io/managed-by": "diverge",
 	})
 
@@ -265,7 +265,7 @@ func BuildSandboxClaimSpec(task *v1alpha1.AgentTask) map[string]interface{} {
 	spec["template"] = map[string]interface{}{
 		"metadata": map[string]interface{}{
 			"labels": map[string]interface{}{
-				"divergedev.com/agent-task":    task.Name,
+				"divergedev.com/agent-task":    pkgauth.TaskLabelValue(task.Name),
 				"app.kubernetes.io/managed-by": "diverge",
 			},
 		},

@@ -95,6 +95,14 @@ spec:
               name: {{ .Values.sandbox.macaroonSecretRef.name }}
               key: {{ .Values.sandbox.macaroonSecretRef.key | default "root-key" }}
         {{- end }}
+        {{- if and .Values.webhook (ne .Values.webhook.enabled false) .Values.webhook.secretName }}
+        - name: DIVERGE_WEBHOOK_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.webhook.secretName }}
+              key: token
+              optional: true
+        {{- end }}
         ports:
         - containerPort: {{ .Values.webhook.port }}
           name: webhook-server

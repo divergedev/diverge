@@ -118,12 +118,26 @@ The MCP server provides the following tools grouped by service:
 | `diverge_update_preview_group` | Update configuration or service definitions for a PreviewGroup. |
 | `diverge_delete_preview_group` | Tear down a PreviewGroup and its child environments (*requires `--allow-destructive`*). |
 
-### Built-in Helper Tools
+### Built-in Helper & Diagnostic Tools
 
 | Tool Name | Description |
 | :--- | :--- |
 | `diverge_wait_for_ready` | Block execution until a target environment reaches `Ready` or `Failed` phase (max 5 minutes). |
 | `diverge_fetch_errors` | Retrieve the last error-level (`ERROR`, `FATAL`, `panic`) log lines from an environment to diagnose failures. |
+| `diverge_doctor` | Run cluster and environment health checks (GatewayClass, CRDs, RBAC, database connectivity). |
+| `diverge_loadtest` | Run a bounded HTTP/gRPC load test against a preview environment and return latency/error percentiles. |
+
+### Autonomous AgentTask Tools
+
+| Tool Name | Description |
+| :--- | :--- |
+| `diverge_create_task` | Spawn a new sandboxed `AgentTask` with repository, branch, model capabilities, and USD/token/iteration budgets. |
+| `diverge_get_task` | Retrieve the current phase (`Pending`, `Provisioning`, `Active`, `Paused`, `Completed`, `Failed`), iteration count, token usage, and sandbox pod status. |
+| `diverge_list_tasks` | List `AgentTask` resources in a namespace with optional phase filtering. |
+| `diverge_pause_task` | Suspend an active `AgentTask` (`spec.suspended: true`) so the controller transitions it to `Paused` and revokes its Macaroon capability token upon reconciliation. |
+| `diverge_resume_task` | Resume a paused `AgentTask` and mint a fresh Macaroon capability token. |
+| `diverge_guide_task` | Send steering instructions or updated budget/iteration limits to an `AgentTask` and resume execution. |
+| `diverge_cancel_task` | Cancel and tear down an `AgentTask` sandbox (*requires `--allow-destructive`*). |
 
 ---
 

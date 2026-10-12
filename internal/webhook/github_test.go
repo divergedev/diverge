@@ -75,6 +75,32 @@ func TestGitHubWebhookHMACValidation(t *testing.T) {
 	}
 }
 
+func TestGitHubWebhookEmptySecretTokenRejected(t *testing.T) {
+	fakeK8s := newTestClient()
+	body := `{"action": "opened", "pull_request": {"number": 1, "head": {"ref": "feat/test", "sha": "abc123def456"}, "base": {"ref": "main"}}, "repository": {"full_name": "team/repo"}}`
+
+	for _, secret := range []string{"", "   "} {
+		handler := &GitHubWebhookHandler{
+			Client:    fakeK8s,
+			Config:    WebhookConfig{SecretToken: secret},
+			DefaultNS: "default",
+		}
+		req, err := http.NewRequest(http.MethodPost, "/", bytes.NewBufferString(body))
+		if err != nil {
+			t.Fatalf("Failed to create request: %v", err)
+		}
+		req.Header.Set("X-GitHub-Event", "pull_request")
+		req.Header.Set("X-Hub-Signature-256", generateSignature(secret, body))
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("secret=%q: expected status %d, got %d", secret, http.StatusUnauthorized, rr.Code)
+		}
+	}
+}
+
 func TestGitHubWebhookMalformedPayload(t *testing.T) {
 	config := WebhookConfig{SecretToken: "secret"}
 	handler := &GitHubWebhookHandler{Config: config}

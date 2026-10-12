@@ -113,8 +113,10 @@
     "webhook": {
       "type": "object",
       "properties": {
+        "enabled": { "type": "boolean" },
         "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
-        "secretName": { "type": "string" }
+        "secretName": { "type": "string" },
+        "tlsSecretName": { "type": "string" }
       }
     },
     "deploy": {
@@ -193,6 +195,7 @@
       "type": "object",
       "properties": {
         "enabled": { "type": "boolean" },
+        "replicaCount": { "type": "integer" },
         "replicas": { "type": "integer" },
         "image": { "type": "object" },
         "port": { "type": "integer" },
@@ -219,6 +222,7 @@
             "audiences": { "type": "array", "items": { "type": "string" } },
             "maxStreams": { "type": "integer" },
             "maxStreamsPerUser": { "type": "integer" },
+            "secureCookies": { "type": ["string", "boolean"] },
             "oidc": {
               "type": "object",
               "properties": {
@@ -304,6 +308,35 @@
           "managedNamespaces": { "minItems": 1 }
         },
         "required": ["managedNamespaces"]
+      }
+    },
+    "sandbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "provider": {
+          "type": "string",
+          "enum": ["agent-sandbox", "noop"]
+        },
+        "poolRef": { "type": "string" },
+        "macaroonSecretRef": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string" },
+            "key": { "type": "string" }
+          }
+        },
+        "networkPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "blockCloudMetadata": { "type": "boolean" },
+            "blockKubernetesAPI": { "type": "boolean" }
+          }
+        }
       }
     }
   },

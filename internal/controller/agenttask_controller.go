@@ -110,22 +110,29 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 			store := r.resolveTokenStore()
 			delErr := store.DeleteToken(ctx, task.Name, task.Namespace)
-			if delErr != nil {
+			if delErr != nil && !errors.Is(delErr, auth.ErrTokenNotFound) {
 				logger.Error(delErr, "Failed to delete token")
+				if r.TokenAuditor != nil {
+					_ = r.TokenAuditor.RecordEvent(ctx, auth.AuthEvent{
+						Type:      auth.EventRevoke,
+						TaskID:    task.Name,
+						Namespace: task.Namespace,
+						Principal: "diverge-controller",
+						Success:   false,
+						Reason:    delErr.Error(),
+						Timestamp: time.Now(),
+					})
+				}
+				return ctrl.Result{RequeueAfter: 5 * time.Second}, delErr
 			}
 
 			if r.TokenAuditor != nil {
-				reason := ""
-				if delErr != nil {
-					reason = delErr.Error()
-				}
 				_ = r.TokenAuditor.RecordEvent(ctx, auth.AuthEvent{
 					Type:      auth.EventRevoke,
 					TaskID:    task.Name,
 					Namespace: task.Namespace,
 					Principal: "diverge-controller",
-					Success:   delErr == nil,
-					Reason:    reason,
+					Success:   true,
 					Timestamp: time.Now(),
 				})
 			}
@@ -280,7 +287,11 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		// Check sandbox execution timeout
 		if task.Spec.Sandbox.TimeoutSeconds > 0 && !task.CreationTimestamp.IsZero() {
 			if time.Since(task.CreationTimestamp.Time) > time.Duration(task.Spec.Sandbox.TimeoutSeconds)*time.Second {
-				_ = provider.Teardown(ctx, task)
+				if err := provider.Teardown(ctx, task); err != nil {
+					logger.Error(err, "Failed to teardown timed-out sandbox")
+					_ = r.revokeToken(ctx, task, "sandbox timeout exceeded")
+					return ctrl.Result{RequeueAfter: 5 * time.Second}, err
+				}
 				patch := client.MergeFrom(task.DeepCopy())
 				oldPhase := task.Status.Phase
 				task.Status.Phase = v1alpha1.AgentTaskPhaseFailed

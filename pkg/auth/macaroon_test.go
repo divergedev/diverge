@@ -401,3 +401,49 @@ func TestMacaroonVerifyAndExtract(t *testing.T) {
 		assert.ErrorIs(t, err, ErrCaveatFailed, "expected ErrCaveatFailed for %+v", badCaveat)
 	}
 }
+
+func TestMacaroonVerifyMissingMandatoryCaveats(t *testing.T) {
+	ctx := context.Background()
+	rootKey := []byte("0123456789abcdef0123456789abcdef")
+	provider := NewMacaroonProvider(rootKey)
+
+	buildSignedMacaroon := func(tokenID string, caveats []Caveat) []byte {
+		mac := &Macaroon{
+			TokenID:   tokenID,
+			Location:  "diverge-cluster",
+			CaveatSeq: caveats,
+		}
+		sig := computeHMAC(rootKey, []byte(mac.TokenID))
+		for _, c := range caveats {
+			sig = computeHMAC(sig, serializeCaveatCanonical(c))
+		}
+		mac.Signature = encodeHex(sig)
+		raw, err := mac.Serialize()
+		require.NoError(t, err)
+		return raw
+	}
+
+	// Missing task_id caveat
+	rawNoTask := buildSignedMacaroon("task-1", []Caveat{
+		{Key: "namespace", Op: OpEqual, Value: "default"},
+	})
+	err := provider.Verify(ctx, rawNoTask, Claims{TaskID: "task-1", Namespace: "default"})
+	assert.ErrorIs(t, err, ErrInvalidCaveat)
+
+	// Missing namespace caveat
+	rawNoNS := buildSignedMacaroon("task-1", []Caveat{
+		{Key: "task_id", Op: OpEqual, Value: "task-1"},
+	})
+	err = provider.Verify(ctx, rawNoNS, Claims{TaskID: "task-1", Namespace: "default"})
+	assert.ErrorIs(t, err, ErrInvalidCaveat)
+}
+
+func encodeHex(b []byte) string {
+	const hextable = "0123456789abcdef"
+	dst := make([]byte, len(b)*2)
+	for i, v := range b {
+		dst[i*2] = hextable[v>>4]
+		dst[i*2+1] = hextable[v&0x0f]
+	}
+	return string(dst)
+}

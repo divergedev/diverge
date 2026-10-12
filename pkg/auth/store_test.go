@@ -169,6 +169,14 @@ func TestKubernetesSecretTokenStore_LongTaskID(t *testing.T) {
 	secName := secretName(longTaskID)
 	assert.LessOrEqual(t, len(secName), 253)
 
+	labelVal := TaskLabelValue(longTaskID)
+	assert.Equal(t, 63, len(labelVal))
+
+	sec := &corev1.Secret{}
+	require.NoError(t, client.Get(ctx, objectKey(namespace, secName), sec))
+	assert.Equal(t, labelVal, sec.Labels[LabelAgentTask])
+	assert.LessOrEqual(t, len(sec.Labels[LabelAgentTask]), 63)
+
 	annKey := revokedIndexKey(longTaskID)
 	parts := strings.SplitN(annKey, "/", 2)
 	require.Len(t, parts, 2)
@@ -183,8 +191,50 @@ func TestKubernetesSecretTokenStore_LongTaskID(t *testing.T) {
 	assert.True(t, store.IsRevoked(ctx, longTaskID, namespace))
 	assert.True(t, indexStore.IsRevoked(ctx, longTaskID, namespace))
 
+	// Verify revoked token payload is removed from index Data while revocation annotation remains
+	idxSec := &corev1.Secret{}
+	require.NoError(t, client.Get(ctx, objectKey(namespace, TokenIndexSecretName), idxSec))
+	_, existsInData := idxSec.Data[longTaskID]
+	assert.False(t, existsInData, "revoked token should be removed from index Data")
+	assert.Equal(t, "true", idxSec.Annotations[annKey])
+
 	err = store.DeleteToken(ctx, longTaskID, namespace)
 	require.NoError(t, err)
+}
+
+func objectKey(namespace, name string) client.ObjectKey {
+	return client.ObjectKey{Namespace: namespace, Name: name}
+}
+
+func TestKubernetesSecretTokenStore_ConcurrentUpsertAndRevoke(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	store := NewKubernetesSecretTokenStore(fakeClient, scheme)
+	indexStore := NewKubernetesSecretTokenStore(fakeClient, scheme).WithIndexOnly()
+	namespace := "default"
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			suffix := strings.Repeat("x", id+1)
+			taskID := "task-concurrent-" + suffix
+			assert.NoError(t, store.SaveToken(ctx, taskID, namespace, []byte("tok-"+suffix)))
+		}(i)
+	}
+	wg.Wait()
+
+	for i := 0; i < 10; i++ {
+		suffix := strings.Repeat("x", i+1)
+		taskID := "task-concurrent-" + suffix
+		tok, err := indexStore.GetToken(ctx, taskID, namespace)
+		require.NoError(t, err)
+		assert.Equal(t, []byte("tok-"+suffix), tok)
+	}
 }
 
 func TestKubernetesSecretTokenStore_OwnershipValidation(t *testing.T) {

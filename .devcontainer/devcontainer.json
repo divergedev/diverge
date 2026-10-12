@@ -1,0 +1,29 @@
+{
+  "name": "Diverge Development Container",
+  "image": "mcr.microsoft.com/devcontainers/go:1-1.24-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+    "ghcr.io/devcontainers/features/kubectl-helm-minikube:1": {
+      "version": "latest",
+      "helm": "latest",
+      "minikube": "none"
+    },
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "22"
+    },
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.12"
+    }
+  },
+  "postCreateCommand": "go install sigs.k8s.io/kind@v0.29.0 && go install github.com/bufbuild/buf/cmd/buf@v1.50.0",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go",
+        "ms-kubernetes-tools.vscode-kubernetes-tools",
+        "bufbuild.vscode-buf",
+        "esbenp.prettier-vscode"
+      ]
+    }
+  }
+}

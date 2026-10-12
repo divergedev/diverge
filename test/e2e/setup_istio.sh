@@ -43,9 +43,16 @@ kind load docker-image divergedev/diverge:latest --name "${CLUSTER_NAME}"
 
 echo "==> Deploying Diverge CRDs and controller..."
 kubectl apply -f config/crd/bases/ --context "kind-${CLUSTER_NAME}"
-kubectl apply -k config/default --context "kind-${CLUSTER_NAME}"
+helm upgrade --install diverge charts/diverge --namespace diverge-system --create-namespace \
+  --skip-crds \
+  --set image.repository=divergedev/diverge \
+  --set image.tag=latest \
+  --set image.pullPolicy=Never \
+  --set routingProvider=istio \
+  --set sandbox.provider=noop \
+  --kube-context "kind-${CLUSTER_NAME}"
 kubectl -n diverge-system wait --for=condition=available \
-  deployment/diverge-controller --timeout=120s \
+  deployment/diverge-controller-manager --timeout=120s \
   --context "kind-${CLUSTER_NAME}"
 
 echo "==> Istio E2E setup complete!"

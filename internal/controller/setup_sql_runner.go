@@ -6,6 +6,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -28,7 +29,31 @@ func (r *EnvironmentReconciler) runSetupSQLJob(ctx context.Context, env *diverge
 		return nil
 	}
 
-	// 1. Create ConfigMap with the SetupSQL content
+	// 1. Check if the setup-sql Job already exists — derive name from env (stable),
+	// not SQL content (which changes each requeue due to random password generation).
+	jobName := sanitizeK8sName(fmt.Sprintf("setup-sql-%s", env.Name), env.Name, 63)
+
+	existingJob := &batchv1.Job{}
+	if err := r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: env.Namespace}, existingJob); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("getting setup-sql job %s: %w", jobName, err)
+		}
+	} else {
+		// Job already exists — check completion
+		for _, cond := range existingJob.Status.Conditions {
+			if cond.Type == batchv1.JobComplete && cond.Status == corev1.ConditionTrue {
+				logger.Info("SetupSQL job completed successfully", "job", jobName)
+				return nil
+			}
+			if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
+				return fmt.Errorf("setup-sql job %s failed: %s", jobName, cond.Message)
+			}
+		}
+		logger.Info("SetupSQL job is still running", "job", jobName)
+		return fmt.Errorf("setup-sql job %s is still running: %w", jobName, ErrHookInProgress)
+	}
+
+	// 2. Create ConfigMap with the SetupSQL content
 	cmName := sanitizeK8sName(fmt.Sprintf("diverge-setup-sql-%s", env.Name), setupSQL, 253)
 
 	cm := &corev1.ConfigMap{
@@ -45,15 +70,19 @@ func (r *EnvironmentReconciler) runSetupSQLJob(ctx context.Context, env *diverge
 		},
 	}
 
-	t := true
-	cm.OwnerReferences = append(cm.OwnerReferences, metav1.OwnerReference{
-		APIVersion:         "divergedev.com/v1alpha1",
-		Kind:               "Environment",
-		Name:               env.GetName(),
-		UID:                env.GetUID(),
-		Controller:         &t,
-		BlockOwnerDeletion: &t,
-	})
+	if env.GetUID() != "" {
+		t := true
+		cm.OwnerReferences = []metav1.OwnerReference{
+			{
+				APIVersion:         "divergedev.com/v1alpha1",
+				Kind:               "Environment",
+				Name:               env.GetName(),
+				UID:                env.GetUID(),
+				Controller:         &t,
+				BlockOwnerDeletion: &t,
+			},
+		}
+	}
 
 	if err := r.Create(ctx, cm); err != nil {
 		if client.IgnoreAlreadyExists(err) != nil {
@@ -61,30 +90,10 @@ func (r *EnvironmentReconciler) runSetupSQLJob(ctx context.Context, env *diverge
 		}
 	}
 
-	// 2. Create admin DSN Secret
+	// 3. Create admin DSN Secret
 	secretName, err := createDSNSecret(ctx, r.Client, fmt.Sprintf("%s-admin", env.Name), env.Namespace, adminDSN, env)
 	if err != nil {
 		return fmt.Errorf("failed to create admin DSN secret for setup-sql: %w", err)
-	}
-
-	// 3. Build and create Job — derive name from env (stable), not SQL content
-	// (which changes each requeue due to random password generation).
-	jobName := sanitizeK8sName(fmt.Sprintf("setup-sql-%s", env.Name), env.Name, 63)
-
-	existingJob := &batchv1.Job{}
-	if err := r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: env.Namespace}, existingJob); err == nil {
-		// Job already exists — check completion
-		for _, cond := range existingJob.Status.Conditions {
-			if cond.Type == batchv1.JobComplete && cond.Status == corev1.ConditionTrue {
-				logger.Info("SetupSQL job completed successfully", "job", jobName)
-				return nil
-			}
-			if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
-				return fmt.Errorf("setup-sql job %s failed: %s", jobName, cond.Message)
-			}
-		}
-		logger.Info("SetupSQL job is still running", "job", jobName)
-		return fmt.Errorf("setup-sql job %s is still running: %w", jobName, ErrHookInProgress)
 	}
 
 	image := r.SetupJobImage
@@ -133,16 +142,6 @@ func (r *EnvironmentReconciler) runSetupSQLJob(ctx context.Context, env *diverge
 			ReadOnly:  true,
 		},
 	)
-
-	// Set owner reference for GC
-	job.OwnerReferences = append(job.OwnerReferences, metav1.OwnerReference{
-		APIVersion:         "divergedev.com/v1alpha1",
-		Kind:               "Environment",
-		Name:               env.GetName(),
-		UID:                env.GetUID(),
-		Controller:         &t,
-		BlockOwnerDeletion: &t,
-	})
 
 	if err := r.Create(ctx, job); err != nil {
 		if client.IgnoreAlreadyExists(err) != nil {

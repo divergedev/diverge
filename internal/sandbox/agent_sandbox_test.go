@@ -169,4 +169,20 @@ func TestBuildSandboxClaimSpec(t *testing.T) {
 	volumes, ok := tmplSpec["volumes"].([]interface{})
 	require.True(t, ok)
 	assert.Len(t, volumes, 2)
+
+	// 4. Long task name (>63 chars) must produce a valid <=63-char label value
+	longName := "agent-task-with-very-long-name-exceeding-sixty-three-characters-limit-1234567890"
+	require.Greater(t, len(longName), 63)
+	taskLong := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      longName,
+			Namespace: "staging",
+		},
+	}
+	specLong := BuildSandboxClaimSpec(taskLong)
+	tmplLong := specLong["template"].(map[string]interface{})
+	metaLong := tmplLong["metadata"].(map[string]interface{})
+	labelsLong := metaLong["labels"].(map[string]interface{})
+	labelVal := labelsLong["divergedev.com/agent-task"].(string)
+	assert.Equal(t, 63, len(labelVal))
 }

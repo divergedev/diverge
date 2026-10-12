@@ -775,6 +775,7 @@ spec:
                 - Degraded
                 - Failed
                 - Terminating
+                - Abandoned
                 type: string
               serviceCount:
                 description: ServiceCount is the total number of services in the group.

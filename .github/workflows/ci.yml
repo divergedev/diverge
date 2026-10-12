@@ -21,7 +21,7 @@ jobs:
       - name: Build
         run: |
           go build ./...
-          go build -tags=no_knative,no_schema -o /tmp/diverge-controller-slim ./cmd/controller/
+          go build -tags=no_knative,no_schema,no_temporal,no_kafka -o /tmp/diverge-controller-slim ./cmd/controller/
       - name: Vet
         run: go vet ./...
       - name: Test
@@ -30,6 +30,7 @@ jobs:
           # and are run in a separate workflow (e2e.yaml) using the 'e2e' build tag.
           PACKAGES=$(go list ./... | grep -v '/gen/' | grep -v '/test/' | tr '\n' ' ')
           go test $PACKAGES -race -coverprofile=coverage.out
+          (cd pkg/sdk/temporal && go test -race ./...)
       - name: Coverage Check
         run: |
           COVERAGE=$(go tool cover -func=coverage.out | grep total: | awk '{print $3}' | tr -d '%')
@@ -64,8 +65,13 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Lint Helm Chart
         run: |
+          ./scripts/test-helm.sh
           helm lint charts/diverge
           helm template diverge charts/diverge > /dev/null
+          helm template diverge charts/diverge \
+            --set metrics.serviceMonitor.enabled=true \
+            --set server.enabled=true \
+            --set server.metrics.serviceMonitor.enabled=true > /dev/null
           helm template diverge charts/diverge \
             --set server.enabled=true \
             --set server.auth.oidc.enabled=true \
@@ -230,6 +236,8 @@ jobs:
           cache: 'npm'
           cache-dependency-path: pkg/sdk/node/package-lock.json
       - run: npm ci
+        working-directory: pkg/sdk/node
+      - run: npm run build
         working-directory: pkg/sdk/node
       - run: npx vitest run
         working-directory: pkg/sdk/node

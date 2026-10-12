@@ -520,3 +520,47 @@ func TestPreviewGroupReconcile_FullCleanup(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "mr-cleanup"}, &updated))
 	assert.Contains(t, updated.Finalizers, previewGroupFinalizer)
 }
+
+func TestPreviewGroupReconcile_OrphanCleanupOnNamespaceChange(t *testing.T) {
+	envName := childEnvironmentName("mr-ns-move", "payments-api")
+	oldEnv := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      envName,
+			Namespace: "ns-old",
+			Labels: map[string]string{
+				labelPreviewGroup: "mr-ns-move",
+				labelManagedBy:    "diverge-previewgroup",
+			},
+		},
+	}
+
+	pg := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "mr-ns-move",
+			Finalizers: []string{previewGroupFinalizer},
+		},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{
+					Name:      "payments-api",
+					Mode:      divergeiov1alpha1.ServiceModeImage,
+					Namespace: "ns-new",
+					Image:     "registry.example.com/payments:mr-ns-move",
+				},
+			},
+		},
+	}
+
+	r, c := newTestPreviewGroupReconciler(pg, oldEnv)
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "mr-ns-move"}})
+	require.NoError(t, err)
+
+	// New child Environment in ns-new must exist
+	var newChild divergeiov1alpha1.Environment
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: envName, Namespace: "ns-new"}, &newChild))
+
+	// Old child Environment in ns-old with the same name must be detected as orphaned and deleted
+	var oldChild divergeiov1alpha1.Environment
+	err = c.Get(context.Background(), types.NamespacedName{Name: envName, Namespace: "ns-old"}, &oldChild)
+	assert.True(t, apierrors.IsNotFound(err), "old Environment in previous namespace should be deleted as orphaned")
+}

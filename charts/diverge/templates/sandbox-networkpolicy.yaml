@@ -57,13 +57,28 @@ spec:
           port: 8443
         - protocol: TCP
           port: 8080
+    {{- if not $.Values.sandbox.networkPolicy.blockKubernetesAPI }}
+    # 2b. Allow Kubernetes API access when blockKubernetesAPI is false
+    - to:
+        - ipBlock:
+            cidr: 10.96.0.1/32
+      ports:
+        - protocol: TCP
+          port: 443
+    {{- end }}
     # 3. Allow public internet egress (HTTPS/Git/LLM APIs)
     # Strictly blocks cloud metadata (169.254.0.0/16) and RFC 1918 internal VPC subnets
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
             except:
+              {{- if $.Values.sandbox.networkPolicy.blockCloudMetadata }}
+              - 169.254.169.254/32 # Cloud metadata IPv4
               - 169.254.0.0/16     # Link-local & cloud metadata
+              {{- end }}
+              {{- if $.Values.sandbox.networkPolicy.blockKubernetesAPI }}
+              - 10.96.0.1/32       # Kubernetes API default Service IP
+              {{- end }}
               - 10.0.0.0/8         # RFC 1918 private network
               - 172.16.0.0/12      # RFC 1918 private network
               - 192.168.0.0/16     # RFC 1918 private network
