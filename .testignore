@@ -8,7 +8,6 @@ internal/events/recorder.go
 pkg/auth/auth.go
 pkg/auth/models.go
 pkg/database/provider.go
-pkg/database/registry.go
 pkg/features/provider.go
 
 # --- Provider registration glue (auto-registration via init(), no logic) ---
@@ -53,7 +52,6 @@ internal/cli/process_windows.go
 internal/proxy/pages.go
 
 # --- Instrumented wrappers (thin delegation, tested via integration) ---
-internal/database/instrumented.go
 internal/deployer/instrumented.go
 internal/routing/instrumented.go
 
@@ -61,24 +59,10 @@ internal/routing/instrumented.go
 # These have no _test.go and need envtest or mock servers.
 # TODO: Add tests — tracked via GitHub Issues.
 internal/cli/environment.go
-internal/database/schemaprovider/schema_security.go
-internal/deployer/argocd.go
-internal/deployer/fetcher_configmap.go
-internal/deployer/fetcher_url.go
 internal/notifier/github_status.go
-internal/notifier/gitlab.go
 internal/notifier/gitlab_status.go
 internal/notifier/previewgroup_templates.go
-internal/routing/router.go
-internal/server/auth.go
-internal/server/cluster_auth.go
-internal/server/previewgroup.go
-internal/server/streaming/informer.go
-internal/server/streaming/logs.go
 internal/testing/github.go
 internal/testing/gitlab.go
 internal/testing/helpers.go
-internal/webhook/config_fetcher_github.go
-internal/webhook/config_fetcher_gitlab.go
 pkg/sdk/temporal/context.go
-pkg/sdk/temporal/propagation.go

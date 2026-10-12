@@ -48,14 +48,34 @@ jobs:
           rm -f charts/diverge/crds/*.yaml
           cp config/crd/bases/*.yaml charts/diverge/crds/
       - name: Package Helm chart
+        env:
+          CHART_VERSION: ${{ steps.tag.outputs.version }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          helm package charts/diverge --version ${{ steps.tag.outputs.version }} --app-version ${{ steps.tag.outputs.version }}
+          helm package charts/diverge --version "${CHART_VERSION}" --app-version "${RELEASE_TAG}"
       - name: Push Helm chart to OCI
+        env:
+          CHART_VERSION: ${{ steps.tag.outputs.version }}
         run: |
-          helm push diverge-${{ steps.tag.outputs.version }}.tgz oci://ghcr.io/divergedev/charts
+          helm push "diverge-${CHART_VERSION}.tgz" oci://ghcr.io/divergedev/charts
       - name: Generate SBOM
-        run: syft ghcr.io/divergedev/diverge:${{ github.ref_name }} -o spdx-json > diverge-sbom.spdx.json
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          syft "ghcr.io/divergedev/diverge:${RELEASE_TAG}" -o spdx-json > diverge-sbom.spdx.json
+          syft "ghcr.io/divergedev/activator-proxy:${RELEASE_TAG}" -o spdx-json > activator-proxy-sbom.spdx.json
+          syft "ghcr.io/divergedev/diverge-cli:${RELEASE_TAG}" -o spdx-json > diverge-cli-sbom.spdx.json
       - name: Sign container image
-        run: cosign sign --yes ghcr.io/divergedev/diverge:${{ github.ref_name }}
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          cosign sign --yes "ghcr.io/divergedev/diverge:${RELEASE_TAG}"
+          cosign sign --yes "ghcr.io/divergedev/activator-proxy:${RELEASE_TAG}"
+          cosign sign --yes "ghcr.io/divergedev/diverge-cli:${RELEASE_TAG}"
       - name: Attach SBOM
-        run: cosign attach sbom --sbom diverge-sbom.spdx.json ghcr.io/divergedev/diverge:${{ github.ref_name }}
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          cosign attach sbom --sbom diverge-sbom.spdx.json "ghcr.io/divergedev/diverge:${RELEASE_TAG}"
+          cosign attach sbom --sbom activator-proxy-sbom.spdx.json "ghcr.io/divergedev/activator-proxy:${RELEASE_TAG}"
+          cosign attach sbom --sbom diverge-cli-sbom.spdx.json "ghcr.io/divergedev/diverge-cli:${RELEASE_TAG}"

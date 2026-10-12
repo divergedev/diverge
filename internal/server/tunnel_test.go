@@ -3,7 +3,9 @@ package server
 import (
 	"context"
 	divergev1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"io"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -416,4 +418,222 @@ func TestTunnelManager_NonBlockingSend(t *testing.T) {
 	resp, err := fx.tm.ForwardRequest(context.Background(), "test-nonblock", &pb.TunnelHTTPRequest{RequestId: "req-1"})
 	require.NoError(t, err)
 	assert.Equal(t, "resp1", string(resp.Body))
+}
+
+func TestExtractPreviewAndNamespaceFromHost(t *testing.T) {
+	tests := []struct {
+		host          string
+		wantPreviewID string
+		wantNamespace string
+	}{
+		{"diverge-tunnel-my-preview.default.svc.cluster.local", "my-preview", "default"},
+		{"diverge-tunnel-my-preview.ns-a.svc.cluster.local:8081", "my-preview", "ns-a"},
+		{"diverge-tunnel-abc123.ns-b.svc", "abc123", "ns-b"},
+		{"diverge-tunnel-bare:8081", "bare", ""},
+		{"diverge-tunnel-.default.svc", "", ""},
+		{"some-other-service.default.svc", "", ""},
+		{"localhost:8080", "", ""},
+		{"", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.host, func(t *testing.T) {
+			gotPreview, gotNS := extractPreviewAndNamespaceFromHost(tt.host)
+			assert.Equal(t, tt.wantPreviewID, gotPreview)
+			assert.Equal(t, tt.wantNamespace, gotNS)
+		})
+	}
+}
+
+func TestTunnelManager_CrossNamespaceIsolation(t *testing.T) {
+	fx := setupTunnelTestFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Register tunnel with preview-id "shared-preview" in "namespace-a"
+	streamA := fx.client.Tunnel(ctx)
+	require.NoError(t, streamA.Send(&pb.TunnelServiceTunnelRequest{
+		Payload: &pb.TunnelServiceTunnelRequest_Register{
+			Register: &pb.TunnelRegister{
+				Service:         "svc-a",
+				Namespace:       "namespace-a",
+				Port:            8080,
+				PreviewId:       "shared-preview",
+				ProtocolVersion: 2,
+			},
+		},
+	}))
+	msgA, err := streamA.Receive()
+	require.NoError(t, err)
+	require.NotNil(t, msgA.GetReady())
+
+	// Register tunnel with the SAME preview-id "shared-preview" in "namespace-b"
+	streamB := fx.client.Tunnel(ctx)
+	require.NoError(t, streamB.Send(&pb.TunnelServiceTunnelRequest{
+		Payload: &pb.TunnelServiceTunnelRequest_Register{
+			Register: &pb.TunnelRegister{
+				Service:         "svc-b",
+				Namespace:       "namespace-b",
+				Port:            8080,
+				PreviewId:       "shared-preview",
+				ProtocolVersion: 2,
+			},
+		},
+	}))
+	msgB, err := streamB.Receive()
+	require.NoError(t, err)
+	require.NotNil(t, msgB.GetReady())
+
+	// Both namespaces must have active tunnels simultaneously
+	assert.True(t, fx.tm.HasTunnelInNamespace("namespace-a", "shared-preview"))
+	assert.True(t, fx.tm.HasTunnelInNamespace("namespace-b", "shared-preview"))
+	// Unqualified lookup is ambiguous when both namespaces have active tunnels with the same preview-id
+	assert.False(t, fx.tm.HasTunnel("shared-preview"))
+
+	// Respond distinctly on streamA and streamB
+	go func() {
+		for {
+			m, err := streamA.Receive()
+			if err != nil {
+				return
+			}
+			if req := m.GetHttpRequest(); req != nil {
+				_ = streamA.Send(&pb.TunnelServiceTunnelRequest{
+					Payload: &pb.TunnelServiceTunnelRequest_HttpResponse{
+						HttpResponse: &pb.TunnelHTTPResponse{
+							RequestId:  req.RequestId,
+							StatusCode: 200,
+							Body:       []byte("from-namespace-a"),
+						},
+					},
+				})
+				return
+			}
+		}
+	}()
+	go func() {
+		for {
+			m, err := streamB.Receive()
+			if err != nil {
+				return
+			}
+			if req := m.GetHttpRequest(); req != nil {
+				_ = streamB.Send(&pb.TunnelServiceTunnelRequest{
+					Payload: &pb.TunnelServiceTunnelRequest_HttpResponse{
+						HttpResponse: &pb.TunnelHTTPResponse{
+							RequestId:  req.RequestId,
+							StatusCode: 200,
+							Body:       []byte("from-namespace-b"),
+						},
+					},
+				})
+				return
+			}
+		}
+	}()
+
+	// 1. Ambiguous bare Host without namespace returns 502 Bad Gateway
+	ambiguousReq, err := http.NewRequest("GET", fx.proxyServer.URL+"/hello", nil)
+	require.NoError(t, err)
+	ambiguousReq.Host = "diverge-tunnel-shared-preview:8081"
+	ambiguousResp, err := fx.proxyServer.Client().Do(ambiguousReq)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusBadGateway, ambiguousResp.StatusCode)
+
+	// 2. Host with namespace-a routes strictly to namespace-a's tunnel
+	reqA, err := http.NewRequest("GET", fx.proxyServer.URL+"/hello", nil)
+	require.NoError(t, err)
+	reqA.Host = "diverge-tunnel-shared-preview.namespace-a.svc.cluster.local:8081"
+	respA, err := fx.proxyServer.Client().Do(reqA)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, respA.StatusCode)
+	bodyA, _ := io.ReadAll(respA.Body)
+	_ = respA.Body.Close()
+	assert.Equal(t, "from-namespace-a", string(bodyA))
+
+	// 3. Host with namespace-b routes strictly to namespace-b's tunnel
+	reqB, err := http.NewRequest("GET", fx.proxyServer.URL+"/hello", nil)
+	require.NoError(t, err)
+	reqB.Host = "diverge-tunnel-shared-preview.namespace-b.svc.cluster.local:8081"
+	respB, err := fx.proxyServer.Client().Do(reqB)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, respB.StatusCode)
+	bodyB, _ := io.ReadAll(respB.Body)
+	_ = respB.Body.Close()
+	assert.Equal(t, "from-namespace-b", string(bodyB))
+}
+
+func TestTunnelManager_RegistrationValidationAndOwnership(t *testing.T) {
+	fx := setupTunnelTestFixture(t)
+	ctx := context.Background()
+
+	// 1. Invalid DNS-1123 preview_id rejected
+	stream := fx.client.Tunnel(ctx)
+	require.NoError(t, stream.Send(&pb.TunnelServiceTunnelRequest{
+		Payload: &pb.TunnelServiceTunnelRequest_Register{
+			Register: &pb.TunnelRegister{
+				PreviewId: "INVALID_PREVIEW_ID",
+				Namespace: "default",
+				Service:   "api",
+				Port:      8080,
+			},
+		},
+	}))
+	_, err := stream.Receive()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "preview_id")
+
+	// 2. PreviewGroup in another namespace does not block, but PreviewGroup in same namespace owned by someone else denies
+	otherNSGroup := &divergev1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pg-owned",
+			Namespace: "other-ns",
+		},
+		Spec: divergev1alpha1.PreviewGroupSpec{
+			Owner: "alice",
+		},
+	}
+	sameNSGroup := &divergev1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pg-owned-default",
+			Namespace: "default",
+		},
+		Spec: divergev1alpha1.PreviewGroupSpec{
+			Owner: "alice",
+		},
+	}
+	envOwnedByBob := &divergev1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "env-owned",
+			Namespace: "default",
+			Annotations: map[string]string{
+				"divergedev.com/created-by": "bob",
+			},
+		},
+	}
+	require.NoError(t, fx.tm.crdClient.Create(ctx, otherNSGroup))
+	require.NoError(t, fx.tm.crdClient.Create(ctx, sameNSGroup))
+	require.NoError(t, fx.tm.crdClient.Create(ctx, envOwnedByBob))
+
+	userCtx := auth.ContextWithUserInfo(ctx, &auth.UserInfo{Username: "test"})
+	// PreviewGroup in other-ns does not conflict with "default"
+	require.NoError(t, fx.tm.validatePreviewOwnership(userCtx, &pb.TunnelRegister{
+		PreviewId: "pg-owned",
+		Namespace: "default",
+	}))
+	// PreviewGroup in same namespace owned by alice is denied for user "test"
+	err = fx.tm.validatePreviewOwnership(userCtx, &pb.TunnelRegister{
+		PreviewId: "pg-owned-default",
+		Namespace: "default",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "owned by \"alice\"")
+
+	// Environment in same namespace with divergedev.com/created-by=bob is denied for user "test"
+	err = fx.tm.validatePreviewOwnership(userCtx, &pb.TunnelRegister{
+		PreviewId: "env-owned",
+		Namespace: "default",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "owned by \"bob\"")
 }

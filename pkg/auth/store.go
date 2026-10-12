@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -47,14 +48,77 @@ const (
 	TokenIndexSecretName = "diverge-agenttask-tokens"
 )
 
+func isAlnumASCII(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
+}
+
+func isLabelCharASCII(b byte) bool {
+	return isAlnumASCII(b) || b == '-' || b == '_' || b == '.'
+}
+
+func isValidK8sLabel(s string) bool {
+	if len(s) == 0 || len(s) > 63 {
+		return false
+	}
+	if !isAlnumASCII(s[0]) || !isAlnumASCII(s[len(s)-1]) {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if !isLabelCharASCII(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 // TaskLabelValue returns a Kubernetes-valid label value (<= 63 chars) for an AgentTask identifier.
 func TaskLabelValue(taskID string) string {
-	if len(taskID) <= 63 {
+	if isValidK8sLabel(taskID) {
 		return taskID
 	}
 	h := sha256.Sum256([]byte(taskID))
 	hashStr := hex.EncodeToString(h[:8]) // 16 hex chars
+	maxPrefix := 63 - 1 - len(hashStr)
+
+	var b strings.Builder
+	b.Grow(len(taskID))
+	for i := 0; i < len(taskID); i++ {
+		if isLabelCharASCII(taskID[i]) {
+			b.WriteByte(taskID[i])
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	prefix := b.String()
+	if len(prefix) > maxPrefix {
+		prefix = prefix[:maxPrefix]
+	}
+	prefix = strings.TrimLeft(prefix, "-_.")
+	prefix = strings.TrimRight(prefix, "-_.")
+	if prefix == "" {
+		return hashStr
+	}
+	return fmt.Sprintf("%s-%s", prefix, hashStr)
+}
+
+func legacyTaskLabelValue(taskID string) string {
+	if len(taskID) <= 63 {
+		return taskID
+	}
+	h := sha256.Sum256([]byte(taskID))
+	hashStr := hex.EncodeToString(h[:8])
 	return fmt.Sprintf("%s-%s", taskID[:63-1-len(hashStr)], hashStr)
+}
+
+func matchesTaskLabel(labels map[string]string, taskID string) bool {
+	if labels == nil {
+		return false
+	}
+	actual := labels[LabelAgentTask]
+	if actual == "" {
+		return false
+	}
+	return actual == TaskLabelValue(taskID) || actual == legacyTaskLabelValue(taskID)
 }
 
 // InMemoryTokenStore provides an in-memory, thread-safe implementation of TokenStore.
@@ -209,9 +273,10 @@ func (s *KubernetesSecretTokenStore) SaveToken(ctx context.Context, taskID, name
 		return s.upsertTokenIndex(ctx, taskID, namespace, token)
 	}
 
-	if sec.Labels == nil || sec.Labels[LabelAgentTask] != labelVal {
+	if !matchesTaskLabel(sec.Labels, taskID) {
 		return fmt.Errorf("secret %s is not owned by agent task %s", name, taskID)
 	}
+	sec.Labels[LabelAgentTask] = labelVal
 
 	if sec.Data == nil {
 		sec.Data = make(map[string][]byte)
@@ -232,7 +297,6 @@ func (s *KubernetesSecretTokenStore) GetToken(ctx context.Context, taskID, names
 		return s.getTokenFromIndex(ctx, taskID, namespace)
 	}
 	name := SecretName(taskID)
-	labelVal := TaskLabelValue(taskID)
 	sec := &corev1.Secret{}
 	err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, sec)
 	if err != nil {
@@ -242,7 +306,7 @@ func (s *KubernetesSecretTokenStore) GetToken(ctx context.Context, taskID, names
 		return nil, fmt.Errorf("get token secret %s: %w", name, err)
 	}
 
-	if sec.Labels == nil || sec.Labels[LabelAgentTask] != labelVal {
+	if !matchesTaskLabel(sec.Labels, taskID) {
 		return nil, ErrTokenNotFound
 	}
 
@@ -280,7 +344,6 @@ func (s *KubernetesSecretTokenStore) getTokenFromIndex(ctx context.Context, task
 // DeleteToken removes the token Secret and clears its entry in TokenIndexSecretName.
 func (s *KubernetesSecretTokenStore) DeleteToken(ctx context.Context, taskID, namespace string) error {
 	name := SecretName(taskID)
-	labelVal := TaskLabelValue(taskID)
 	sec := &corev1.Secret{}
 	err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, sec)
 	if err != nil {
@@ -290,7 +353,7 @@ func (s *KubernetesSecretTokenStore) DeleteToken(ctx context.Context, taskID, na
 		return fmt.Errorf("get token secret %s: %w", name, err)
 	}
 
-	if sec.Labels == nil || sec.Labels[LabelAgentTask] != labelVal {
+	if !matchesTaskLabel(sec.Labels, taskID) {
 		return fmt.Errorf("secret %s is not owned by agent task %s", name, taskID)
 	}
 
@@ -302,6 +365,10 @@ func (s *KubernetesSecretTokenStore) DeleteToken(ctx context.Context, taskID, na
 
 // RevokeToken marks the token Secret and TokenIndexSecretName entry as revoked.
 func (s *KubernetesSecretTokenStore) RevokeToken(ctx context.Context, taskID, namespace string) error {
+	if s.indexOnly {
+		return s.markRevokedInIndex(ctx, taskID, namespace)
+	}
+
 	name := SecretName(taskID)
 	labelVal := TaskLabelValue(taskID)
 	sec := &corev1.Secret{}
@@ -313,13 +380,11 @@ func (s *KubernetesSecretTokenStore) RevokeToken(ctx context.Context, taskID, na
 		return fmt.Errorf("get token secret %s for revocation: %w", name, err)
 	}
 
-	if sec.Labels == nil || sec.Labels[LabelAgentTask] != labelVal {
+	if !matchesTaskLabel(sec.Labels, taskID) {
 		return fmt.Errorf("secret %s is not owned by agent task %s", name, taskID)
 	}
 
-	if sec.Labels == nil {
-		sec.Labels = make(map[string]string)
-	}
+	sec.Labels[LabelAgentTask] = labelVal
 	sec.Labels[LabelRevoked] = "true"
 	if err := s.client.Update(ctx, sec); err != nil {
 		return err
@@ -337,12 +402,11 @@ func (s *KubernetesSecretTokenStore) IsRevoked(ctx context.Context, taskID, name
 		return sec.Annotations != nil && sec.Annotations[revokedIndexKey(taskID)] == "true"
 	}
 	name := SecretName(taskID)
-	labelVal := TaskLabelValue(taskID)
 	sec := &corev1.Secret{}
 	if err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, sec); err != nil {
 		return false
 	}
-	if sec.Labels == nil || sec.Labels[LabelAgentTask] != labelVal {
+	if !matchesTaskLabel(sec.Labels, taskID) {
 		return false
 	}
 	return sec.Labels[LabelRevoked] == "true"
@@ -399,6 +463,9 @@ func (s *KubernetesSecretTokenStore) markRevokedInIndex(ctx context.Context, tas
 		err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: TokenIndexSecretName}, idx)
 		if err != nil {
 			if apierrors.IsNotFound(err) {
+				if s.indexOnly {
+					return ErrTokenNotFound
+				}
 				return nil
 			}
 			return fmt.Errorf("get token index secret %s: %w", TokenIndexSecretName, err)

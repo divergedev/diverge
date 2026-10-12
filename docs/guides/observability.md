@@ -6,11 +6,15 @@ Diverge provides built-in observability by exposing Prometheus metrics and stand
 
 The controller uses standard controller-runtime metrics at `:8080/metrics` (workqueue depth, reconcile duration, etc).
 
-In addition, Diverge exposes custom controller metrics under the `diverge_controller` namespace:
-- `diverge_controller_async_provisions_total` (labels: protocol, result) — Total async route provisions
-- `diverge_controller_async_provision_duration_seconds` (labels: protocol) — Async route provisioning duration
-- `diverge_controller_async_teardowns_total` (labels: protocol, result) — Total async route teardowns
-- `diverge_controller_async_active_routes` (labels: protocol) — Currently active async routes
+In addition, Diverge exposes custom controller and environment metrics:
+- `diverge_environment_estimated_hourly_cost_usd` (labels: `environment`, `namespace`) — Estimated hourly cloud cost (USD) for each preview environment based on active replica counts and database provisioning mode:
+  - **Compute Rate Card**: `$0.025/hr` per active pod replica (`0` when scaled to zero or hibernating).
+  - **Database Rate Card**: `$0.05/hr` for dedicated cluster/branch modes (`cnpg`, `neon`), `$0.02/hr` for `snapshot`/`fresh` modes, `$0.005/hr` for `schema` mode, and `$0.00/hr` for `shared`/`noop`.
+- `diverge_environment_ttl_remaining_seconds` (labels: `environment`, `namespace`) — Seconds remaining until TTL expiry.
+- `diverge_controller_async_provisions_total` (labels: `protocol`, `result`) — Total async route provisions
+- `diverge_controller_async_provision_duration_seconds` (labels: `protocol`) — Async route provisioning duration
+- `diverge_controller_async_teardowns_total` (labels: `protocol`, `result`) — Total async route teardowns
+- `diverge_controller_async_active_routes` (labels: `protocol`) — Currently active async routes
 
 ## Server Metrics
 

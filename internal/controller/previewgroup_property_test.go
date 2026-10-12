@@ -103,6 +103,59 @@ func TestDerivePreviewGroupPhase_AnyFailedNotAllRunning(t *testing.T) {
 	})
 }
 
+func TestDerivePreviewGroupPhase_PropertyInvariants(t *testing.T) {
+	allPhases := []divergeiov1alpha1.EnvironmentPhase{
+		divergeiov1alpha1.PhasePending,
+		divergeiov1alpha1.PhaseMigrating,
+		divergeiov1alpha1.PhaseDeploying,
+		divergeiov1alpha1.PhaseRunning,
+		divergeiov1alpha1.PhaseFailed,
+		divergeiov1alpha1.PhaseTerminating,
+	}
+
+	hegel.Test(t, func(ht *hegel.T) {
+		count := hegel.Draw(ht, hegel.Integers(1, 12))
+		services := make([]divergeiov1alpha1.PreviewGroupServiceStatus, count)
+		var failed, running, deploying int
+		for i := 0; i < count; i++ {
+			ph := hegel.Draw(ht, hegel.SampledFrom(allPhases))
+			services[i] = divergeiov1alpha1.PreviewGroupServiceStatus{Phase: ph}
+			switch ph {
+			case divergeiov1alpha1.PhaseFailed:
+				failed++
+			case divergeiov1alpha1.PhaseRunning:
+				running++
+			case divergeiov1alpha1.PhaseDeploying:
+				deploying++
+			}
+		}
+
+		got := derivePreviewGroupPhase(services)
+		switch {
+		case running == count:
+			if got != divergeiov1alpha1.PreviewGroupPhaseRunning {
+				ht.Fatalf("all running (%d) must yield Running, got %s", count, got)
+			}
+		case failed == count:
+			if got != divergeiov1alpha1.PreviewGroupPhaseFailed {
+				ht.Fatalf("all failed (%d) must yield Failed, got %s", count, got)
+			}
+		case failed > 0 && failed < count:
+			if got != divergeiov1alpha1.PreviewGroupPhaseDegraded {
+				ht.Fatalf("partial failure (%d/%d) must yield Degraded, got %s", failed, count, got)
+			}
+		case deploying > 0:
+			if got != divergeiov1alpha1.PreviewGroupPhaseDeploying {
+				ht.Fatalf("deploying > 0 with no failures must yield Deploying, got %s", got)
+			}
+		default:
+			if got != divergeiov1alpha1.PreviewGroupPhasePending {
+				ht.Fatalf("expected Pending when neither failed, all-running, nor deploying, got %s", got)
+			}
+		}
+	})
+}
+
 var dnsFirstChars = []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
 var dnsMidChars = []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "-"}
 

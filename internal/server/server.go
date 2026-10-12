@@ -12,6 +12,7 @@ import (
 	"github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
 	"github.com/divergedev/diverge/internal/server/dashboard"
 	"github.com/divergedev/diverge/internal/server/streaming"
+	pkgauth "github.com/divergedev/diverge/pkg/auth"
 )
 
 // ServeMuxConfig holds all dependencies for the ConnectRPC server mux.
@@ -25,6 +26,8 @@ type ServeMuxConfig struct {
 	AuditLogger      *AuditLogger
 	Version          string
 	DashboardEnabled bool
+	MacaroonVerifier *pkgauth.MacaroonProvider
+	TokenStore       pkgauth.TokenStore
 }
 
 // NewServeMux creates the ConnectRPC service mux with all handlers registered.
@@ -79,6 +82,9 @@ func NewServeMux(cfg ServeMuxConfig) (*http.ServeMux, *TunnelManager) {
 	taskService := NewAgentTaskService(cfg.Client, cfg.K8sClient, cfg.LogStreamer, cfg.StreamLimiter, cfg.Logger, cfg.AuditLogger)
 	taskPath, taskHandler := divergev1alpha1connect.NewAgentTaskServiceHandler(taskService, interceptors)
 	mux.Handle(taskPath, taskHandler)
+
+	meterHandler := NewLLMMeterHandler(cfg.Client, cfg.MacaroonVerifier, cfg.TokenStore, cfg.Logger)
+	mux.Handle("/api/v1/agenttask/meter", meterHandler)
 
 	// Serve the embedded web dashboard at root when enabled.
 	// Go 1.22+ ServeMux uses most-specific-match routing, so the ConnectRPC

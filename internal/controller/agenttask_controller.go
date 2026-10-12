@@ -235,7 +235,13 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			}
 		}
 
-		patch := client.MergeFrom(task.DeepCopy())
+		baseTask := task.DeepCopy()
+		if err := r.reconcileLinkedPreviewEnvironment(ctx, task); err != nil {
+			logger.Error(err, "Failed to reconcile linked preview environment")
+		}
+		baseTask.ObjectMeta = *task.ObjectMeta.DeepCopy()
+
+		patch := client.MergeFrom(baseTask)
 		oldPhase := task.Status.Phase
 		task.Status.SandboxClaimRef = res.ClaimName
 		task.Status.SandboxPodName = res.PodName
@@ -262,7 +268,12 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		}
 
-		patch := client.MergeFrom(task.DeepCopy())
+		baseTask := task.DeepCopy()
+		if err := r.reconcileLinkedPreviewEnvironment(ctx, task); err != nil {
+			logger.Error(err, "Failed to reconcile linked preview environment")
+		}
+		baseTask.ObjectMeta = *task.ObjectMeta.DeepCopy()
+		patch := client.MergeFrom(baseTask)
 		oldPhase := task.Status.Phase
 		task.Status.SandboxPodName = sbStatus.PodName
 		task.Status.SandboxIP = sbStatus.PodIP
@@ -327,9 +338,14 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			return ctrl.Result{}, nil
 		}
 
-		// Periodic health check
+		// Periodic health check and linked preview environment sync
 		sbStatus, err := provider.Status(ctx, task)
-		patch := client.MergeFrom(task.DeepCopy())
+		baseTask := task.DeepCopy()
+		if err := r.reconcileLinkedPreviewEnvironment(ctx, task); err != nil {
+			logger.Error(err, "Failed to reconcile linked preview environment")
+		}
+		baseTask.ObjectMeta = *task.ObjectMeta.DeepCopy()
+		patch := client.MergeFrom(baseTask)
 		if err == nil && sbStatus != nil {
 			if sbStatus.PodName != "" {
 				task.Status.SandboxPodName = sbStatus.PodName

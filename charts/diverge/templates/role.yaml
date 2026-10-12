@@ -73,5 +73,9 @@ rules:
   - apiGroups: ["agents.x-k8s.io"]
     resources: [sandboxes]
     verbs: [get, list, watch]
+  # Knative Serving
+  - apiGroups: ["serving.knative.dev"]
+    resources: [services]
+    verbs: [get, list, watch, create, update, patch, delete]
 {{- end }}
 {{- end }}

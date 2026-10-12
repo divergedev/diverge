@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -25,6 +27,7 @@ type GitHubWebhookHandler struct {
 	Client        client.Client
 	Config        WebhookConfig
 	ConfigFetcher ConfigFetcher
+	HTTPClient    *http.Client
 	DefaultNS     string
 	Dedup         *DeliveryDedup
 }
@@ -101,6 +104,11 @@ func (h *GitHubWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	}
 
 	event := r.Header.Get("X-GitHub-Event")
+	if event == "issue_comment" {
+		action = "issue_comment"
+		h.handleIssueComment(ctx, w, bodyBytes)
+		return
+	}
 	if event != "pull_request" {
 		w.WriteHeader(http.StatusOK)
 		return
@@ -133,6 +141,167 @@ func (h *GitHubWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+type GitHubIssueCommentPayload struct {
+	Action string `json:"action"`
+	Issue  struct {
+		Number      int `json:"number"`
+		PullRequest *struct {
+			URL string `json:"url"`
+		} `json:"pull_request,omitempty"`
+	} `json:"issue"`
+	PullRequest struct {
+		Number int `json:"number"`
+		Head   struct {
+			Ref string `json:"ref"`
+		} `json:"head"`
+	} `json:"pull_request"`
+	Comment struct {
+		Body              string `json:"body"`
+		AuthorAssociation string `json:"author_association"`
+	} `json:"comment"`
+	Repository struct {
+		FullName      string `json:"full_name"`
+		CloneURL      string `json:"clone_url"`
+		HTMLURL       string `json:"html_url"`
+		DefaultBranch string `json:"default_branch"`
+	} `json:"repository"`
+}
+
+func isAuthorizedGitHubCommenter(assoc string) bool {
+	switch strings.ToUpper(strings.TrimSpace(assoc)) {
+	case "OWNER", "MEMBER", "COLLABORATOR":
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *GitHubWebhookHandler) handleIssueComment(ctx context.Context, w http.ResponseWriter, bodyBytes []byte) {
+	logger := log.FromContext(ctx).WithName("github-webhook")
+
+	var payload GitHubIssueCommentPayload
+	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+		logger.Error(err, "Failed to decode issue_comment payload")
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	if payload.Action != "" && payload.Action != "created" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if payload.Issue.PullRequest == nil && payload.PullRequest.Number == 0 {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if !isAuthorizedGitHubCommenter(payload.Comment.AuthorAssociation) {
+		logger.Info("Ignoring slash command from unauthorized GitHub commenter", "author_association", payload.Comment.AuthorAssociation)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	cmd, ok := ParseSlashCommand(payload.Comment.Body)
+	if !ok {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	prNumber := payload.Issue.Number
+	if prNumber == 0 {
+		prNumber = payload.PullRequest.Number
+	}
+
+	repoURL := payload.Repository.CloneURL
+	if repoURL == "" && payload.Repository.HTMLURL != "" {
+		repoURL = payload.Repository.HTMLURL
+	}
+	if repoURL == "" && payload.Repository.FullName != "" {
+		repoURL = "https://github.com/" + payload.Repository.FullName
+	}
+
+	branch := strings.TrimSpace(payload.PullRequest.Head.Ref)
+	if branch == "" && payload.Issue.PullRequest != nil && payload.Issue.PullRequest.URL != "" {
+		branch = h.fetchGitHubPRHeadRef(ctx, payload.Issue.PullRequest.URL)
+	}
+	if branch == "" && h.Client != nil && payload.Repository.FullName != "" && prNumber > 0 {
+		ns := h.DefaultNS
+		if ns == "" {
+			ns = "default"
+		}
+		var existingEnv v1alpha1.Environment
+		envName := previewEnvName("pr", payload.Repository.FullName, prNumber)
+		if err := h.Client.Get(ctx, client.ObjectKey{Name: envName, Namespace: ns}, &existingEnv); err == nil && existingEnv.Spec.Source.Branch != "" {
+			branch = existingEnv.Spec.Source.Branch
+		}
+	}
+	if branch == "" {
+		branch = payload.Repository.DefaultBranch
+	}
+	if branch == "" {
+		branch = "main"
+	}
+
+	if err := ExecuteSlashCommand(ctx, h.Client, h.DefaultNS, cmd, repoURL, branch, prNumber); err != nil {
+		logger.Error(err, "Failed to execute slash command", "action", cmd.Action, "pr", prNumber)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (h *GitHubWebhookHandler) fetchGitHubPRHeadRef(ctx context.Context, prAPIURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(prAPIURL))
+	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") {
+		return ""
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host != "api.github.com" && host != "localhost" && host != "127.0.0.1" && host != "::1" {
+		return ""
+	}
+
+	httpClient := h.HTTPClient
+	if httpClient == nil {
+		if host == "api.github.com" && strings.TrimSpace(os.Getenv("GITHUB_TOKEN")) == "" {
+			return ""
+		}
+		httpClient = &http.Client{Timeout: 5 * time.Second}
+	}
+
+	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	if tok := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+
+	var prData struct {
+		Head struct {
+			Ref string `json:"ref"`
+		} `json:"head"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&prData); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(prData.Head.Ref)
 }
 
 func (h *GitHubWebhookHandler) reconcileEnvironment(ctx context.Context, payload *GitHubPRPayload) error {

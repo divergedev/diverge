@@ -2,7 +2,10 @@ package deployer
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"regexp"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -240,7 +243,7 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 // resolveDBSecret determines the database connection Secret name for a preview pod.
 // Priority:
 //  1. connectionRef (user's pre-existing Secret — the primary path)
-//  2. Auto-provisioned Secret from SchemaProvider (diverge-db-<schemaName>)
+//  2. Auto-provisioned Secret from SchemaProvider (diverge-db-env-<env.Name>)
 //  3. Empty string (no database injection)
 func resolveDBSecret(env *v1alpha1.Environment) string {
 	db := env.Spec.Database
@@ -250,7 +253,36 @@ func resolveDBSecret(env *v1alpha1.Environment) string {
 		return db.ConnectionRef
 	}
 
-	// Auto-provisioned: schema mode no longer uses secrets, it injects env vars directly
-	// so we return empty here.
+	// Auto-provisioned secret for schema mode (when database provisioning has
+	// recorded status or when evaluated standalone without controller status conditions)
+	if db.Mode == "schema" && (env.Status.DatabaseStatus != "" || len(env.Status.Conditions) == 0) {
+		return sanitizeDBEnvSecretName(fmt.Sprintf("diverge-db-env-%s", env.Name), env.Name, 63)
+	}
+
 	return ""
+}
+
+func sanitizeDBEnvSecretName(raw, hashInput string, maxLength int) string {
+	if maxLength < 10 {
+		maxLength = 10
+	}
+	raw = strings.ToLower(raw)
+	raw = strings.NewReplacer(".", "-", "_", "-").Replace(raw)
+	raw = regexp.MustCompile(`[^a-z0-9-]`).ReplaceAllString(raw, "")
+	raw = regexp.MustCompile(`-{2,}`).ReplaceAllString(raw, "-")
+	raw = strings.Trim(raw, "-")
+
+	if raw == "" {
+		raw = "resource"
+	}
+
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(hashInput)))[:8]
+	prefix := raw
+	if len(prefix) > maxLength-9 {
+		prefix = strings.TrimRight(prefix[:maxLength-9], "-")
+	}
+	if prefix == "" {
+		prefix = "r"
+	}
+	return prefix + "-" + hash
 }

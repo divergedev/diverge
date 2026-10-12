@@ -12,13 +12,24 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
 	pkgdb "github.com/divergedev/diverge/pkg/database"
 	"github.com/jackc/pgx/v5"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+// durablePasswords stores generated role passwords keyed by adminDSN/namespace/roleName
+// so passwords survive provider re-instantiation even when no Kubernetes Client is configured,
+// and are cleared on Teardown.
+var durablePasswords sync.Map
 
 // SQLExecutor defines the contract for this component.
 type SQLExecutor interface {
@@ -27,8 +38,134 @@ type SQLExecutor interface {
 
 // SchemaDatabaseProvider represents the configuration or state for this type.
 type SchemaDatabaseProvider struct {
-	AdminDSN string
-	Executor SQLExecutor
+	AdminDSN  string
+	Executor  SQLExecutor
+	Client    client.Client
+	mu        sync.Mutex
+	passwords map[string]string
+}
+
+// NewSchemaDatabaseProvider creates a SchemaDatabaseProvider with an initialized password cache.
+func NewSchemaDatabaseProvider(adminDSN string) *SchemaDatabaseProvider {
+	return &SchemaDatabaseProvider{
+		AdminDSN:  adminDSN,
+		passwords: make(map[string]string),
+	}
+}
+
+func (p *SchemaDatabaseProvider) durableKey(namespace, roleName string) string {
+	return p.AdminDSN + "/" + namespace + "/" + roleName
+}
+
+func rolePasswordSecretName(roleName string) string {
+	s := strings.ToLower(strings.ReplaceAll(roleName, "_", "-"))
+	const prefix = "diverge-db-role-"
+	const maxLen = 63
+	name := prefix + s
+	if len(name) <= maxLen {
+		return name
+	}
+	hash := sha256.Sum256([]byte(roleName))
+	suffix := hex.EncodeToString(hash[:4])
+	truncLen := maxLen - len(prefix) - 1 - 8
+	return strings.TrimRight(prefix+s[:truncLen], "-") + "-" + suffix
+}
+
+func (p *SchemaDatabaseProvider) getOrCreatePassword(ctx context.Context, env *v1alpha1.Environment, roleName string) (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.passwords == nil {
+		p.passwords = make(map[string]string)
+	}
+	if pw, ok := p.passwords[roleName]; ok && pw != "" {
+		return pw, nil
+	}
+
+	ns := "default"
+	if env != nil && env.Namespace != "" {
+		ns = env.Namespace
+	}
+	dKey := p.durableKey(ns, roleName)
+	secName := rolePasswordSecretName(roleName)
+
+	// 1. Load from durable Kubernetes Secret if Client is configured
+	if p.Client != nil {
+		var sec corev1.Secret
+		err := p.Client.Get(ctx, types.NamespacedName{Name: secName, Namespace: ns}, &sec)
+		if err == nil {
+			if pw := string(sec.Data["password"]); pw != "" {
+				p.passwords[roleName] = pw
+				durablePasswords.Store(dKey, pw)
+				return pw, nil
+			}
+		} else if !apierrors.IsNotFound(err) {
+			return "", fmt.Errorf("failed to get role password secret %s/%s: %w", ns, secName, err)
+		}
+	}
+
+	// 2. Fallback to durable store across provider instances
+	if val, ok := durablePasswords.Load(dKey); ok {
+		if pw, ok := val.(string); ok && pw != "" {
+			p.passwords[roleName] = pw
+			if p.Client != nil {
+				if err := p.persistPasswordSecret(ctx, ns, secName, roleName, pw); err != nil {
+					return "", err
+				}
+			}
+			return pw, nil
+		}
+	}
+
+	// 3. Generate a new password and persist it durably
+	pwBytes := make([]byte, 32)
+	if _, err := crypto_rand.Read(pwBytes); err != nil {
+		return "", fmt.Errorf("failed to generate password: %w", err)
+	}
+	pw := hex.EncodeToString(pwBytes)
+
+	if p.Client != nil {
+		if err := p.persistPasswordSecret(ctx, ns, secName, roleName, pw); err != nil {
+			return "", err
+		}
+	}
+
+	p.passwords[roleName] = pw
+	durablePasswords.Store(dKey, pw)
+	return pw, nil
+}
+
+func (p *SchemaDatabaseProvider) persistPasswordSecret(ctx context.Context, namespace, secretName, roleName, password string) error {
+	sec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"divergedev.com/managed-by": "diverge",
+				"divergedev.com/db-role":    roleName,
+			},
+		},
+		Data: map[string][]byte{
+			"password": []byte(password),
+		},
+	}
+	if err := p.Client.Create(ctx, sec); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			var existing corev1.Secret
+			if getErr := p.Client.Get(ctx, types.NamespacedName{Name: secretName, Namespace: namespace}, &existing); getErr != nil {
+				return fmt.Errorf("failed to get existing role password secret %s/%s: %w", namespace, secretName, getErr)
+			}
+			if existing.Data == nil {
+				existing.Data = make(map[string][]byte)
+			}
+			existing.Data["password"] = []byte(password)
+			if updErr := p.Client.Update(ctx, &existing); updErr != nil {
+				return fmt.Errorf("failed to update role password secret %s/%s: %w", namespace, secretName, updErr)
+			}
+			return nil
+		}
+		return fmt.Errorf("failed to create role password secret %s/%s: %w", namespace, secretName, err)
+	}
+	return nil
 }
 
 var validSchemaName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
@@ -93,32 +230,31 @@ END
 $$;`, schema)
 	// editorconfig-checker-enable
 
-	pwBytes := make([]byte, 32)
-	if _, err := crypto_rand.Read(pwBytes); err != nil {
-		return nil, fmt.Errorf("failed to generate password: %w", err)
-	}
-	password := hex.EncodeToString(pwBytes)
 	roleName := safeRoleName(schema)
+	password, err := p.getOrCreatePassword(ctx, env, roleName)
+	if err != nil {
+		return nil, err
+	}
 
 	schemaIdent := pgx.Identifier{schema}.Sanitize()
 	roleIdent := pgx.Identifier{roleName}.Sanitize()
 
-	// Idempotent role creation: create if not exists, update password on re-reconcile
+	// Idempotent role creation: create if not exists without rotating existing role password
 	// editorconfig-checker-disable
 	setupSQL += fmt.Sprintf(`
 DO $diverge_role$
 BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '%s') THEN
     CREATE ROLE %s WITH LOGIN PASSWORD '%s';
-  ELSE
-    ALTER ROLE %s WITH PASSWORD '%s';
   END IF;
 END
 $diverge_role$;
-`, roleName, roleIdent, password, roleIdent, password)
+`, roleName, roleIdent, password)
 	// editorconfig-checker-enable
 	setupSQL += fmt.Sprintf("GRANT USAGE ON SCHEMA %s TO %s;\n", schemaIdent, roleIdent)
+	setupSQL += fmt.Sprintf("GRANT CREATE ON SCHEMA %s TO %s;\n", schemaIdent, roleIdent)
 	setupSQL += fmt.Sprintf("GRANT ALL ON ALL TABLES IN SCHEMA %s TO %s;\n", schemaIdent, roleIdent)
+	setupSQL += fmt.Sprintf("GRANT ALL ON ALL SEQUENCES IN SCHEMA %s TO %s;\n", schemaIdent, roleIdent)
 	setupSQL += fmt.Sprintf("ALTER DEFAULT PRIVILEGES IN SCHEMA %s GRANT ALL ON TABLES TO %s;\n", schemaIdent, roleIdent)
 
 	dsn := buildWorkloadDSN(p.AdminDSN, roleName, password, schema)
@@ -197,6 +333,27 @@ func (p *SchemaDatabaseProvider) Teardown(ctx context.Context, env *v1alpha1.Env
 	if err != nil {
 		return fmt.Errorf("failed to drop role: %w", err)
 	}
+
+	ns := "default"
+	if env != nil && env.Namespace != "" {
+		ns = env.Namespace
+	}
+	if p.Client != nil {
+		sec := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      rolePasswordSecretName(roleName),
+				Namespace: ns,
+			},
+		}
+		if delErr := client.IgnoreNotFound(p.Client.Delete(ctx, sec)); delErr != nil {
+			return fmt.Errorf("failed to delete role password secret: %w", delErr)
+		}
+	}
+
+	p.mu.Lock()
+	delete(p.passwords, roleName)
+	durablePasswords.Delete(p.durableKey(ns, roleName))
+	p.mu.Unlock()
 
 	return nil
 }

@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGitLabStatusReporter(t *testing.T) {
@@ -61,7 +63,7 @@ func TestGitLabStatusReporter(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Unexpected error: %v", err)
 			}
-			// not checking CommitStatusURL because our impl might not extract target_url exactly, but let's check it doesn't panic.
+			assert.NotEmpty(t, env.Status.CommitStatusURL)
 		})
 	}
 }
@@ -122,6 +124,75 @@ func TestGitHubStatusReporter(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStatusReporters_EdgeCasesAndValidation(t *testing.T) {
+	ctx := context.Background()
+
+	// Default GitHub BaseURL
+	ghDefault := NewGitHubStatusReporter("", "tok")
+	assert.Equal(t, "https://api.github.com", ghDefault.BaseURL)
+
+	// Empty SHA is a no-op for both GitHub and GitLab
+	ghEnvEmptySHA := &v1alpha1.Environment{
+		Spec: v1alpha1.EnvironmentSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "github", Project: "owner/repo"},
+		},
+	}
+	require.NoError(t, ghDefault.PostCommitStatus(ctx, ghEnvEmptySHA, "pending", "desc"))
+
+	glReporter := NewGitLabStatusReporter("https://gitlab.example.com", "tok")
+	glEnvEmptySHA := &v1alpha1.Environment{
+		Spec: v1alpha1.EnvironmentSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "gitlab", Project: "owner/repo"},
+		},
+	}
+	require.NoError(t, glReporter.PostCommitStatus(ctx, glEnvEmptySHA, "pending", "desc"))
+
+	// Invalid SHA rejected
+	ghInvalidSHA := &v1alpha1.Environment{
+		Spec: v1alpha1.EnvironmentSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "github", Project: "owner/repo"},
+		},
+		Status: v1alpha1.EnvironmentStatus{CommitSHA: "not-a-hex-sha!"},
+	}
+	require.Error(t, ghDefault.PostCommitStatus(ctx, ghInvalidSHA, "pending", "desc"))
+
+	glInvalidSHA := &v1alpha1.Environment{
+		Spec: v1alpha1.EnvironmentSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "gitlab", Project: "owner/repo"},
+		},
+		Status: v1alpha1.EnvironmentStatus{CommitSHA: "not-a-hex-sha!"},
+	}
+	require.Error(t, glReporter.PostCommitStatus(ctx, glInvalidSHA, "pending", "desc"))
+
+	// Wrong provider rejected
+	require.Error(t, ghDefault.PostCommitStatus(ctx, glEnvEmptySHA, "pending", "desc"))
+	require.Error(t, glReporter.PostCommitStatus(ctx, ghEnvEmptySHA, "pending", "desc"))
+
+	// Non-2xx status code handling
+	errServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer errServer.Close()
+
+	ghErrReporter := NewGitHubStatusReporter(errServer.URL, "tok")
+	validGHEnv := &v1alpha1.Environment{
+		Spec: v1alpha1.EnvironmentSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "github", Project: "owner/repo"},
+		},
+		Status: v1alpha1.EnvironmentStatus{CommitSHA: "deadbeef1234"},
+	}
+	require.Error(t, ghErrReporter.PostCommitStatus(ctx, validGHEnv, "pending", "desc"))
+
+	glErrReporter := NewGitLabStatusReporter(errServer.URL, "tok")
+	validGLEnv := &v1alpha1.Environment{
+		Spec: v1alpha1.EnvironmentSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "gitlab", Project: "owner/repo"},
+		},
+		Status: v1alpha1.EnvironmentStatus{CommitSHA: "deadbeef1234"},
+	}
+	require.Error(t, glErrReporter.PostCommitStatus(ctx, validGLEnv, "pending", "desc"))
 }
 
 func TestNoopStatusReporter(t *testing.T) {

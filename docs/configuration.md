@@ -152,6 +152,27 @@ Diverge includes an OpenFeature-compatible feature flags engine. For details and
 | `createdAt` | Timestamp when the environment was created. |
 | `expiresAt` | Timestamp when the environment will be deleted (if TTL is set). |
 
+## Resource Annotations (`Environment` & `AgentTask`)
+
+### `Environment` Annotations
+| Annotation | Example | Description |
+|---|---|---|
+| `divergedev.com/hibernate-after` | `"30m"` | Idle duration after which `diverge-controller` scales the environment's preview Deployment to `0` replicas (`Phase: Hibernating`). |
+| `divergedev.com/last-traffic-at` | `"2026-10-12T01:30:00Z"` | RFC 3339 timestamp of the last observed HTTP/gRPC traffic (falls back to `status.createdAt` when unset). |
+| `divergedev.com/pr-number` | `"42"` | Pull Request / Merge Request number associated with the environment. |
+
+### `AgentTask` Preview Annotations
+When `spec.repository.url` is set on an `AgentTask`, the controller automatically provisions a linked preview `Environment` (`agent-preview-<taskName>`):
+
+| Annotation | Direction | Default | Description |
+|---|---|---|---|
+| `divergedev.com/preview-enabled` | Input | `"true"` (when `repository.url` is set) | Set to `"false"` to disable automatic linked preview provisioning, or `"true"` to explicitly enable. |
+| `divergedev.com/preview-service` | Input | `<task.name>` | Target Kubernetes Service name for the linked `Environment`. |
+| `divergedev.com/preview-image` | Input | `nginx:alpine` (port `80`) | Container image deployed in the linked preview `Environment`. |
+| `divergedev.com/preview-branch` | Input | `workingBranch` / `baseBranch` | Git branch tracked by the linked `Environment`. |
+| `divergedev.com/preview-environment` | Output | — | Populated by `diverge-controller` with the linked `Environment` name (`agent-preview-<taskName>`). |
+| `divergedev.com/preview-url` | Output | — | Populated by `diverge-controller` with the live preview URL once ready. |
+
 ## MR Label Overrides
 
 Diverge can read labels applied to a Merge Request and override the default deployment configurations. This allows developers to request specific infrastructure directly from GitLab/GitHub.
@@ -179,16 +200,23 @@ Key parameters:
 | `routing.defaultMode` | `header` | Default routing mode if not specified. |
 | `database.defaultMode` | `shared` | Default database mode if not specified. |
 
-## CLI Configuration
+## CLI & Binary Flags Configuration
 
-Diverge can be configured via CLI flags in the controller `main.go`:
+Diverge binaries can be configured via CLI flags:
 
+### Controller (`diverge-controller`)
 | Flag | Default | Description |
 |---|---|---|
 | `--deploy-provider` | `noop` | Deployment provider (`direct`, `argocd`, `knative`, `noop`). |
 | `--routing-provider` | `gateway` | Routing provider (`gateway`, `istio`, `composite`, `noop`, or comma-separated list like `gateway,istio`). |
 | `--database-provider` | `none` | Database provider (`schema`, `none`). |
 | `--notifier-provider` | `noop` | Notification provider (`github`, `gitlab`, `noop`). |
+
+### Proxy (`diverge-proxy`) & Activator (`activator-proxy`)
+| Binary | Flag | Default | Description |
+|---|---|---|---|
+| `diverge-proxy` | `--hide-environment-list` | `false` | Hide the active environments list on the 404 landing page to prevent environment enumeration. |
+| `activator-proxy` | `--wake-splash` | `false` | Serve an auto-refreshing `202 Accepted` HTML wake-up splash page (`GET /-/wakeup-status`) while waking scaled-to-zero revisions (also triggered per request via `X-Diverge-Wake-Splash: true`). |
 
 ### Provider-Specific Flags
 Because providers self-register, some flags are tied to specific providers (registered in their `*_register.go` files):

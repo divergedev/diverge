@@ -150,12 +150,13 @@ func buildJob(cfg HookJobConfig) *batchv1.Job {
 	return job
 }
 
-// truncateLabel ensures label values do not exceed the 63 character limit.
+// truncateLabel ensures label values do not exceed the 63 character limit
+// and do not end with non-alphanumeric characters (-_.).
 func truncateLabel(val string) string {
 	if len(val) > validation.LabelValueMaxLength {
-		return val[:validation.LabelValueMaxLength]
+		val = val[:validation.LabelValueMaxLength]
 	}
-	return val
+	return strings.TrimRight(val, "-_.")
 }
 
 // createDSNSecret creates a short-lived Secret containing the database DSN.
@@ -198,6 +199,9 @@ func createDSNSecret(ctx context.Context, c client.Client, name, namespace, dsn 
 
 // sanitizeK8sName limits name length and ensures DNS-1123 compliance.
 func sanitizeK8sName(raw, hashInput string, maxLength int) string {
+	if maxLength < 10 {
+		maxLength = 10
+	}
 	raw = strings.ToLower(raw)
 	raw = strings.NewReplacer(".", "-", "_", "-").Replace(raw)
 	raw = regexp.MustCompile(`[^a-z0-9-]`).ReplaceAllString(raw, "")
@@ -209,10 +213,14 @@ func sanitizeK8sName(raw, hashInput string, maxLength int) string {
 	}
 
 	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(hashInput)))[:8]
-	if len(raw) <= maxLength-9 {
-		return raw + "-" + hash
+	prefix := raw
+	if len(prefix) > maxLength-9 {
+		prefix = strings.TrimRight(prefix[:maxLength-9], "-")
 	}
-	return raw[:maxLength-9] + "-" + hash
+	if prefix == "" {
+		prefix = "r"
+	}
+	return prefix + "-" + hash
 }
 
 // generateHookJobName creates a DNS-1123 compliant job name.

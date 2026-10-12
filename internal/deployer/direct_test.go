@@ -588,3 +588,57 @@ func TestDirectDeployer_Deploy_AllowsDeployment(t *testing.T) {
 	err := d.Deploy(context.Background(), env)
 	require.NoError(t, err)
 }
+
+func TestDirectDeployer_Deploy_RejectsRBACAndEndpointKindsByDefault(t *testing.T) {
+	s := testScheme()
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+	env := testEnv("test-env", "test-ns", "same")
+
+	disallowed := []struct {
+		apiVersion string
+		kind       string
+	}{
+		{"rbac.authorization.k8s.io/v1", "Role"},
+		{"rbac.authorization.k8s.io/v1", "RoleBinding"},
+		{"v1", "Endpoints"},
+		{"discovery.k8s.io/v1", "EndpointSlice"},
+	}
+
+	for _, tc := range disallowed {
+		obj := unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": tc.apiVersion,
+				"kind":       tc.kind,
+				"metadata": map[string]interface{}{
+					"name": "test-disallowed",
+				},
+			},
+		}
+		d := NewDirectDeployer(c, &mockFetcher{objects: []unstructured.Unstructured{obj}})
+		err := d.Deploy(context.Background(), env)
+		require.Error(t, err, "expected kind %s to be rejected by default", tc.kind)
+		assert.Contains(t, err.Error(), "not permitted")
+	}
+}
+
+func TestDirectDeployer_WithAllowedKinds_CustomAllowlist(t *testing.T) {
+	s := testScheme()
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+	env := testEnv("test-env", "test-ns", "same")
+
+	dep := testDeploymentUnstructured("dep1", "")
+	d := NewDirectDeployer(c, &mockFetcher{objects: []unstructured.Unstructured{dep}}, WithAllowedKinds(map[string]bool{
+		"Service": true,
+	}))
+	err := d.Deploy(context.Background(), env)
+	require.Error(t, err, "Deployment should be rejected when custom allowlist only permits Service")
+
+	// Empty map override must deny all kinds (not fall back to defaultAllowedKinds)
+	d.WithAllowedKinds(map[string]bool{})
+	err = d.Deploy(context.Background(), env)
+	require.Error(t, err, "Deployment should be rejected when custom allowlist is empty")
+
+	d.WithAllowedKinds(map[string]bool{"Deployment": true})
+	err = d.Deploy(context.Background(), env)
+	require.NoError(t, err)
+}

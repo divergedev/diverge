@@ -15,13 +15,12 @@ import (
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
 
-// allowedKinds is an allowlist of Kubernetes resource kinds permitted in
+// defaultAllowedKinds is an allowlist of Kubernetes resource kinds permitted in
 // preview deployment manifests. Only namespaced workload resources that
 // Diverge needs to deploy are allowed. Any kind not in this list —
-// including cluster-scoped resources and custom CRDs — is rejected.
-// This is safer than a blocklist: new cluster-scoped kinds are blocked
-// by default rather than requiring explicit enumeration.
-var allowedKinds = map[string]bool{
+// including cluster-scoped resources, RBAC (Role/RoleBinding), endpoint
+// hijacking resources (Endpoints/EndpointSlice), and custom CRDs — is rejected.
+var defaultAllowedKinds = map[string]bool{
 	"Deployment":              true,
 	"StatefulSet":             true,
 	"DaemonSet":               true,
@@ -33,25 +32,61 @@ var allowedKinds = map[string]bool{
 	"Secret":                  true,
 	"Ingress":                 true,
 	"ServiceAccount":          true,
-	"Role":                    true,
-	"RoleBinding":             true,
 	"NetworkPolicy":           true,
 	"PersistentVolumeClaim":   true,
 	"HorizontalPodAutoscaler": true,
 	"PodDisruptionBudget":     true,
-	"Endpoints":               true,
-	"EndpointSlice":           true,
 }
 
-func isAllowedKind(kind string) bool {
-	return allowedKinds[kind]
+// DirectDeployerOption configures a DirectDeployer.
+type DirectDeployerOption func(*DirectDeployer)
+
+// WithAllowedKinds overrides the default allowlist of Kubernetes resource kinds.
+func WithAllowedKinds(kinds map[string]bool) DirectDeployerOption {
+	return func(d *DirectDeployer) {
+		cloned := make(map[string]bool, len(kinds))
+		for k, v := range kinds {
+			cloned[k] = v
+		}
+		d.AllowedKinds = cloned
+		d.customAllowedKinds = true
+	}
 }
 
 // DirectDeployer applies pre-rendered Kubernetes manifests directly
 // via Server-Side Apply, without requiring ArgoCD.
 type DirectDeployer struct {
-	Client  client.Client
-	Fetcher ManifestFetcher
+	Client             client.Client
+	Fetcher            ManifestFetcher
+	AllowedKinds       map[string]bool
+	customAllowedKinds bool
+}
+
+// NewDirectDeployer creates a new DirectDeployer with optional configuration.
+func NewDirectDeployer(c client.Client, fetcher ManifestFetcher, opts ...DirectDeployerOption) *DirectDeployer {
+	d := &DirectDeployer{
+		Client:  c,
+		Fetcher: fetcher,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(d)
+		}
+	}
+	return d
+}
+
+// WithAllowedKinds sets custom allowed kinds on the DirectDeployer and returns it for chaining.
+func (d *DirectDeployer) WithAllowedKinds(kinds map[string]bool) *DirectDeployer {
+	WithAllowedKinds(kinds)(d)
+	return d
+}
+
+func (d *DirectDeployer) isKindPermitted(kind string) bool {
+	if d.customAllowedKinds || d.AllowedKinds != nil {
+		return d.AllowedKinds[kind]
+	}
+	return defaultAllowedKinds[kind]
 }
 
 // Deploy fetches pre-rendered manifests and applies them via Server-Side Apply.
@@ -81,9 +116,9 @@ func (d *DirectDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) 
 
 		// S3: Only permit allowlisted resource kinds in preview deployments.
 		// This prevents privilege escalation via cluster-scoped resources
-		// (ClusterRole, Namespace, CRD) and unknown custom resources.
+		// (ClusterRole, Namespace, CRD), RBAC (Role, RoleBinding), and endpoint hijacking.
 		kind := obj.GetObjectKind().GroupVersionKind().Kind
-		if !isAllowedKind(kind) {
+		if !d.isKindPermitted(kind) {
 			return fmt.Errorf("resource kind %q is not permitted in preview deployments (only workload resources are allowed)", kind)
 		}
 

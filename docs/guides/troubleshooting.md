@@ -58,3 +58,18 @@ diverge route <service-name>
   ```bash
   kubectl logs -n diverge-system deployment/diverge-controller-manager --tail=100
   ```
+
+---
+
+### 5. `POST /api/v1/agenttask/meter` Returns `429 Too Many Requests` or `403 Forbidden`
+**Symptoms**: Sandbox agent or LLM proxy receives `429 Too Many Requests` (`{"allowed": false, "suspended": true, "reason": "budget exceeded"}`) or `403 Forbidden` (`{"allowed": false, "suspended": false, "reason": "model \"...\" is not allowed"}`).
+
+**Common Causes & Fixes**:
+- **`429 Too Many Requests` (`budget exceeded`)**: The `AgentTask`'s cumulative `totalCostUSD` or `totalTokensUsed` exceeded its Macaroon capability caveats or `spec.budgetUSD` / `spec.budgetTokens`. `diverge-server` automatically transitions the task to `Paused`, sets `spec.suspended: true`, and revokes its token in `diverge-agenttask-tokens`. To resume execution with a higher budget:
+  ```bash
+  diverge task resume <task-name> --budget 15.00 --tokens 500000
+  # Or patch the AgentTask directly:
+  kubectl patch agenttask <task-name> --type=merge -p '{"spec":{"suspended":false,"budgetUSD":"15.00","budgetTokens":500000}}'
+  ```
+- **`403 Forbidden` (`model not allowed`)**: The `AgentTask` restricts allowed LLM models via `spec.capabilities` (encoded as `allowed_models` caveats in the Macaroon token), and the metering request either omitted the `"model"` field or specified a model not listed in `spec.capabilities`. Add the model to `spec.capabilities` on the `AgentTask` (or `.diverge/agent.yaml`) so the controller mints a capability token permitting that model.
+

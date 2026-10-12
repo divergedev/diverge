@@ -46,6 +46,19 @@ services:
 
 1. Per-service CRD spec → 2. Controller CLI flags → 3. Built-in defaults
 
-## Cold Start
+## Cold Start & Preview Wake-Up Splash Page
 
-When scaling from zero, expect 10–60s latency (KEDA polling + pod scheduling + app startup). The HTTP Activator Proxy buffers the triggering request to prevent drops.
+When scaling from zero, expect 10–60s latency (KEDA polling + pod scheduling + app startup). The HTTP Activator Proxy (`activator-proxy`) buffers the triggering request by default to prevent drops.
+
+For interactive browser sessions (`GET` requests with `Accept: text/html`), `activator-proxy` also supports an auto-refreshing **Preview Wake-Up Splash Page**:
+- **Enable via CLI flag**: Start `activator-proxy` with `--wake-splash`.
+- **Enable per request**: Include the `X-Diverge-Wake-Splash: true` HTTP header.
+- **How it works**: While the target pod is scaled to zero, `activator-proxy` triggers a background wake request and immediately responds with `202 Accepted` and an HTML splash screen that polls `GET /-/wakeup-status` (`{"ready": true|false}`) every 1.5 seconds, reloading automatically once the pod is ready.
+
+## Annotation-Based Idle Hibernation
+
+Environments can also hibernate without KEDA by setting idle hibernation annotations on the `Environment` CR:
+
+- `divergedev.com/hibernate-after`: Duration string (e.g., `"15m"`, `"1h"`) after which an idle environment scales its Deployment to `0` replicas.
+- `divergedev.com/last-traffic-at`: RFC 3339 timestamp recording the last observed traffic activity (falls back to `status.createdAt` if omitted).
+

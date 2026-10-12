@@ -67,3 +67,28 @@ spec:
       minReplicas: 0
       maxReplicas: 5
 ```
+
+---
+
+## 4. Preview Wake-Up Splash Page (`activator-proxy`)
+
+For browser-facing preview URLs, holding a cold-start connection open for 10–30 seconds can feel unresponsive. `activator-proxy` includes an optional **Preview Wake-Up Splash Page** mode:
+
+- **Enabling Globally**: Pass `--wake-splash` (`--wake-splash=true`) to `activator-proxy`.
+- **Enabling Per-Request**: Send the request header `X-Diverge-Wake-Splash: true` on a browser `GET` request (`Accept: text/html`).
+- **Behavior**:
+  1. When the target pod is scaled to zero, `activator-proxy` triggers an asynchronous wake-up in the background and immediately returns `202 Accepted` (`Retry-After: 2`) with a self-contained HTML splash page (`"Waking up preview environment..."`).
+  2. The splash page polls `GET /-/wakeup-status` every `1.5s`, which returns `{"ready": false}` while scaling and `{"ready": true}` (`200 OK`) as soon as a ready pod IP is available in the shared informer cache.
+  3. Once `{"ready": true}` is returned, the browser automatically reloads the page and `activator-proxy` forwards the request directly to the ready pod.
+
+---
+
+## 5. Annotation-Based Idle Hibernation
+
+In addition to KEDA `HTTPScaledObject` scaling, `diverge-controller` supports annotation-driven idle hibernation directly on `Environment` resources:
+
+| Annotation | Example | Description |
+| :--- | :--- | :--- |
+| `divergedev.com/hibernate-after` | `"30m"` | Idle duration (parsed via `time.ParseDuration`) after which the environment's preview Deployment is scaled down to `0` replicas (`Phase: Hibernating`). |
+| `divergedev.com/last-traffic-at` | `"2026-10-12T01:30:00Z"` | RFC 3339 timestamp of the most recent request (updated by proxies/gateways or annotations). Falls back to `status.createdAt` when unset. |
+

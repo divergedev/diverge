@@ -116,3 +116,69 @@ kubectl patch agenttask fix-checkout-latency --type=merge -p '{
 ```
 
 When resumed, `diverge-controller` mints a new Macaroon capability token reflecting the updated `budgetUSD` and `maxIterations` limits and clears the revocation marker.
+
+---
+
+## 5. Live LLM Cost & Token Enforcement (`POST /api/v1/agenttask/meter`)
+
+Sandbox LLM proxies and agent runtimes report incremental token and USD consumption to `diverge-server` via `POST /api/v1/agenttask/meter`, authenticating with the mounted Macaroon capability token (`Authorization: Bearer <macaroon-token>`).
+
+### Request & Response
+
+```bash
+curl -s -X POST "https://diverge-server.diverge-system.svc:8443/api/v1/agenttask/meter" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $(cat /etc/diverge/token/token)" \
+  -d '{
+    "model": "claude-3-7-sonnet",
+    "tokensUsed": 1500,
+    "costUSD": 0.0225
+  }'
+```
+
+**Response (`200 OK`)**:
+```json
+{
+  "allowed": true,
+  "suspended": false,
+  "totalTokensUsed": 1500,
+  "totalCostUSD": 0.0225
+}
+```
+
+### Guardrails Enforced by `/api/v1/agenttask/meter`
+- **Model Restriction Enforcement (`403 Forbidden`)**: If the capability token has `allowed_models` caveats (`spec.capabilities`), requests that omit `model` or specify a model not in `allowed_models` are rejected immediately with `403 Forbidden`.
+- **Automatic Budget Enforcement (`429 Too Many Requests`)**: When cumulative `totalCostUSD` or `totalTokensUsed` exceeds the Macaroon caveat or `AgentTask` spec (`budgetUSD` / `budgetTokens`), `diverge-server`:
+  1. Transitions the `AgentTask` status phase to `Paused`.
+  2. Sets `spec.suspended = true`.
+  3. Revokes the capability token in `diverge-agenttask-tokens`.
+  4. Returns `429 Too Many Requests` with `{"allowed": false, "suspended": true, "reason": "budget exceeded", ...}`.
+
+---
+
+## 6. Automatic Linked Preview Environments
+
+When `spec.repository.url` is set on an `AgentTask` (and `divergedev.com/preview-enabled` is not `"false"`), `diverge-controller` automatically provisions and owns a linked `Environment` Custom Resource named `agent-preview-<taskName>` (with `OwnerReference` for automatic garbage collection when the task is deleted).
+
+### Input Annotations (on `AgentTask`)
+| Annotation | Default | Description |
+| :--- | :--- | :--- |
+| `divergedev.com/preview-enabled` | `"true"` (when `spec.repository.url` is set) | Set to `"false"` to disable automatic preview environment creation, or `"true"` to force-enable. |
+| `divergedev.com/preview-service` | `<task.name>` | Target Kubernetes service name for the linked `Environment`. |
+| `divergedev.com/preview-image` | `nginx:alpine` (port `80`) | Container image deployed in the linked preview `Environment`. |
+| `divergedev.com/preview-branch` | `spec.repository.workingBranch` / `baseBranch` | Git branch tracked by the linked `Environment`. |
+
+### Output Annotations & Status Conditions
+- **Output Annotations**: Once reconciled, the controller writes `divergedev.com/preview-environment` (the child `Environment` name) and `divergedev.com/preview-url` (the live preview URL once ready) onto the `AgentTask`.
+- **Status Condition**: Tracks readiness via the `PreviewEnvironmentReady` condition (`Reason: EnvironmentProvisioning` -> `Reason: EnvironmentRunning`).
+
+---
+
+## 7. Triggering & Controlling `AgentTask` from PR / MR Comments
+
+Collaborators (`OWNER`, `MEMBER`, or `COLLABORATOR`) can spawn and control `AgentTask` resources directly from GitHub Pull Request and GitLab Merge Request comments:
+
+- `/diverge fix <objective>` — Creates or updates an `AgentTask` scoped to the PR/MR branch with the given objective.
+- `/diverge pause` — Suspends active `AgentTask` execution for the PR/MR (`spec.suspended = true`).
+- `/diverge resume` — Resumes a paused `AgentTask` for the PR/MR (`spec.suspended = false`).
+

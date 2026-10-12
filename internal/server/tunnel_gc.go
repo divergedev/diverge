@@ -130,15 +130,18 @@ func (gc *TunnelGC) sweep(ctx context.Context, namespace string) {
 		return
 	}
 	for _, lease := range leases.Items {
-		expiresStr, ok := lease.Annotations["divergedev.com/tunnel-expires"]
-		if !ok {
-			continue
+		expired := false
+		if expiresStr, ok := lease.Annotations["divergedev.com/tunnel-expires"]; ok {
+			expires, err := time.Parse(time.RFC3339, expiresStr)
+			if err != nil {
+				continue
+			}
+			expired = now.After(expires)
+		} else if lease.Spec.RenewTime != nil && lease.Spec.LeaseDurationSeconds != nil {
+			expires := lease.Spec.RenewTime.Add(time.Duration(*lease.Spec.LeaseDurationSeconds) * time.Second)
+			expired = now.After(expires)
 		}
-		expires, err := time.Parse(time.RFC3339, expiresStr)
-		if err != nil {
-			continue
-		}
-		if now.After(expires) {
+		if expired {
 			gc.logger.Info("tunnel GC: deleting expired lease", "lease", lease.Name, "ns", namespace)
 			_ = gc.k8sClient.CoordinationV1().Leases(namespace).Delete(ctx, lease.Name, metav1.DeleteOptions{})
 		}

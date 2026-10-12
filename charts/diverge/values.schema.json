@@ -124,12 +124,12 @@
       "properties": {
         "provider": {
           "type": "string",
-          "enum": ["argocd", "direct", "noop"],
+          "enum": ["argocd", "direct", "knative", "noop"],
           "description": "Deployment provider"
         },
         "manifestSourceType": {
           "type": "string",
-          "enum": ["configmap", "url"],
+          "enum": ["configmap", "url", "serviceconfig"],
           "description": "Manifest source type"
         }
       }

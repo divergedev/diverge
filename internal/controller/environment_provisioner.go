@@ -146,6 +146,26 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 		})
 		env.Status.DatabaseStatus = dbStatus.Message
 
+		if env.Spec.Database.ConnectionRef == "" && (len(dbStatus.EnvVars) > 0 || env.Spec.Database.Mode == "schema") {
+			envVars := dbStatus.EnvVars
+			if len(envVars) == 0 {
+				envVars = map[string]string{
+					"DATABASE_URL": dbStatus.DSN,
+				}
+			}
+			if err := r.ensureDatabaseEnvSecret(ctx, env, envVars); err != nil {
+				meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+					Type:    "DatabaseReady",
+					Status:  metav1.ConditionFalse,
+					Reason:  "DatabaseSecretProvisionFailed",
+					Message: err.Error(),
+				})
+				r.notifyFailed(ctx, env, err.Error())
+				res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
+				return res, true, retErr
+			}
+		}
+
 		// Run migrations (Atlas / MigrationJob) if configured
 		if env.Spec.Database.Atlas != nil || env.Spec.Database.MigrationJob != nil {
 			isBlocking := true
@@ -515,6 +535,67 @@ func (r *EnvironmentReconciler) ensureBannerConfigMap(ctx context.Context, env *
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create or update banner ConfigMap: %w", err)
+	}
+	return nil
+}
+
+func (r *EnvironmentReconciler) ensureDatabaseEnvSecret(ctx context.Context, env *divergeiov1alpha1.Environment, envVars map[string]string) error {
+	secretName := sanitizeK8sName(fmt.Sprintf("diverge-db-env-%s", env.Name), env.Name, 63)
+
+	targetNS := env.Namespace
+	if env.Spec.Deploy.Namespace == "create" {
+		targetNS = env.PreviewNamespace()
+	}
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: targetNS,
+		},
+	}
+
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
+		if secret.Labels == nil {
+			secret.Labels = make(map[string]string)
+		}
+		secret.Labels["divergedev.com/environment"] = truncateLabel(env.Name)
+		secret.Labels["divergedev.com/managed-by"] = "diverge"
+
+		if targetNS == env.Namespace {
+			if r.Scheme != nil {
+				if err := controllerutil.SetControllerReference(env, secret, r.Scheme); err != nil {
+					return err
+				}
+			} else {
+				for _, ref := range secret.OwnerReferences {
+					if ref.Controller != nil && *ref.Controller && (ref.Kind != "Environment" || ref.Name != env.Name) {
+						return fmt.Errorf("secret %s is already owned by %s/%s", secret.Name, ref.Kind, ref.Name)
+					}
+				}
+				if env.UID != "" {
+					isCtrl := true
+					secret.OwnerReferences = []metav1.OwnerReference{{
+						APIVersion:         "divergedev.com/v1alpha1",
+						Kind:               "Environment",
+						Name:               env.Name,
+						UID:                env.UID,
+						Controller:         &isCtrl,
+						BlockOwnerDeletion: &isCtrl,
+					}}
+				}
+			}
+		}
+
+		newData := make(map[string][]byte, len(envVars))
+		for k, v := range envVars {
+			newData[k] = []byte(v)
+		}
+		secret.Data = newData
+		secret.StringData = nil
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create or update database env secret: %w", err)
 	}
 	return nil
 }

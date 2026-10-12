@@ -3,9 +3,7 @@ package deployer
 import (
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
-	"time"
 
 	"github.com/divergedev/diverge/pkg/registry"
 )
@@ -21,10 +19,7 @@ func init() {
 			switch *manifestSourceType {
 			case "url":
 				manifestToken := os.Getenv("DIVERGE_MANIFEST_TOKEN")
-				fetcher = &URLFetcher{
-					HTTPClient: &http.Client{Timeout: 60 * time.Second},
-					AuthToken:  manifestToken,
-				}
+				fetcher = NewURLFetcher(manifestToken)
 			case "serviceconfig":
 				fetcher = &ServiceConfigFetcher{}
 			case "configmap", "":

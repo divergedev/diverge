@@ -68,7 +68,7 @@ Activator Proxy image
 {{- if and .Values.activatorProxy .Values.activatorProxy.image .Values.activatorProxy.image.repository -}}
   {{- $repo = .Values.activatorProxy.image.repository -}}
 {{- end -}}
-{{- $tag := .Chart.AppVersion -}}
+{{- $tag := .Values.image.tag | default .Chart.AppVersion -}}
 {{- if and .Values.activatorProxy .Values.activatorProxy.image .Values.activatorProxy.image.tag -}}
   {{- $tag = .Values.activatorProxy.image.tag -}}
 {{- end -}}

@@ -210,13 +210,7 @@ func main() {
 
 	// Build composite auth provider
 	var authProvider auth.AuthProvider
-	exemptPrefixes := func() []string {
-		prefixes := []string{}
-		if dashboardEnabled {
-			prefixes = append(prefixes, "/assets/")
-		}
-		return prefixes
-	}()
+	exemptPrefixes := buildExemptPrefixes(dashboardEnabled, oidcIssuerURL != "")
 
 	// Resolve OIDC client secret from env if not set via flag
 	if oidcClientSecret == "" {
@@ -226,15 +220,19 @@ func main() {
 		macaroonRootKey = os.Getenv("DIVERGE_MACAROON_ROOT_KEY")
 	}
 
+	var macaroonProvider *pkgauth.MacaroonProvider
+	var tokenStore pkgauth.TokenStore
 	var macaroonAuthProvider *auth.MacaroonAuthProvider
 	if macaroonRootKey != "" {
 		if len(macaroonRootKey) < pkgauth.MinMacaroonRootKeyLen {
 			logger.Error("macaroon root key is too short (must be at least 32 bytes)", "length", len(macaroonRootKey))
 			os.Exit(1)
 		}
+		macaroonProvider = pkgauth.NewMacaroonProvider([]byte(macaroonRootKey))
+		tokenStore = pkgauth.NewKubernetesSecretTokenStore(crClient, scheme).WithIndexOnly()
 		macaroonAuthProvider = auth.NewMacaroonAuthProvider(
-			pkgauth.NewMacaroonProvider([]byte(macaroonRootKey)),
-			pkgauth.NewKubernetesSecretTokenStore(crClient, scheme).WithIndexOnly(),
+			macaroonProvider,
+			tokenStore,
 		).WithTaskActiveCheck(crClient)
 		logger.Info("Macaroon capability token authentication enabled")
 	}
@@ -303,8 +301,6 @@ func main() {
 			logger.Error("failed to create OIDC handler", "error", err)
 			os.Exit(1)
 		}
-
-		exemptPrefixes = append(exemptPrefixes, "/auth/")
 	} else {
 		logger.Info("OIDC SSO disabled (no --oidc-issuer-url)")
 	}
@@ -323,6 +319,11 @@ func main() {
 		authProvider = tokenReviewProvider
 	}
 
+	loginURL := ""
+	if oidcIssuerURL != "" {
+		loginURL = "/auth/login"
+	}
+
 	authMiddleware := auth.NewMiddleware(auth.MiddlewareConfig{
 		Provider: authProvider,
 		Cache:    tokenCache,
@@ -338,12 +339,7 @@ func main() {
 		// Only meaningful when SSO is configured: a signed-out browser
 		// navigation goes to sign-in instead of a bare 401 page. Every
 		// session expires, so this is the routine path, not an edge.
-		LoginURL: func() string {
-			if oidcIssuerURL != "" {
-				return "/auth/login"
-			}
-			return ""
-		}(),
+		LoginURL: loginURL,
 	})
 
 	// Build the ConnectRPC mux
@@ -357,6 +353,8 @@ func main() {
 		AuditLogger:      auditLogger,
 		Version:          version,
 		DashboardEnabled: dashboardEnabled,
+		MacaroonVerifier: macaroonProvider,
+		TokenStore:       tokenStore,
 	})
 
 	if tunnelMgr != nil {
@@ -388,33 +386,13 @@ func main() {
 	})
 
 	// Protocol telemetry (records wire protocol + client SDK after auth)
-	handler := server.ProtocolTelemetryMiddleware(mux)
+	telemetryHandler := server.ProtocolTelemetryMiddleware(mux)
 
-	// Wrap with auth middleware (runs before telemetry)
-	handler = authMiddleware(handler)
+	// Wrap with auth middleware (runs before telemetry), allowing unauthenticated
+	// GET/HEAD / when dashboard is enabled and OIDC is disabled.
+	handler := wrapDashboardAuthHandler(authMiddleware(telemetryHandler), telemetryHandler, dashboardEnabled, loginURL)
 
-	rawOrigins := strings.Split(corsAllowedOrigins, ",")
-	origins := make([]string, 0, len(rawOrigins))
-	for _, o := range rawOrigins {
-		trimmed := strings.TrimSpace(o)
-		if trimmed != "" {
-			origins = append(origins, trimmed)
-		}
-	}
-
-	opts := cors.Options{
-		AllowedMethods:   []string{"GET", "POST"},
-		AllowedHeaders:   []string{"Authorization", "Content-Type", "Connect-Protocol-Version", "Connect-Timeout-Ms", "X-Grpc-Web", "X-User-Agent", "Grpc-Timeout"},
-		ExposedHeaders:   []string{"Grpc-Status", "Grpc-Message", "Grpc-Status-Details-Bin"},
-		AllowCredentials: false, // Disabling AllowCredentials prevents CSRF vulnerability with wildcard origins
-		MaxAge:           corsMaxAge,
-	}
-	if len(origins) == 1 && origins[0] == "*" {
-		opts.AllowOriginFunc = func(origin string) bool { return true }
-	} else {
-		opts.AllowedOrigins = origins
-	}
-
+	opts := newCORSOptions(corsAllowedOrigins, corsMaxAge)
 	corsHandler := cors.New(opts)
 
 	handler = corsHandler.Handler(handler)
@@ -562,4 +540,53 @@ func main() {
 		logger.Error("server exited with error", "error", errWait)
 		os.Exit(1)
 	}
+}
+
+func buildExemptPrefixes(dashboardEnabled, oidcEnabled bool) []string {
+	prefixes := []string{"/api/v1/agenttask/meter"}
+	if dashboardEnabled {
+		prefixes = append(prefixes, "/assets/", "/login", "/favicon.ico")
+	}
+	if oidcEnabled {
+		prefixes = append(prefixes, "/auth/")
+	}
+	return prefixes
+}
+
+func wrapDashboardAuthHandler(authedHandler, rawHandler http.Handler, dashboardEnabled bool, loginURL string) http.Handler {
+	if !dashboardEnabled || loginURL != "" {
+		return authedHandler
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if (r.Method == http.MethodGet || r.Method == http.MethodHead) && r.URL.Path == "/" {
+			rawHandler.ServeHTTP(w, r)
+			return
+		}
+		authedHandler.ServeHTTP(w, r)
+	})
+}
+
+func newCORSOptions(corsAllowedOrigins string, corsMaxAge int) cors.Options {
+	rawOrigins := strings.Split(corsAllowedOrigins, ",")
+	origins := make([]string, 0, len(rawOrigins))
+	for _, o := range rawOrigins {
+		trimmed := strings.TrimSpace(o)
+		if trimmed != "" {
+			origins = append(origins, trimmed)
+		}
+	}
+
+	opts := cors.Options{
+		AllowedMethods:   []string{"GET", "POST"},
+		AllowedHeaders:   []string{"Authorization", "Content-Type", "Connect-Protocol-Version", "Connect-Timeout-Ms", "X-Grpc-Web", "X-User-Agent", "Grpc-Timeout"},
+		ExposedHeaders:   []string{"Grpc-Status", "Grpc-Message", "Grpc-Status-Details-Bin"},
+		AllowCredentials: false, // Disabling AllowCredentials prevents CSRF vulnerability with wildcard origins
+		MaxAge:           corsMaxAge,
+	}
+	if len(origins) == 1 && origins[0] == "*" {
+		opts.AllowOriginFunc = func(origin string) bool { return true }
+	} else {
+		opts.AllowedOrigins = origins
+	}
+	return opts
 }
