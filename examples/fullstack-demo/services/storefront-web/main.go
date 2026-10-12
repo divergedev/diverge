@@ -22,6 +22,9 @@ func main() {
 		Addr:              ":" + port,
 		Handler:           NewStorefrontHandler(checkoutURL, nil),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	log.Printf("storefront-web listening on :%s (upstream checkout-api: %s)", port, checkoutURL)

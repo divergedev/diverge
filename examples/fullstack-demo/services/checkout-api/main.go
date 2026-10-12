@@ -22,6 +22,9 @@ func main() {
 		Addr:              ":" + port,
 		Handler:           NewCheckoutHandler(workerURL, nil),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	log.Printf("checkout-api listening on :%s (downstream worker: %s)", port, workerURL)

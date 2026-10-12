@@ -3,7 +3,7 @@
 This directory contains a complete, self-contained **3-service Go monorepo** (`storefront-web`, `checkout-api`, `fulfillment-worker`) demonstrating all core Diverge capabilities in a single workspace:
 
 1. **Delta Deployment (`PreviewGroup`)**: Deploy only `checkout-api` for PR #42 (`ghcr.io/divergedev/demo-checkout-api:pr-42`) while sharing the baseline `storefront-web` and `fulfillment-worker` deployments.
-2. **L7 Header & Cookie Routing (`x-diverge-env: pr-42` / `?_diverge_env=pr-42`)**: Route preview requests through baseline `storefront-web` into the isolated `checkout-api` preview pod and propagate context headers (`x-diverge-env`, `x-preview-env`, `baggage`, `traceparent`) downstream to `fulfillment-worker`.
+2. **L7 Header & Query-Parameter Routing (`x-diverge-env: pr-42` / `?_diverge_env=pr-42`)**: Route preview requests through baseline `storefront-web` into the isolated `checkout-api` preview pod and propagate context headers (`x-diverge-env`, `x-preview-env`, `baggage`, `traceparent`) downstream to `fulfillment-worker` (when fronted by `diverge-proxy`, `?_diverge_env=pr-42` also sets an `_diverge_env` session cookie).
 3. **PostgreSQL Schema-per-PR & Atlas Versioned Migrations**: Automatically provision the `preview_pr_42` PostgreSQL schema and execute versioned SQL migrations (`migrations/`) via an Atlas migration job with `destructive: error` linting.
 4. **OpenFeature / Flipt Per-Preview Flag Overrides**: Override `instant_payouts=true` and `checkout_v2_banner=true` exclusively for PR #42 traffic.
 5. **Async Kafka Queue & Consumer Group Isolation**: Route async order events for PR #42 to an isolated Kafka topic (`ORDERS_QUEUE_TOPIC=orders-events-pr-42`).
@@ -35,6 +35,7 @@ flowchart LR
 examples/fullstack-demo/
 ├── .diverge.yaml                           # Schema-validated Diverge monorepo config
 ├── handlers.go                             # Shared HTTP handlers for the 3 Go services
+├── handlers_test.go                        # Unit tests for handlers, masking, & HTML escaping
 ├── demo_test.go                            # Automated E2E header-routing, DAG, & CRD tests
 ├── services/
 │   ├── storefront-web/main.go              # Entrypoint service (:8080) — propagates headers
@@ -43,6 +44,7 @@ examples/fullstack-demo/
 ├── migrations/
 │   ├── 20260901000000_initial_orders.sql   # Baseline orders table
 │   ├── 20260902000000_add_instant_payouts.sql # PR #42 migration adding payout_speed column
+│   ├── atlas.sum                           # Atlas migration directory integrity checksums
 │   └── atlas.hcl                           # Atlas versioned migration config + destructive policy
 ├── k8s/
 │   ├── 00-baseline.yaml                    # Baseline Deployments, Services, & migrations ConfigMap

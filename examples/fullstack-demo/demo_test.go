@@ -149,6 +149,41 @@ func TestFullstackDemoK8sManifestsUnmarshal(t *testing.T) {
 		assert.NotEmpty(t, task.Spec.Repository.URL)
 		assert.NotEmpty(t, task.Spec.Objective)
 	})
+
+	t.Run("00-baseline.yaml checkout-migrations ConfigMap matches migrations directory", func(t *testing.T) {
+		rawBaseline, err := os.ReadFile(filepath.Join("k8s", "00-baseline.yaml"))
+		require.NoError(t, err)
+
+		var foundConfigMap bool
+		for _, doc := range strings.Split(string(rawBaseline), "\n---\n") {
+			var cm struct {
+				Kind     string `json:"kind"`
+				Metadata struct {
+					Name string `json:"name"`
+				} `json:"metadata"`
+				Data map[string]string `json:"data"`
+			}
+			require.NoError(t, k8syaml.Unmarshal([]byte(doc), &cm))
+			if cm.Kind != "ConfigMap" || cm.Metadata.Name != "checkout-migrations" {
+				continue
+			}
+			foundConfigMap = true
+			entries, err := os.ReadDir("migrations")
+			require.NoError(t, err)
+			require.NotEmpty(t, entries)
+			for _, entry := range entries {
+				if entry.IsDir() || entry.Name() == "atlas.hcl" {
+					continue
+				}
+				diskBytes, err := os.ReadFile(filepath.Join("migrations", entry.Name()))
+				require.NoError(t, err)
+				cmContent, ok := cm.Data[entry.Name()]
+				require.True(t, ok, "checkout-migrations ConfigMap missing %s", entry.Name())
+				assert.Equal(t, strings.TrimSpace(string(diskBytes)), strings.TrimSpace(cmContent), "drift in %s", entry.Name())
+			}
+		}
+		require.True(t, foundConfigMap, "expected checkout-migrations ConfigMap in k8s/00-baseline.yaml")
+	})
 }
 
 func TestFullstackDemoEndToEndHeaderRouting(t *testing.T) {

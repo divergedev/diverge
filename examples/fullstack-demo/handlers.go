@@ -2,6 +2,8 @@ package fullstackdemo
 
 import (
 	"encoding/json"
+	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
@@ -94,6 +96,14 @@ func NewStorefrontHandler(checkoutAPIURL string, client *http.Client) http.Handl
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			http.Error(w, fmt.Sprintf("checkout-api returned status %d", resp.StatusCode), http.StatusBadGateway)
+			return
+		}
+		if !json.Valid(body) {
+			http.Error(w, "checkout-api returned malformed JSON", http.StatusBadGateway)
+			return
+		}
 
 		writeJSON(w, resp.StatusCode, StorefrontResponse{
 			StorefrontEnv:    storefrontEnv,
@@ -168,6 +178,14 @@ func NewCheckoutHandler(workerURL string, client *http.Client) http.Handler {
 				http.Error(w, err.Error(), http.StatusBadGateway)
 				return
 			}
+			if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+				http.Error(w, fmt.Sprintf("fulfillment-worker returned status %d", resp.StatusCode), http.StatusBadGateway)
+				return
+			}
+			if !json.Valid(body) {
+				http.Error(w, "fulfillment-worker returned malformed JSON", http.StatusBadGateway)
+				return
+			}
 			workerPayload = json.RawMessage(body)
 		}
 
@@ -235,12 +253,21 @@ func getenv(key, fallback string) string {
 	return fallback
 }
 
+func isSensitiveQueryKey(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "password", "pass", "passwd", "pwd", "secret", "token", "api_key", "apikey":
+		return true
+	default:
+		return false
+	}
+}
+
 func maskDatabaseURL(raw string) string {
 	if raw == "" {
 		return ""
 	}
 	parsed, err := url.Parse(raw)
-	if err != nil {
+	if err != nil || parsed.Scheme == "" {
 		return "configured"
 	}
 	if parsed.User != nil {
@@ -249,16 +276,36 @@ func maskDatabaseURL(raw string) string {
 			parsed.User = url.UserPassword(username, "****")
 		}
 	}
-	return parsed.String()
+	if parsed.RawQuery != "" {
+		query := parsed.Query()
+		modified := false
+		for key := range query {
+			if isSensitiveQueryKey(key) {
+				query.Set(key, "****")
+				modified = true
+			}
+		}
+		if modified {
+			parsed.RawQuery = query.Encode()
+		}
+	}
+	return strings.ReplaceAll(parsed.String(), "%2A%2A%2A%2A", "****")
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		http.Error(w, "failed to encode JSON response", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
+	_, _ = w.Write(append(data, '\n'))
 }
 
 func renderStorefrontHTML(storefrontEnv, activeHeader string) string {
+	safeStorefrontEnv := html.EscapeString(storefrontEnv)
+	safeActiveHeader := html.EscapeString(activeHeader)
 	return "<!DOCTYPE html>\n" +
 		"<html lang=\"en\">\n" +
 		"<head>\n" +
@@ -267,8 +314,8 @@ func renderStorefrontHTML(storefrontEnv, activeHeader string) string {
 		"</head>\n" +
 		"<body>\n" +
 		"\t<h1>Diverge Demo Storefront</h1>\n" +
-		"\t<p>Storefront instance environment: <strong>" + storefrontEnv + "</strong></p>\n" +
-		"\t<p>Active routing header (<code>x-diverge-env</code>): <strong>" + activeHeader + "</strong></p>\n" +
+		"\t<p>Storefront instance environment: <strong>" + safeStorefrontEnv + "</strong></p>\n" +
+		"\t<p>Active routing header (<code>x-diverge-env</code>): <strong>" + safeActiveHeader + "</strong></p>\n" +
 		"\t<p>Switch preview environment in browser: <a href=\"/?_diverge_env=pr-42\">Activate PR #42</a> | <a href=\"/?_diverge_env=reset\">Reset to Baseline</a></p>\n" +
 		"\t<button id=\"checkout-btn\" onclick=\"fetch('/api/checkout').then(r => r.json()).then(d => document.getElementById('out').textContent = JSON.stringify(d, null, 2))\">Test /api/checkout</button>\n" +
 		"\t<pre id=\"out\"></pre>\n" +

@@ -21,6 +21,9 @@ func main() {
 		Addr:              ":" + port,
 		Handler:           NewWorkerHandler(),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	log.Printf("fulfillment-worker listening on :%s", port)

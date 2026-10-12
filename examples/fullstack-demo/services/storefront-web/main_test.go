@@ -21,6 +21,7 @@ func TestStorefrontHandler(t *testing.T) {
 	}))
 	defer upstream.Close()
 
+	t.Setenv("DIVERGE_ENV", "baseline")
 	handler := NewStorefrontHandler(upstream.URL, upstream.Client())
 
 	t.Run("healthz", func(t *testing.T) {
