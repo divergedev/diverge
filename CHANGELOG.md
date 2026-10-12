@@ -1,5 +1,38 @@
 # Changelog
 
+## [v0.14.0] - 2026-10-12
+
+### 🚀 Highlights & New Features
+
+#### 🤖 Autonomous Agent Sandboxes (`AgentTask`), Macaroon Auth & Live LLM Metering
+- **`AgentTask` CRD & Reconciler (#290, #295, #298, #299)**: Provision isolated Kubernetes sandboxes (`gVisor` / `Kata` / standard runtime classes) with egress `NetworkPolicy` isolation (blocking cloud metadata `169.254.169.254` / `fd00:ec2::254`, Kubernetes API server, and RFC 1918 private CIDRs), `ResourceQuota`, and `LimitRange` enforcement.
+- **Macaroon Capability Tokens (`pkg/auth`)**: Mint HMAC-SHA256 chained Macaroon tokens with caveats for `task_id`, `namespace`, `repo`, `branch`, `max_cost_usd`, `max_tokens`, and `allowed_models`, backed by `diverge-agenttask-tokens` O(1) index Secret revocation.
+- **Live LLM Cost & Token Metering (`POST /api/v1/agenttask/meter`) (#301)**: Real-time token and USD spend reporting endpoint on `diverge-server` that validates `allowed_models`, accumulates usage with Kubernetes optimistic concurrency (`RetryOnConflict`), and automatically pauses the `AgentTask` (`spec.suspended = true`, `429 Too Many Requests`) and revokes its Macaroon token when budget thresholds are exceeded.
+- **Automatic Linked Preview Environments (#301)**: `AgentTask` resources with `divergedev.com/preview-enabled: "true"` automatically provision and own a linked `Environment` (`agent-preview-<task>`), surfacing `divergedev.com/preview-url` and `PreviewEnvironmentReady` status conditions.
+
+#### 🔌 Built-In Model Context Protocol (MCP) Server
+- **Streamable HTTP & Stdio MCP Server (`diverge mcp`, `/mcp`) (#294, #296)**: Exposes 16 tools across `EnvironmentService`, `PreviewGroupService`, `AgentTaskService`, and diagnostic workflows (`diverge_fetch_errors`, `diverge_inspect_preview`, `diverge_run_test`) for Claude Code, Cursor, and Windsurf agents.
+
+#### 💬 Interactive GitHub PR & GitLab MR Slash Commands
+- **Webhook Slash Commands (#301)**: Comment `/diverge preview`, `/diverge fix <objective>`, `/diverge extend-ttl [duration]`, `/diverge teardown`, `/diverge pause`, or `/diverge resume` directly on GitHub Pull Requests (`issue_comment`) or GitLab Merge Requests (`Note Hook`), gated to `OWNER`, `MEMBER`, and `COLLABORATOR` roles.
+
+#### ⚡ Turnkey CI/CD Integrations: GitHub Action & GitLab CI/CD Component
+- **Composite GitHub Action (`divergedev/diverge@v1` / `action.yml`) (#304)**: One-step `validate`, `diff`, `deploy`, and `teardown` automation with Playwright/Cypress-ready outputs (`preview-name`, `changed-services`, `changed-count`, `skipped`, `routing-header`, `routing-header-json`, `preview-url`).
+- **GitLab CI/CD Catalog Component (`templates/preview/template.yml`, `ci/gitlab/.gitlab-ci-component.yml`) (#304)**: Automatic `diverge diff` delta detection, `PreviewGroup` deployment, dynamic GitLab `environment.on_stop` teardown, and dotenv-safe `preview.env` reports (`DIVERGE_ROUTING_HEADER_B64`, `DIVERGE_CHANGED_SERVICES_CSV`).
+
+#### 🛠️ Developer Experience, Protobuf Config Schema & Observability
+- **Protobuf-Driven `.diverge.yaml` JSON Schema (#302)**: Defined `DivergeConfig` in `api/proto/diverge/v1alpha1/config.proto` and generated Draft-07 JSON Schema (`schemas/diverge.schema.json`, `diverge validate --print-schema`) for IDE autocomplete and validation.
+- **Interactive `diverge init`, `diverge trace`, & Shell Completions (#302)**: Added `diverge init` (auto-detecting services from `docker-compose.yml`, `Chart.yaml`, and `Dockerfile`s), `diverge trace` L7 hop-by-hop routing diagnostics, and `bash`/`zsh`/`fish`/`powershell` completions (`diverge completion`).
+- **Stable `diverge doctor` Diagnostic Codes (#302)**: Every cluster health check now emits a stable diagnostic code (`DIV-DOC-001` through `DIV-DOC-009`) and remediation command in text and `--output json` modes.
+- **Scale-to-Zero Wake-Up Splash Page & Cost Metrics (#301, #302)**: `activator-proxy` now supports `--wake-splash` (`202 Accepted` auto-refreshing HTML splash screen polling `GET /-/wakeup-status`), and the controller exports `diverge_environment_estimated_hourly_cost_usd` alongside bundled Grafana dashboards and Prometheus rules.
+- **Full-Stack Reference Monorepo & Visual Assets (#303, #304)**: Added runnable 3-service reference monorepo (`examples/fullstack-demo` with `storefront-web`, `checkout-api`, `fulfillment-worker`, and `e2e-verify.sh`), architecture SVGs (`docs/assets/`), and VHS terminal tapes (`docs/demos/`).
+
+#### 🛡️ Security Hardening & Property-Based Testing (Hegel PBT)
+- **Security & Concurrency Hardening (#300, #301)**: Cross-namespace reverse tunnel isolation, URL fetcher DNS-rebinding/SSRF protection (`DialContext` IP pinning), hop-by-hop `Connection` header stripping protection in `diverge-proxy` and `activator-proxy`, durable schema-provider role passwords across restarts, and auto-provisioned `diverge-db-env-<env>` Secrets.
+- **Comprehensive Hegel PBT Suite (#301)**: Added property-based testing across `pkg/auth`, `pkg/topology`, `pkg/license`, `pkg/secrets`, `internal/git`, `internal/config`, `internal/controller`, `internal/proxy`, `internal/server`, `internal/webhook`, `internal/metrics`, and `api/v1alpha1`.
+
+---
+
 ## [v0.11.0] - 2026-09-11
 
 ### ⚠️ Critical Migration Notice: CRD API Group Transition to `divergedev.com`

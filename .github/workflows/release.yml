@@ -2,9 +2,11 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - 'v[0-9]*.[0-9]*.[0-9]*'
+      - '!*-*'
 jobs:
   release:
+    if: "!contains(github.ref_name, '-')"
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -41,6 +43,20 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+      - name: Update floating v1 GitHub Action tag and branch
+        if: "!contains(github.ref_name, '-')"
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Skipping v1 update for non-stable tag ${RELEASE_TAG}"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -fa v1 -m "Update v1 action tag to ${RELEASE_TAG}" "${GITHUB_SHA}"
+          git push origin refs/tags/v1 --force
+          git push origin "${GITHUB_SHA}:refs/heads/v1" --force
       - name: Extract tag
         id: tag
         run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
@@ -114,8 +130,13 @@ jobs:
             echo "NPM_TOKEN not set, skipping npm publish"
           fi
       - name: Build Python SDK (diverge-sdk)
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          cd pkg/sdk/python && pip install build && python -m build
+          VERSION="${RELEASE_TAG#v}"
+          cd pkg/sdk/python
+          sed -i.bak "s/^version = .*/version = \"${VERSION}\"/" pyproject.toml && rm -f pyproject.toml.bak
+          pip install build && python -m build
       - name: Upload SDK distributions to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

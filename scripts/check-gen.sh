@@ -42,9 +42,9 @@ echo "▸ Running buf generate..."
 buf generate
 
 echo "▸ Running controller-gen..."
-controller-gen object paths=./api/...
+go run sigs.k8s.io/controller-tools/cmd/controller-gen object paths=./api/...
 mkdir -p config/crd/bases
-controller-gen crd webhook rbac:roleName=manager-role paths="./..." output:crd:dir=config/crd/bases
+go run sigs.k8s.io/controller-tools/cmd/controller-gen crd webhook rbac:roleName=manager-role paths="./..." output:crd:dir=config/crd/bases
 
 # Check for modified or untracked files
 DIFF_OUTPUT=$(git diff -I 'protoc-gen-go v' -I 'controller-gen' --stat api/ gen/ config/crd/bases/ config/rbac/ config/webhook/ go.mod go.sum pkg/sdk/temporal/go.mod pkg/sdk/temporal/go.sum 2>/dev/null || true)
