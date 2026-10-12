@@ -61,7 +61,8 @@
                         "allow"
                       ]
                     }
-                  }
+                  },
+                  "additionalProperties": false
                 },
                 "schema": {
                   "description": "Local path to schema file (SQL or HCL) for declarative mode.",
@@ -70,7 +71,8 @@
                 "schema_config_map": {
                   "type": "string"
                 }
-              }
+              },
+              "additionalProperties": false
             },
             "connection_ref": {
               "type": "string"
@@ -90,7 +92,8 @@
             "seed_source": {
               "type": "string"
             }
-          }
+          },
+          "additionalProperties": false
         },
         "deploy": {
           "type": "object",
@@ -109,7 +112,8 @@
                 "create"
               ]
             }
-          }
+          },
+          "additionalProperties": false
         },
         "dev": {
           "description": "Local development conflict resolution settings (diverge dev).",
@@ -123,7 +127,8 @@
                 "allow"
               ]
             }
-          }
+          },
+          "additionalProperties": false
         },
         "features": {
           "description": "Feature flag overrides and remote configuration.",
@@ -149,7 +154,8 @@
                 "none"
               ]
             }
-          }
+          },
+          "additionalProperties": false
         },
         "lifecycle": {
           "type": "object",
@@ -160,7 +166,8 @@
             "ttl": {
               "type": "string"
             }
-          }
+          },
+          "additionalProperties": false
         },
         "routing": {
           "type": "object",
@@ -185,7 +192,8 @@
                 "text": {
                   "type": "string"
                 }
-              }
+              },
+              "additionalProperties": false
             },
             "baseline_namespace": {
               "type": "string"
@@ -204,9 +212,11 @@
                 "subdomain"
               ]
             }
-          }
+          },
+          "additionalProperties": false
         }
-      }
+      },
+      "additionalProperties": false
     },
     "environments": {
       "description": "Environment type overrides.",
@@ -269,7 +279,8 @@
                           "allow"
                         ]
                       }
-                    }
+                    },
+                    "additionalProperties": false
                   },
                   "schema": {
                     "description": "Local path to schema file (SQL or HCL) for declarative mode.",
@@ -278,7 +289,8 @@
                   "schema_config_map": {
                     "type": "string"
                   }
-                }
+                },
+                "additionalProperties": false
               },
               "connection_ref": {
                 "type": "string"
@@ -298,7 +310,8 @@
               "seed_source": {
                 "type": "string"
               }
-            }
+            },
+            "additionalProperties": false
           },
           "deploy": {
             "type": "object",
@@ -317,7 +330,8 @@
                   "create"
                 ]
               }
-            }
+            },
+            "additionalProperties": false
           },
           "dev": {
             "description": "Local development conflict resolution settings (diverge dev).",
@@ -331,7 +345,8 @@
                   "allow"
                 ]
               }
-            }
+            },
+            "additionalProperties": false
           },
           "features": {
             "description": "Feature flag overrides and remote configuration.",
@@ -357,7 +372,8 @@
                   "none"
                 ]
               }
-            }
+            },
+            "additionalProperties": false
           },
           "label": {
             "type": "string"
@@ -371,7 +387,8 @@
               "ttl": {
                 "type": "string"
               }
-            }
+            },
+            "additionalProperties": false
           },
           "routing": {
             "type": "object",
@@ -396,7 +413,8 @@
                   "text": {
                     "type": "string"
                   }
-                }
+                },
+                "additionalProperties": false
               },
               "baseline_namespace": {
                 "type": "string"
@@ -415,7 +433,8 @@
                   "subdomain"
                 ]
               }
-            }
+            },
+            "additionalProperties": false
           },
           "trigger": {
             "type": "string",
@@ -427,7 +446,8 @@
               "schedule"
             ]
           }
-        }
+        },
+        "additionalProperties": false
       }
     },
     "label_overrides": {
@@ -488,7 +508,8 @@
                           "allow"
                         ]
                       }
-                    }
+                    },
+                    "additionalProperties": false
                   },
                   "schema": {
                     "description": "Local path to schema file (SQL or HCL) for declarative mode.",
@@ -497,7 +518,8 @@
                   "schema_config_map": {
                     "type": "string"
                   }
-                }
+                },
+                "additionalProperties": false
               },
               "connection_ref": {
                 "type": "string"
@@ -517,7 +539,8 @@
               "seed_source": {
                 "type": "string"
               }
-            }
+            },
+            "additionalProperties": false
           },
           "deploy": {
             "type": "object",
@@ -536,7 +559,8 @@
                   "create"
                 ]
               }
-            }
+            },
+            "additionalProperties": false
           },
           "dev": {
             "description": "Local development conflict resolution settings (diverge dev).",
@@ -550,7 +574,8 @@
                   "allow"
                 ]
               }
-            }
+            },
+            "additionalProperties": false
           },
           "features": {
             "description": "Feature flag overrides and remote configuration.",
@@ -576,7 +601,8 @@
                   "none"
                 ]
               }
-            }
+            },
+            "additionalProperties": false
           },
           "lifecycle": {
             "type": "object",
@@ -587,7 +613,8 @@
               "ttl": {
                 "type": "string"
               }
-            }
+            },
+            "additionalProperties": false
           },
           "routing": {
             "type": "object",
@@ -612,7 +639,8 @@
                   "text": {
                     "type": "string"
                   }
-                }
+                },
+                "additionalProperties": false
               },
               "baseline_namespace": {
                 "type": "string"
@@ -631,12 +659,14 @@
                   "subdomain"
                 ]
               }
-            }
+            },
+            "additionalProperties": false
           },
           "skip": {
             "type": "boolean"
           }
-        }
+        },
+        "additionalProperties": false
       }
     },
     "notifications": {
@@ -659,7 +689,8 @@
             "github"
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "services": {
       "description": "Service discovery mapping service names to source paths.",
@@ -681,13 +712,6 @@
                     "type": "string"
                   }
                 },
-                "env_var_mapping": {
-                  "description": "Maps provisioned targets to environment variable names.",
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  }
-                },
                 "protocol": {
                   "description": "Async protocol type.",
                   "type": "string",
@@ -701,45 +725,7 @@
                   "type": "string"
                 }
               },
-              "required": [
-                "protocol",
-                "target"
-              ]
-            }
-          },
-          "async_routes": {
-            "description": "Async routing targets (Temporal task queues, Kafka topics) for event-driven services.",
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "envVarMapping": {
-                  "description": "Maps provisioned targets to environment variable names.",
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  }
-                },
-                "env_var_mapping": {
-                  "description": "Maps provisioned targets to environment variable names.",
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  }
-                },
-                "protocol": {
-                  "description": "Async protocol type.",
-                  "type": "string",
-                  "enum": [
-                    "temporal",
-                    "kafka"
-                  ]
-                },
-                "target": {
-                  "description": "Baseline resource name (e.g., Temporal task queue or Kafka topic).",
-                  "type": "string"
-                }
-              },
+              "additionalProperties": false,
               "required": [
                 "protocol",
                 "target"
@@ -747,13 +733,6 @@
             }
           },
           "dependsOn": {
-            "description": "Services that this service calls at runtime.",
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "depends_on": {
             "description": "Services that this service calls at runtime.",
             "type": "array",
             "items": {
@@ -776,7 +755,8 @@
                 "description": "Optional override values",
                 "type": "string"
               }
-            }
+            },
+            "additionalProperties": false
           },
           "image": {
             "description": "Container image template settings.",
@@ -790,6 +770,7 @@
                 "default": "mr-{{.MR}}"
               }
             },
+            "additionalProperties": false,
             "required": [
               "repository"
             ]
@@ -802,6 +783,7 @@
             }
           }
         },
+        "additionalProperties": false,
         "required": [
           "paths",
           "image"
@@ -822,31 +804,16 @@
             "caBundle": {
               "type": "string"
             },
-            "ca_bundle": {
-              "type": "string"
-            },
             "cacheTTL": {
-              "type": "string"
-            },
-            "cache_ttl": {
               "type": "string"
             },
             "insecureTLS": {
               "type": "boolean"
             },
-            "insecure_tls": {
-              "type": "boolean"
-            },
             "lookbackWindow": {
               "type": "string"
             },
-            "lookback_window": {
-              "type": "string"
-            },
             "meshType": {
-              "type": "string"
-            },
-            "mesh_type": {
               "type": "string"
             },
             "namespaces": {
@@ -858,24 +825,17 @@
             "pollInterval": {
               "type": "string"
             },
-            "poll_interval": {
-              "type": "string"
-            },
             "tokenEnv": {
               "type": "string"
             },
             "tokenFile": {
               "type": "string"
-            },
-            "token_env": {
-              "type": "string"
-            },
-            "token_file": {
-              "type": "string"
             }
-          }
+          },
+          "additionalProperties": false
         }
-      }
+      },
+      "additionalProperties": false
     },
     "version": {
       "description": "Configuration schema version.",
@@ -885,6 +845,7 @@
       ]
     }
   },
+  "additionalProperties": false,
   "required": [
     "version"
   ]

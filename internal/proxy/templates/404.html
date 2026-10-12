@@ -22,7 +22,7 @@ li:last-child { border-bottom: none; }
 	<h2>Active Environments</h2>
 	<ul>
 		{{range .ActiveEnvs}}
-		<li>{{.Name}} <small style="color: #666;">({{.Phase}})</small> <a href="/?_diverge_env={{.Name}}" style="margin-left: 0.5rem; font-size: 0.85rem;">[Switch via Cookie]</a></li>
+		<li>{{.Name}} <small style="color: #666;">({{.Phase}})</small> <a href="{{if $.PreviewDomain}}//{{$.PreviewDomain}}{{end}}/?_diverge_env={{.Name}}" style="margin-left: 0.5rem; font-size: 0.85rem;">[Switch via Cookie]</a></li>
 		{{end}}
 	</ul>
 	{{else}}

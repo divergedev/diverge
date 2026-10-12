@@ -90,7 +90,7 @@ When `diverge doctor` (or `diverge doctor --json`) inspects a namespace, preview
 | [`DIV-107`](#div-107-container-config-error) | `CRITICAL` | `Container/<name>` | Missing `ConfigMap` or `Secret` (`CreateContainerConfigError`) |
 | [`DIV-108`](#div-108-oomkilled) | `CRITICAL` / `WARNING` | `Container/<name>` | Container terminated due to Out Of Memory (`OOMKilled`) |
 | [`DIV-109`](#div-109-container-exit) | `CRITICAL` / `WARNING` | `Container/<name>` | Container terminated with non-zero exit code |
-| [`DIV-110`](#div-110-agenttask-budget-or-failure) | `CRITICAL` / `WARNING` | `AgentTask/<name>` | `AgentTask` failed or paused due to LLM budget/iteration limits |
+| [`DIV-110`](#div-110-agenttask-budget-or-failure) | `CRITICAL` / `WARNING` | `AgentTask/<name>` | `AgentTask` failed or paused due to LLM budget exceeded |
 
 ### DIV-101: Environment Failed
 
@@ -125,7 +125,7 @@ When `diverge doctor` (or `diverge doctor --json`) inspects a namespace, preview
   - Upstream infrastructure dependency (Gateway API controller, PostgreSQL instance, Flipt server, or Kafka/Temporal broker) is unreachable or misconfigured.
 - **Remediation**:
   ```bash
-  kubectl get environment <env-name> -o jsonpath='{.status.conditions}' | jq .
+  kubectl get environment <env-name> -o json | jq '.status.conditions'
   ```
   Inspect the `reason` and `message` fields on the failing condition and verify the corresponding provider configuration.
 
@@ -205,10 +205,10 @@ When `diverge doctor` (or `diverge doctor --json`) inspects a namespace, preview
 
 ### DIV-110: AgentTask Budget or Failure
 
-- **Trigger**: An `AgentTask` Custom Resource is in `status.phase: Failed` or `status.phase: Paused` (for example, `Reason: BudgetExceeded`, `MaxIterationsReached`, or `Suspended`).
+- **Trigger**: An `AgentTask` Custom Resource is in `status.phase: Failed`, or is in `status.phase: Paused` with an active `BudgetExceeded` condition (`status: "True"`) or a budget-exceeded status message.
 - **Common Causes**:
   - Live LLM metering (`POST /api/v1/agenttask/meter`) recorded `totalCostUSD` or `totalTokensUsed` exceeding `spec.budgetUSD`, `spec.budgetTokens`, or the Macaroon token's `max_cost_usd` / `max_tokens` caveats.
-  - The agent exceeded `spec.maxIterations` or the sandbox job exited with an error.
+  - The sandbox job exited with an error or exceeded `spec.maxIterations` (entering `Failed` phase).
 - **Remediation**:
   ```bash
   kubectl get agenttask <task-name> -o yaml

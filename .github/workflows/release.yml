@@ -97,10 +97,19 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          cd pkg/sdk/node && npm ci && npm run build && npm test && npm pack
+          VERSION="${RELEASE_TAG#v}"
+          cd pkg/sdk/node
+          npm version "${VERSION}" --no-git-tag-version --allow-same-version
+          PKG_VERSION="$(jq -r .version package.json)"
+          if [ "${PKG_VERSION}" != "${VERSION}" ]; then
+            echo "ERROR: pkg/sdk/node/package.json version (${PKG_VERSION}) does not match release tag (${VERSION})"
+            exit 1
+          fi
+          npm ci && npm run build && npm test && npm pack
           if [ -n "${NPM_TOKEN:-}" ]; then
-            cd pkg/sdk/node && npm publish --provenance --access public
+            npm publish --provenance --access public
           else
             echo "NPM_TOKEN not set, skipping npm publish"
           fi

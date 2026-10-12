@@ -133,5 +133,9 @@ kubectl port-forward -n diverge-system svc/diverge-server 8443:8443
 ## Step 4: Tear Down
 
 ```bash
-kind delete cluster --name diverge-local
+# If created with Kind:
+kind delete cluster --name diverge-dev
+
+# If created with k3d (or --provider auto when k3d is installed):
+k3d cluster delete diverge-dev
 ```

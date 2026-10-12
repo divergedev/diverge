@@ -141,6 +141,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		qEnv = r.URL.Query().Get("env")
 	}
 	if qEnv == "clear" || (r.URL.Path == "/-/select" && r.URL.Query().Get("clear") != "") {
+		if host != s.config.PreviewDomain {
+			http.Redirect(w, r, apexSelectionURL(r, s.config.PreviewDomain), http.StatusFound)
+			return
+		}
 		http.SetCookie(w, &http.Cookie{
 			Name:     PreviewCookieName,
 			Value:    "",
@@ -156,6 +160,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if qEnv != "" {
 		if !isValidPreviewEnvName(qEnv) {
 			http.Error(w, "Invalid preview environment name", http.StatusBadRequest)
+			return
+		}
+		if host != s.config.PreviewDomain {
+			http.Redirect(w, r, apexSelectionURL(r, s.config.PreviewDomain), http.StatusFound)
 			return
 		}
 		http.SetCookie(w, &http.Cookie{
@@ -191,7 +199,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, ErrEnvironmentNotFound) {
 			envs, _ := s.envLister.ListEnvironments(r.Context())
-			renderNotFound(w, envName, envs, s.config.HideEnvironmentList)
+			renderNotFound(w, envName, envs, s.config.HideEnvironmentList, apexHostWithPort(r.Host, s.config.PreviewDomain))
 			return
 		}
 		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
@@ -252,10 +260,38 @@ func isHTTPSRequest(r *http.Request) bool {
 	return r.URL != nil && strings.EqualFold(r.URL.Scheme, "https")
 }
 
+func apexHostWithPort(reqHost, previewDomain string) string {
+	if previewDomain == "" {
+		return ""
+	}
+	if strings.Contains(reqHost, ":") {
+		parts := strings.SplitN(reqHost, ":", 2)
+		if parts[1] != "" {
+			return previewDomain + ":" + parts[1]
+		}
+	}
+	return previewDomain
+}
+
+func apexSelectionURL(r *http.Request, previewDomain string) string {
+	scheme := "http"
+	if isHTTPSRequest(r) {
+		scheme = "https"
+	}
+	escapedPath := r.URL.EscapedPath()
+	if r.URL.Path == "" || strings.HasPrefix(r.URL.Path, "//") || escapedPath == "" || strings.HasPrefix(escapedPath, "//") {
+		escapedPath = "/"
+	}
+	if r.URL.RawQuery != "" {
+		return scheme + "://" + apexHostWithPort(r.Host, previewDomain) + escapedPath + "?" + r.URL.RawQuery
+	}
+	return scheme + "://" + apexHostWithPort(r.Host, previewDomain) + escapedPath
+}
+
 func cleanRedirectTarget(r *http.Request) string {
-	path := r.URL.Path
-	if path == "" || path == "/-/select" || strings.HasPrefix(path, "//") {
-		path = "/"
+	escapedPath := r.URL.EscapedPath()
+	if r.URL.Path == "" || r.URL.Path == "/-/select" || strings.HasPrefix(r.URL.Path, "//") || escapedPath == "" || strings.HasPrefix(escapedPath, "//") {
+		escapedPath = "/"
 	}
 	q := r.URL.Query()
 	q.Del(PreviewQueryParam)
@@ -265,7 +301,7 @@ func cleanRedirectTarget(r *http.Request) string {
 	}
 	encoded := q.Encode()
 	if encoded != "" {
-		return path + "?" + encoded
+		return escapedPath + "?" + encoded
 	}
-	return path
+	return escapedPath
 }

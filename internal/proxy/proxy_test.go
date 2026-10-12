@@ -383,3 +383,51 @@ func TestProxyInvalidPreviewEnvAndSuffixSpoofing(t *testing.T) {
 	assert.Equal(t, http.StatusOK, wHdr.Code)
 	assert.Equal(t, "pr-42", wHdr.Header().Get(ResponseHeaderEnvironment))
 }
+
+func TestProxySubdomainSelectionRedirectsToApexAndPreservesEscapedPath(t *testing.T) {
+	lister := &mockEnvironmentLister{
+		envs: map[string]*EnvironmentInfo{
+			"pr-42": {
+				Name:  "pr-42",
+				Phase: string(v1alpha1.PhaseRunning),
+			},
+		},
+	}
+	server, _ := setupTestServer(t, lister)
+
+	// 1. Selecting an env from a subdomain redirects to the apex endpoint first before setting the cookie
+	reqSub := httptest.NewRequest(http.MethodGet, "http://old-env.preview.example.com:8080/documents/a%3Fb?_diverge_env=pr-42&foo=1", nil)
+	wSub := httptest.NewRecorder()
+	server.ServeHTTP(wSub, reqSub)
+
+	assert.Equal(t, http.StatusFound, wSub.Code)
+	assert.Empty(t, wSub.Result().Cookies(), "subdomain redirect should not set host-only cookie on subdomain")
+	assert.Equal(t, "http://preview.example.com:8080/documents/a%3Fb?_diverge_env=pr-42&foo=1", wSub.Header().Get("Location"))
+
+	// 2. Following the redirect on the apex host sets the cookie and preserves %3F in the destination path
+	reqApex := httptest.NewRequest(http.MethodGet, wSub.Header().Get("Location"), nil)
+	wApex := httptest.NewRecorder()
+	server.ServeHTTP(wApex, reqApex)
+
+	assert.Equal(t, http.StatusFound, wApex.Code)
+	assert.Equal(t, "/documents/a%3Fb?foo=1", wApex.Header().Get("Location"))
+	require.Len(t, wApex.Result().Cookies(), 1)
+	assert.Equal(t, "pr-42", wApex.Result().Cookies()[0].Value)
+
+	// 3. Clearing from a subdomain also redirects to the apex endpoint first
+	reqClearSub := httptest.NewRequest(http.MethodGet, "https://old-env.preview.example.com/?_diverge_env=clear", nil)
+	wClearSub := httptest.NewRecorder()
+	server.ServeHTTP(wClearSub, reqClearSub)
+
+	assert.Equal(t, http.StatusFound, wClearSub.Code)
+	assert.Empty(t, wClearSub.Result().Cookies())
+	assert.Equal(t, "https://preview.example.com/?_diverge_env=clear", wClearSub.Header().Get("Location"))
+
+	// 4. 404 page on a missing subdomain renders the Switch via Cookie link against the apex host
+	req404 := httptest.NewRequest(http.MethodGet, "http://missing.preview.example.com:8080/", nil)
+	w404 := httptest.NewRecorder()
+	server.ServeHTTP(w404, req404)
+
+	assert.Equal(t, http.StatusNotFound, w404.Code)
+	assert.Contains(t, w404.Body.String(), `href="//preview.example.com:8080/?_diverge_env=pr-42"`)
+}

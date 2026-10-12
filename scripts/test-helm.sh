@@ -72,7 +72,7 @@ echo '=== Helm template (Grafana dashboards & Prometheus alerts) ==='
 observability_output=$(helm template diverge charts/diverge/ \
   --set grafana.dashboards.enabled=true \
   --set prometheus.alerts.enabled=true)
-prometheus_rule_count=$(echo "$observability_output" | grep -c '^kind: PrometheusRule$')
+prometheus_rule_count=$(echo "$observability_output" | grep -c '^kind: PrometheusRule$' || true)
 if [ "$prometheus_rule_count" -ne 1 ]; then
   echo "FAIL: Expected exactly 1 PrometheusRule resource, found $prometheus_rule_count"
   exit 1

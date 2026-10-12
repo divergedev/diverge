@@ -68,41 +68,42 @@ flowchart LR
 
 ## Preview Environment Cost & Savings Model
 
-Diverge's controller exposes a built-in Prometheus gauge (`diverge_environment_estimated_hourly_cost_usd`) using the default on-demand Kubernetes compute rate card:
+Diverge's controller exposes a built-in Prometheus gauge (`diverge_environment_estimated_hourly_cost_usd`) using the default on-demand Kubernetes rate card in `internal/metrics/cost.go`:
 
-- **vCPU Rate**: `$0.031611 / vCPU-hr`
-- **Memory Rate**: `$0.004237 / GiB-hr`
-- **Per-Replica Hourly Rate (`0.5 vCPU + 1 GiB RAM`)**:
+- **vCPU Rate**: `$0.04 / vCPU-hr`
+- **Memory Rate**: `$0.004 / GiB-hr`
+- **Database Schema Rate**: `$0.01 / schema-hr` (added when `spec.database.mode` is enabled and not `none`)
+- **Per-Replica Service Compute Rate (`0.25 vCPU + 0.5 GiB RAM`)**:
   ```text
-  hourlyRate = (0.5 * $0.031611) + (1.0 * $0.004237) = $0.0200425 / pod-hr ($14.631 / pod-month at 730h/mo)
+  hourlyServiceRate = (0.25 * $0.04) + (0.5 * $0.004) = $0.012 / service-hr ($8.76 / service-month at 730h/mo)
   ```
 
-### Worked Cost Formulas (Default Baseline: 25 Services, 30 Open PRs, 2 Modified Services/PR, 4 Active Hours/Day)
+### Worked Compute Cost Formulas (Default Baseline: 25 Services, 30 Open PRs, 2 Modified Services/PR, 4 Active Hours/Day)
 
-1. **Full Namespace Clone Monthly Cost**:
+1. **Full Namespace Clone Monthly Compute Cost**:
    ```text
-   services * openPRs * 730h * hourlyRate
-   = 25 * 30 * 730 * $0.0200425 = $10,973.27 / month (750 always-on pods)
+   services * openPRs * 730h * hourlyServiceRate
+   = 25 * 30 * 730 * $0.012 = $6,570.00 / month (750 always-on pods)
    ```
-2. **Diverge Delta Deploy Monthly Cost (Always-On)**:
+2. **Diverge Delta Deploy Monthly Compute Cost (Always-On)**:
    ```text
-   modifiedServices * openPRs * 730h * hourlyRate
-   = 2 * 30 * 730 * $0.0200425 = $877.86 / month (60 delta pods — 92.0% reduction)
+   modifiedServices * openPRs * 730h * hourlyServiceRate
+   = 2 * 30 * 730 * $0.012 = $525.60 / month (60 delta pods — 92.0% reduction)
    ```
-3. **Diverge Delta + Scale-to-Zero Monthly Cost (`4h/day` active, `20h/day` hibernated)**:
+3. **Diverge Delta + Scale-to-Zero Monthly Compute Cost (`4h/day` active, `20h/day` hibernated)**:
    ```text
-   modifiedServices * openPRs * (activeHours / 24) * 730h * hourlyRate
-   = 2 * 30 * (4 / 24) * 730 * $0.0200425 = $146.31 / month (10.0 active pod-equivalents)
+   modifiedServices * openPRs * (activeHours / 24) * 730h * hourlyServiceRate
+   = 2 * 30 * (4 / 24) * 730 * $0.012 = $87.60 / month (10.0 active pod-equivalents)
    ```
 4. **Net Cloud Compute Savings**:
-   - **Monthly Savings**: `$10,973.27 - $146.31 = $10,826.96 / month` (**`98.7%` saved**)
-   - **Annual Savings**: `$10,826.96 * 12 = $129,923.50 / year`
+   - **Monthly Savings**: `$6,570.00 - $87.60 = $6,482.40 / month` (**`98.7%` saved**)
+   - **Annual Savings**: `$6,482.40 * 12 = $77,788.80 / year`
 
 ### Multi-Team Sizing Reference
 
 | Team Profile | Baseline Services | Open PRs | Modified / PR | Active Hrs / Day | Full Clone / mo | Diverge Delta / mo | Diverge Delta + Scale-to-Zero / mo | **Annual Savings** |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Seed / Small Team** | `10` | `10` | `2` | `4h` | `$1,463` | `$293` | **`$49`** | **`$16,972 / yr` (96.7%)** |
-| **Growth Engineering** | `25` | `30` | `2` | `4h` | `$10,973` | `$878` | **`$146`** | **`$129,924 / yr` (98.7%)** |
-| **Scale-Up Platform** | `50` | `75` | `2` | `4h` | `$54,866` | `$2,195` | **`$366`** | **`$654,007 / yr` (99.3%)** |
-| **Enterprise + AI Agents** | `100` | `150` | `3` | `4h` | `$219,465` | `$6,584` | **`$1,097`** | **`$2,620,416 / yr` (99.5%)** |
+| **Seed / Small Team** | `10` | `10` | `2` | `4h` | `$876` | `$175` | **`$29`** | **`$10,162 / yr` (96.7%)** |
+| **Growth Engineering** | `25` | `30` | `2` | `4h` | `$6,570` | `$526` | **`$88`** | **`$77,789 / yr` (98.7%)** |
+| **Scale-Up Platform** | `50` | `75` | `2` | `4h` | `$32,850` | `$1,314` | **`$219`** | **`$391,572 / yr` (99.3%)** |
+| **Enterprise + AI Agents** | `100` | `150` | `3` | `4h` | `$131,400` | `$3,942` | **`$657`** | **`$1,568,916 / yr` (99.5%)** |

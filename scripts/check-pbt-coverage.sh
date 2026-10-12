@@ -29,6 +29,9 @@ REQUIRED_PBT_FILES=(
   "pkg/secrets/property_test.go"
   "internal/git/property_test.go"
   "internal/config/property_test.go"
+  "internal/proxy/property_test.go"
+  "pkg/doctor/diagnostics_test.go"
+  "internal/cli/init_test.go"
 )
 
 for pbt_file in "${REQUIRED_PBT_FILES[@]}"; do

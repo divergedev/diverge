@@ -3,10 +3,12 @@ package doctor
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"hegel.dev/go/hegel"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -414,7 +416,8 @@ func TestDoctor_ContainerNonZeroExitAndAgentTasks(t *testing.T) {
 
 type errorClient struct {
 	client.Client
-	err error
+	err          error
+	agentTaskErr error
 }
 
 func (e *errorClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
@@ -422,6 +425,9 @@ func (e *errorClient) Get(ctx context.Context, key client.ObjectKey, obj client.
 }
 
 func (e *errorClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if _, ok := list.(*divergeiov1alpha1.AgentTaskList); ok && e.agentTaskErr != nil {
+		return e.agentTaskErr
+	}
 	return e.err
 }
 
@@ -435,4 +441,178 @@ func TestDoctor_APIErrors(t *testing.T) {
 	_, err = diagnoserListErr.Diagnose(context.Background(), "default", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to list pods")
+
+	diagnoserAgentTaskListErr := NewDiagnoser(&errorClient{agentTaskErr: assert.AnError})
+	_, err = diagnoserAgentTaskListErr.Diagnose(context.Background(), "default", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to list agent tasks")
+}
+
+func TestDoctor_AgentTaskLinkedEnvironmentAndInactiveBudgetCondition(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, divergeiov1alpha1.AddToScheme(scheme))
+
+	linkedFailedTask := &divergeiov1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "fix-login",
+			Namespace: "default",
+			Annotations: map[string]string{
+				"divergedev.com/preview-environment": "agent-preview-fix-login",
+			},
+		},
+		Status: divergeiov1alpha1.AgentTaskStatus{
+			Phase:   divergeiov1alpha1.AgentTaskPhaseFailed,
+			Message: "sandbox failed",
+		},
+	}
+
+	unlinkedFailedTask := &divergeiov1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "other-task",
+			Namespace: "default",
+			Annotations: map[string]string{
+				"divergedev.com/preview-environment": "agent-preview-other-task",
+			},
+		},
+		Status: divergeiov1alpha1.AgentTaskStatus{
+			Phase:   divergeiov1alpha1.AgentTaskPhaseFailed,
+			Message: "other task failed",
+		},
+	}
+
+	pausedInactiveBudgetTask := &divergeiov1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "paused-manual",
+			Namespace: "default",
+			Annotations: map[string]string{
+				"divergedev.com/preview-environment": "agent-preview-fix-login",
+			},
+		},
+		Status: divergeiov1alpha1.AgentTaskStatus{
+			Phase:   divergeiov1alpha1.AgentTaskPhasePaused,
+			Message: "Suspended by user",
+			Conditions: []metav1.Condition{
+				{
+					Type:    "BudgetExceeded",
+					Status:  metav1.ConditionFalse,
+					Reason:  "WithinBudget",
+					Message: "Spend is within budget",
+				},
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(linkedFailedTask, unlinkedFailedTask, pausedInactiveBudgetTask).
+		Build()
+
+	diagnoser := NewDiagnoser(c)
+	report, err := diagnoser.Diagnose(context.Background(), "default", "agent-preview-fix-login")
+	require.NoError(t, err)
+	assert.False(t, report.Healthy)
+	require.Len(t, report.Issues, 1, "only linkedFailedTask should produce an issue; pausedInactiveBudgetTask has Status=False")
+	assert.Equal(t, "AgentTask/fix-login", report.Issues[0].Component)
+	assert.Equal(t, CodeAgentTaskFailure, report.Issues[0].Code)
+}
+
+func TestDoctor_DiagnoseInvariants_PBT(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, divergeiov1alpha1.AddToScheme(scheme))
+
+	hegel.Test(t, func(ht *hegel.T) {
+		envPhase := hegel.Draw(ht, hegel.SampledFrom([]string{"Running", "Pending", "Failed", "Error"}))
+		migStatus := hegel.Draw(ht, hegel.SampledFrom([]string{"", "Succeeded", "Failed"}))
+		waitingReason := hegel.Draw(ht, hegel.SampledFrom([]string{"", "CrashLoopBackOff", "ImagePullBackOff", "CreateContainerConfigError"}))
+		exitCode := hegel.Draw(ht, hegel.SampledFrom([]int32{0, 1, 137}))
+		taskPhase := hegel.Draw(ht, hegel.SampledFrom([]divergeiov1alpha1.AgentTaskPhase{
+			divergeiov1alpha1.AgentTaskPhaseActive,
+			divergeiov1alpha1.AgentTaskPhaseFailed,
+			divergeiov1alpha1.AgentTaskPhasePaused,
+		}))
+		budgetExceededTrue := hegel.Draw(ht, hegel.Booleans())
+
+		env := &divergeiov1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "pr-pbt",
+				Namespace: "default",
+			},
+			Status: divergeiov1alpha1.EnvironmentStatus{
+				Phase:           divergeiov1alpha1.EnvironmentPhase(envPhase),
+				MigrationStatus: migStatus,
+			},
+		}
+
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "pod-pbt",
+				Namespace: "default",
+				Labels: map[string]string{
+					"diverge.io/environment": "pr-pbt",
+				},
+			},
+		}
+		var cs corev1.ContainerStatus
+		cs.Name = "app"
+		if waitingReason != "" {
+			cs.State.Waiting = &corev1.ContainerStateWaiting{
+				Reason:  waitingReason,
+				Message: "simulated waiting state",
+			}
+		} else if exitCode != 0 {
+			reason := "Error"
+			if exitCode == 137 {
+				reason = "OOMKilled"
+			}
+			cs.State.Terminated = &corev1.ContainerStateTerminated{
+				ExitCode: exitCode,
+				Reason:   reason,
+				Message:  "simulated exit",
+			}
+		}
+		pod.Status.ContainerStatuses = []corev1.ContainerStatus{cs}
+
+		condStatus := metav1.ConditionFalse
+		if budgetExceededTrue {
+			condStatus = metav1.ConditionTrue
+		}
+		task := &divergeiov1alpha1.AgentTask{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "task-pbt",
+				Namespace: "default",
+				Annotations: map[string]string{
+					"divergedev.com/preview-environment": "pr-pbt",
+				},
+			},
+			Status: divergeiov1alpha1.AgentTaskStatus{
+				Phase: taskPhase,
+				Conditions: []metav1.Condition{
+					{
+						Type:   "BudgetExceeded",
+						Status: condStatus,
+						Reason: "BudgetCheck",
+					},
+				},
+			},
+		}
+
+		c := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(env, pod, task).
+			Build()
+
+		report, err := NewDiagnoser(c).Diagnose(context.Background(), "default", "pr-pbt")
+		require.NoError(ht, err)
+		require.Equal(ht, len(report.Issues) == 0, report.Healthy)
+
+		for _, iss := range report.Issues {
+			require.True(ht, strings.HasPrefix(iss.Code, "DIV-1"), "unexpected code %q", iss.Code)
+			require.NotEmpty(ht, iss.Component)
+			require.NotEmpty(ht, iss.Summary)
+			require.NotEmpty(ht, iss.Remediation)
+			require.True(ht, strings.HasPrefix(iss.DocsURL, DocsBaseURL+"#div-1"), "unexpected DocsURL %q", iss.DocsURL)
+		}
+	})
 }

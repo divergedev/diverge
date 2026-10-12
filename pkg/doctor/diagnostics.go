@@ -7,7 +7,9 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
@@ -111,9 +113,13 @@ func (d *Diagnoser) Diagnose(ctx context.Context, namespace, envName string) (*R
 
 		// 3. Inspect AgentTasks in the namespace (if registered in scheme)
 		var taskList divergeiov1alpha1.AgentTaskList
-		if err := d.client.List(ctx, &taskList, client.InNamespace(namespace)); err == nil {
+		if err := d.client.List(ctx, &taskList, client.InNamespace(namespace)); err != nil {
+			if !meta.IsNoMatchError(err) && !runtime.IsNotRegisteredError(err) {
+				return nil, fmt.Errorf("failed to list agent tasks in namespace %s: %w", namespace, err)
+			}
+		} else {
 			for i := range taskList.Items {
-				if envName != "" && taskList.Items[i].Name != envName {
+				if envName != "" && taskList.Items[i].Annotations["divergedev.com/preview-environment"] != envName {
 					continue
 				}
 				d.checkAgentTask(&taskList.Items[i], report)
@@ -320,7 +326,7 @@ func (d *Diagnoser) checkAgentTask(task *divergeiov1alpha1.AgentTask, report *Re
 		budgetExceeded := strings.Contains(strings.ToLower(task.Status.Message), "budget")
 		details := task.Status.Message
 		for _, cond := range task.Status.Conditions {
-			if cond.Type == "BudgetExceeded" || cond.Reason == "BudgetExceeded" {
+			if (cond.Type == "BudgetExceeded" || cond.Reason == "BudgetExceeded") && cond.Status == metav1.ConditionTrue {
 				budgetExceeded = true
 				if cond.Message != "" {
 					details = cond.Message

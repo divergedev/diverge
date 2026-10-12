@@ -19,14 +19,13 @@ type jsonSchemaNode struct {
 	Default              any                        `json:"default,omitempty"`
 	Pattern              string                     `json:"pattern,omitempty"`
 	Properties           map[string]*jsonSchemaNode `json:"properties,omitempty"`
-	AdditionalProperties *jsonSchemaNode            `json:"additionalProperties,omitempty"`
+	AdditionalProperties any                        `json:"additionalProperties,omitempty"`
 	Items                *jsonSchemaNode            `json:"items,omitempty"`
 	Required             []string                   `json:"required,omitempty"`
 }
 
 type fieldConstraint struct {
 	canonicalYAMLName string
-	includeSnakeAlias bool
 	description       string
 	enum              []string
 	defaultVal        any
@@ -87,12 +86,10 @@ var fieldConstraints = map[string]fieldConstraint{
 	},
 	"diverge.v1alpha1.ConfigService.async_routes": {
 		canonicalYAMLName: "asyncRoutes",
-		includeSnakeAlias: true,
 		description:       "Async routing targets (Temporal task queues, Kafka topics) for event-driven services.",
 	},
 	"diverge.v1alpha1.ConfigService.depends_on": {
 		canonicalYAMLName: "dependsOn",
-		includeSnakeAlias: true,
 		description:       "Services that this service calls at runtime.",
 	},
 	"diverge.v1alpha1.ConfigService.entrypoint": {
@@ -107,7 +104,6 @@ var fieldConstraints = map[string]fieldConstraint{
 	},
 	"diverge.v1alpha1.AsyncRouteSpec.env_var_mapping": {
 		canonicalYAMLName: "envVarMapping",
-		includeSnakeAlias: true,
 		description:       "Maps provisioned targets to environment variable names.",
 	},
 	"diverge.v1alpha1.ConfigImage.tag_template": {
@@ -172,35 +168,27 @@ var fieldConstraints = map[string]fieldConstraint{
 	},
 	"diverge.v1alpha1.ConfigPrometheus.token_env": {
 		canonicalYAMLName: "tokenEnv",
-		includeSnakeAlias: true,
 	},
 	"diverge.v1alpha1.ConfigPrometheus.token_file": {
 		canonicalYAMLName: "tokenFile",
-		includeSnakeAlias: true,
 	},
 	"diverge.v1alpha1.ConfigPrometheus.ca_bundle": {
 		canonicalYAMLName: "caBundle",
-		includeSnakeAlias: true,
 	},
 	"diverge.v1alpha1.ConfigPrometheus.insecure_tls": {
 		canonicalYAMLName: "insecureTLS",
-		includeSnakeAlias: true,
 	},
 	"diverge.v1alpha1.ConfigPrometheus.poll_interval": {
 		canonicalYAMLName: "pollInterval",
-		includeSnakeAlias: true,
 	},
 	"diverge.v1alpha1.ConfigPrometheus.cache_ttl": {
 		canonicalYAMLName: "cacheTTL",
-		includeSnakeAlias: true,
 	},
 	"diverge.v1alpha1.ConfigPrometheus.mesh_type": {
 		canonicalYAMLName: "meshType",
-		includeSnakeAlias: true,
 	},
 	"diverge.v1alpha1.ConfigPrometheus.lookback_window": {
 		canonicalYAMLName: "lookbackWindow",
-		includeSnakeAlias: true,
 	},
 }
 
@@ -227,10 +215,11 @@ func GenerateJSONSchema() ([]byte, error) {
 func schemaForMessage(md protoreflect.MessageDescriptor) *jsonSchemaNode {
 	fullName := string(md.FullName())
 	node := &jsonSchemaNode{
-		Type:        "object",
-		Description: messageDescriptions[fullName],
-		Properties:  make(map[string]*jsonSchemaNode, md.Fields().Len()),
-		Required:    messageRequiredFields[fullName],
+		Type:                 "object",
+		Description:          messageDescriptions[fullName],
+		Properties:           make(map[string]*jsonSchemaNode, md.Fields().Len()),
+		Required:             messageRequiredFields[fullName],
+		AdditionalProperties: false,
 	}
 
 	fields := md.Fields()
@@ -243,9 +232,6 @@ func schemaForMessage(md protoreflect.MessageDescriptor) *jsonSchemaNode {
 			propName = constraint.canonicalYAMLName
 		}
 		node.Properties[propName] = fieldSchema
-		if hasConstraint && constraint.includeSnakeAlias && propName != string(fd.TextName()) {
-			node.Properties[string(fd.TextName())] = fieldSchema
-		}
 	}
 
 	return node

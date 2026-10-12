@@ -143,9 +143,9 @@ Initialize a `.diverge.yaml` repository configuration file or bootstrap a comple
 
 **Flags:**
 - `-c, --config` — Generate a starter `.diverge.yaml` configuration file in the current directory and exit (without creating a cluster)
-- `--provider` — Cluster provider to bootstrap: `auto` (default: detects existing context, `k3d`, or `kind`), `kind`, `k3d`, or `existing` (installs Diverge into your active `kubectl` context)
+- `--provider` — Cluster provider to bootstrap: `auto` (default: selects `k3d` when available, then `kind`, and otherwise defaults to `k3d`), `kind`, `k3d`, or `existing` (installs Diverge into your active or `--context` `kubectl` cluster)
 - `--cluster-name` — Local Kind or k3d cluster name (default: `diverge-dev`)
-- `--install-gateway` — Install Envoy Gateway and Gateway API CRDs (default: `true`)
+- `--install-gateway` — Install Envoy Gateway (default: `true`; setting `--install-gateway=false` skips the Envoy Gateway Helm chart installation while still applying Gateway API CRDs)
 - `--install-keda` — Install KEDA and KEDA HTTP Add-on for scale-to-zero (default: `false`)
 - `--install-sample-app` — Deploy the `echo-server` baseline sample deployment (default: `true`)
 - `--dry-run` — Print the bootstrap commands without executing them
