@@ -2,9 +2,11 @@ name: Release
 on:
   push:
     tags:
-      - 'v*.*.*'
+      - 'v[0-9]*.[0-9]*.[0-9]*'
+      - '!*-*'
 jobs:
   release:
+    if: "!contains(github.ref_name, '-')"
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -42,9 +44,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
       - name: Update floating v1 GitHub Action tag and branch
+        if: "!contains(github.ref_name, '-')"
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Skipping v1 update for non-stable tag ${RELEASE_TAG}"
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -fa v1 -m "Update v1 action tag to ${RELEASE_TAG}" "${GITHUB_SHA}"
