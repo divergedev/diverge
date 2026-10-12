@@ -68,4 +68,19 @@ if ! echo "$multi_routing" | grep -q -- '--routing-provider=gateway,istio'; then
   exit 1
 fi
 
+echo '=== Helm template (Grafana dashboards & Prometheus alerts) ==='
+observability_output=$(helm template diverge charts/diverge/ \
+  --set grafana.dashboards.enabled=true \
+  --set prometheus.alerts.enabled=true)
+prometheus_rule_count=$(echo "$observability_output" | grep -c '^kind: PrometheusRule$')
+if [ "$prometheus_rule_count" -ne 1 ]; then
+  echo "FAIL: Expected exactly 1 PrometheusRule resource, found $prometheus_rule_count"
+  exit 1
+fi
+python3 -m json.tool charts/diverge/dashboards/diverge-overview.json > /dev/null
+if grep -qE '(\[5m\{|\[1h\{|sum\{)' charts/diverge/dashboards/diverge-overview.json; then
+  echo 'FAIL: Malformed PromQL selector detected in diverge-overview.json'
+  exit 1
+fi
+
 echo '✅ All Helm tests passed'

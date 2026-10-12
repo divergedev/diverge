@@ -17,9 +17,10 @@ func newTaskStatusCmd(app *App) *cobra.Command {
 	var output string
 
 	cmd := &cobra.Command{
-		Use:   "status <name>",
-		Short: "Display live status and progress of an AgentTask",
-		Args:  cobra.ExactArgs(1),
+		Use:               "status <name>",
+		Short:             "Display live status and progress of an AgentTask",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeAgentTaskNames(app),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runTaskStatus(cmd.Context(), app, args[0], output)
 		},

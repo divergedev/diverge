@@ -98,7 +98,7 @@ func NewRootCmd(app *App) *cobra.Command {
 func cmdRequiresKube(cmd *cobra.Command) bool {
 	for c := cmd; c != nil; c = c.Parent() {
 		switch c.Name() {
-		case "loadtest", "test", "version", "diff":
+		case "loadtest", "test", "version", "diff", "completion", "init", "validate":
 			return false
 		}
 	}
@@ -106,6 +106,7 @@ func cmdRequiresKube(cmd *cobra.Command) bool {
 }
 
 func addCommands(root *cobra.Command, app *App) {
+	root.AddCommand(newCompletionCmd(app))
 	root.AddCommand(newCreateCmd(app))
 	root.AddCommand(newDeleteCmd(app))
 	root.AddCommand(newDevCmd(app))

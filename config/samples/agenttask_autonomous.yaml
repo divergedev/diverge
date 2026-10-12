@@ -1,0 +1,26 @@
+apiVersion: divergedev.com/v1alpha1
+kind: AgentTask
+metadata:
+  name: fix-payment-retry-idempotency
+  namespace: default
+  annotations:
+    divergedev.com/preview-enabled: "true"
+    divergedev.com/preview-service: "payments-api"
+spec:
+  objective: "Fix duplicate charge bug when payment webhook retries occur concurrently and add regression tests"
+  repository:
+    url: "https://github.com/example-org/payments-service.git"
+    baseBranch: "main"
+    workingBranch: "agent/fix-payment-retry-idempotency"
+  sandbox:
+    provider: "agent-sandbox"
+    poolRef: "gvisor-warm-pool"
+    templateRef: "isolated-go-sandbox"
+    timeoutSeconds: 3600
+  budgetUSD: "5.00"
+  budgetTokens: 500000
+  maxIterations: 5
+  capabilities:
+    - "claude-3-7-sonnet"
+    - "gpt-4o"
+  draftPR: true

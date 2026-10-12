@@ -14,10 +14,10 @@ import (
 
 func newOpenCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
-
-		Use:   "open <name>",
-		Short: "Open the environment URL in the browser",
-		Args:  cobra.ExactArgs(1),
+		Use:               "open <name>",
+		Short:             "Open the environment URL in the browser",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeEnvironmentNames(app),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, _, err := app.KubeClient()
 			if err != nil {

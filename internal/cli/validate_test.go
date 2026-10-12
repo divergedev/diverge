@@ -196,3 +196,24 @@ services:
 	require.True(t, ok)
 	assert.Empty(t, errorsSlice)
 }
+
+func TestValidatePrintSchema(t *testing.T) {
+	dir := t.TempDir()
+	origDir, _ := os.Getwd()
+	require.NoError(t, os.Chdir(dir))
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
+
+	app := &App{}
+	cmd := newValidateCmd(app)
+	cmd.SetArgs([]string{"--print-schema"})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+
+	err := cmd.Execute()
+	require.NoError(t, err, "--print-schema should succeed even when .diverge.yaml does not exist")
+
+	var schema map[string]interface{}
+	require.NoError(t, json.Unmarshal(out.Bytes(), &schema))
+	assert.Equal(t, "http://json-schema.org/draft-07/schema#", schema["$schema"])
+	assert.Equal(t, "Diverge Config", schema["title"])
+}

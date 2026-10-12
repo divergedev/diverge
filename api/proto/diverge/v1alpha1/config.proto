@@ -1,0 +1,170 @@
+syntax = "proto3";
+
+package diverge.v1alpha1;
+
+import "diverge/v1alpha1/environment.proto";
+
+option go_package = "github.com/divergedev/diverge/api/gen/diverge/v1alpha1;divergev1alpha1";
+
+// DivergeConfig represents the repository-level .diverge.yaml configuration.
+message DivergeConfig {
+  string version = 1;
+  map<string, ConfigService> services = 2;
+  ConfigEnvironmentSettings defaults = 3;
+  map<string, ConfigEnvironmentType> environments = 4;
+  map<string, ConfigLabelOverride> label_overrides = 5;
+  ConfigNotifications notifications = 6;
+  ConfigTopology topology = 7;
+}
+
+// ConfigService defines service discovery and build/chart configuration.
+message ConfigService {
+  repeated string paths = 1;
+  ConfigImage image = 2;
+  ConfigHelm helm = 3;
+  repeated AsyncRouteSpec async_routes = 4;
+  repeated string depends_on = 5;
+  bool entrypoint = 6;
+}
+
+// ConfigImage defines container image repository and tag template settings.
+message ConfigImage {
+  string repository = 1;
+  string tag_template = 2;
+}
+
+// ConfigHelm defines Helm chart location and values file.
+message ConfigHelm {
+  string path = 1;
+  string values_file = 2;
+}
+
+// ConfigEnvironmentSettings defines shared environment settings used in defaults, environments, and label overrides.
+message ConfigEnvironmentSettings {
+  ConfigDeploySettings deploy = 1;
+  ConfigRoutingSettings routing = 2;
+  ConfigDatabaseSettings database = 3;
+  ConfigLifecycleSettings lifecycle = 4;
+  ConfigFeatureSettings features = 5;
+  ConfigDevSettings dev = 6;
+}
+
+// ConfigDeploySettings defines deployment mode and namespace strategy.
+message ConfigDeploySettings {
+  string mode = 1;
+  string namespace = 2;
+}
+
+// ConfigRoutingSettings defines traffic routing strategy for preview environments.
+message ConfigRoutingSettings {
+  string mode = 1;
+  string baseline_namespace = 2;
+  string header_key = 3;
+  string domain = 4;
+  ConfigBannerSettings banner = 5;
+}
+
+// ConfigBannerSettings configures the visual preview environment banner.
+message ConfigBannerSettings {
+  optional bool enabled = 1;
+  string text = 2;
+  string position = 3;
+  string color = 4;
+}
+
+// ConfigDatabaseSettings defines database isolation and migration settings.
+message ConfigDatabaseSettings {
+  string mode = 1;
+  string connection_ref = 2;
+  string seed_source = 3;
+  string migration_command = 4;
+  ConfigAtlasSettings atlas = 5;
+}
+
+// ConfigAtlasSettings configures Atlas schema management and migrations.
+message ConfigAtlasSettings {
+  string mode = 1;
+  string engine = 2;
+  string image = 3;
+  string dir = 4;
+  string schema = 5;
+  string migration_config_map = 6;
+  string schema_config_map = 7;
+  optional bool blocking = 8;
+  ConfigAtlasPolicySettings policy = 9;
+  repeated string extra_args = 10;
+}
+
+// ConfigAtlasPolicySettings configures Atlas safety policies.
+message ConfigAtlasPolicySettings {
+  string destructive = 1;
+}
+
+// ConfigLifecycleSettings configures TTL and merge cleanup behavior.
+message ConfigLifecycleSettings {
+  string ttl = 1;
+  optional bool cleanup_on_merge = 2;
+}
+
+// ConfigFeatureSettings configures feature flag providers and overrides.
+message ConfigFeatureSettings {
+  string provider = 1;
+  map<string, string> overrides = 2;
+  string connection_ref = 3;
+}
+
+// ConfigDevSettings configures local development behavior (diverge dev).
+message ConfigDevSettings {
+  string on_conflict = 1;
+}
+
+// ConfigEnvironmentType defines an environment type profile with trigger rules.
+message ConfigEnvironmentType {
+  ConfigDeploySettings deploy = 1;
+  ConfigRoutingSettings routing = 2;
+  ConfigDatabaseSettings database = 3;
+  ConfigLifecycleSettings lifecycle = 4;
+  ConfigFeatureSettings features = 5;
+  ConfigDevSettings dev = 6;
+  string trigger = 7;
+  string label = 8;
+  string branch = 9;
+}
+
+// ConfigLabelOverride defines settings overridden when an MR/PR has a specific label.
+message ConfigLabelOverride {
+  ConfigDeploySettings deploy = 1;
+  ConfigRoutingSettings routing = 2;
+  ConfigDatabaseSettings database = 3;
+  ConfigLifecycleSettings lifecycle = 4;
+  ConfigFeatureSettings features = 5;
+  ConfigDevSettings dev = 6;
+  bool skip = 7;
+}
+
+// ConfigNotifications defines notification settings for Git providers.
+message ConfigNotifications {
+  string provider = 1;
+  bool comment_on_create = 2;
+  bool comment_on_ready = 3;
+  bool comment_on_destroy = 4;
+}
+
+// ConfigTopology configures service dependency graph discovery.
+message ConfigTopology {
+  ConfigPrometheus prometheus = 1;
+}
+
+// ConfigPrometheus configures Prometheus-backed topology discovery.
+message ConfigPrometheus {
+  string address = 1;
+  string token_env = 2;
+  string token_file = 3;
+  string ca_bundle = 4;
+  bool insecure_tls = 5;
+  string poll_interval = 6;
+  string cache_ttl = 7;
+  string mesh_type = 8;
+  string lookback_window = 9;
+  repeated string namespaces = 10;
+}

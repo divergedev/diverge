@@ -21,6 +21,7 @@ curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/main/install.sh 
 ```
 
 Documentation: [https://divergedev.com](https://divergedev.com)
+- [Why Diverge? (Architecture & Cost Comparison)](docs/guides/why-diverge.md)
 - [2-Minute Local Quickstart (Kind + Helm)](docs/guides/quickstart-local.md)
 - [Autonomous Agent Sandboxes & Capability Auth](docs/guides/agent-sandboxes.md)
 - [MCP Server & IDE Integration Guide](docs/guides/mcp-server.md)

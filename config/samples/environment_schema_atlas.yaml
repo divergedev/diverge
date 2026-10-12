@@ -1,0 +1,35 @@
+apiVersion: divergedev.com/v1alpha1
+kind: Environment
+metadata:
+  name: preview-mr-204-atlas
+  namespace: default
+spec:
+  source:
+    provider: github
+    project: example-org/payments-service
+    mr: 204
+    branch: feat/ledger-audit-table
+  deploy:
+    mode: delta
+    namespace: same
+    changedServices:
+      - payments-api
+  routing:
+    provider: gateway
+    mode: header
+    headerKey: x-diverge-env
+    headerValue: preview-mr-204-atlas
+  database:
+    # connectionRef is intentionally omitted so Diverge auto-provisions
+    # the per-environment credentials Secret (diverge-db-env-<env>).
+    mode: schema
+    atlas:
+      mode: declarative
+      engine: operator
+      schemaConfigMap: payments-schema
+      blocking: true
+      policy:
+        destructive: error
+  lifecycle:
+    ttl: 48h
+    cleanupOnMerge: true

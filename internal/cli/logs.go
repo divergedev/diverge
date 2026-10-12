@@ -20,10 +20,11 @@ import (
 
 func newLogsCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "logs [environment-name]",
-		Short: "Stream logs from a preview environment",
-		Long:  "Stream logs from pods in a preview environment. Shows logs from all services by default.",
-		Args:  cobra.ExactArgs(1),
+		Use:               "logs [environment-name]",
+		Short:             "Stream logs from a preview environment",
+		Long:              "Stream logs from pods in a preview environment. Shows logs from all services by default.",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeEnvironmentNames(app),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runLogs(app, cmd, args)
 		},

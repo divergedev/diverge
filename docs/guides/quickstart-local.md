@@ -16,7 +16,21 @@ Spin up a complete local Diverge environment — including `diverge-controller`,
 
 ## Step 1: Boot Local Cluster & Install Diverge
 
-Run the steps below to create a Kind cluster, install Envoy Gateway, apply the Diverge CRDs, and deploy the operator + API server:
+### Option A: One-Command Bootstrap (`diverge init`)
+
+Use `diverge init` to automatically create a local cluster, install Gateway API CRDs + Envoy Gateway, apply the Diverge CRDs, deploy the Diverge operator, and launch a sample baseline app:
+
+```bash
+# Bootstrap with Kind (or use --provider k3d / --provider auto)
+diverge init --provider kind --cluster-name diverge-local
+
+# Optional: scaffold a starter .diverge.yaml in your repository
+diverge init --config
+```
+
+### Option B: Manual Step-by-Step (Kind + Helm)
+
+If you prefer to run each Kubernetes and Helm command manually:
 
 ```bash
 # 1. Create a Kind cluster
@@ -83,7 +97,20 @@ kubectl get environments -l divergedev.com/preview-group=pr-101
 
 ---
 
-## Step 3: Open the Web Dashboard & Connect MCP
+## Step 3: Route Browser Traffic, Open the Web Dashboard & Connect MCP
+
+### One-Click Browser Cookie Switching (`?_diverge_env=<env>`)
+
+You can test header-routed preview environments directly in any browser—**without installing a browser extension**:
+
+1. Open your gateway or `diverge-proxy` URL with the `?_diverge_env=pr-101` query parameter:
+   ```text
+   http://localhost:8080/?_diverge_env=pr-101
+   ```
+2. `diverge-proxy` automatically sets an `HttpOnly` session cookie (`Set-Cookie: _diverge_env=pr-101; Path=/; SameSite=Lax`) and routes all subsequent page loads, static assets, `fetch`/XHR requests, and WebSockets to `pr-101` (and injects the floating preview environment switcher if `previewBanner.enabled=true`).
+3. To return to the shared baseline environment at any time, visit `http://localhost:8080/?_diverge_env=reset`.
+
+### Web Dashboard, Doctor & MCP Server
 
 Port-forward `diverge-server` to access the Web UI and ConnectRPC / MCP API:
 

@@ -12,10 +12,10 @@ var deleteForce bool
 
 func newDeleteCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
-
-		Use:   "delete <name>",
-		Short: "Delete an environment",
-		Args:  cobra.ExactArgs(1),
+		Use:               "delete <name>",
+		Short:             "Delete an environment",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeEnvironmentNames(app),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, _, err := app.KubeClient()
 			if err != nil {

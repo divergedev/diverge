@@ -14,9 +14,10 @@ import (
 
 func newTaskDeleteCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "delete <name>",
-		Short: "Delete an AgentTask and trigger sandbox teardown",
-		Args:  cobra.ExactArgs(1),
+		Use:               "delete <name>",
+		Short:             "Delete an AgentTask and trigger sandbox teardown",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeAgentTaskNames(app),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runTaskDelete(cmd.Context(), app, args[0])
 		},

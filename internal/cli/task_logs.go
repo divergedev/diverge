@@ -20,9 +20,10 @@ func newTaskLogsCmd(app *App) *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "logs <name>",
-		Short: "Stream execution logs from an AgentTask's sandbox",
-		Args:  cobra.ExactArgs(1),
+		Use:               "logs <name>",
+		Short:             "Stream execution logs from an AgentTask's sandbox",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeAgentTaskNames(app),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runTaskLogs(cmd.Context(), app, args[0], follow, tail)
 		},

@@ -66,9 +66,10 @@ func newStatusCmd(app *App) *cobra.Command {
 	var wide bool
 
 	cmd := &cobra.Command{
-		Use:   "status",
-		Short: "Show active preview environments and preview groups",
-		Long:  "Display a summary of all active preview environments, preview groups, and their current state.",
+		Use:               "status",
+		Short:             "Show active preview environments and preview groups",
+		Long:              "Display a summary of all active preview environments, preview groups, and their current state.",
+		ValidArgsFunction: completeEnvironmentNames(app),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, _, err := app.KubeClient()
 			if err != nil {

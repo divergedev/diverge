@@ -290,3 +290,96 @@ func TestProxyConnectionHeaderStrippingResistance(t *testing.T) {
 	assert.Equal(t, "Proxied: mr-42", w.Body.String())
 	assert.Equal(t, "mr-42", w.Header().Get("X-Received-Env"))
 }
+
+func TestProxySetPreviewCookieViaQueryParam(t *testing.T) {
+	lister := &mockEnvironmentLister{
+		envs: map[string]*EnvironmentInfo{
+			"pr-42": {
+				Name:  "pr-42",
+				Phase: string(v1alpha1.PhaseRunning),
+			},
+		},
+	}
+	server, _ := setupTestServer(t, lister)
+
+	// 1. GET /?_diverge_env=pr-42 sets Set-Cookie: diverge_env=pr-42 and redirects (302) to /
+	req := httptest.NewRequest(http.MethodGet, "http://preview.example.com/?_diverge_env=pr-42", nil)
+	w := httptest.NewRecorder()
+	server.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusFound, w.Code)
+	assert.Equal(t, "/", w.Header().Get("Location"))
+	cookies := w.Result().Cookies()
+	require.Len(t, cookies, 1)
+	assert.Equal(t, PreviewCookieName, cookies[0].Name)
+	assert.Equal(t, "pr-42", cookies[0].Value)
+	assert.Equal(t, "/", cookies[0].Path)
+	assert.Equal(t, 86400, cookies[0].MaxAge)
+	assert.True(t, cookies[0].HttpOnly)
+
+	// 2. Subsequent GET /api/data on Host: preview.example.com with Cookie: diverge_env=pr-42 routes to pr-42
+	req2 := httptest.NewRequest(http.MethodGet, "http://preview.example.com/api/data", nil)
+	req2.AddCookie(&http.Cookie{Name: PreviewCookieName, Value: "pr-42"})
+	w2 := httptest.NewRecorder()
+	server.ServeHTTP(w2, req2)
+
+	assert.Equal(t, http.StatusOK, w2.Code)
+	assert.Equal(t, "Proxied: pr-42", w2.Body.String())
+	assert.Equal(t, "pr-42", w2.Header().Get("X-Received-Env"))
+	assert.Equal(t, "pr-42", w2.Header().Get(ResponseHeaderEnvironment))
+
+	// 3. GET /?_diverge_env=clear expires the cookie
+	req3 := httptest.NewRequest(http.MethodGet, "http://preview.example.com/?_diverge_env=clear", nil)
+	w3 := httptest.NewRecorder()
+	server.ServeHTTP(w3, req3)
+
+	assert.Equal(t, http.StatusFound, w3.Code)
+	assert.Equal(t, "/", w3.Header().Get("Location"))
+	clearCookies := w3.Result().Cookies()
+	require.Len(t, clearCookies, 1)
+	assert.Equal(t, PreviewCookieName, clearCookies[0].Name)
+	assert.Equal(t, "", clearCookies[0].Value)
+	assert.Equal(t, -1, clearCookies[0].MaxAge)
+
+	// 4. GET /-/select?env=pr-42 also sets cookie and redirects to /
+	req4 := httptest.NewRequest(http.MethodGet, "https://preview.example.com/-/select?env=pr-42", nil)
+	w4 := httptest.NewRecorder()
+	server.ServeHTTP(w4, req4)
+
+	assert.Equal(t, http.StatusFound, w4.Code)
+	assert.Equal(t, "/", w4.Header().Get("Location"))
+	selectCookies := w4.Result().Cookies()
+	require.Len(t, selectCookies, 1)
+	assert.Equal(t, "pr-42", selectCookies[0].Value)
+	assert.True(t, selectCookies[0].Secure)
+}
+
+func TestProxyInvalidPreviewEnvAndSuffixSpoofing(t *testing.T) {
+	server, _ := setupTestServer(t, &mockEnvironmentLister{
+		envs: map[string]*EnvironmentInfo{
+			"pr-42": {Name: "pr-42", Phase: string(v1alpha1.PhaseRunning)},
+		},
+	})
+
+	// Invalid _diverge_env (e.g. ../evil) returns 400 Bad Request
+	req := httptest.NewRequest(http.MethodGet, "http://preview.example.com/?_diverge_env=../evil", nil)
+	w := httptest.NewRecorder()
+	server.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "Invalid preview environment name")
+
+	// Suffix spoofing (Host: evil-preview.example.com) returns 400 Bad Request
+	reqSpoof := httptest.NewRequest(http.MethodGet, "http://evil-preview.example.com/", nil)
+	wSpoof := httptest.NewRecorder()
+	server.ServeHTTP(wSpoof, reqSpoof)
+	assert.Equal(t, http.StatusBadRequest, wSpoof.Code)
+	assert.Equal(t, "Invalid domain\n", wSpoof.Body.String())
+
+	// Header fallback on apex domain
+	reqHdr := httptest.NewRequest(http.MethodGet, "http://preview.example.com/", nil)
+	reqHdr.Header.Set("x-diverge-env", "pr-42")
+	wHdr := httptest.NewRecorder()
+	server.ServeHTTP(wHdr, reqHdr)
+	assert.Equal(t, http.StatusOK, wHdr.Code)
+	assert.Equal(t, "pr-42", wHdr.Header().Get(ResponseHeaderEnvironment))
+}

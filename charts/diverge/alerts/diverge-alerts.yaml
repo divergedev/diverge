@@ -1,6 +1,14 @@
 groups:
   - name: diverge.rules
     rules:
+      - alert: DivergeControllerDown
+        expr: absent(diverge_environments_active)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Diverge controller is down"
+          description: "The Diverge controller has been unavailable for more than 5 minutes."
       - alert: DivergeEnvironmentStuck
         expr: diverge_environment_ttl_remaining_seconds < 0
         for: 5m
@@ -22,3 +30,10 @@ groups:
           severity: warning
         annotations:
           summary: "Async provisioning p95 > 30s"
+      - alert: DivergeHighEnvironmentHourlyCost
+        expr: sum(diverge_environment_estimated_hourly_cost_usd) > 5
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Total preview environment hourly cost exceeds $5/hr"
