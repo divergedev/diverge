@@ -90,7 +90,7 @@ Example MR comment commands:
 ```
 
 ## 8. GitLab CI/CD Pipeline
-Include the official Diverge GitLab CI/CD Component (`templates/preview/template.yml`) to automatically detect changed microservices via `diverge diff`, apply a `PreviewGroup` CR, and export `preview.env` (`DIVERGE_PREVIEW_NAME`, `DIVERGE_ROUTING_HEADER_JSON`, `DIVERGE_PREVIEW_URL`) to downstream test jobs:
+Include the official Diverge GitLab CI/CD Component (`templates/preview/template.yml`) to automatically detect changed microservices via `diverge diff`, apply a `PreviewGroup` CR, and export dotenv-safe variables in `preview.env` (`DIVERGE_PREVIEW_NAME`, `DIVERGE_SKIPPED`, `DIVERGE_ROUTING_HEADER_B64`, `DIVERGE_PREVIEW_URL`) to downstream test jobs:
 
 ```yaml
 include:
@@ -114,16 +114,18 @@ build-preview:
     - docker build -t $CI_REGISTRY_IMAGE/frontend:$CI_COMMIT_SHORT_SHA .
     - docker push $CI_REGISTRY_IMAGE/frontend:$CI_COMMIT_SHORT_SHA
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_EVENT_TYPE != "merge_train"
 
 e2e-preview:
   stage: test
-  needs: ["diverge:preview"]
+  needs:
+    - job: diverge:preview
+      optional: true
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_EVENT_TYPE != "merge_train"
   script:
-    - if [ "$DIVERGE_SKIPPED" = "true" ]; then exit 0; fi
-    - EXTRA_HTTP_HEADERS="$DIVERGE_ROUTING_HEADER_JSON" npx playwright test
+    - if [ "${DIVERGE_SKIPPED:-false}" = "true" ]; then exit 0; fi
+    - EXTRA_HTTP_HEADERS="$(echo "$DIVERGE_ROUTING_HEADER_B64" | base64 -d)" npx playwright test
 ```
 Refer to [`ci/gitlab/README.md`](../../ci/gitlab/README.md) and [`docs/guides/ci-cd-workflows.md`](ci-cd-workflows.md) for full input and output documentation.
 

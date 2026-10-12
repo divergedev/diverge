@@ -77,6 +77,7 @@ Deploy a delta `PreviewGroup` for only the services modified in a Pull Request a
     kubeconfig: ${{ secrets.PREVIEW_KUBECONFIG }}
     image-registry: ghcr.io/acme
     base-url: https://staging.example.com
+    wait: "true"
 
 - name: Run Playwright E2E Against Preview
   if: steps.diverge.outputs.skipped != 'true'

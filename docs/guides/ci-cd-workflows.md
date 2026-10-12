@@ -87,7 +87,7 @@ jobs:
 | `action` | `deploy` | `validate`, `diff`, `deploy`, or `teardown` |
 | `kubeconfig` | `""` | Raw or base64-encoded kubeconfig for target cluster |
 | `image-registry` | `""` | Registry prefix for changed services (e.g. `ghcr.io/acme`) |
-| `image-tag` | `pr-<number>` | Image tag for changed services |
+| `image-tag` | `""` | Image tag for changed services (when omitted, defaults to resolved `preview-name`, e.g. `pr-<number>` or branch slug) |
 | `header-key` | `x-diverge-env` | HTTP routing header key |
 | `ttl` | `4h` | Preview environment TTL |
 | `base-url` | `""` | Optional gateway base URL to emit `preview-url` (`?_diverge_env=`) |
@@ -97,6 +97,7 @@ jobs:
 | :--- | :--- | :--- |
 | `preview-name` | `pr-42` | Resolved `PreviewGroup` name |
 | `changed-services` | `["payments-api"]` | JSON array of changed services from `diverge diff` |
+| `changed-count` | `1` | Number of changed services detected |
 | `skipped` | `false` | `true` when 0 services changed |
 | `routing-header` | `x-diverge-env: pr-42` | HTTP header for curl / API tests |
 | `routing-header-json` | `{"x-diverge-env":"pr-42"}` | JSON header map for Playwright / Cypress |
@@ -134,7 +135,7 @@ If you prefer calling the `diverge` CLI directly without the composite action:
 
 ### Turnkey GitLab CI/CD Component (Recommended)
 
-Include the official component (`templates/preview/template.yml`). It automatically runs `diverge diff` when `diverge_services` is omitted and exports `preview.env` (`DIVERGE_PREVIEW_NAME`, `DIVERGE_ROUTING_HEADER_JSON`, `DIVERGE_PREVIEW_URL`) as a `dotenv` artifact to downstream jobs:
+Include the official component (`templates/preview/template.yml`). It automatically runs `diverge diff` when `diverge_services` is omitted and exports dotenv-safe variables in `preview.env` (`DIVERGE_PREVIEW_NAME`, `DIVERGE_SKIPPED`, `DIVERGE_ROUTING_HEADER_B64`, `DIVERGE_PREVIEW_URL`) to downstream jobs:
 
 ```yaml
 include:
@@ -145,15 +146,19 @@ include:
 
 e2e_preview:
   stage: test
-  needs: ["diverge:preview"]
+  needs:
+    - job: diverge:preview
+      optional: true
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_EVENT_TYPE != "merge_train"
   script:
-    - if [ "$DIVERGE_SKIPPED" = "true" ]; then exit 0; fi
-    - EXTRA_HTTP_HEADERS="$DIVERGE_ROUTING_HEADER_JSON" npx playwright test
+    - if [ "${DIVERGE_SKIPPED:-false}" = "true" ]; then exit 0; fi
+    - EXTRA_HTTP_HEADERS="$(echo "$DIVERGE_ROUTING_HEADER_B64" | base64 -d)" npx playwright test
 ```
 
 ### Manual CLI Pipeline
+
+Ensure your `playwright.config.ts` maps `EXTRA_HTTP_HEADERS` to `use.extraHTTPHeaders` (e.g. `extraHTTPHeaders: process.env.EXTRA_HTTP_HEADERS ? JSON.parse(process.env.EXTRA_HTTP_HEADERS) : undefined`):
 
 ```yaml
 stages:
@@ -165,8 +170,12 @@ deploy_preview:
   stage: preview
   image: ghcr.io/divergedev/diverge-cli:latest
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_EVENT_TYPE != "merge_train"
+  artifacts:
+    reports:
+      dotenv: preview.env
   script:
+    - git fetch --depth=50 origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
     - DIFF_JSON=$(diverge diff --base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" --output json)
     - SVC_ARGS=$(echo "$DIFF_JSON" | jq -r '.services[]? | "--service=\(.)=registry.example.com/\(.):mr-'"${CI_MERGE_REQUEST_IID}"'"')
     - |
@@ -176,23 +185,27 @@ deploy_preview:
           --mr "${CI_MERGE_REQUEST_IID}" \
           --ttl 4h \
           $SVC_ARGS
+        echo "DIVERGE_SKIPPED=false" > preview.env
+      else
+        echo "No service changes detected; skipping preview deployment."
+        echo "DIVERGE_SKIPPED=true" > preview.env
       fi
 
 e2e_preview:
   stage: test
+  needs: ["deploy_preview"]
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-  variables:
-    DIVERGE_HEADER: "x-diverge-env: mr-${CI_MERGE_REQUEST_IID}"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_EVENT_TYPE != "merge_train"
   script:
+    - if [ "${DIVERGE_SKIPPED:-false}" = "true" ]; then exit 0; fi
     - npm ci
-    - npx playwright test
+    - EXTRA_HTTP_HEADERS="{\"x-diverge-env\":\"mr-${CI_MERGE_REQUEST_IID}\"}" npx playwright test
 
 stop_preview:
   stage: cleanup
   image: bitnami/kubectl:latest
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_EVENT_TYPE != "merge_train"
       when: manual
   environment:
     name: preview/mr-${CI_MERGE_REQUEST_IID}

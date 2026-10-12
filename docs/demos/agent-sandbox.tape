@@ -33,6 +33,6 @@ Sleep 1800ms
 Type "# 3. Report live LLM token & USD usage via Macaroon-authenticated metering endpoint"
 Enter
 Sleep 400ms
-Type `curl -sS -X POST http://localhost:8081/api/v1/agenttask/meter -H "Authorization: Bearer $DIVERGE_MACAROON_TOKEN" -H "Content-Type: application/json" -d '{"namespace":"default","name":"fix-payment-retry-idempotency","tokensDelta":14200,"costUSDDelta":"0.18","iteration":1}' | jq .`
+Type `curl -sS -X POST http://localhost:8081/api/v1/agenttask/meter -H "Authorization: Bearer $DIVERGE_MACAROON_TOKEN" -H "Content-Type: application/json" -d '{"model":"claude-3-7-sonnet","tokensUsed":14200,"costUSD":0.18}' | jq .`
 Enter
 Sleep 3000ms

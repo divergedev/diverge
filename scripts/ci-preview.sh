@@ -139,6 +139,7 @@ case "$INPUT_ACTION" in
         echo "No service changes detected relative to ${INPUT_BASE_REF}; skipping preview deployment."
         emit_output "preview-name" "$PREVIEW_NAME"
         emit_output "changed-services" "[]"
+        emit_output "changed-count" "0"
         emit_output "skipped" "true"
         emit_output "routing-header" "$ROUTING_HEADER"
         emit_output "routing-header-json" "$ROUTING_HEADER_JSON"
@@ -189,7 +190,7 @@ case "$INPUT_ACTION" in
     "$DIVERGE_BIN" "${CREATE_ARGS[@]}"
 
     if [[ "$INPUT_WAIT" == "true" && "$INPUT_DRY_RUN" != "true" ]]; then
-      "$KUBECTL_BIN" wait --for=condition=Ready "previewgroup/$PREVIEW_NAME" --timeout="$INPUT_WAIT_TIMEOUT"
+      "$KUBECTL_BIN" wait -n "$INPUT_NAMESPACE" --for=condition=Ready "previewgroup/$PREVIEW_NAME" --timeout="$INPUT_WAIT_TIMEOUT"
     fi
 
     PREVIEW_URL=""
@@ -199,6 +200,7 @@ case "$INPUT_ACTION" in
 
     emit_output "preview-name" "$PREVIEW_NAME"
     emit_output "changed-services" "$SERVICES_JSON"
+    emit_output "changed-count" "${#CHANGED_SERVICES[@]}"
     emit_output "skipped" "false"
     emit_output "routing-header" "$ROUTING_HEADER"
     emit_output "routing-header-json" "$ROUTING_HEADER_JSON"
@@ -207,7 +209,7 @@ case "$INPUT_ACTION" in
 
   teardown)
     PREVIEW_NAME="$(resolve_preview_name)"
-    "$KUBECTL_BIN" delete previewgroup "$PREVIEW_NAME" --ignore-not-found
+    "$KUBECTL_BIN" delete previewgroup "$PREVIEW_NAME" -n "$INPUT_NAMESPACE" --ignore-not-found
     "$KUBECTL_BIN" delete environment "$PREVIEW_NAME" -n "$INPUT_NAMESPACE" --ignore-not-found
     emit_output "preview-name" "$PREVIEW_NAME"
     ;;

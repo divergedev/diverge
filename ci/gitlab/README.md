@@ -57,19 +57,21 @@ The `diverge:preview` job exports `preview.env` via `artifacts: reports: dotenv:
 | Variable | Example | Description |
 | :--- | :--- | :--- |
 | `DIVERGE_PREVIEW_NAME` | `mr-42` | Name of the `PreviewGroup` resource |
-| `DIVERGE_CHANGED_SERVICES` | `["checkout-api"]` | JSON array of deployed services |
+| `DIVERGE_CHANGED_SERVICES_CSV` | `checkout-api` | Comma-separated list of deployed services |
 | `DIVERGE_SKIPPED` | `false` | `true` when 0 services changed and deployment was skipped |
+| `DIVERGE_HEADER_KEY` | `x-diverge-env` | HTTP routing header key |
+| `DIVERGE_HEADER_VALUE` | `mr-42` | HTTP routing header value |
 | `DIVERGE_ROUTING_HEADER` | `x-diverge-env: mr-42` | HTTP routing header string |
-| `DIVERGE_ROUTING_HEADER_JSON` | `{"x-diverge-env":"mr-42"}` | JSON object for Playwright / Cypress `extraHTTPHeaders` |
+| `DIVERGE_ROUTING_HEADER_B64` | `eyJ4LWRpdmVyZ2UtZW52IjoibXItNDIifQ==` | Base64-encoded JSON header object (`echo "$DIVERGE_ROUTING_HEADER_B64" \| base64 -d`) for Playwright / Cypress `extraHTTPHeaders` |
 | `DIVERGE_PREVIEW_URL` | `https://staging.example.com/?_diverge_env=mr-42` | Shareable browser URL with `?_diverge_env=` cookie bootstrap |
 
 ## Cluster Authentication
 
 Provide access to your Kubernetes cluster using one of:
-- `KUBECONFIG`: Path to a kubeconfig file variable.
-- `KUBECONFIG_CONTENT`: Base64-encoded kubeconfig content provided as a masked CI/CD variable.
+- `KUBECONFIG`: Path to a raw multiline kubeconfig **File** CI/CD variable (`Masked: No`).
+- `KUBECONFIG_CONTENT`: Single-line base64-encoded kubeconfig content provided as a masked **Variable** (`Masked: Yes`).
 
 ## Jobs Provided
 
-- `diverge:preview`: Runs on Merge Request events (`merge_request_event`, excluding merge trains). Detects changed services, applies the `PreviewGroup` CR, and exports `preview.env`.
-- `diverge:cleanup`: Runs when a Merge Request is merged or closed, deleting the `PreviewGroup` to free cluster resources immediately.
+- `diverge:preview`: Runs on Merge Request events (`merge_request_event`, excluding merge trains). Fetches the target branch, detects changed services, applies the `PreviewGroup` CR, registers the GitLab `preview/mr-<iid>` environment (`on_stop: diverge:cleanup`), and exports `preview.env`.
+- `diverge:cleanup`: Environment `stop` job triggered automatically when the Merge Request is merged or closed (or manually from the GitLab UI), deleting the `PreviewGroup` to free cluster resources immediately.

@@ -378,6 +378,9 @@ services:
 		if ghOut["changed-services"] != `["checkout-api"]` {
 			t.Errorf("expected changed-services=[\"checkout-api\"], got %q", ghOut["changed-services"])
 		}
+		if ghOut["changed-count"] != "1" {
+			t.Errorf("expected changed-count=1, got %q", ghOut["changed-count"])
+		}
 		if ghOut["routing-header"] != "x-diverge-env: pr-42" {
 			t.Errorf("expected routing-header='x-diverge-env: pr-42', got %q", ghOut["routing-header"])
 		}
@@ -404,6 +407,9 @@ services:
 		if ghOut["changed-services"] != "[]" {
 			t.Errorf("expected changed-services=[], got %q", ghOut["changed-services"])
 		}
+		if ghOut["changed-count"] != "0" {
+			t.Errorf("expected changed-count=0, got %q", ghOut["changed-count"])
+		}
 		if dotenv["DIVERGE_SKIPPED"] != "true" {
 			t.Errorf("expected DIVERGE_SKIPPED=true in dotenv, got %q", dotenv["DIVERGE_SKIPPED"])
 		}
@@ -423,8 +429,8 @@ services:
 			t.Fatalf("failed to read kubectl log: %v", err)
 		}
 		logStr := string(logBytes)
-		if !strings.Contains(logStr, "delete previewgroup pr-42 --ignore-not-found") {
-			t.Errorf("expected kubectl delete previewgroup pr-42 in log, got:\n%s", logStr)
+		if !strings.Contains(logStr, "delete previewgroup pr-42 -n staging --ignore-not-found") {
+			t.Errorf("expected kubectl delete previewgroup pr-42 -n staging in log, got:\n%s", logStr)
 		}
 		if !strings.Contains(logStr, "delete environment pr-42 -n staging --ignore-not-found") {
 			t.Errorf("expected kubectl delete environment pr-42 in log, got:\n%s", logStr)

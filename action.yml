@@ -114,11 +114,11 @@ runs:
       env:
         DIVERGE_VERSION: ${{ inputs.version }}
       run: |
-        if [[ "$DIVERGE_VERSION" == "installed" ]] || command -v diverge >/dev/null 2>&1; then
+        if [[ "$DIVERGE_VERSION" == "installed" ]]; then
           echo "Using pre-installed diverge CLI: $(command -v diverge)"
           exit 0
         fi
-        VERSION="$DIVERGE_VERSION" curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/main/install.sh | sh
+        VERSION="$DIVERGE_VERSION" sh "${{ github.action_path }}/install.sh"
 
     - name: Run Diverge Preview Action
       id: preview
