@@ -176,6 +176,9 @@ func TestGitLabComponentYAMLSchema(t *testing.T) {
 		if !strings.Contains(parts[1], "dotenv: preview.env") {
 			t.Errorf("%s missing dotenv: preview.env artifact report", p)
 		}
+		if !strings.Contains(parts[1], "allow_failure: true") {
+			t.Errorf("%s missing allow_failure: true on manual cleanup rule", p)
+		}
 	}
 
 	// editorconfig-checker-disable

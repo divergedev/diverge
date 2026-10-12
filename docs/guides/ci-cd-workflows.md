@@ -207,6 +207,7 @@ stop_preview:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_EVENT_TYPE != "merge_train"
       when: manual
+      allow_failure: true
   environment:
     name: preview/mr-${CI_MERGE_REQUEST_IID}
     action: stop
