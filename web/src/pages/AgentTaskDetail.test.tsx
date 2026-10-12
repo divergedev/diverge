@@ -232,4 +232,41 @@ describe('AgentTaskDetail', () => {
       expect(deleteCalled).toBe(true)
     })
   })
+
+  it('displays linked preview environment and Open Preview links when a matching environment exists', async () => {
+    server.use(
+      http.post('*/diverge.v1alpha1.AgentTaskService/GetTask', () =>
+        HttpResponse.json(mockActiveTask),
+      ),
+      http.post('*/diverge.v1alpha1.EnvironmentService/ListEnvironments', () =>
+        HttpResponse.json({
+          environments: [
+            {
+              name: 'agent-preview-fix-checkout',
+              namespace: 'default',
+              labels: { 'divergedev.com/agent-task': 'fix-checkout' },
+              status: {
+                phase: 'Ready',
+                url: 'https://agent-preview-fix-checkout.preview.example.com',
+              },
+            },
+          ],
+        }),
+      ),
+    )
+
+    renderPage()
+
+    expect(await screen.findByText('fix-checkout')).toBeInTheDocument()
+    const envLink = await screen.findByRole('link', { name: 'agent-preview-fix-checkout' })
+    expect(envLink).toHaveAttribute('href', '/environments/default/agent-preview-fix-checkout')
+    expect(screen.getByText('Linked Preview')).toBeInTheDocument()
+
+    const openPreviewButtons = screen.getAllByRole('link', { name: /Open Preview/i })
+    expect(openPreviewButtons.length).toBeGreaterThanOrEqual(1)
+    expect(openPreviewButtons[0]).toHaveAttribute(
+      'href',
+      'https://agent-preview-fix-checkout.preview.example.com',
+    )
+  })
 })

@@ -317,7 +317,7 @@
         "enabled": { "type": "boolean" },
         "provider": {
           "type": "string",
-          "enum": ["agent-sandbox", "noop"]
+          "enum": ["agent-sandbox", "pod", "k8s-pod", "noop"]
         },
         "poolRef": { "type": "string" },
         "macaroonSecretRef": {

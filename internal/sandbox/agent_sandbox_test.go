@@ -8,9 +8,16 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/pkg/registry"
@@ -22,10 +29,16 @@ func TestRegistryHasProviders(t *testing.T) {
 	assert.Contains(t, list, "noop")
 	assert.Contains(t, list, "none")
 	assert.Contains(t, list, "agent-sandbox")
+	assert.Contains(t, list, "pod")
+	assert.Contains(t, list, "k8s-pod")
 
 	p, err := pkgsandbox.Providers.Create("noop", registry.Deps{})
 	require.NoError(t, err)
 	assert.NotNil(t, p)
+
+	podP, err := pkgsandbox.Providers.Create("pod", registry.Deps{})
+	require.NoError(t, err)
+	assert.NotNil(t, podP)
 }
 
 func TestAgentSandboxProvider(t *testing.T) {
@@ -185,4 +198,77 @@ func TestBuildSandboxClaimSpec(t *testing.T) {
 	labelsLong := metaLong["labels"].(map[string]interface{})
 	labelVal := labelsLong["divergedev.com/agent-task"].(string)
 	assert.Equal(t, 63, len(labelVal))
+}
+
+func TestAgentSandboxProvider_FallbackToPodOnNoMatchError(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, v1alpha1.AddToScheme(scheme))
+
+	noMatchErr := &meta.NoKindMatchError{
+		GroupKind:        schema.GroupKind{Group: "extensions.agents.x-k8s.io", Kind: "SandboxClaim"},
+		SearchedVersions: []string{"v1beta1"},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				if u, ok := obj.(*unstructured.Unstructured); ok && u.GroupVersionKind() == sandboxClaimGVK {
+					return noMatchErr
+				}
+				return c.Create(ctx, obj, opts...)
+			},
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if u, ok := obj.(*unstructured.Unstructured); ok && u.GroupVersionKind() == sandboxClaimGVK {
+					return noMatchErr
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if u, ok := obj.(*unstructured.Unstructured); ok && u.GroupVersionKind() == sandboxClaimGVK {
+					return noMatchErr
+				}
+				return c.Delete(ctx, obj, opts...)
+			},
+		}).
+		Build()
+
+	p := NewAgentSandboxProvider(fakeClient, nil, scheme)
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "fallback-task",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective: "Verify automatic fallback to native PodSandboxProvider",
+			Repository: v1alpha1.AgentTaskRepository{
+				URL: "https://github.com/org/repo.git",
+			},
+		},
+	}
+
+	res, err := p.Provision(ctx, task)
+	require.NoError(t, err)
+	assert.Equal(t, "sb-pod-fallback-task", res.ClaimName)
+	assert.Equal(t, "sb-pod-fallback-task", res.PodName)
+
+	// Verify Pod was created in the cluster
+	pod := &corev1.Pod{}
+	require.NoError(t, fakeClient.Get(ctx, client.ObjectKey{Namespace: "default", Name: "sb-pod-fallback-task"}, pod))
+	pod.Status.Phase = corev1.PodRunning
+	pod.Status.PodIP = "10.0.0.42"
+	require.NoError(t, fakeClient.Status().Update(ctx, pod))
+
+	status, err := p.Status(ctx, task)
+	require.NoError(t, err)
+	assert.Equal(t, "Running", status.Phase)
+	assert.True(t, status.Ready)
+	assert.Equal(t, "10.0.0.42", status.PodIP)
+
+	require.NoError(t, p.Teardown(ctx, task))
+	err = fakeClient.Get(ctx, client.ObjectKey{Namespace: "default", Name: "sb-pod-fallback-task"}, pod)
+	assert.True(t, apierrors.IsNotFound(err))
 }

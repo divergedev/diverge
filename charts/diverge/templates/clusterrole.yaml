@@ -16,7 +16,7 @@ rules:
     verbs: [get, list, watch, create, update, patch, delete]
   # Core K8s - Workloads
   - apiGroups: [""]
-    resources: [services, secrets, configmaps, serviceaccounts, limitranges, resourcequotas]
+    resources: [pods, services, secrets, configmaps, serviceaccounts, limitranges, resourcequotas]
     verbs: [get, list, watch, create, update, patch, delete]
   - apiGroups: ["apps"]
     resources: [deployments, statefulsets]

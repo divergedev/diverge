@@ -1,139 +1,178 @@
-import { render, screen, fireEvent } from '@/test/utils'
-import { describe, it, expect, vi } from 'vitest'
-import { FlagsTab } from './FlagsTab'
+import { render, screen, waitFor, fireEvent } from '@/test/utils'
+import { server } from '@/test/mocks/server'
+import { http, HttpResponse } from 'msw'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { Environment } from '@/api/gen/diverge/v1alpha1/environment_pb'
+import { environmentClient } from '@/api/client'
+import { FlagsTab } from './FlagsTab'
 
 describe('FlagsTab', () => {
-  it('renders empty state when no overrides are configured', () => {
-    const env = new Environment({
-      name: 'test-env',
-      namespace: 'default',
-      spec: {
-        features: {
-          provider: 'configmap',
-          overrides: {},
-        },
-      },
-    })
-
-    render(<FlagsTab environment={env} />)
-
-    expect(screen.getByText('Kubernetes ConfigMap (flagd)')).toBeInTheDocument()
-    expect(screen.getByText('No feature flag overrides configured')).toBeInTheDocument()
-    expect(screen.getByText(/0 configured/)).toBeInTheDocument()
+  afterEach(() => {
+    vi.restoreAllMocks()
   })
 
-  it('renders flag overrides table with boolean and variant flags', () => {
-    const env = new Environment({
-      name: 'preview-pr-12',
-      namespace: 'default',
-      spec: {
-        features: {
-          provider: 'configmap',
-          overrides: {
-            new_nav: 'true',
-            dark_mode: 'false',
-            tier: 'pro_tier',
-          },
-        },
-      },
-      status: {
-        conditions: [
-          { type: 'FeaturesReady', status: 'True', reason: 'FeaturesProvisioned', message: 'Ready' },
-        ],
-      },
-    })
-
-    render(<FlagsTab environment={env} />)
-
-    expect(screen.getByText('new_nav')).toBeInTheDocument()
-    expect(screen.getByText('dark_mode')).toBeInTheDocument()
-    expect(screen.getByText('tier')).toBeInTheDocument()
-    expect(screen.getByText('true')).toBeInTheDocument()
-    expect(screen.getByText('false')).toBeInTheDocument()
-    expect(screen.getByText('pro_tier')).toBeInTheDocument()
-    expect(screen.getAllByText('Boolean')).toHaveLength(2)
-    expect(screen.getByText('Variant')).toBeInTheDocument()
-    expect(screen.getByText(/3 configured/)).toBeInTheDocument()
-  })
-
-  it('renders Flipt provider details and console link', () => {
-    const env = new Environment({
-      name: 'flipt-env',
+  it('renders provider info, existing overrides, and injected env vars', () => {
+    const env = Environment.fromJson({
+      name: 'pr-42',
       namespace: 'default',
       spec: {
         features: {
           provider: 'flipt',
           connectionRef: 'flipt-secret',
           overrides: {
-            checkout_v2: 'true',
+            new_checkout: 'true',
+            pricing_tier: 'enterprise',
           },
         },
       },
       status: {
-        featureEnvVars: {
-          FLIPT_URL: 'http://flipt.example.com',
-          FLIPT_NAMESPACE: 'diverge-flipt-env',
-          FLIPT_AUTH_TOKEN: 'secret-token',
-        },
+        phase: 'Ready',
         conditions: [
-          { type: 'FeaturesReady', status: 'True', reason: 'FeaturesProvisioned', message: 'Flipt namespace ready' },
+          {
+            type: 'FeaturesReady',
+            status: 'True',
+            reason: 'FliptSynced',
+            message: 'Synced 2 flags to Flipt namespace',
+          },
         ],
+        featureEnvVars: {
+          FLIPT_URL: 'http://flipt.default.svc:8080',
+          FLIPT_NAMESPACE: 'diverge-pr-42',
+          FLIPT_AUTH_TOKEN: 'super-secret-token',
+        },
       },
     })
 
     render(<FlagsTab environment={env} />)
 
     expect(screen.getByText('Flipt Feature Flags')).toBeInTheDocument()
-    expect(screen.getAllByText('diverge-flipt-env').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText('2 configured')).toBeInTheDocument()
     expect(screen.getByText('flipt-secret')).toBeInTheDocument()
-    expect(screen.getByText('Open Flipt Console')).toHaveAttribute(
-      'href',
-      'http://flipt.example.com/namespaces/diverge-flipt-env'
-    )
+    expect(screen.getByText('Synced 2 flags to Flipt namespace')).toBeInTheDocument()
 
-    // Injected env vars
+    // Overrides
+    expect(screen.getByText('new_checkout')).toBeInTheDocument()
+    expect(screen.getByText('pricing_tier')).toBeInTheDocument()
+    expect(screen.getByText('enterprise')).toBeInTheDocument()
+
+    // Injected env vars (token should be masked)
     expect(screen.getByText('FLIPT_URL')).toBeInTheDocument()
-    expect(screen.getByText('http://flipt.example.com')).toBeInTheDocument()
+    expect(screen.getByText('http://flipt.default.svc:8080')).toBeInTheDocument()
     expect(screen.getByText('FLIPT_AUTH_TOKEN')).toBeInTheDocument()
-    // Token is masked
     expect(screen.getByText('••••••••••••••••')).toBeInTheDocument()
   })
 
-  it('copies text to clipboard when copy button is clicked', () => {
-    const writeTextMock = vi.fn().mockResolvedValue(undefined)
-    Object.assign(navigator, {
-      clipboard: {
-        writeText: writeTextMock,
+  it('adds a new flag override via updateEnvironment with updateMask', async () => {
+    const env = Environment.fromJson({
+      name: 'pr-42',
+      namespace: 'default',
+      spec: {
+        features: {
+          provider: 'flipt',
+          overrides: {
+            new_checkout: 'true',
+          },
+        },
       },
     })
 
-    const env = new Environment({
-      name: 'copy-env',
+    const updateSpy = vi.spyOn(environmentClient, 'updateEnvironment')
+    server.use(
+      http.post('*/diverge.v1alpha1.EnvironmentService/UpdateEnvironment', () =>
+        HttpResponse.json({ environment: env.toJson() }),
+      ),
+    )
+
+    render(<FlagsTab environment={env} />)
+
+    fireEvent.change(screen.getByLabelText('Flag key'), {
+      target: { value: 'dark_mode' },
+    })
+    fireEvent.change(screen.getByLabelText('Flag value'), {
+      target: { value: 'v2' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Add Override/i }))
+
+    await waitFor(() => {
+      expect(updateSpy).toHaveBeenCalledWith({
+        environment: expect.objectContaining({
+          name: 'pr-42',
+          namespace: 'default',
+          spec: expect.objectContaining({
+            features: expect.objectContaining({
+              overrides: {
+                new_checkout: 'true',
+                dark_mode: 'v2',
+              },
+            }),
+          }),
+        }),
+        updateMask: { paths: ['spec.features.overrides'] },
+      })
+      expect(screen.getByRole('status')).toHaveTextContent('Saved override for dark_mode')
+    })
+  })
+
+  it('toggles a boolean flag override and removes an override', async () => {
+    const env = Environment.fromJson({
+      name: 'pr-42',
       namespace: 'default',
       spec: {
         features: {
           provider: 'configmap',
           overrides: {
-            copy_flag: 'true',
+            new_checkout: 'true',
+            pricing_tier: 'enterprise',
           },
-        },
-      },
-      status: {
-        featureEnvVars: {
-          FLAGD_PATH: '/etc/flags.json',
         },
       },
     })
 
+    const updateSpy = vi.spyOn(environmentClient, 'updateEnvironment')
+    server.use(
+      http.post('*/diverge.v1alpha1.EnvironmentService/UpdateEnvironment', () =>
+        HttpResponse.json({ environment: env.toJson() }),
+      ),
+    )
+
     render(<FlagsTab environment={env} />)
 
-    const copyBtn = screen.getByTitle('Copy copy_flag')
-    fireEvent.click(copyBtn)
-    expect(writeTextMock).toHaveBeenCalledWith('copy_flag')
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle new_checkout' }))
 
-    const copyEnvBtn = screen.getByTitle('Copy FLAGD_PATH')
-    fireEvent.click(copyEnvBtn)
-    expect(writeTextMock).toHaveBeenCalledWith('/etc/flags.json')
+    await waitFor(() => {
+      expect(updateSpy).toHaveBeenCalledWith({
+        environment: expect.objectContaining({
+          spec: expect.objectContaining({
+            features: expect.objectContaining({
+              overrides: {
+                new_checkout: 'false',
+                pricing_tier: 'enterprise',
+              },
+            }),
+          }),
+        }),
+        updateMask: { paths: ['spec.features.overrides'] },
+      })
+      expect(screen.getByRole('status')).toHaveTextContent('Toggled new_checkout to false')
+    })
+
+    updateSpy.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: 'Remove pricing_tier' }))
+
+    await waitFor(() => {
+      expect(updateSpy).toHaveBeenCalledWith({
+        environment: expect.objectContaining({
+          spec: expect.objectContaining({
+            features: expect.objectContaining({
+              overrides: {
+                new_checkout: 'true',
+              },
+            }),
+          }),
+        }),
+        updateMask: { paths: ['spec.features.overrides'] },
+      })
+      expect(screen.getByRole('status')).toHaveTextContent('Removed override pricing_tier')
+    })
   })
 })

@@ -166,6 +166,52 @@ func TestUpdateEnvironment_FieldMask(t *testing.T) {
 		// Annotations replaced (cleared) because fieldmask was nil
 		assert.Empty(t, updated.Annotations)
 	})
+
+	t.Run("partial update of spec.features.overrides preserves other spec fields", func(t *testing.T) {
+		var cur v1alpha1.Environment
+		require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "test-env", Namespace: "default"}, &cur))
+		cur.Spec.Source = v1alpha1.EnvironmentSource{
+			Provider: "github",
+			Branch:   "feat/checkout",
+		}
+		cur.Spec.Features = &v1alpha1.FeatureSpec{
+			Provider:  "configmap",
+			Overrides: map[string]string{"old_flag": "true"},
+		}
+		require.NoError(t, c.Update(ctx, &cur))
+		require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "test-env", Namespace: "default"}, &cur))
+
+		req := &pb.UpdateEnvironmentRequest{
+			Environment: &pb.Environment{
+				Name:            "test-env",
+				Namespace:       "default",
+				ResourceVersion: cur.ResourceVersion,
+				Spec: &pb.EnvironmentSpec{
+					Features: &pb.FeatureSpec{
+						Overrides: map[string]string{
+							"dark_mode": "true",
+							"beta_ui":   "false",
+						},
+					},
+				},
+			},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.features.overrides"}},
+		}
+
+		resp, err := svc.UpdateEnvironment(ctx, connect.NewRequest(req))
+		require.NoError(t, err)
+		require.NotNil(t, resp.Msg.Environment.Spec)
+		require.NotNil(t, resp.Msg.Environment.Spec.Features)
+		assert.Equal(t, map[string]string{"dark_mode": "true", "beta_ui": "false"}, resp.Msg.Environment.Spec.Features.Overrides)
+
+		var updated v1alpha1.Environment
+		require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "test-env", Namespace: "default"}, &updated))
+		assert.Equal(t, "github", updated.Spec.Source.Provider)
+		assert.Equal(t, "feat/checkout", updated.Spec.Source.Branch)
+		require.NotNil(t, updated.Spec.Features)
+		assert.Equal(t, "configmap", updated.Spec.Features.Provider)
+		assert.Equal(t, map[string]string{"dark_mode": "true", "beta_ui": "false"}, updated.Spec.Features.Overrides)
+	})
 }
 
 func TestUpdateEnvironment_PBT(t *testing.T) {

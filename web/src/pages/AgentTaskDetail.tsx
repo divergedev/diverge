@@ -7,6 +7,7 @@ import {
   usePauseAgentTask,
   useResumeAgentTask,
   useGuideAgentTask,
+  useListEnvironments,
 } from '@/api/queries'
 import { AgentTaskPhase } from '@/api/gen/diverge/v1alpha1/agenttask_pb'
 import { StatusBadge, formatAgentTaskPhase } from '@/components/StatusBadge'
@@ -35,6 +36,7 @@ export default function AgentTaskDetail() {
   const { namespace = '', name = '' } = useParams()
   const navigate = useNavigate()
   const { data, isLoading, error, refetch } = useGetAgentTask(namespace, name)
+  const { data: envListData } = useListEnvironments({ namespace })
   const deleteTask = useDeleteAgentTask()
   const pauseTask = usePauseAgentTask()
   const resumeTask = useResumeAgentTask()
@@ -80,6 +82,14 @@ export default function AgentTaskDetail() {
   const canPause = !isPaused && (phase === AgentTaskPhase.ACTIVE || phase === AgentTaskPhase.PROVISIONING || phase === AgentTaskPhase.PENDING)
   const canGuide = !isTerminal && !isPaused
   const safePrUrl = isSafeExternalUrl(task.status?.prUrl) ? task.status?.prUrl : undefined
+  const linkedEnv = (envListData?.environments ?? []).find(
+    (env) =>
+      env.labels?.['divergedev.com/agent-task'] === name ||
+      env.name === `agent-preview-${name}`,
+  )
+  const safePreviewUrl = isSafeExternalUrl(linkedEnv?.status?.url)
+    ? linkedEnv?.status?.url
+    : undefined
 
   const handleDelete = async () => {
     if (!confirm(`Delete agent task ${namespace}/${name}?`)) return
@@ -173,6 +183,11 @@ export default function AgentTaskDetail() {
           <p className="text-muted-foreground">{task.namespace}</p>
         </div>
         <div className="flex items-center gap-2">
+          {safePreviewUrl && (
+            <a href={safePreviewUrl} target="_blank" rel="noopener noreferrer">
+              <Button variant="outline" size="sm"><ExternalLink className="h-4 w-4 mr-2" />Open Preview</Button>
+            </a>
+          )}
           {safePrUrl && (
             <a href={safePrUrl} target="_blank" rel="noopener noreferrer">
               <Button variant="outline" size="sm"><ExternalLink className="h-4 w-4 mr-2" />Open PR</Button>
@@ -286,6 +301,31 @@ export default function AgentTaskDetail() {
                   <span className="text-muted-foreground">Sandbox Pod</span>
                   <span className="font-mono text-xs">{task.status?.sandboxPodName || '—'}</span>
                 </div>
+                {linkedEnv && (
+                  <div className="flex justify-between items-center pt-1 border-t border-border/50">
+                    <span className="text-muted-foreground">Linked Preview</span>
+                    <div className="flex items-center gap-2">
+                      <Link
+                        to={`/environments/${linkedEnv.namespace || namespace}/${linkedEnv.name}`}
+                        className="text-primary hover:underline font-mono text-xs"
+                      >
+                        {linkedEnv.name}
+                      </Link>
+                      <StatusBadge phase={linkedEnv.status?.phase || 'Pending'} />
+                      {safePreviewUrl && (
+                        <a
+                          href={safePreviewUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                        >
+                          Open Preview
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </div>

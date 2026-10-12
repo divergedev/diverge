@@ -10,6 +10,7 @@ rules:
   - configmaps
   - events
   - namespaces
+  - pods
   - secrets
   - services
   verbs:
