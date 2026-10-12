@@ -138,7 +138,7 @@ func (gc *TunnelGC) sweep(ctx context.Context, namespace string) {
 			}
 			expired = now.After(expires)
 		} else if lease.Spec.RenewTime != nil && lease.Spec.LeaseDurationSeconds != nil {
-			expires := lease.Spec.RenewTime.Time.Add(time.Duration(*lease.Spec.LeaseDurationSeconds) * time.Second)
+			expires := lease.Spec.RenewTime.Add(time.Duration(*lease.Spec.LeaseDurationSeconds) * time.Second)
 			expired = now.After(expires)
 		}
 		if expired {

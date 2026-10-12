@@ -38,12 +38,6 @@ var defaultAllowedKinds = map[string]bool{
 	"PodDisruptionBudget":     true,
 }
 
-var allowedKinds = defaultAllowedKinds
-
-func isAllowedKind(kind string) bool {
-	return defaultAllowedKinds[kind]
-}
-
 // DirectDeployerOption configures a DirectDeployer.
 type DirectDeployerOption func(*DirectDeployer)
 

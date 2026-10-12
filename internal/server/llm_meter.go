@@ -207,13 +207,8 @@ func (h *LLMMeterHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	task.Status.TokensConsumed = totalTokens
 	task.Status.CostUSD = fmt.Sprintf("%.4f", totalCost)
 
-	budgetExceeded := false
-	if claims.MaxCostUSD > 0 && totalCost > claims.MaxCostUSD {
-		budgetExceeded = true
-	}
-	if claims.MaxTokens > 0 && totalTokens > claims.MaxTokens {
-		budgetExceeded = true
-	}
+	budgetExceeded := (claims.MaxCostUSD > 0 && totalCost > claims.MaxCostUSD) ||
+		(claims.MaxTokens > 0 && totalTokens > claims.MaxTokens)
 	if task.Spec.BudgetUSD != "" {
 		if specBudgetUSD, parseErr := strconv.ParseFloat(task.Spec.BudgetUSD, 64); parseErr == nil && specBudgetUSD > 0 && totalCost > specBudgetUSD {
 			budgetExceeded = true
