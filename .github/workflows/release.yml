@@ -36,6 +36,9 @@ jobs:
         uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a # v3.8.1
       - name: Install syft
         uses: anchore/sbom-action/download-syft@61119d458adab75f756bc0b9e4bde25725f86a7a # v0
+      - name: Strip floating major tags locally before GoReleaser
+        run: |
+          git tag -d v1 2>/dev/null || true
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
         with:
           version: '~> v2'
@@ -43,20 +46,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
-      - name: Update floating v1 GitHub Action tag and branch
-        if: "!contains(github.ref_name, '-')"
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Skipping v1 update for non-stable tag ${RELEASE_TAG}"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -fa v1 -m "Update v1 action tag to ${RELEASE_TAG}" "${GITHUB_SHA}"
-          git push origin refs/tags/v1 --force
-          git push origin "${GITHUB_SHA}:refs/heads/v1" --force
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
       - name: Extract tag
         id: tag
         run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
@@ -96,6 +86,20 @@ jobs:
           cosign attach sbom --sbom diverge-sbom.spdx.json "ghcr.io/divergedev/diverge:${RELEASE_TAG}"
           cosign attach sbom --sbom activator-proxy-sbom.spdx.json "ghcr.io/divergedev/activator-proxy:${RELEASE_TAG}"
           cosign attach sbom --sbom diverge-cli-sbom.spdx.json "ghcr.io/divergedev/diverge-cli:${RELEASE_TAG}"
+      - name: Update floating v1 GitHub Action tag and branch
+        if: "!contains(github.ref_name, '-')"
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Skipping v1 update for non-stable tag ${RELEASE_TAG}"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -fa v1 -m "Update v1 action tag to ${RELEASE_TAG}" "${GITHUB_SHA}"
+          git push origin refs/tags/v1 --force
+          git push origin "${GITHUB_SHA}:refs/heads/v1" --force
 
   release-sdks:
     runs-on: ubuntu-latest
