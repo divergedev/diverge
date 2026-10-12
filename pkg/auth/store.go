@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -47,14 +48,57 @@ const (
 	TokenIndexSecretName = "diverge-agenttask-tokens"
 )
 
+func isAlnumASCII(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
+}
+
+func isLabelCharASCII(b byte) bool {
+	return isAlnumASCII(b) || b == '-' || b == '_' || b == '.'
+}
+
+func isValidK8sLabel(s string) bool {
+	if len(s) == 0 || len(s) > 63 {
+		return false
+	}
+	if !isAlnumASCII(s[0]) || !isAlnumASCII(s[len(s)-1]) {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if !isLabelCharASCII(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 // TaskLabelValue returns a Kubernetes-valid label value (<= 63 chars) for an AgentTask identifier.
 func TaskLabelValue(taskID string) string {
-	if len(taskID) <= 63 {
+	if isValidK8sLabel(taskID) {
 		return taskID
 	}
 	h := sha256.Sum256([]byte(taskID))
 	hashStr := hex.EncodeToString(h[:8]) // 16 hex chars
-	return fmt.Sprintf("%s-%s", taskID[:63-1-len(hashStr)], hashStr)
+	maxPrefix := 63 - 1 - len(hashStr)
+
+	var b strings.Builder
+	b.Grow(len(taskID))
+	for i := 0; i < len(taskID); i++ {
+		if isLabelCharASCII(taskID[i]) {
+			b.WriteByte(taskID[i])
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	prefix := b.String()
+	if len(prefix) > maxPrefix {
+		prefix = prefix[:maxPrefix]
+	}
+	prefix = strings.TrimLeft(prefix, "-_.")
+	prefix = strings.TrimRight(prefix, "-_.")
+	if prefix == "" {
+		return hashStr
+	}
+	return fmt.Sprintf("%s-%s", prefix, hashStr)
 }
 
 // InMemoryTokenStore provides an in-memory, thread-safe implementation of TokenStore.

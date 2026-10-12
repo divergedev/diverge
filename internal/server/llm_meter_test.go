@@ -1,0 +1,297 @@
+package server
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	"github.com/divergedev/diverge/api/v1alpha1"
+	pkgauth "github.com/divergedev/diverge/pkg/auth"
+)
+
+func setupLLMMeterTest(t *testing.T) (client.Client, *pkgauth.MacaroonProvider, *pkgauth.InMemoryTokenStore, *LLMMeterHandler) {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1alpha1.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	crdClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1alpha1.AgentTask{}).
+		Build()
+
+	rootKey := []byte("0123456789abcdef0123456789abcdef")
+	verifier := pkgauth.NewMacaroonProvider(rootKey)
+	store := pkgauth.NewInMemoryTokenStore()
+	handler := NewLLMMeterHandler(crdClient, verifier, store, slog.Default())
+	return crdClient, verifier, store, handler
+}
+
+func mintTestMeterToken(t *testing.T, verifier *pkgauth.MacaroonProvider, store *pkgauth.InMemoryTokenStore, claims pkgauth.Claims) string {
+	t.Helper()
+	ctx := context.Background()
+	tok, err := verifier.Mint(ctx, claims)
+	require.NoError(t, err)
+	raw, err := tok.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, store.SaveToken(ctx, claims.TaskID, claims.Namespace, raw))
+	return base64.RawStdEncoding.EncodeToString(raw)
+}
+
+func TestLLMMeterHandler_ValidMetering(t *testing.T) {
+	ctx := context.Background()
+	crdClient, verifier, store, handler := setupLLMMeterTest(t)
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "task-meter-ok",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective:    "Implement feature",
+			BudgetUSD:    "5.00",
+			BudgetTokens: 100000,
+			Capabilities: []string{"gemini-2.5-pro", "gemini-2.5-flash"},
+			Repository: v1alpha1.AgentTaskRepository{
+				URL: "https://github.com/divergedev/diverge",
+			},
+		},
+		Status: v1alpha1.AgentTaskStatus{
+			Phase: v1alpha1.AgentTaskPhaseActive,
+		},
+	}
+	require.NoError(t, crdClient.Create(ctx, task))
+	task.Status.Phase = v1alpha1.AgentTaskPhaseActive
+	require.NoError(t, crdClient.Status().Update(ctx, task))
+
+	token := mintTestMeterToken(t, verifier, store, pkgauth.Claims{
+		TaskID:        "task-meter-ok",
+		Namespace:     "default",
+		AllowedModels: []string{"gemini-2.5-pro", "gemini-2.5-flash"},
+		MaxCostUSD:    5.00,
+		MaxTokens:     100000,
+		ExpiresAt:     time.Now().Add(time.Hour),
+	})
+
+	// First metering call
+	body1, _ := json.Marshal(LLMMeterRequest{
+		Model:      "gemini-2.5-pro",
+		TokensUsed: 12000,
+		CostUSD:    0.45,
+	})
+	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/agenttask/meter", bytes.NewReader(body1))
+	req1.Header.Set("Authorization", "Bearer "+token)
+	rec1 := httptest.NewRecorder()
+	handler.ServeHTTP(rec1, req1)
+
+	require.Equal(t, http.StatusOK, rec1.Code)
+	var resp1 LLMMeterResponse
+	require.NoError(t, json.NewDecoder(rec1.Body).Decode(&resp1))
+	assert.True(t, resp1.Allowed)
+	assert.False(t, resp1.Suspended)
+	assert.Equal(t, int64(12000), resp1.TotalTokensUsed)
+	assert.InDelta(t, 0.45, resp1.TotalCostUSD, 0.0001)
+
+	// Second metering call accumulates onto previous usage
+	body2, _ := json.Marshal(LLMMeterRequest{
+		Model:      "gemini-2.5-flash",
+		TokensUsed: 8000,
+		CostUSD:    0.15,
+	})
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/agenttask/meter", bytes.NewReader(body2))
+	req2.Header.Set("Authorization", "Bearer "+token)
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, req2)
+
+	require.Equal(t, http.StatusOK, rec2.Code)
+	var resp2 LLMMeterResponse
+	require.NoError(t, json.NewDecoder(rec2.Body).Decode(&resp2))
+	assert.True(t, resp2.Allowed)
+	assert.False(t, resp2.Suspended)
+	assert.Equal(t, int64(20000), resp2.TotalTokensUsed)
+	assert.InDelta(t, 0.60, resp2.TotalCostUSD, 0.0001)
+
+	// Verify CRD status was updated
+	var updated v1alpha1.AgentTask
+	require.NoError(t, crdClient.Get(ctx, client.ObjectKey{Namespace: "default", Name: "task-meter-ok"}, &updated))
+	assert.Equal(t, int64(20000), updated.Status.TokensConsumed)
+	assert.Equal(t, "0.6000", updated.Status.CostUSD)
+	assert.False(t, updated.Spec.Suspended)
+	assert.Equal(t, v1alpha1.AgentTaskPhaseActive, updated.Status.Phase)
+}
+
+func TestLLMMeterHandler_DisallowedModel(t *testing.T) {
+	ctx := context.Background()
+	crdClient, verifier, store, handler := setupLLMMeterTest(t)
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "task-model-check",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective:    "Use lite model only",
+			Capabilities: []string{"gemini-2.5-flash"},
+			Repository: v1alpha1.AgentTaskRepository{
+				URL: "https://github.com/divergedev/diverge",
+			},
+		},
+	}
+	require.NoError(t, crdClient.Create(ctx, task))
+
+	token := mintTestMeterToken(t, verifier, store, pkgauth.Claims{
+		TaskID:        "task-model-check",
+		Namespace:     "default",
+		AllowedModels: []string{"gemini-2.5-flash"},
+		ExpiresAt:     time.Now().Add(time.Hour),
+	})
+
+	body, _ := json.Marshal(LLMMeterRequest{
+		Model:      "claude-opus-4",
+		TokensUsed: 1000,
+		CostUSD:    0.10,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agenttask/meter", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusForbidden, rec.Code)
+	var resp LLMMeterResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.False(t, resp.Allowed)
+	assert.Contains(t, resp.Reason, "claude-opus-4")
+}
+
+func TestLLMMeterHandler_BudgetExceededAutoPauseAndRevoke(t *testing.T) {
+	ctx := context.Background()
+	crdClient, verifier, store, handler := setupLLMMeterTest(t)
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "task-budget-cap",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective:    "Test budget enforcement",
+			BudgetUSD:    "1.00",
+			BudgetTokens: 50000,
+			Repository: v1alpha1.AgentTaskRepository{
+				URL: "https://github.com/divergedev/diverge",
+			},
+		},
+	}
+	require.NoError(t, crdClient.Create(ctx, task))
+	task.Status.Phase = v1alpha1.AgentTaskPhaseActive
+	task.Status.CostUSD = "0.7500"
+	task.Status.TokensConsumed = 30000
+	require.NoError(t, crdClient.Status().Update(ctx, task))
+
+	token := mintTestMeterToken(t, verifier, store, pkgauth.Claims{
+		TaskID:     "task-budget-cap",
+		Namespace:  "default",
+		MaxCostUSD: 1.00,
+		MaxTokens:  50000,
+		ExpiresAt:  time.Now().Add(time.Hour),
+	})
+
+	// Push cumulative cost to $1.25 (> $1.00 budget)
+	body, _ := json.Marshal(LLMMeterRequest{
+		Model:      "gemini-2.5-pro",
+		TokensUsed: 10000,
+		CostUSD:    0.50,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agenttask/meter", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusTooManyRequests, rec.Code)
+	var resp LLMMeterResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.False(t, resp.Allowed)
+	assert.True(t, resp.Suspended)
+	assert.Equal(t, "budget exceeded", resp.Reason)
+	assert.Equal(t, int64(40000), resp.TotalTokensUsed)
+	assert.InDelta(t, 1.25, resp.TotalCostUSD, 0.0001)
+
+	// Verify AgentTask CR is paused & suspended
+	var updated v1alpha1.AgentTask
+	require.NoError(t, crdClient.Get(ctx, client.ObjectKey{Namespace: "default", Name: "task-budget-cap"}, &updated))
+	assert.True(t, updated.Spec.Suspended)
+	assert.Equal(t, v1alpha1.AgentTaskPhasePaused, updated.Status.Phase)
+	assert.Equal(t, int64(40000), updated.Status.TokensConsumed)
+	assert.Equal(t, "1.2500", updated.Status.CostUSD)
+
+	// Verify token was revoked in TokenStore
+	assert.True(t, store.IsRevoked(ctx, "task-budget-cap", "default"))
+
+	// Subsequent request with the same token must be rejected with 401 Unauthorized
+	reqAfter := httptest.NewRequest(http.MethodPost, "/api/v1/agenttask/meter", bytes.NewReader(body))
+	reqAfter.Header.Set("Authorization", "Bearer "+token)
+	recAfter := httptest.NewRecorder()
+	handler.ServeHTTP(recAfter, reqAfter)
+	assert.Equal(t, http.StatusUnauthorized, recAfter.Code)
+}
+
+func TestLLMMeterHandler_RevokedAndNegativeInputs(t *testing.T) {
+	ctx := context.Background()
+	crdClient, verifier, store, handler := setupLLMMeterTest(t)
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "task-revoked",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective: "Test revoked token",
+			Repository: v1alpha1.AgentTaskRepository{
+				URL: "https://github.com/divergedev/diverge",
+			},
+		},
+	}
+	require.NoError(t, crdClient.Create(ctx, task))
+
+	token := mintTestMeterToken(t, verifier, store, pkgauth.Claims{
+		TaskID:    "task-revoked",
+		Namespace: "default",
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+
+	// Negative tokensUsed -> 400 Bad Request
+	negBody, _ := json.Marshal(LLMMeterRequest{
+		TokensUsed: -100,
+		CostUSD:    0.01,
+	})
+	negReq := httptest.NewRequest(http.MethodPost, "/api/v1/agenttask/meter", bytes.NewReader(negBody))
+	negReq.Header.Set("Authorization", "Bearer "+token)
+	negRec := httptest.NewRecorder()
+	handler.ServeHTTP(negRec, negReq)
+	assert.Equal(t, http.StatusBadRequest, negRec.Code)
+
+	// Revoke token -> 401 Unauthorized
+	require.NoError(t, store.RevokeToken(ctx, "task-revoked", "default"))
+	okBody, _ := json.Marshal(LLMMeterRequest{
+		TokensUsed: 100,
+		CostUSD:    0.01,
+	})
+	revReq := httptest.NewRequest(http.MethodPost, "/api/v1/agenttask/meter", bytes.NewReader(okBody))
+	revReq.Header.Set("Authorization", "Bearer "+token)
+	revRec := httptest.NewRecorder()
+	handler.ServeHTTP(revRec, revReq)
+	assert.Equal(t, http.StatusUnauthorized, revRec.Code)
+}

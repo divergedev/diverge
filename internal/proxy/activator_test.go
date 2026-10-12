@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,10 +17,17 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
-func TestActivatorServer_Healthz(t *testing.T) {
+func TestActivatorServer_HealthzAndReadyzDoNotWakeActivator(t *testing.T) {
+	var activatorHits atomic.Int32
+	activatorBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		activatorHits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer activatorBackend.Close()
+
 	kubeClient := fake.NewSimpleClientset()
 	cfg := ActivatorProxyConfig{
-		ActivatorURL:   "http://activator.default.svc.cluster.local",
+		ActivatorURL:   activatorBackend.URL,
 		TargetSelector: "app=test",
 	}
 
@@ -27,13 +35,155 @@ func TestActivatorServer_Healthz(t *testing.T) {
 	require.NoError(t, err)
 	defer server.Close()
 
-	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	for _, path := range []string{"/healthz", "/readyz"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rr := httptest.NewRecorder()
+
+		server.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code, "path %s should return 200", path)
+		assert.Equal(t, "ok", rr.Body.String(), "path %s should return ok", path)
+	}
+
+	assert.Equal(t, int32(0), activatorHits.Load(), "health/readiness probes must never hit Knative activator")
+}
+
+func TestActivatorServer_WakeupStatus(t *testing.T) {
+	var activatorHits atomic.Int32
+	activatorBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		activatorHits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer activatorBackend.Close()
+
+	cfg := ActivatorProxyConfig{
+		ActivatorURL:    activatorBackend.URL,
+		TargetNamespace: "default",
+		TargetSelector:  "app=test",
+	}
+
+	t.Run("not ready when scaled to zero", func(t *testing.T) {
+		kubeClient := fake.NewSimpleClientset()
+		server, err := NewActivatorServer(context.Background(), cfg, kubeClient)
+		require.NoError(t, err)
+		defer server.Close()
+
+		req := httptest.NewRequest(http.MethodGet, "/-/wakeup-status", nil)
+		rr := httptest.NewRecorder()
+		server.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code)
+		assert.Equal(t, "application/json", rr.Header().Get("Content-Type"))
+		assert.JSONEq(t, `{"ready": false}`, rr.Body.String())
+		assert.Equal(t, int32(0), activatorHits.Load())
+	})
+
+	t.Run("ready when pod is running and ready", func(t *testing.T) {
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-pod",
+				Namespace: "default",
+				Labels:    map[string]string{"app": "test"},
+			},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				PodIP: "10.0.0.42",
+				Conditions: []corev1.PodCondition{
+					{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+				},
+			},
+		}
+		kubeClient := fake.NewSimpleClientset(pod)
+		server, err := NewActivatorServer(context.Background(), cfg, kubeClient)
+		require.NoError(t, err)
+		defer server.Close()
+
+		time.Sleep(50 * time.Millisecond)
+
+		req := httptest.NewRequest(http.MethodGet, "/-/wakeup-status", nil)
+		rr := httptest.NewRecorder()
+		server.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code)
+		assert.Equal(t, "application/json", rr.Header().Get("Content-Type"))
+		assert.JSONEq(t, `{"ready": true}`, rr.Body.String())
+		assert.Equal(t, int32(0), activatorHits.Load())
+	})
+}
+
+func TestActivatorServer_WakeupSplashPage(t *testing.T) {
+	wakeCh := make(chan string, 1)
+	activatorBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case wakeCh <- r.Header.Get("Knative-Serving-Revision"):
+		default:
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer activatorBackend.Close()
+
+	kubeClient := fake.NewSimpleClientset()
+	cfg := ActivatorProxyConfig{
+		ActivatorURL:    activatorBackend.URL,
+		TargetNamespace: "default",
+		TargetSelector:  "serving.knative.dev/revision=my-rev-00001",
+		PreviewEnvValue: "pr-99",
+	}
+
+	server, err := NewActivatorServer(context.Background(), cfg, kubeClient)
+	require.NoError(t, err)
+	defer server.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "http://pr-99.preview.example.com/", nil)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+	req.Header.Set("X-Diverge-Wake-Splash", "true")
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
 
-	assert.Equal(t, http.StatusOK, rr.Code)
-	assert.Equal(t, "ok", rr.Body.String())
+	assert.Equal(t, http.StatusAccepted, rr.Code)
+	assert.Equal(t, "text/html; charset=utf-8", rr.Header().Get("Content-Type"))
+	assert.Equal(t, "2", rr.Header().Get("Retry-After"))
+	assert.Contains(t, rr.Body.String(), "Waking up preview environment...")
+	assert.Contains(t, rr.Body.String(), "/-/wakeup-status")
+
+	select {
+	case rev := <-wakeCh:
+		assert.Equal(t, "my-rev-00001", rev)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected background wake request to reach Knative activator")
+	}
+}
+
+func TestActivatorServer_ConnectionHeaderProtection(t *testing.T) {
+	activatorBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "preview-123", r.Header.Get("X-Preview-Env"))
+		assert.Equal(t, "rev-123", r.Header.Get("Knative-Serving-Revision"))
+		assert.Equal(t, "default", r.Header.Get("Knative-Serving-Namespace"))
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer activatorBackend.Close()
+
+	kubeClient := fake.NewSimpleClientset()
+	cfg := ActivatorProxyConfig{
+		ActivatorURL:    activatorBackend.URL,
+		TargetNamespace: "default",
+		TargetSelector:  "app=test",
+		TargetRevision:  "rev-123",
+		PreviewEnvValue: "preview-123",
+	}
+
+	server, err := NewActivatorServer(context.Background(), cfg, kubeClient)
+	require.NoError(t, err)
+	defer server.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Connection", "X-Preview-Env, Knative-Serving-Revision, Knative-Serving-Namespace")
+	rr := httptest.NewRecorder()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusAccepted, rr.Code)
 }
 
 func TestActivatorServer_Routing(t *testing.T) {

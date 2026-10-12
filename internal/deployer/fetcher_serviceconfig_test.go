@@ -186,3 +186,38 @@ func TestServiceConfigFetcher_FeatureFlagInjection(t *testing.T) {
 	assert.Equal(t, "/etc/diverge/flags/flags.json", envMap["FLAGD_FLAG_PATH"])
 	assert.Equal(t, "val-123", envMap["CUSTOM_FLAG_VAR"])
 }
+
+func TestServiceConfigFetcher_SchemaDBAutoProvisionedSecret(t *testing.T) {
+	fetcher := &ServiceConfigFetcher{}
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-99",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Database: v1alpha1.EnvironmentDatabase{
+				Mode: "schema",
+			},
+			ServiceConfig: &v1alpha1.ServicePreviewConfig{
+				ServiceName: "api",
+				Port:        8080,
+				Image:       "api:latest",
+			},
+		},
+	}
+
+	objs, err := fetcher.Fetch(context.Background(), env)
+	require.NoError(t, err)
+	require.Len(t, objs, 2)
+
+	deploy := objs[0]
+	containers := deploy.Object["spec"].(map[string]interface{})["template"].(map[string]interface{})["spec"].(map[string]interface{})["containers"].([]interface{})
+	container := containers[0].(map[string]interface{})
+	envFrom, ok := container["envFrom"].([]interface{})
+	require.True(t, ok, "expected envFrom to be mounted for schema database mode")
+	require.Len(t, envFrom, 1)
+	secretRef := envFrom[0].(map[string]interface{})["secretRef"].(map[string]interface{})
+	expectedName := sanitizeDBEnvSecretName("diverge-db-env-pr-99", "pr-99", 63)
+	assert.Equal(t, expectedName, secretRef["name"])
+	assert.LessOrEqual(t, len(expectedName), 63)
+}

@@ -67,11 +67,20 @@ func TestIsAllowedOrigin(t *testing.T) {
 		want           bool
 	}{
 		{"https://mr-42.preview.example.com", "preview.example.com", true},
+		{"http://mr-42.preview.example.com", "preview.example.com", true},
 		{"https://preview.example.com", "preview.example.com", true},
 		{"https://mr-42.preview.example.com:8080", "preview.example.com", true},
+		{"https://MR-42.PREVIEW.EXAMPLE.COM", "preview.example.com", true},
 		{"https://evil.com", "preview.example.com", false},
 		{"https://notpreview.example.com", "preview.example.com", false},
 		{"https://example.com", "preview.example.com", false},
+		{"https://evil.com/https://mr-42.preview.example.com", "preview.example.com", false},
+		{"https://evil.com?.preview.example.com", "preview.example.com", false},
+		{"https://evil.com#.preview.example.com", "preview.example.com", false},
+		{"https://preview.example.com@evil.com", "preview.example.com", false},
+		{"https://user:pass@mr-42.preview.example.com", "preview.example.com", false},
+		{"https://mr-42.preview.example.com/path", "preview.example.com", false},
+		{"javascript://mr-42.preview.example.com", "preview.example.com", false},
 		{"", "preview.example.com", false},
 		{"https://mr-42.preview.example.com", "", false},
 	}

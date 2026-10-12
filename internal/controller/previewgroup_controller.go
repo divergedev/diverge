@@ -590,7 +590,7 @@ func derivePreviewGroupPhase(services []divergeiov1alpha1.PreviewGroupServiceSta
 		return divergeiov1alpha1.PreviewGroupPhaseRunning
 	case failed == total:
 		return divergeiov1alpha1.PreviewGroupPhaseFailed
-	case failed > 0 && running > 0:
+	case failed > 0:
 		return divergeiov1alpha1.PreviewGroupPhaseDegraded
 	case deploying > 0:
 		return divergeiov1alpha1.PreviewGroupPhaseDeploying
@@ -614,7 +614,11 @@ func childEnvironmentName(groupName, serviceName string) string {
 	if len(raw) <= 63-9 {
 		return raw + "-" + hash
 	}
-	return raw[:63-9] + "-" + hash
+	prefix := strings.TrimRight(raw[:63-9], "-")
+	if prefix == "" {
+		prefix = "pg"
+	}
+	return prefix + "-" + hash
 }
 
 // cleanupRoutesAndEndpoints removes routing resources for a PreviewGroup

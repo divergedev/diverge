@@ -49,13 +49,22 @@ jobs:
           cp config/crd/bases/*.yaml charts/diverge/crds/
       - name: Package Helm chart
         run: |
-          helm package charts/diverge --version ${{ steps.tag.outputs.version }} --app-version ${{ steps.tag.outputs.version }}
+          helm package charts/diverge --version ${{ steps.tag.outputs.version }} --app-version ${{ github.ref_name }}
       - name: Push Helm chart to OCI
         run: |
           helm push diverge-${{ steps.tag.outputs.version }}.tgz oci://ghcr.io/divergedev/charts
       - name: Generate SBOM
-        run: syft ghcr.io/divergedev/diverge:${{ github.ref_name }} -o spdx-json > diverge-sbom.spdx.json
+        run: |
+          syft ghcr.io/divergedev/diverge:${{ github.ref_name }} -o spdx-json > diverge-sbom.spdx.json
+          syft ghcr.io/divergedev/activator-proxy:${{ github.ref_name }} -o spdx-json > activator-proxy-sbom.spdx.json
+          syft ghcr.io/divergedev/diverge-cli:${{ github.ref_name }} -o spdx-json > diverge-cli-sbom.spdx.json
       - name: Sign container image
-        run: cosign sign --yes ghcr.io/divergedev/diverge:${{ github.ref_name }}
+        run: |
+          cosign sign --yes ghcr.io/divergedev/diverge:${{ github.ref_name }}
+          cosign sign --yes ghcr.io/divergedev/activator-proxy:${{ github.ref_name }}
+          cosign sign --yes ghcr.io/divergedev/diverge-cli:${{ github.ref_name }}
       - name: Attach SBOM
-        run: cosign attach sbom --sbom diverge-sbom.spdx.json ghcr.io/divergedev/diverge:${{ github.ref_name }}
+        run: |
+          cosign attach sbom --sbom diverge-sbom.spdx.json ghcr.io/divergedev/diverge:${{ github.ref_name }}
+          cosign attach sbom --sbom activator-proxy-sbom.spdx.json ghcr.io/divergedev/activator-proxy:${{ github.ref_name }}
+          cosign attach sbom --sbom diverge-cli-sbom.spdx.json ghcr.io/divergedev/diverge-cli:${{ github.ref_name }}

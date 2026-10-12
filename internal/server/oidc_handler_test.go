@@ -6,12 +6,14 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
+	"hegel.dev/go/hegel"
 
 	"github.com/divergedev/diverge/internal/server/auth"
 )
@@ -365,4 +367,43 @@ func TestOIDCHandler_HandleCallback_AllowedGroupsAndRedirectSanitization(t *test
 	if !foundToken {
 		t.Error("expected diverge_token cookie to be set for allowed group")
 	}
+}
+
+func TestSanitizeReturnURL_PBT(t *testing.T) {
+	hegel.Test(t, func(ht *hegel.T) {
+		prefix := hegel.Draw(ht, hegel.SampledFrom([]string{
+			"",
+			"/",
+			"//",
+			"/\\",
+			"https://",
+			"http://",
+			"javascript:",
+			"/dashboard/",
+			"/environments?ns=",
+		}))
+		suffix := hegel.Draw(ht, hegel.Text().MinSize(0).MaxSize(80))
+		raw := prefix + suffix
+
+		out := sanitizeReturnURL(raw)
+		if !strings.HasPrefix(out, "/") {
+			t.Fatalf("sanitizeReturnURL(%q) = %q, must start with \"/\"", raw, out)
+		}
+		if strings.HasPrefix(out, "//") {
+			t.Fatalf("sanitizeReturnURL(%q) = %q, must not start with \"//\"", raw, out)
+		}
+		if strings.ContainsAny(out, "\\\r\n\t") {
+			t.Fatalf("sanitizeReturnURL(%q) = %q, must not contain backslash or control whitespace", raw, out)
+		}
+		u, err := url.Parse(out)
+		if err != nil {
+			t.Fatalf("sanitizeReturnURL(%q) = %q failed url.Parse: %v", raw, out, err)
+		}
+		if u.Scheme != "" || u.Host != "" {
+			t.Fatalf("sanitizeReturnURL(%q) = %q has non-empty Scheme=%q or Host=%q", raw, out, u.Scheme, u.Host)
+		}
+		if idempotent := sanitizeReturnURL(out); idempotent != out {
+			t.Fatalf("sanitizeReturnURL is not idempotent: sanitizeReturnURL(%q) = %q != %q", out, idempotent, out)
+		}
+	})
 }

@@ -39,11 +39,10 @@ func TestResolveDBSecret_ConnectionRef(t *testing.T) {
 }
 
 func TestResolveDBSecret_SchemaMode(t *testing.T) {
-	// Schema mode no longer uses secrets — env vars are injected by the controller
-	// via DatabaseProvider.Provision()
 	env := testEnvWithDB("preview-42", "schema", "", "")
 	secret := resolveDBSecret(env)
-	assert.Empty(t, secret, "schema mode should not return a secret (env vars injected by controller)")
+	expected := sanitizeDBEnvSecretName("diverge-db-env-preview-42", "preview-42", 63)
+	assert.Equal(t, expected, secret, "schema mode should return deterministic auto-provisioned secret name")
 }
 
 func TestResolveDBSecret_NoDatabase(t *testing.T) {
@@ -65,8 +64,6 @@ func TestResolveDBSecret_ConnectionRefOverridesSchemaMode(t *testing.T) {
 }
 
 func TestServiceConfigFetcher_WithSchemaDB_NoEnvFrom(t *testing.T) {
-	// Schema mode env var injection is now handled by the controller via
-	// DatabaseProvider.Provision(), not by the deployer.
 	env := testEnvWithDB("preview-42", "schema", "", "")
 	fetcher := &ServiceConfigFetcher{}
 	objects, err := fetcher.Fetch(context.Background(), env)
@@ -79,8 +76,13 @@ func TestServiceConfigFetcher_WithSchemaDB_NoEnvFrom(t *testing.T) {
 	require.Len(t, containers, 1)
 
 	container := containers[0].(map[string]interface{})
-	_, hasEnvFrom := container["envFrom"]
-	assert.False(t, hasEnvFrom, "schema mode should not inject envFrom (controller handles it)")
+	envFrom, hasEnvFrom := container["envFrom"].([]interface{})
+	require.True(t, hasEnvFrom, "schema mode should inject envFrom with auto-provisioned secret")
+	require.Len(t, envFrom, 1)
+	ref := envFrom[0].(map[string]interface{})
+	secretRef := ref["secretRef"].(map[string]interface{})
+	expected := sanitizeDBEnvSecretName("diverge-db-env-preview-42", "preview-42", 63)
+	assert.Equal(t, expected, secretRef["name"])
 }
 
 func TestServiceConfigFetcher_WithConnectionRef_InjectsEnvFrom(t *testing.T) {

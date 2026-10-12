@@ -101,6 +101,11 @@ func (h *GitHubWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	}
 
 	event := r.Header.Get("X-GitHub-Event")
+	if event == "issue_comment" {
+		action = "issue_comment"
+		h.handleIssueComment(ctx, w, bodyBytes)
+		return
+	}
 	if event != "pull_request" {
 		w.WriteHeader(http.StatusOK)
 		return
@@ -130,6 +135,82 @@ func (h *GitHubWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+type GitHubIssueCommentPayload struct {
+	Action string `json:"action"`
+	Issue  struct {
+		Number      int `json:"number"`
+		PullRequest *struct {
+			URL string `json:"url"`
+		} `json:"pull_request,omitempty"`
+	} `json:"issue"`
+	PullRequest struct {
+		Number int `json:"number"`
+		Head   struct {
+			Ref string `json:"ref"`
+		} `json:"head"`
+	} `json:"pull_request"`
+	Comment struct {
+		Body string `json:"body"`
+	} `json:"comment"`
+	Repository struct {
+		FullName      string `json:"full_name"`
+		CloneURL      string `json:"clone_url"`
+		HTMLURL       string `json:"html_url"`
+		DefaultBranch string `json:"default_branch"`
+	} `json:"repository"`
+}
+
+func (h *GitHubWebhookHandler) handleIssueComment(ctx context.Context, w http.ResponseWriter, bodyBytes []byte) {
+	logger := log.FromContext(ctx).WithName("github-webhook")
+
+	var payload GitHubIssueCommentPayload
+	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+		logger.Error(err, "Failed to decode issue_comment payload")
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	if payload.Action != "" && payload.Action != "created" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	cmd, ok := ParseSlashCommand(payload.Comment.Body)
+	if !ok {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	prNumber := payload.Issue.Number
+	if prNumber == 0 {
+		prNumber = payload.PullRequest.Number
+	}
+
+	repoURL := payload.Repository.CloneURL
+	if repoURL == "" && payload.Repository.HTMLURL != "" {
+		repoURL = payload.Repository.HTMLURL
+	}
+	if repoURL == "" && payload.Repository.FullName != "" {
+		repoURL = "https://github.com/" + payload.Repository.FullName
+	}
+
+	branch := payload.PullRequest.Head.Ref
+	if branch == "" {
+		branch = payload.Repository.DefaultBranch
+	}
+	if branch == "" {
+		branch = "main"
+	}
+
+	if err := ExecuteSlashCommand(ctx, h.Client, h.DefaultNS, cmd, repoURL, branch, prNumber); err != nil {
+		logger.Error(err, "Failed to execute slash command", "action", cmd.Action, "pr", prNumber)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
 	}
 
 	w.WriteHeader(http.StatusOK)

@@ -356,3 +356,54 @@ func TestGitLabWebhookDeletesOnMerge(t *testing.T) {
 		t.Fatalf("Expected 200, got %d", rr.Code)
 	}
 }
+
+func TestGitLabWebhookNoteSlashCommand(t *testing.T) {
+	fakeK8s := newTestClient()
+
+	handler := &GitLabWebhookHandler{
+		Client:    fakeK8s,
+		Config:    WebhookConfig{SecretToken: "secret"},
+		DefaultNS: "preview",
+	}
+
+	body := `{
+		"object_kind": "note",
+		"object_attributes": {
+			"note": "/diverge fix update database connection pool timeout",
+			"noteable_type": "MergeRequest"
+		},
+		"merge_request": {
+			"iid": 88,
+			"source_branch": "feat/db-pool"
+		},
+		"project": {
+			"path_with_namespace": "team/payments-api",
+			"git_http_url": "https://gitlab.com/team/payments-api.git"
+		}
+	}`
+
+	req, _ := http.NewRequest(http.MethodPost, "/", bytes.NewBufferString(body))
+	req.Header.Set("X-Gitlab-Token", "secret")
+	req.Header.Set("X-Gitlab-Event", "Note Hook")
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Expected 200, got %d", rr.Code)
+	}
+
+	var tasks divergeiov1alpha1.AgentTaskList
+	if err := fakeK8s.List(context.Background(), &tasks, client.InNamespace("preview")); err != nil {
+		t.Fatalf("Failed to list AgentTasks: %v", err)
+	}
+	if len(tasks.Items) != 1 {
+		t.Fatalf("Expected 1 AgentTask created, got %d", len(tasks.Items))
+	}
+	if tasks.Items[0].Spec.Objective != "update database connection pool timeout" {
+		t.Errorf("Unexpected objective: %s", tasks.Items[0].Spec.Objective)
+	}
+	if tasks.Items[0].Annotations["divergedev.com/pr-number"] != "88" {
+		t.Errorf("Expected pr-number annotation 88, got %s", tasks.Items[0].Annotations["divergedev.com/pr-number"])
+	}
+}

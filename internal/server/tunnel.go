@@ -118,6 +118,18 @@ func (tm *TunnelManager) Tunnel(ctx context.Context, stream *connect.BidiStream[
 		return fmt.Errorf("first message must be TunnelRegister")
 	}
 
+	if err := ValidateDNS1123Label(reg.PreviewId, "preview_id"); err != nil {
+		return err
+	}
+	if err := ValidateDNS1123Label(reg.Namespace, "namespace"); err != nil {
+		return err
+	}
+	if reg.Service != "" {
+		if err := ValidateDNS1123Label(reg.Service, "service"); err != nil {
+			return err
+		}
+	}
+
 	// 2. Validate auth (done by middleware)
 	// 3. RBAC check
 	if err := AuthorizeAction(ctx, tm.k8sClient, tm.auditLogger, "create", reg.Namespace, "environments"); err != nil {
@@ -146,7 +158,7 @@ func (tm *TunnelManager) Tunnel(ctx context.Context, stream *connect.BidiStream[
 	if previousHolder != "" {
 		tm.logger.Info("evicted previous tunnel holder", "previous", previousHolder, "preview-id", reg.PreviewId)
 		// If previous holder is on this pod, cancel it
-		tm.evictLocalTunnel(reg.PreviewId)
+		tm.evictLocalTunnel(reg.Namespace, reg.PreviewId)
 	}
 
 	// 4. Create headless Service + EndpointSlice
@@ -182,14 +194,15 @@ func (tm *TunnelManager) Tunnel(ctx context.Context, stream *connect.BidiStream[
 		cancel:      tCancel,
 	}
 
+	mapKey := tunnelMapKey(reg.Namespace, reg.PreviewId)
 	tm.mu.Lock()
-	tm.tunnels[reg.PreviewId] = at
+	tm.tunnels[mapKey] = at
 	tm.mu.Unlock()
 
 	defer func() {
 		tm.mu.Lock()
-		if tm.tunnels[reg.PreviewId] == at {
-			delete(tm.tunnels, reg.PreviewId)
+		if tm.tunnels[mapKey] == at {
+			delete(tm.tunnels, mapKey)
 		}
 		tm.mu.Unlock()
 
@@ -385,6 +398,10 @@ func (tm *TunnelManager) Tunnel(ctx context.Context, stream *connect.BidiStream[
 	}
 }
 
+func tunnelMapKey(namespace, previewID string) string {
+	return namespace + "/" + previewID
+}
+
 // P0 #1: Validate that authenticated user owns the preview-id
 func (tm *TunnelManager) validatePreviewOwnership(ctx context.Context, reg *pb.TunnelRegister) error {
 	user, ok := auth.UserInfoFromContext(ctx)
@@ -393,28 +410,35 @@ func (tm *TunnelManager) validatePreviewOwnership(ctx context.Context, reg *pb.T
 	}
 
 	var pg divergeiov1alpha1.PreviewGroup
-	err := tm.crdClient.Get(ctx, client.ObjectKey{Name: reg.PreviewId}, &pg)
+	err := tm.crdClient.Get(ctx, client.ObjectKey{Namespace: reg.Namespace, Name: reg.PreviewId}, &pg)
 	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("failed to look up preview group: %w", err)
 		}
-		return fmt.Errorf("failed to look up preview group: %w", err)
+	} else if pg.Spec.Owner != "" && pg.Spec.Owner != user.Username {
+		return fmt.Errorf("preview-id %q is owned by %q", reg.PreviewId, pg.Spec.Owner)
 	}
 
-	if pg.Spec.Owner != "" && pg.Spec.Owner != user.Username {
-		return fmt.Errorf("preview-id %q is owned by %q", reg.PreviewId, pg.Spec.Owner)
+	var env divergeiov1alpha1.Environment
+	if err := tm.crdClient.Get(ctx, client.ObjectKey{Namespace: reg.Namespace, Name: reg.PreviewId}, &env); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("failed to look up environment: %w", err)
+		}
+	} else if owner := env.Annotations["divergedev.com/created-by"]; owner != "" && owner != user.Username {
+		return fmt.Errorf("preview-id %q is owned by %q", reg.PreviewId, owner)
 	}
 
 	return nil
 }
 
 // evictLocalTunnel cancels a tunnel on this pod if it exists.
-func (tm *TunnelManager) evictLocalTunnel(previewID string) {
+func (tm *TunnelManager) evictLocalTunnel(namespace, previewID string) {
+	key := tunnelMapKey(namespace, previewID)
 	tm.mu.Lock()
-	if existing, ok := tm.tunnels[previewID]; ok {
-		tm.logger.Info("evicting local tunnel", "preview-id", previewID, "tunnel-id", existing.tunnelID)
+	if existing, ok := tm.tunnels[key]; ok {
+		tm.logger.Info("evicting local tunnel", "namespace", namespace, "preview-id", previewID, "tunnel-id", existing.tunnelID)
 		existing.cancel()
-		delete(tm.tunnels, previewID)
+		delete(tm.tunnels, key)
 	}
 	tm.mu.Unlock()
 }
@@ -624,16 +648,57 @@ func (tm *TunnelManager) refreshTunnelTTL(ctx context.Context, reg *pb.TunnelReg
 	}
 }
 
+func (tm *TunnelManager) getActiveTunnelInNamespace(namespace, previewID string) (*activeTunnel, bool) {
+	if namespace == "" {
+		return tm.getActiveTunnel(previewID)
+	}
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+	at, ok := tm.tunnels[tunnelMapKey(namespace, previewID)]
+	return at, ok
+}
+
+func (tm *TunnelManager) getActiveTunnel(previewID string) (*activeTunnel, bool) {
+	if previewID == "" {
+		return nil, false
+	}
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+	var matched *activeTunnel
+	matches := 0
+	suffix := "/" + previewID
+	for k, at := range tm.tunnels {
+		if k == previewID || (at != nil && at.previewID == previewID) || strings.HasSuffix(k, suffix) {
+			matched = at
+			matches++
+		}
+	}
+	if matches != 1 {
+		return nil, false
+	}
+	return matched, true
+}
+
 // ForwardRequest sends an HTTP request through the tunnel to the CLI.
 // P0 #4: Supports chunked streaming — for large bodies, sends chunks via TunnelRequestChunk.
 func (tm *TunnelManager) ForwardRequest(ctx context.Context, previewID string, req *pb.TunnelHTTPRequest) (*pb.TunnelHTTPResponse, error) {
-	tm.mu.RLock()
-	at, ok := tm.tunnels[previewID]
-	tm.mu.RUnlock()
+	at, ok := tm.getActiveTunnel(previewID)
 	if !ok {
 		return nil, fmt.Errorf("tunnel not found for preview-id: %s", previewID)
 	}
+	return tm.forwardToActiveTunnel(ctx, at, req)
+}
 
+// ForwardRequestInNamespace sends an HTTP request through the tunnel in a specific namespace.
+func (tm *TunnelManager) ForwardRequestInNamespace(ctx context.Context, namespace, previewID string, req *pb.TunnelHTTPRequest) (*pb.TunnelHTTPResponse, error) {
+	at, ok := tm.getActiveTunnelInNamespace(namespace, previewID)
+	if !ok {
+		return nil, fmt.Errorf("tunnel not found for namespace %s preview-id: %s", namespace, previewID)
+	}
+	return tm.forwardToActiveTunnel(ctx, at, req)
+}
+
+func (tm *TunnelManager) forwardToActiveTunnel(ctx context.Context, at *activeTunnel, req *pb.TunnelHTTPRequest) (*pb.TunnelHTTPResponse, error) {
 	respCh := make(chan *pb.TunnelHTTPResponse, 1)
 	at.respMu.Lock()
 	at.respWg[req.RequestId] = respCh
@@ -678,9 +743,12 @@ func (tm *TunnelManager) ForwardRequest(ctx context.Context, previewID string, r
 }
 
 func (tm *TunnelManager) HasTunnel(previewID string) bool {
-	tm.mu.RLock()
-	defer tm.mu.RUnlock()
-	_, ok := tm.tunnels[previewID]
+	_, ok := tm.getActiveTunnel(previewID)
+	return ok
+}
+
+func (tm *TunnelManager) HasTunnelInNamespace(namespace, previewID string) bool {
+	_, ok := tm.getActiveTunnelInNamespace(namespace, previewID)
 	return ok
 }
 
@@ -690,11 +758,16 @@ func (tm *TunnelManager) HasTunnel(previewID string) bool {
 // Validates Host header to prevent open proxy abuse.
 func (tm *TunnelManager) NewTunnelProxyHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Determine preview-id from Host header or x-diverge-env
+		// Determine preview-id and namespace from Host header or x-diverge-env
+		hostPreviewID, hostNamespace := extractPreviewAndNamespaceFromHost(r.Host)
 		previewID := r.Header.Get("x-diverge-env")
 		if previewID == "" {
 			// P0 #3: Extract from Host header (diverge-tunnel-{preview-id}.{ns}.svc)
-			previewID = extractPreviewIDFromHost(r.Host)
+			previewID = hostPreviewID
+		}
+		namespace := r.Header.Get("x-diverge-namespace")
+		if namespace == "" {
+			namespace = hostNamespace
 		}
 		if previewID == "" {
 			http.Error(w, "cannot determine tunnel target", http.StatusBadRequest)
@@ -702,7 +775,8 @@ func (tm *TunnelManager) NewTunnelProxyHandler() http.Handler {
 		}
 
 		// P0 #6: Validate Host header matches expected tunnel service pattern
-		if !tm.HasTunnel(previewID) {
+		at, ok := tm.getActiveTunnelInNamespace(namespace, previewID)
+		if !ok {
 			http.Error(w, "tunnel not found", http.StatusBadGateway)
 			return
 		}
@@ -728,9 +802,9 @@ func (tm *TunnelManager) NewTunnelProxyHandler() http.Handler {
 		}
 
 		// For small bodies, just forward directly
-		resp, fwdErr := tm.ForwardRequest(r.Context(), previewID, tunnelReq)
+		resp, fwdErr := tm.forwardToActiveTunnel(r.Context(), at, tunnelReq)
 		if fwdErr != nil {
-			tm.logger.Error("tunnel forward error", "err", fwdErr, "preview_id", previewID)
+			tm.logger.Error("tunnel forward error", "err", fwdErr, "preview_id", previewID, "namespace", namespace)
 			http.Error(w, "bad gateway", http.StatusBadGateway)
 			return
 		}
@@ -745,23 +819,40 @@ func (tm *TunnelManager) NewTunnelProxyHandler() http.Handler {
 	})
 }
 
-// extractPreviewIDFromHost extracts preview-id from Host header.
+// extractPreviewAndNamespaceFromHost extracts preview-id and namespace from Host header.
 // Expected format: diverge-tunnel-{preview-id}.{namespace}.svc.cluster.local
-func extractPreviewIDFromHost(host string) string {
+func extractPreviewAndNamespaceFromHost(host string) (previewID, namespace string) {
 	// Strip port
 	if idx := strings.IndexByte(host, ':'); idx != -1 {
 		host = host[:idx]
 	}
 	const prefix = "diverge-tunnel-"
 	if !strings.HasPrefix(host, prefix) {
-		return ""
+		return "", ""
 	}
-	// Extract preview-id (everything between prefix and first dot)
 	rest := host[len(prefix):]
-	if idx := strings.IndexByte(rest, '.'); idx != -1 {
-		return rest[:idx]
+	dotIdx := strings.IndexByte(rest, '.')
+	if dotIdx == -1 {
+		return rest, ""
 	}
-	return rest
+	previewID = rest[:dotIdx]
+	if previewID == "" {
+		return "", ""
+	}
+	afterFirstDot := rest[dotIdx+1:]
+	if nextDot := strings.IndexByte(afterFirstDot, '.'); nextDot != -1 {
+		namespace = afterFirstDot[:nextDot]
+	} else {
+		namespace = afterFirstDot
+	}
+	return previewID, namespace
+}
+
+// extractPreviewIDFromHost extracts preview-id from Host header.
+// Expected format: diverge-tunnel-{preview-id}.{namespace}.svc.cluster.local
+func extractPreviewIDFromHost(host string) string {
+	previewID, _ := extractPreviewAndNamespaceFromHost(host)
+	return previewID
 }
 
 // headersToProto converts http.Header to repeated HeaderEntry (preserves multi-values).

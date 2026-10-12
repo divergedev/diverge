@@ -350,3 +350,55 @@ func TestGitHubWebhookDeletesEnvironmentError(t *testing.T) {
 		t.Fatalf("Expected 500, got %d", rr.Code)
 	}
 }
+
+func TestGitHubWebhookIssueCommentSlashCommand(t *testing.T) {
+	fakeK8s := newTestClient()
+
+	handler := &GitHubWebhookHandler{
+		Client:    fakeK8s,
+		Config:    WebhookConfig{SecretToken: "secret"},
+		DefaultNS: "preview",
+	}
+
+	body := `{
+		"action": "created",
+		"issue": {
+			"number": 77,
+			"pull_request": {"url": "https://api.github.com/repos/divergedev/demo-api/pulls/77"}
+		},
+		"comment": {
+			"body": "/diverge fix resolve race condition in worker pool"
+		},
+		"repository": {
+			"full_name": "divergedev/demo-api",
+			"clone_url": "https://github.com/divergedev/demo-api.git",
+			"default_branch": "main"
+		}
+	}`
+	sig := generateSignature("secret", body)
+
+	req, _ := http.NewRequest(http.MethodPost, "/", bytes.NewBufferString(body))
+	req.Header.Set("X-Hub-Signature-256", sig)
+	req.Header.Set("X-GitHub-Event", "issue_comment")
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Expected 200, got %d", rr.Code)
+	}
+
+	var tasks divergeiov1alpha1.AgentTaskList
+	if err := fakeK8s.List(context.Background(), &tasks, client.InNamespace("preview")); err != nil {
+		t.Fatalf("Failed to list AgentTasks: %v", err)
+	}
+	if len(tasks.Items) != 1 {
+		t.Fatalf("Expected 1 AgentTask created, got %d", len(tasks.Items))
+	}
+	if tasks.Items[0].Spec.Objective != "resolve race condition in worker pool" {
+		t.Errorf("Unexpected objective: %s", tasks.Items[0].Spec.Objective)
+	}
+	if tasks.Items[0].Annotations["divergedev.com/pr-number"] != "77" {
+		t.Errorf("Expected pr-number annotation 77, got %s", tasks.Items[0].Annotations["divergedev.com/pr-number"])
+	}
+}

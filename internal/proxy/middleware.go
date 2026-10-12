@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -39,19 +40,31 @@ func CORSMiddleware(previewDomain string, next http.Handler) http.Handler {
 	})
 }
 
-// isAllowedOrigin checks if the origin's host ends with the preview domain.
+// isAllowedOrigin checks if the origin is a valid HTTP(S) origin whose host matches or is a subdomain of previewDomain.
 func isAllowedOrigin(origin, previewDomain string) bool {
-	if previewDomain == "" {
+	if origin == "" || previewDomain == "" {
 		return false
 	}
-	// Extract host from origin (e.g., "https://mr-42.preview.example.com" → "mr-42.preview.example.com")
-	host := origin
-	if idx := strings.Index(origin, "://"); idx != -1 {
-		host = origin[idx+3:]
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
 	}
-	// Strip port if present
-	if idx := strings.Index(host, ":"); idx != -1 {
-		host = host[:idx]
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
 	}
-	return host == previewDomain || strings.HasSuffix(host, "."+previewDomain)
+	if u.User != nil {
+		return false
+	}
+	if u.Path != "" && u.Path != "/" {
+		return false
+	}
+	if u.RawQuery != "" || u.Fragment != "" || strings.HasSuffix(origin, "?") || strings.HasSuffix(origin, "#") {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return false
+	}
+	pd := strings.ToLower(previewDomain)
+	return host == pd || strings.HasSuffix(host, "."+pd)
 }

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"time"
 )
 
 // NewTunnelProxyServer creates a dedicated HTTP server for the tunnel proxy.
@@ -12,13 +13,20 @@ import (
 // P0 #6: NO auth middleware — cluster-internal traffic only.
 // Host-header validation prevents open proxy abuse.
 func NewTunnelProxyServer(tm *TunnelManager, port int, logger *slog.Logger) *http.Server {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	mux := http.NewServeMux()
 	mux.Handle("/", tm.NewTunnelProxyHandler())
 
 	return &http.Server{
-		Addr:     fmt.Sprintf(":%d", port),
-		Handler:  mux,
-		ErrorLog: slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
+		Addr:              fmt.Sprintf(":%d", port),
+		Handler:           mux,
+		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 }
 

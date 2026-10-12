@@ -166,3 +166,34 @@ func TestPBT_DSNSecret(t *testing.T) {
 		assert.Equal(t, dsn, secret.StringData["url"])
 	})
 }
+
+func TestPBT_SanitizeK8sName(t *testing.T) {
+	dnsRegex := regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+
+	hegel.Test(t, func(ht *hegel.T) {
+		raw := hegel.Draw(ht, hegel.Text())
+		hashInput := hegel.Draw(ht, hegel.Text())
+		maxLen := hegel.Draw(ht, hegel.Integers(-5, 253))
+
+		out := sanitizeK8sName(raw, hashInput, maxLen)
+		effectiveMax := maxLen
+		if effectiveMax < 10 {
+			effectiveMax = 10
+		}
+		assert.LessOrEqual(t, len(out), effectiveMax)
+		assert.NotContains(t, out, "--", "sanitized name %q must not contain consecutive hyphens", out)
+		assert.True(t, dnsRegex.MatchString(out), "sanitized name %q must be a valid DNS-1123 label", out)
+	})
+}
+
+func TestPBT_TruncateLabel(t *testing.T) {
+	hegel.Test(t, func(ht *hegel.T) {
+		val := hegel.Draw(ht, hegel.Text())
+		out := truncateLabel(val)
+		assert.LessOrEqual(t, len(out), 63)
+		if len(out) > 0 {
+			last := out[len(out)-1]
+			assert.NotContains(t, "-_.", string(last), "truncated label %q must not end with -_.", out)
+		}
+	})
+}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -141,4 +142,54 @@ func TestTunnelGC_SweepsExpiredEndpoints(t *testing.T) {
 
 	_, err = fakeK8s.CoreV1().Endpoints("default").Get(context.Background(), "diverge-tunnel-old-ep", metav1.GetOptions{})
 	assert.Error(t, err, "expired endpoints should be deleted by GC")
+}
+
+func TestTunnelGC_SweepsLeasesViaRenewTimeAndDuration(t *testing.T) {
+	fakeK8s := fake.NewSimpleClientset()
+	logger := slog.Default()
+	gc := NewTunnelGC(fakeK8s, logger)
+
+	dur := int32(60)
+	expiredRenew := metav1.NewMicroTime(time.Now().Add(-2 * time.Minute))
+	activeRenew := metav1.NewMicroTime(time.Now().Add(-10 * time.Second))
+
+	expiredLease := &coordinationv1.Lease{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "diverge-tunnel-lease-expired",
+			Namespace: "default",
+			Labels: map[string]string{
+				"divergedev.com/tunnel": "true",
+			},
+		},
+		Spec: coordinationv1.LeaseSpec{
+			RenewTime:            &expiredRenew,
+			LeaseDurationSeconds: &dur,
+		},
+	}
+	activeLease := &coordinationv1.Lease{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "diverge-tunnel-lease-active",
+			Namespace: "default",
+			Labels: map[string]string{
+				"divergedev.com/tunnel": "true",
+			},
+		},
+		Spec: coordinationv1.LeaseSpec{
+			RenewTime:            &activeRenew,
+			LeaseDurationSeconds: &dur,
+		},
+	}
+
+	_, err := fakeK8s.CoordinationV1().Leases("default").Create(context.Background(), expiredLease, metav1.CreateOptions{})
+	require.NoError(t, err)
+	_, err = fakeK8s.CoordinationV1().Leases("default").Create(context.Background(), activeLease, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	gc.sweep(context.Background(), "default")
+
+	_, err = fakeK8s.CoordinationV1().Leases("default").Get(context.Background(), "diverge-tunnel-lease-expired", metav1.GetOptions{})
+	assert.Error(t, err, "expired lease should be deleted via RenewTime + LeaseDurationSeconds")
+
+	_, err = fakeK8s.CoordinationV1().Leases("default").Get(context.Background(), "diverge-tunnel-lease-active", metav1.GetOptions{})
+	assert.NoError(t, err, "active lease should be kept")
 }

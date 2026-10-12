@@ -1,0 +1,139 @@
+package controller
+
+import (
+	"context"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	"github.com/divergedev/diverge/api/v1alpha1"
+	_ "github.com/divergedev/diverge/internal/sandbox"
+	pkgsandbox "github.com/divergedev/diverge/pkg/sandbox"
+)
+
+func newAgentTaskTestScheme(t *testing.T) *runtime.Scheme {
+	t.Helper()
+	s := runtime.NewScheme()
+	require.NoError(t, clientgoscheme.AddToScheme(s))
+	require.NoError(t, v1alpha1.AddToScheme(s))
+	return s
+}
+
+func TestAgentTaskPreview_CreatesAndLinksEnvironment(t *testing.T) {
+	ctx := context.Background()
+	s := newAgentTaskTestScheme(t)
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "fix-checkout-42",
+			Namespace: "default",
+			UID:       "task-uid-42",
+			Annotations: map[string]string{
+				"divergedev.com/preview-service": "checkout-api",
+				"divergedev.com/preview-image":   "ghcr.io/org/checkout:pr-42",
+			},
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective: "Fix checkout panic",
+			Repository: v1alpha1.AgentTaskRepository{
+				URL:           "https://github.com/org/repo",
+				BaseBranch:    "main",
+				WorkingBranch: "agent/fix-checkout-42",
+			},
+			Sandbox: v1alpha1.AgentTaskSandbox{
+				Provider: "noop",
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(task).
+		WithStatusSubresource(&v1alpha1.AgentTask{}, &v1alpha1.Environment{}).
+		Build()
+
+	reconciler := &AgentTaskReconciler{
+		Client:          c,
+		Scheme:          s,
+		SandboxRegistry: pkgsandbox.Providers,
+	}
+
+	// 1st reconcile adds finalizer
+	_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: task.Name, Namespace: task.Namespace}})
+	require.NoError(t, err)
+
+	// 2nd reconcile provisions sandbox and linked preview Environment
+	_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: task.Name, Namespace: task.Namespace}})
+	require.NoError(t, err)
+
+	expectedEnvName := linkedPreviewEnvironmentName(task.Name)
+	var env v1alpha1.Environment
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: expectedEnvName, Namespace: "default"}, &env))
+
+	assert.Equal(t, "agent/fix-checkout-42", env.Spec.Source.Branch)
+	require.NotNil(t, env.Spec.ServiceConfig)
+	assert.Equal(t, "checkout-api", env.Spec.ServiceConfig.ServiceName)
+	assert.Equal(t, "ghcr.io/org/checkout:pr-42", env.Spec.ServiceConfig.Image)
+	assert.Equal(t, int32(8080), env.Spec.ServiceConfig.Port)
+	assert.Equal(t, task.Name, env.Labels["divergedev.com/agent-task"])
+	assert.Equal(t, "diverge-agenttask", env.Labels["divergedev.com/managed-by"])
+	require.Len(t, env.OwnerReferences, 1)
+	assert.Equal(t, task.Name, env.OwnerReferences[0].Name)
+	assert.Equal(t, "AgentTask", env.OwnerReferences[0].Kind)
+
+	// Simulate Environment becoming Running with URL
+	env.Status.Phase = v1alpha1.PhaseRunning
+	env.Status.URL = "https://fix-checkout-42.preview.example.com"
+	require.NoError(t, c.Status().Update(ctx, &env))
+
+	// 3rd reconcile (Active phase) updates task annotations and PreviewEnvironmentReady condition
+	_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: task.Name, Namespace: task.Namespace}})
+	require.NoError(t, err)
+
+	var updatedTask v1alpha1.AgentTask
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: task.Name, Namespace: task.Namespace}, &updatedTask))
+	assert.Equal(t, expectedEnvName, updatedTask.Annotations["divergedev.com/preview-environment"])
+	assert.Equal(t, "https://fix-checkout-42.preview.example.com", updatedTask.Annotations["divergedev.com/preview-url"])
+
+	cond := meta.FindStatusCondition(updatedTask.Status.Conditions, "PreviewEnvironmentReady")
+	require.NotNil(t, cond)
+	assert.Equal(t, metav1.ConditionTrue, cond.Status)
+}
+
+func TestAgentTaskPreview_DisabledByAnnotation(t *testing.T) {
+	ctx := context.Background()
+	s := newAgentTaskTestScheme(t)
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "no-preview-task",
+			Namespace: "default",
+			Annotations: map[string]string{
+				"divergedev.com/preview-enabled": "false",
+			},
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective: "Docs only task",
+			Repository: v1alpha1.AgentTaskRepository{
+				URL: "https://github.com/org/repo",
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(task).Build()
+	reconciler := &AgentTaskReconciler{Client: c, Scheme: s}
+
+	require.NoError(t, reconciler.reconcileLinkedPreviewEnvironment(ctx, task))
+
+	var envList v1alpha1.EnvironmentList
+	require.NoError(t, c.List(ctx, &envList))
+	assert.Empty(t, envList.Items)
+}

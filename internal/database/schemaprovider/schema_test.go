@@ -78,7 +78,9 @@ func TestSchemaDatabaseProvider_Provision(t *testing.T) {
 	// Verify role creation SQL
 	assert.Contains(t, res.SetupSQL, "CREATE ROLE")
 	assert.Contains(t, res.SetupSQL, "GRANT USAGE ON SCHEMA")
+	assert.Contains(t, res.SetupSQL, "GRANT CREATE ON SCHEMA")
 	assert.Contains(t, res.SetupSQL, "GRANT ALL ON ALL TABLES IN SCHEMA")
+	assert.Contains(t, res.SetupSQL, "GRANT ALL ON ALL SEQUENCES IN SCHEMA")
 }
 
 func TestSchemaDatabaseProvider_Provision_EmptyName(t *testing.T) {
@@ -192,7 +194,8 @@ func TestSchemaDatabaseProvider_Provision_Concurrent(t *testing.T) {
 
 func TestSchemaDatabaseProvider_Provision_Idempotent(t *testing.T) {
 	mockExec := &recordingExecutor{}
-	provider := &SchemaDatabaseProvider{AdminDSN: "postgres://admin@localhost/db", Executor: mockExec}
+	provider := NewSchemaDatabaseProvider("postgres://admin@localhost/db")
+	provider.Executor = mockExec
 	env := &v1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-env"},
 	}
@@ -205,9 +208,10 @@ func TestSchemaDatabaseProvider_Provision_Idempotent(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, res2.Ready)
 
-	// Assert both DSNs contain the same role name
+	// Assert both DSNs contain the same role name and identical password
 	assert.Contains(t, res1.DSN, "diverge_preview_preview_test_env")
-	assert.Contains(t, res2.DSN, "diverge_preview_preview_test_env")
+	assert.Equal(t, res1.DSN, res2.DSN, "repeated Provision calls for the same environment must return the same DSN/password")
+	assert.Equal(t, res1.EnvVars["DATABASE_URL"], res2.EnvVars["DATABASE_URL"])
 
 	// Assert SetupSQL contains IF NOT EXISTS
 	assert.Contains(t, res1.SetupSQL, "IF NOT EXISTS")

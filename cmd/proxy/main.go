@@ -49,12 +49,13 @@ func main() {
 	logger.Info("starting diverge-proxy", "version", version, "commit", commit, "date", date)
 
 	var (
-		port          int
-		previewDomain string
-		upstream      string
-		headerKey     string
-		kubeconfig    string
-		namespace     string
+		port                int
+		previewDomain       string
+		upstream            string
+		headerKey           string
+		kubeconfig          string
+		namespace           string
+		hideEnvironmentList bool
 	)
 
 	flag.IntVar(&port, "port", 8090, "Port to listen on")
@@ -63,18 +64,20 @@ func main() {
 	flag.StringVar(&headerKey, "header-key", "x-diverge-env", "Header to inject")
 	flag.StringVar(&kubeconfig, "kubeconfig", "", "Path to kubeconfig")
 	flag.StringVar(&namespace, "namespace", "default", "Kubernetes namespace")
+	flag.BoolVar(&hideEnvironmentList, "hide-environment-list", false, "Hide active environments list on 404 page")
 	flag.Parse()
 
-	if previewDomain == "" || upstream == "" {
-		fmt.Fprintln(os.Stderr, "--preview-domain and --upstream are required")
+	if err := validateProxyFlags(previewDomain, upstream); err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
 	}
 
 	cfg := proxy.Config{
-		BaseURL:       upstream,
-		HeaderKey:     headerKey,
-		PreviewDomain: previewDomain,
-		Port:          port,
+		BaseURL:             upstream,
+		HeaderKey:           headerKey,
+		PreviewDomain:       previewDomain,
+		Port:                port,
+		HideEnvironmentList: hideEnvironmentList,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -136,4 +139,11 @@ func main() {
 	}
 
 	logger.Info("proxy stopped")
+}
+
+func validateProxyFlags(previewDomain, upstream string) error {
+	if previewDomain == "" || upstream == "" {
+		return fmt.Errorf("--preview-domain and --upstream are required")
+	}
+	return nil
 }

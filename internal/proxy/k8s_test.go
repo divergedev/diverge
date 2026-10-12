@@ -61,7 +61,7 @@ func TestK8sEnvironmentLister_Fallback(t *testing.T) {
 	lister.ttlMu.Unlock()
 
 	_, err = lister.GetEnvironment(ctx, "test-env")
-	assert.ErrorContains(t, err, "not found")
+	assert.ErrorIs(t, err, ErrEnvironmentNotFound)
 
 	// Test ListEnvironments
 	newEnv := &v1alpha1.Environment{

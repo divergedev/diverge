@@ -37,12 +37,13 @@ func main() {
 	logger.Info("starting diverge-activator-proxy", "version", version, "commit", commit, "date", date)
 
 	var (
-		port            int
-		activatorURL    string
-		targetNamespace string
-		targetSelector  string
-		targetPort      int
-		targetRevision  string
+		port             int
+		activatorURL     string
+		targetNamespace  string
+		targetSelector   string
+		targetPort       int
+		targetRevision   string
+		enableWakeSplash bool
 	)
 
 	flag.IntVar(&port, "port", 8091, "Port to listen on")
@@ -51,20 +52,22 @@ func main() {
 	flag.StringVar(&targetSelector, "target-selector", "", "Label selector to find target pods")
 	flag.IntVar(&targetPort, "target-port", 8080, "Port of the target pod to proxy to")
 	flag.StringVar(&targetRevision, "target-revision", "", "Knative revision name (auto-detected if empty)")
+	flag.BoolVar(&enableWakeSplash, "wake-splash", false, "Serve HTML splash page while waking scaled-to-zero revisions")
 	flag.Parse()
 
-	if activatorURL == "" || targetSelector == "" {
-		fmt.Fprintln(os.Stderr, "--activator-url and --target-selector are required")
+	if err := validateFlags(activatorURL, targetSelector); err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
 	}
 
 	cfg := proxy.ActivatorProxyConfig{
-		Port:            port,
-		ActivatorURL:    activatorURL,
-		TargetNamespace: targetNamespace,
-		TargetSelector:  targetSelector,
-		TargetPort:      targetPort,
-		TargetRevision:  targetRevision,
+		Port:             port,
+		ActivatorURL:     activatorURL,
+		TargetNamespace:  targetNamespace,
+		TargetSelector:   targetSelector,
+		TargetPort:       targetPort,
+		TargetRevision:   targetRevision,
+		EnableWakeSplash: enableWakeSplash,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -111,4 +114,11 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("activator proxy stopped")
+}
+
+func validateFlags(activatorURL, targetSelector string) error {
+	if activatorURL == "" || targetSelector == "" {
+		return fmt.Errorf("--activator-url and --target-selector are required")
+	}
+	return nil
 }

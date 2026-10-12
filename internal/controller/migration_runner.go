@@ -54,72 +54,73 @@ func (r *EnvironmentReconciler) runMigrationJob(ctx context.Context, env *diverg
 		return fmt.Errorf("migration job requires a provisioned database with DSN")
 	}
 
-	var envVars []corev1.EnvVar
-	if dbResult.DSN != "" {
-		// 1. Create DSN Secret
-		secretName, err := createDSNSecret(ctx, r.Client, env.Name, env.Namespace, dbResult.DSN, env)
-		if err != nil {
-			return fmt.Errorf("failed to create DSN secret for migration: %w", err)
-		}
-		envVars = append(envVars, corev1.EnvVar{
-			Name: "DATABASE_URL",
-			ValueFrom: &corev1.EnvVarSource{
-				SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: secretName,
-					},
-					Key: "url",
-				},
-			},
-		})
-	}
-
 	hashInput := mjSpec.Image + strings.Join(mjSpec.Args, "")
 	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(hashInput)))[:8]
 	jobName := generateHookJobName(env.Name, "migration-"+hash)
 
-	timeout := defaultMigrationTimeout
-	if mjSpec.TimeoutSeconds > 0 {
-		timeout = mjSpec.TimeoutSeconds
-	}
-
-	cfg := HookJobConfig{
-		JobName:   jobName,
-		Namespace: env.Namespace,
-		Image:     mjSpec.Image,
-		Args:      mjSpec.Args,
-		Timeout:   timeout,
-		Owner:     env,
-		Labels: map[string]string{
-			labelHookType:    hookTypeMigration,
-			labelEnvironment: env.Name,
-		},
-		EnvVars: envVars,
-	}
-
-	for _, ref := range mjSpec.EnvFrom {
-		cfg.EnvVars = append(cfg.EnvVars, corev1.EnvVar{
-			Name: ref.Key,
-			ValueFrom: &corev1.EnvVarSource{
-				SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: ref.Name,
-					},
-					Key: ref.Key,
-				},
-			},
-		})
-	}
-
-	job := buildJob(cfg)
-
-	// Create or get existing Job
+	// Check if the migration Job already exists before creating the DSN Secret
 	var existingJob batchv1.Job
+	var job *batchv1.Job
 	err := r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: env.Namespace}, &existingJob)
 	if err != nil {
 		if client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("failed to get migration job: %w", err)
 		}
+
+		var envVars []corev1.EnvVar
+		if dbResult.DSN != "" {
+			// 1. Create DSN Secret only when the Job does not yet exist
+			secretName, err := createDSNSecret(ctx, r.Client, env.Name, env.Namespace, dbResult.DSN, env)
+			if err != nil {
+				return fmt.Errorf("failed to create DSN secret for migration: %w", err)
+			}
+			envVars = append(envVars, corev1.EnvVar{
+				Name: "DATABASE_URL",
+				ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: secretName,
+						},
+						Key: "url",
+					},
+				},
+			})
+		}
+
+		timeout := defaultMigrationTimeout
+		if mjSpec.TimeoutSeconds > 0 {
+			timeout = mjSpec.TimeoutSeconds
+		}
+
+		cfg := HookJobConfig{
+			JobName:   jobName,
+			Namespace: env.Namespace,
+			Image:     mjSpec.Image,
+			Args:      mjSpec.Args,
+			Timeout:   timeout,
+			Owner:     env,
+			Labels: map[string]string{
+				labelHookType:    hookTypeMigration,
+				labelEnvironment: env.Name,
+			},
+			EnvVars: envVars,
+		}
+
+		for _, ref := range mjSpec.EnvFrom {
+			cfg.EnvVars = append(cfg.EnvVars, corev1.EnvVar{
+				Name: ref.Key,
+				ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: ref.Name,
+						},
+						Key: ref.Key,
+					},
+				},
+			})
+		}
+
+		job = buildJob(cfg)
 
 		logger.Info("Creating migration job", "jobName", jobName)
 		if err := r.Create(ctx, job); err != nil {

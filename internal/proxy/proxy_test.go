@@ -268,3 +268,25 @@ func TestProxyMigratingEnvironment(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "mr-migrate")
 	assert.Nil(t, w.Header().Values(ResponseHeaderEnvironment))
 }
+
+func TestProxyConnectionHeaderStrippingResistance(t *testing.T) {
+	lister := &mockEnvironmentLister{
+		envs: map[string]*EnvironmentInfo{
+			"mr-42": {
+				Name:  "mr-42",
+				Phase: string(v1alpha1.PhaseRunning),
+			},
+		},
+	}
+	server, _ := setupTestServer(t, lister)
+
+	req := httptest.NewRequest(http.MethodGet, "http://mr-42.preview.example.com/", nil)
+	req.Header.Set("Connection", "x-diverge-env, keep-alive")
+	w := httptest.NewRecorder()
+
+	server.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "Proxied: mr-42", w.Body.String())
+	assert.Equal(t, "mr-42", w.Header().Get("X-Received-Env"))
+}

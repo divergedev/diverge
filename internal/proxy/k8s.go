@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
@@ -206,6 +207,9 @@ func (l *K8sEnvironmentLister) getFallback(ctx context.Context, name string) (*E
 	var env v1alpha1.Environment
 	err := l.client.Get(ctx, client.ObjectKey{Name: name, Namespace: l.namespace}, &env)
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, ErrEnvironmentNotFound
+		}
 		return nil, err
 	}
 

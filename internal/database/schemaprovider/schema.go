@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
@@ -27,8 +28,36 @@ type SQLExecutor interface {
 
 // SchemaDatabaseProvider represents the configuration or state for this type.
 type SchemaDatabaseProvider struct {
-	AdminDSN string
-	Executor SQLExecutor
+	AdminDSN  string
+	Executor  SQLExecutor
+	mu        sync.Mutex
+	passwords map[string]string
+}
+
+// NewSchemaDatabaseProvider creates a SchemaDatabaseProvider with an initialized password cache.
+func NewSchemaDatabaseProvider(adminDSN string) *SchemaDatabaseProvider {
+	return &SchemaDatabaseProvider{
+		AdminDSN:  adminDSN,
+		passwords: make(map[string]string),
+	}
+}
+
+func (p *SchemaDatabaseProvider) getOrCreatePassword(roleName string) (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.passwords == nil {
+		p.passwords = make(map[string]string)
+	}
+	if pw, ok := p.passwords[roleName]; ok && pw != "" {
+		return pw, nil
+	}
+	pwBytes := make([]byte, 32)
+	if _, err := crypto_rand.Read(pwBytes); err != nil {
+		return "", fmt.Errorf("failed to generate password: %w", err)
+	}
+	pw := hex.EncodeToString(pwBytes)
+	p.passwords[roleName] = pw
+	return pw, nil
 }
 
 var validSchemaName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
@@ -93,12 +122,11 @@ END
 $$;`, schema)
 	// editorconfig-checker-enable
 
-	pwBytes := make([]byte, 32)
-	if _, err := crypto_rand.Read(pwBytes); err != nil {
-		return nil, fmt.Errorf("failed to generate password: %w", err)
-	}
-	password := hex.EncodeToString(pwBytes)
 	roleName := safeRoleName(schema)
+	password, err := p.getOrCreatePassword(roleName)
+	if err != nil {
+		return nil, err
+	}
 
 	schemaIdent := pgx.Identifier{schema}.Sanitize()
 	roleIdent := pgx.Identifier{roleName}.Sanitize()
@@ -118,7 +146,9 @@ $diverge_role$;
 `, roleName, roleIdent, password, roleIdent, password)
 	// editorconfig-checker-enable
 	setupSQL += fmt.Sprintf("GRANT USAGE ON SCHEMA %s TO %s;\n", schemaIdent, roleIdent)
+	setupSQL += fmt.Sprintf("GRANT CREATE ON SCHEMA %s TO %s;\n", schemaIdent, roleIdent)
 	setupSQL += fmt.Sprintf("GRANT ALL ON ALL TABLES IN SCHEMA %s TO %s;\n", schemaIdent, roleIdent)
+	setupSQL += fmt.Sprintf("GRANT ALL ON ALL SEQUENCES IN SCHEMA %s TO %s;\n", schemaIdent, roleIdent)
 	setupSQL += fmt.Sprintf("ALTER DEFAULT PRIVILEGES IN SCHEMA %s GRANT ALL ON TABLES TO %s;\n", schemaIdent, roleIdent)
 
 	dsn := buildWorkloadDSN(p.AdminDSN, roleName, password, schema)
@@ -197,6 +227,10 @@ func (p *SchemaDatabaseProvider) Teardown(ctx context.Context, env *v1alpha1.Env
 	if err != nil {
 		return fmt.Errorf("failed to drop role: %w", err)
 	}
+
+	p.mu.Lock()
+	delete(p.passwords, roleName)
+	p.mu.Unlock()
 
 	return nil
 }

@@ -78,15 +78,18 @@ func NewServer(cfg Config, lister EnvironmentLister) (*Server, error) {
 	s := &Server{
 		config:    cfg,
 		envLister: lister,
-		proxy: &httputil.ReverseProxy{
-			Rewrite: func(r *httputil.ProxyRequest) {
-				r.SetURL(targetURL)
-				r.Out.Host = targetURL.Host
-			},
-		},
 	}
 	if s.config.HeaderKey == "" {
 		s.config.HeaderKey = "x-diverge-env"
+	}
+	s.proxy = &httputil.ReverseProxy{
+		Rewrite: func(r *httputil.ProxyRequest) {
+			r.SetURL(targetURL)
+			r.Out.Host = targetURL.Host
+			if envName := r.In.Header.Get(s.config.HeaderKey); envName != "" {
+				r.Out.Header.Set(s.config.HeaderKey, envName)
+			}
+		},
 	}
 	if r, ok := lister.(ReadinessChecker); ok {
 		s.readiness = r
@@ -150,6 +153,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		renderError(w, envInfo, "Deployment failed")
 		return
 	case string(v1alpha1.PhaseRunning):
+		sanitizeConnectionHeader(r.Header, s.config.HeaderKey)
 		r.Header.Set(s.config.HeaderKey, envInfo.Name)
 		w.Header().Set(ResponseHeaderEnvironment, envInfo.Name)
 		s.proxy.ServeHTTP(w, r)
