@@ -51,6 +51,25 @@ func TestResolveTraceparent(t *testing.T) {
 		assert.Equal(t, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", got)
 	})
 
+	t.Run("rejects invalid traceparent header and falls back to active span in context", func(t *testing.T) {
+		traceID, err := trace.TraceIDFromHex("4bf92f3577b34da6a3ce929d0e0e4736")
+		require.NoError(t, err)
+		spanID, err := trace.SpanIDFromHex("00f067aa0ba902b7")
+		require.NoError(t, err)
+		sc := trace.NewSpanContext(trace.SpanContextConfig{
+			TraceID:    traceID,
+			SpanID:     spanID,
+			TraceFlags: trace.FlagsSampled,
+		})
+		ctx := trace.ContextWithSpanContext(context.Background(), sc)
+		req := httptest.NewRequest(http.MethodPost, "/github-webhook", nil).WithContext(ctx)
+		req.Header.Set("traceparent", "not-a-valid-traceparent")
+
+		got := ResolveTraceparent(req)
+		assert.Equal(t, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", got)
+		assert.False(t, isValidTraceparent(ctx, "not-a-valid-traceparent"))
+	})
+
 	t.Run("generates fresh W3C traceparent when header is missing or invalid", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/github-webhook", nil)
 		req.Header.Set("traceparent", "invalid-traceparent-value")

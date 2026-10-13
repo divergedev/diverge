@@ -149,6 +149,12 @@ func TestOpenCmdPreviewGroupAndNoBrowser(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "https://shop.example.com?_diverge_env=pr-101", pgMagicURL)
 
+	pgWithExternal := pg.DeepCopy()
+	pgWithExternal.Spec.Routing.ExternalURL = "https://gateway.example.com"
+	extURL, err := buildPreviewGroupURL(pgWithExternal)
+	require.NoError(t, err)
+	assert.Equal(t, "https://gateway.example.com", extURL)
+
 	fakeClient := fake.NewClientBuilder().
 		WithScheme(newTestScheme()).
 		WithObjects(pg).

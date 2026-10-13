@@ -190,6 +190,10 @@ const floatingToolbarJS = `(function() {
         localStorage.setItem('diverge_toolbar_collapsed', this.state.collapsed ? '1' : '0');
       } catch (_) {}
       this.render();
+      const collapseBtn = this.shadowRoot && this.shadowRoot.getElementById('diverge-collapse-btn');
+      if (collapseBtn && typeof collapseBtn.focus === 'function') {
+        collapseBtn.focus();
+      }
     }
 
     async fetchContext() {

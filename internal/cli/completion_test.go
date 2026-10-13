@@ -61,7 +61,7 @@ func TestCompleteEnvironmentNames(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "pr-99", Namespace: "other"},
 	}
 	pg1 := &divergeiov1alpha1.PreviewGroup{
-		ObjectMeta: metav1.ObjectMeta{Name: "pr-77"},
+		ObjectMeta: metav1.ObjectMeta{Name: "pr-77", Namespace: "default"},
 	}
 	pgDup := &divergeiov1alpha1.PreviewGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: "pr-42", Namespace: "default"},

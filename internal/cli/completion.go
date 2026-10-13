@@ -113,11 +113,8 @@ func completeEnvironmentNames(app *App) func(cmd *cobra.Command, args []string, 
 		}
 
 		var pgList divergeiov1alpha1.PreviewGroupList
-		if err := c.List(ctx, &pgList); err == nil {
+		if err := c.List(ctx, &pgList, client.InNamespace(ns)); err == nil {
 			for _, pg := range pgList.Items {
-				if pg.Namespace != "" && pg.Namespace != ns {
-					continue
-				}
 				if strings.HasPrefix(pg.Name, toComplete) {
 					if _, ok := seen[pg.Name]; !ok {
 						seen[pg.Name] = struct{}{}

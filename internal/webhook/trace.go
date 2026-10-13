@@ -76,11 +76,8 @@ func SetTraceparentAnnotation(obj metav1.Object, traceparent string) {
 	obj.SetAnnotations(annotations)
 }
 
-func isValidTraceparent(ctx context.Context, tp string) bool {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	extracted := (propagation.TraceContext{}).Extract(ctx, propagation.MapCarrier{
+func isValidTraceparent(_ context.Context, tp string) bool {
+	extracted := (propagation.TraceContext{}).Extract(context.Background(), propagation.MapCarrier{
 		"traceparent": strings.ToLower(strings.TrimSpace(tp)),
 	})
 	return trace.SpanContextFromContext(extracted).IsValid()

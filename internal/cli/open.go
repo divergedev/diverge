@@ -78,10 +78,12 @@ func buildPreviewGroupURL(pg *divergeiov1alpha1.PreviewGroup, magic ...bool) (st
 	}
 
 	rawURL := strings.TrimSpace(pg.Spec.Routing.ExternalURL)
+	fromServiceURL := false
 	if rawURL == "" {
 		for _, svc := range pg.Status.Services {
 			if strings.TrimSpace(svc.URL) != "" {
 				rawURL = strings.TrimSpace(svc.URL)
+				fromServiceURL = true
 				break
 			}
 		}
@@ -113,7 +115,7 @@ func buildPreviewGroupURL(pg *divergeiov1alpha1.PreviewGroup, magic ...bool) (st
 		return parsed.String(), nil
 	}
 
-	if pg.Spec.Routing.Mode == "header" || pg.Spec.Routing.Mode == "" {
+	if fromServiceURL && (pg.Spec.Routing.Mode == "header" || pg.Spec.Routing.Mode == "") {
 		prefix := pg.Name + ".preview."
 		if !strings.HasPrefix(parsed.Host, prefix) {
 			parsed.Host = fmt.Sprintf("%s.preview.%s", pg.Name, parsed.Host)

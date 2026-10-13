@@ -252,18 +252,6 @@ func (h *GitHubWebhookHandler) handleIssueComment(ctx context.Context, w http.Re
 		execErr = h.handleFixCommand(ctx, &payload, cmd, repoURL, branch, prNumber)
 	} else {
 		execErr = ExecuteSlashCommand(ctx, h.Client, h.DefaultNS, cmd, repoURL, branch, prNumber)
-		if execErr == nil && cmd.Action == "preview" && h.Client != nil {
-			ns := h.DefaultNS
-			if ns == "" {
-				ns = "default"
-			}
-			envName := previewEnvName("pr", projectFromRepoURL(repoURL), prNumber)
-			var env v1alpha1.Environment
-			if getErr := h.Client.Get(ctx, client.ObjectKey{Name: envName, Namespace: ns}, &env); getErr == nil {
-				SetTraceparentAnnotation(&env, TraceparentFromContext(ctx))
-				execErr = h.Client.Update(ctx, &env)
-			}
-		}
 	}
 	if execErr != nil {
 		logger.Error(execErr, "Failed to execute slash command", "action", cmd.Action, "pr", prNumber)

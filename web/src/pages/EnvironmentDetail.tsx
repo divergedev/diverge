@@ -81,10 +81,14 @@ export default function EnvironmentDetail() {
       ? `Auto after ${env.annotations['divergedev.com/hibernate-after']}`
       : 'Active'
 
-  const handleCopyMagicLink = () => {
+  const handleCopyMagicLink = async () => {
     if (!magicUrl) return
-    navigator.clipboard.writeText(magicUrl)
-    setSuccessMessage('Magic preview link copied to clipboard')
+    try {
+      await navigator.clipboard.writeText(magicUrl)
+      setSuccessMessage('Magic preview link copied to clipboard')
+    } catch {
+      setMutationError('Failed to copy magic link to clipboard')
+    }
   }
 
   const handleToggleHibernate = async () => {

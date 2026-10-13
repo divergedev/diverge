@@ -169,11 +169,13 @@ export function activate(context: vscode.ExtensionContext) {
       }));
       if (!envName) return;
 
-      const httpPath = (await vscode.window.showInputBox({
+      const rawPath = await vscode.window.showInputBox({
         prompt: "Enter HTTP path or URL to compare against baseline",
         value: "/",
         placeHolder: "/api/orders",
-      })) || "/";
+      });
+      if (rawPath === undefined) return;
+      const httpPath = rawPath.trim() || "/";
 
       runCLI(["curl", envName, httpPath, "--compare-baseline"], `Diverge Compare Baseline (${envName} ${httpPath})`);
     })

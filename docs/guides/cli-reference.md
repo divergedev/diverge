@@ -241,7 +241,7 @@ diverge curl pr-42 /api/checkout --compare-baseline
 
 ### `diverge open`
 
-Open a preview `Environment` or `PreviewGroup` URL in your default browser (or print it to stdout). Resolves an `Environment` first and automatically falls back to a `PreviewGroup` of the same name (`spec.routing.externalURL` or the first ready child service URL).
+Open a preview `Environment` or `PreviewGroup` URL in your default browser (or print it to stdout). Resolves an `Environment` first and automatically falls back to a `PreviewGroup` of the same name (`spec.routing.externalURL` or the first child service URL that has a URL set).
 
 **Usage:** `diverge open <env-or-previewgroup-name> [flags]`
 

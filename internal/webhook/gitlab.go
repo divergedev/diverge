@@ -250,18 +250,6 @@ func (h *GitLabWebhookHandler) handleNoteEvent(ctx context.Context, w http.Respo
 		execErr = h.handleFixCommand(ctx, &payload, cmd, repoURL, branch, mrIID)
 	} else {
 		execErr = ExecuteSlashCommand(ctx, h.Client, h.DefaultNS, cmd, repoURL, branch, mrIID)
-		if execErr == nil && cmd.Action == "preview" && h.Client != nil {
-			ns := h.DefaultNS
-			if ns == "" {
-				ns = "default"
-			}
-			envName := previewEnvName("mr", projectFromRepoURL(repoURL), mrIID)
-			var env v1alpha1.Environment
-			if getErr := h.Client.Get(ctx, client.ObjectKey{Name: envName, Namespace: ns}, &env); getErr == nil {
-				SetTraceparentAnnotation(&env, TraceparentFromContext(ctx))
-				execErr = h.Client.Update(ctx, &env)
-			}
-		}
 	}
 	if execErr != nil {
 		logger.Error(execErr, "Failed to execute GitLab slash command", "action", cmd.Action, "mr", mrIID)

@@ -48,7 +48,7 @@ Use this skill whenever working in a repository configured with Diverge (`.diver
      diverge curl pr-42 /api/v1/checkout --compare-baseline
 
      # Send a POST payload to a preview environment
-     diverge curl pr-42 /api/v1/orders -X POST -d '{"sku":"item-1"}' --compare-baseline
+     diverge curl pr-42 /api/v1/orders -X POST -d '{"sku":"item-1"}'
      ```
 3. **Open in Browser or Print Magic Links (`diverge open`)**:
    - Open or print (`-p, --no-browser`) the cookie-setting magic link (`?_diverge_env=<env>`) for an `Environment` or `PreviewGroup` so browser sessions route through `diverge-proxy` with the collapsible in-browser Floating DevToolbar:

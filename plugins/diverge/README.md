@@ -14,8 +14,13 @@ Official **Google Antigravity** plugin bundle for [Diverge](https://divergedev.c
 
 ## Installation
 
-### 1. Automatic Workspace Discovery (Zero-Install)
-When you open a repository containing `.agents/plugins.json` pointing to `plugins`, Antigravity automatically discovers and activates the `diverge` plugin.
+### 1. Workspace Installation (`.agents/plugins/`)
+To enable the plugin for a specific repository/workspace in Antigravity IDE, copy or symlink `plugins/diverge` into `.agents/plugins/diverge`:
+
+```bash
+mkdir -p .agents/plugins
+cp -R plugins/diverge .agents/plugins/diverge
+```
 
 ### 2. Global Installation (All Workspaces)
 Copy or symlink this directory into your global Antigravity plugins folder and restart Antigravity:

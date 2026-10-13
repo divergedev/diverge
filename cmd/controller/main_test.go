@@ -47,4 +47,19 @@ func TestAgentTaskNotifierWiring(t *testing.T) {
 			require.NotNil(t, scmNotifier.Underlying)
 		}
 	})
+
+	t.Run("resolveAgentTaskNotifier resolves GITHUB_TOKEN and GITLAB_TOKEN when explicit token is empty", func(t *testing.T) {
+		t.Setenv("DIVERGE_NOTIFIER_TOKEN", "")
+		t.Setenv("GITHUB_TOKEN", "gh-env-token")
+		t.Setenv("GITHUB_API_URL", "https://ghe.example.com/api/v3")
+		tn := resolveAgentTaskNotifier("github", "", nil)
+		_, ok := tn.(*notifier.SCMTaskNotifier)
+		require.True(t, ok)
+
+		t.Setenv("GITLAB_TOKEN", "gl-env-token")
+		t.Setenv("GITLAB_API_URL", "https://gitlab.example.com")
+		tnGL := resolveAgentTaskNotifier("gitlab", "", nil)
+		_, ok = tnGL.(*notifier.SCMTaskNotifier)
+		require.True(t, ok)
+	})
 }

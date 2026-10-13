@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -18,6 +19,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -315,11 +317,7 @@ func main() {
 			}
 			setupLog.Info("generated ephemeral macaroon root key; set DIVERGE_MACAROON_ROOT_KEY for persistent token verification")
 		}
-		var taskNotifier controller.TaskNotifier = &controller.NoopTaskNotifier{}
-		notifierBaseURL := os.Getenv("DIVERGE_BASE_URL")
-		if tn := notifier.NewTaskNotifier(notifierProvider, notifierToken, notifierBaseURL, mgr.GetClient()); tn != nil {
-			taskNotifier = tn
-		}
+		taskNotifier := resolveAgentTaskNotifier(notifierProvider, notifierToken, mgr.GetClient())
 		if err = (&controller.AgentTaskReconciler{
 			Client:          mgr.GetClient(),
 			Scheme:          mgr.GetScheme(),
@@ -395,4 +393,32 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+func resolveAgentTaskNotifier(provider, explicitToken string, k8sClient client.Client) controller.TaskNotifier {
+	var token, baseURL string
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "github":
+		token = firstNonEmpty(explicitToken, os.Getenv("DIVERGE_NOTIFIER_TOKEN"), os.Getenv("GITHUB_TOKEN"))
+		baseURL = firstNonEmpty(os.Getenv("DIVERGE_BASE_URL"), os.Getenv("GITHUB_API_URL"))
+	case "gitlab":
+		token = firstNonEmpty(explicitToken, os.Getenv("DIVERGE_NOTIFIER_TOKEN"), os.Getenv("DIVERGE_GITLAB_TOKEN"), os.Getenv("GITLAB_TOKEN"))
+		baseURL = firstNonEmpty(os.Getenv("DIVERGE_BASE_URL"), os.Getenv("GITLAB_API_URL"))
+	default:
+		token = explicitToken
+		baseURL = os.Getenv("DIVERGE_BASE_URL")
+	}
+	if tn := notifier.NewTaskNotifier(provider, token, baseURL, k8sClient); tn != nil {
+		return tn
+	}
+	return &controller.NoopTaskNotifier{}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if trimmed := strings.TrimSpace(v); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }

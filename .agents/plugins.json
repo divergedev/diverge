@@ -1,6 +1,9 @@
 {
   "entries": [
     {
+      "path": ".agents/plugins"
+    },
+    {
       "path": "plugins"
     }
   ]
