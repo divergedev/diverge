@@ -13,11 +13,15 @@ flowchart LR
     subgraph Feature Provider
         Reconciler -->|configmap| CM[ConfigMap<br/>flagd JSON]
         Reconciler -->|flipt| FliptAPI[Flipt Server<br/>Ephemeral Namespace]
+        Reconciler -->|flagsmith| FlagsmithAPI[Flagsmith Server<br/>Ephemeral Identity]
+        Reconciler -->|unleash| UnleashAPI[Unleash Server<br/>Preview Strategy]
     end
 
     subgraph Preview Pod
         CM -.->|mount / env| Pod[Workload Container]
         FliptAPI -.->|FLIPT_URL<br/>FLIPT_NAMESPACE| Pod
+        FlagsmithAPI -.->|FLAGSMITH_API_URL<br/>FLAGSMITH_IDENTITY| Pod
+        UnleashAPI -.->|UNLEASH_URL<br/>UNLEASH_STRATEGY_TITLE| Pod
         Pod --> OF[OpenFeature SDK]
         OF --> App[Application Code]
     end
@@ -42,6 +46,7 @@ flowchart LR
 | `configmap` *(default)* | Generates an in-cluster Kubernetes ConfigMap formatted for the OpenFeature `flagd` provider. | Zero external infrastructure; lightweight, standalone preview clusters. |
 | `flipt` | Provisions an ephemeral namespace (`diverge-<envName>`) in a remote or in-cluster [Flipt](https://flipt.io) instance. | Teams already using Flipt for feature flags or requiring advanced rollout strategies and audit logs. |
 | `flagsmith` | Provisions an ephemeral identity (`diverge-[<namespace>-]<envName>-<hash8>`) and standard traits (`diverge_environment`, `diverge_namespace`, `diverge_preview`) in remote or self-hosted Flagsmith. | Teams using Flagsmith for feature flag management with identity and trait targeting. |
+| `unleash` | Provisions context-constrained `flexibleRollout` activation strategies (`diverge.environment IN [<envName>]`) and strategy-level variants (`diverge-[<namespace>-]<envName>-<hash8>`) in [Unleash](https://www.getunleash.io/). | Teams using Unleash Enterprise or Open Source with context-based activation strategies. |
 | `noop` / `none` | Disables feature flag synchronization for this environment. | Environments where feature flag synchronization is intentionally skipped. |
 
 ---
@@ -170,6 +175,53 @@ Standard traits automatically injected for identity targeting:
 - `diverge_environment`: `<envName>`
 - `diverge_namespace`: `<namespace>`
 - `diverge_preview`: `true`
+
+### 4. Unleash Provider
+
+The `unleash` provider ensures feature toggles exist in your Unleash project and configures a preview-scoped `flexibleRollout` activation strategy (`diverge-[<namespace>-]<envName>-<hash8>`) constrained to `diverge.environment IN [<envName>]`. Boolean overrides (`"true"` / `"false"`) set `rollout` (`100` / `0`) and `disabled` (`false` / `true`); string or numeric overrides attach a strategy-level variant (`weight: 1000`, `payload.type: "string"`). On environment teardown, all preview strategies matching the environment's strategy title are removed cleanly:
+
+```yaml
+apiVersion: divergedev.com/v1alpha1
+kind: Environment
+metadata:
+  name: pr-1234
+  namespace: diverge-previews
+spec:
+  features:
+    provider: unleash
+    connectionRef: unleash-credentials
+    overrides:
+      checkout_v2: "true"
+      legacy_banner: "false"
+      pricing_tier: "enterprise"
+```
+
+#### Secret Configuration (`connectionRef`)
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: unleash-credentials
+  namespace: diverge-previews # Or diverge-system
+type: Opaque
+stringData:
+  url: "https://unleash.internal.example.com"
+  adminToken: "*:*.unleash_admin_token..."          # Used by Diverge controller for Admin API
+  clientToken: "default:development.client_token..." # Injected into workloads
+  project: "default"                                 # Optional (defaults to "default")
+  environment: "development"                         # Optional (defaults to "development")
+```
+
+Injected Pod environment variables:
+- `UNLEASH_URL`: Base URL of the Unleash instance.
+- `UNLEASH_API_TOKEN`: Client SDK token (falls back to `adminToken` if `clientToken` is omitted).
+- `UNLEASH_PROJECT`: Target Unleash project ID.
+- `UNLEASH_ENVIRONMENT`: Target Unleash environment.
+- `UNLEASH_STRATEGY_TITLE`: `diverge-[<namespace>-]<envName>-<hash8>`
+- `OPENFEATURE_UNLEASH_URL`: Standard OpenFeature Unleash URL.
+- `OPENFEATURE_UNLEASH_API_TOKEN`: Standard OpenFeature Unleash client token.
+- `OPENFEATURE_TARGET_KEY`: `diverge-[<namespace>-]<envName>-<hash8>`
 
 ---
 

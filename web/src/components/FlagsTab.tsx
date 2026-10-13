@@ -127,7 +127,7 @@ export function FlagsTab({ environment }: FlagsTabProps) {
       case 'flagsmith':
         return {
           title: 'Flagsmith Enterprise',
-          desc: 'Feature flags & remote config provider (preview stub).',
+          desc: 'Feature flags & remote config provider with isolated identity overrides.',
           badge: 'Flagsmith',
           color: 'bg-amber-500/10 text-amber-400 border-amber-500/30',
           consoleUrl: 'https://app.flagsmith.com',
@@ -135,10 +135,12 @@ export function FlagsTab({ environment }: FlagsTabProps) {
       case 'unleash':
         return {
           title: 'Unleash Enterprise',
-          desc: 'Enterprise feature management with strategy evaluation (preview stub).',
+          desc: 'Enterprise feature management with context-constrained preview strategies.',
           badge: 'Unleash',
           color: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30',
-          consoleUrl: null,
+          consoleUrl: featureEnvVars['UNLEASH_URL']
+            ? `${featureEnvVars['UNLEASH_URL'].replace(/\/api\/?$/, '').replace(/\/$/, '')}/projects/${featureEnvVars['UNLEASH_PROJECT'] || 'default'}`
+            : null,
         }
       case 'noop':
       case 'none':
@@ -162,6 +164,12 @@ export function FlagsTab({ environment }: FlagsTabProps) {
   }
 
   const providerInfo = getProviderInfo()
+  const targetScope =
+    featureEnvVars['FLIPT_NAMESPACE'] ||
+    featureEnvVars['UNLEASH_STRATEGY_TITLE'] ||
+    featureEnvVars['FLAGSMITH_IDENTITY'] ||
+    status?.featureConfigMap ||
+    '—'
 
   return (
     <div className="space-y-6">
@@ -208,8 +216,8 @@ export function FlagsTab({ environment }: FlagsTabProps) {
               </div>
               <div>
                 <span className="text-muted-foreground block">Target Namespace</span>
-                <span className="font-mono text-xs truncate block" title={featureEnvVars['FLIPT_NAMESPACE'] || status?.featureConfigMap || environment.namespace}>
-                  {featureEnvVars['FLIPT_NAMESPACE'] || status?.featureConfigMap || '—'}
+                <span className="font-mono text-xs truncate block" title={targetScope === '—' ? environment.namespace : targetScope}>
+                  {targetScope}
                 </span>
               </div>
               <div>

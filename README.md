@@ -108,7 +108,7 @@ See [charts/diverge/values.yaml](charts/diverge/values.yaml) for configuration o
 *   **MR-Triggered Lifecycle**: Environments spin up when a Merge Request opens and tear down upon merge/close.
 *   **Merge Gating**: GitLab/GitHub commit status checks (`diverge/preview`) block merges until environments are healthy.
 *   **Argo CD & Direct Deploy**: Argo CD GitOps (`Application` CRs) and No-ArgoCD mode (`DirectDeployer`) for Helm charts and Kustomize overlays.
-*   **Feature Flags & OpenFeature**: Isolated flag evaluation per preview environment. Out-of-the-box support for in-cluster `flagd` ConfigMaps and remote [Flipt](https://flipt.io) ephemeral namespaces with automated cleanup on MR merge.
+*   **Feature Flags & OpenFeature**: Isolated flag evaluation per preview environment. Out-of-the-box support for in-cluster `flagd` ConfigMaps, remote [Flipt](https://flipt.io) ephemeral namespaces, [Flagsmith](https://www.flagsmith.com) ephemeral identities, and [Unleash](https://www.getunleash.io) context-constrained strategies with automated cleanup on MR merge.
 *   **Environment Export**: `diverge env export` extracts environment variables from preview pods for local development (dotenv, JSON, shell formats).
 *   **Test Integration**: CI trigger and polling support to run automated tests against preview environments.
 *   **Prometheus Metrics**: Reconciliation duration, deployment status, route counts, active environments, preview group gauges, per-environment cost estimation (`diverge_environment_estimated_hourly_cost_usd`), and idle hibernation tracking (`divergedev.com/hibernate-after`, `divergedev.com/last-traffic-at`).

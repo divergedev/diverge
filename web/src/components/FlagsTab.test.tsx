@@ -189,4 +189,39 @@ describe('FlagsTab', () => {
       expect(screen.getByRole('status')).toHaveTextContent('Removed override pricing_tier')
     })
   })
+
+  it('renders Unleash provider info, strategy title, and console link', () => {
+    const env = Environment.fromJson({
+      name: 'pr-99',
+      namespace: 'default',
+      spec: {
+        features: {
+          provider: 'unleash',
+          connectionRef: 'unleash-credentials',
+          overrides: {
+            beta_banner: 'true',
+          },
+        },
+      },
+      status: {
+        phase: 'Ready',
+        featureEnvVars: {
+          UNLEASH_URL: 'https://unleash.internal.example.com/api',
+          UNLEASH_PROJECT: 'payments',
+          UNLEASH_STRATEGY_TITLE: 'diverge-pr-99-a1b2c3d4',
+        },
+      },
+    })
+
+    render(<FlagsTab environment={env} />)
+
+    expect(screen.getByText('Unleash Enterprise')).toBeInTheDocument()
+    expect(
+      screen.getByText('Enterprise feature management with context-constrained preview strategies.'),
+    ).toBeInTheDocument()
+    expect(screen.getAllByText('diverge-pr-99-a1b2c3d4').length).toBeGreaterThanOrEqual(1)
+
+    const consoleLink = screen.getByRole('link', { name: /Open Unleash Console/i })
+    expect(consoleLink).toHaveAttribute('href', 'https://unleash.internal.example.com/projects/payments')
+  })
 })
