@@ -62,7 +62,7 @@
   <circle cx="64" cy="21" r="6.5" fill="#10b981" />
 
   <!-- Window Title -->
-  <text x="480" y="26" text-anchor="middle" class="mono" font-size="12" fill="#94a3b8">acme/commerce-monorepo — zsh — diverge v0.14.0</text>
+  <text x="480" y="26" text-anchor="middle" class="mono" font-size="12" fill="#94a3b8">acme/commerce-monorepo — zsh — diverge v0.15.0</text>
   <rect x="832" y="11" width="110" height="20" rx="4" fill="#064e3b" stroke="#10b981" stroke-width="0.8" />
   <text x="887" y="25" text-anchor="middle" class="mono" font-size="10" font-weight="700" fill="#a7f3d0">DELTA MODE</text>
 

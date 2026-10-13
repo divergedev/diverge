@@ -10,7 +10,7 @@ variables:
 
 # All jobs that need the Diverge CLI use this image (git, curl, jq included)
 default:
-  image: ghcr.io/divergedev/diverge-cli:v0.14.0
+  image: ghcr.io/divergedev/diverge-cli:v0.15.0
 
 # ─── Build ───────────────────────────────────────────────────────────────────
 build:
