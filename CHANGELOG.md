@@ -1,5 +1,29 @@
 # Changelog
 
+## [v0.15.0] - 2026-10-12
+
+### 🚀 Highlights & New Features
+
+#### 🚩 Unleash Enterprise Feature Flag Provider
+- **Unleash Admin API v4.2+ Provider (`pkg/features/unleash.go`, `pkg/features/unleash_client.go`) (#309)**: Native `unleash` feature flag provider (`spec.features.provider: unleash`) supporting environment-scoped `flexibleRollout` strategies (`sortOrder: 0`, `title: "diverge-<namespace>-<env>"`, `diverge.environment IN [<env>]`), `"false"` override `NOT_IN` exclusion constraints on existing strategies, strategy-level variant overrides (`json`, `csv`, and `string` payloads), and automatic environment toggle activation (`POST .../environments/{env}/on`).
+- **4-Tier Credential Resolution & SSRF Hardening (#309)**: Resolves credentials from `spec.features.connectionRef` Secret, default `unleash-credentials` Secret, `DIVERGE_UNLEASH_*` environment variables, or in-cluster default (`https://unleash.default.svc.cluster.local:4242`), with Secret-supplied URL token isolation (`resolveCredentialsForClient`) and dial-time SSRF IP pinning (`newUnleashHTTPClient` blocking RFC 1918, loopback, link-local, CGNAT `100.64.0.0/10`, and Alibaba Cloud metadata `100.100.100.200/32`).
+- **Lifecycle Reconciliation & Dashboard Integration (#309)**: Cleans up stale strategies when keys are removed from `spec.features.overrides`, scans all project features during `Teardown` when overrides were cleared prior to deletion, and links directly to the Unleash Admin UI in the Web Dashboard `FlagsTab`.
+
+#### 📦 Native Kubernetes Pod (`k8s-pod`) Sandbox Provider & Automatic Fallback
+- **Zero-CRD `PodSandboxProvider` (`internal/sandbox/pod.go`, `pod_register.go`) (#308)**: Added native `pod` (`k8s-pod`) sandbox provider (`DIVERGE_SANDBOX_PROVIDER=pod`) that provisions hardened Kubernetes Pods (`automountServiceAccountToken: false`, `runAsNonRoot: true`, `allowPrivilegeEscalation: false`, `seccompProfile: RuntimeDefault`, `capabilities.drop: ["ALL"]`, `/workspace` `emptyDir`) with full `Exec` and `StreamLogs` support.
+- **Automatic Fallback from `AgentSandboxProvider` (#308)**: When `extensions.agents.x-k8s.io` `SandboxClaim` CRDs are not installed on the cluster, `AgentSandboxProvider` automatically falls back to `PodSandboxProvider` (`divergedev.com/sandbox-backend: pod`).
+
+#### 🌐 Node.js (`@divergedev/sdk`) & Python (`diverge-sdk`) SDK Parity
+- **Live LLM Usage Metering (`meterLLMUsage` / `meter_llm_usage`) (#308)**: Added client helpers in both Node.js and Python SDKs for reporting LLM token and USD spend to `POST /api/v1/agenttask/meter`, raising typed `DivergeBudgetExceededError` (`429`) and `DivergeModelNotAllowedError` (`403`) exceptions when task guardrails trip.
+- **Kafka & Temporal Context Propagation (#308)**: Added `injectKafkaHeaders`, `extractKafkaContext`, `resolvePreviewTopic`, `injectTemporalHeaders`, and `extractTemporalContext` (and Python snake_case equivalents) across `@divergedev/sdk` and `diverge-sdk`.
+
+#### 🖥️ Interactive Web Dashboard & Quality Gates
+- **Interactive Feature Flag Override Editor (#308)**: Added inline override creation, editing, and deletion in `FlagsTab.tsx` backed by `EnvironmentService.UpdateEnvironment`.
+- **`PreviewGroup` & `AgentTask` Linked Environment Navigation (#308)**: Added tabbed `Overview`/`Services`/`YAML` navigation with child `Environment` deep-links in `PreviewGroupDetail.tsx` and a linked preview `Environment` status card in `AgentTaskDetail.tsx`.
+- **Zero `.testignore` `TODO` Exemptions & VS Code Extension CI (#308, #309)**: Eliminated all remaining `TODO` exemptions in `.testignore`, added `vscode-extension` CI verification, and expanded Hegel property-based test suites (`pkg/features/unleash_property_test.go`).
+
+---
+
 ## [v0.14.0] - 2026-10-12
 
 ### 🚀 Highlights & New Features
