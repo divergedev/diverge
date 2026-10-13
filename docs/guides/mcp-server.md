@@ -288,9 +288,12 @@ Once configured, you can interact with Diverge naturally through your AI assista
 
 ---
 
-## 9. Official AI Coding Agent Skill & Cursor Rules
+## 9. Official AI Coding Agent Plugin, Skill & Cursor Rules
 
-Diverge ships ready-to-use agent instructions so Claude Code, Cursor, Windsurf, and Copilot automatically follow the **diff → deploy → wait → verify → diagnose** preview loop:
+Diverge ships ready-to-use agent instructions and an official **Google Antigravity Plugin** so Antigravity, Claude Code, Cursor, Windsurf, and Copilot automatically follow the **diff → deploy → wait → verify → diagnose** preview loop:
 
-- **Agent Skill (`skills/diverge/SKILL.md`)**: Install into `~/.claude/skills/diverge/SKILL.md` or `.agents/skills/diverge/SKILL.md`.
+- **Google Antigravity Plugin (`plugins/diverge/`)**: Bundles `plugin.json`, `mcp_config.json` (`diverge-mcp`), `skills/diverge/SKILL.md`, the `diverge-operator` specialist subagent (`agents/diverge-operator.md`), and `rules/AGENTS.md`. Automatically discovered in workspaces via `.agents/plugins.json`, or installable globally via `cp -R plugins/diverge ~/.gemini/config/plugins/diverge`.
+- **Antigravity IDE & VS Code Extension (`editors/vscode/`)**: Provides the Diverge sidebar (`Environments`, `Dev Session Leases`, `Verification Suite`), 1-click Magic Link launcher (`diverge.openMagicLink`), and baseline diff (`diverge.compareBaseline`) for Antigravity IDE, VS Code, and Cursor.
+- **Standalone Agent Skill (`skills/diverge/SKILL.md`)**: Install into `~/.claude/skills/diverge/SKILL.md` or `.agents/skills/diverge/SKILL.md`.
 - **Cursor Rules (`.cursor/rules/diverge.mdc`)**: Automatically loaded by Cursor when working in repositories configured with `.diverge.yaml`.
+

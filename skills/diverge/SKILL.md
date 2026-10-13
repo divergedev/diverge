@@ -50,10 +50,11 @@ Use this skill whenever working in a repository configured with Diverge (`.diver
      # Send a POST payload to a preview environment
      diverge curl pr-42 /api/v1/orders -X POST -d '{"sku":"item-1"}' --compare-baseline
      ```
-3. **Open in Browser or Share Magic Links**:
-   - Open the cookie-setting magic link (`?_diverge_env=<env>`) so browser sessions route through `diverge-proxy` with the in-browser Floating DevToolbar:
+3. **Open in Browser or Print Magic Links (`diverge open`)**:
+   - Open or print (`-p, --no-browser`) the cookie-setting magic link (`?_diverge_env=<env>`) for an `Environment` or `PreviewGroup` so browser sessions route through `diverge-proxy` with the collapsible in-browser Floating DevToolbar:
      ```bash
      diverge open --magic pr-42
+     diverge open --magic --no-browser pr-42
      ```
    - To clear the preview cookie and return to baseline in a browser, visit `?_diverge_env=clear` or `?_diverge_env=reset`.
    - Automated scrapers or tests that need un-modified HTML from `diverge-proxy` can opt out of DevToolbar script injection by sending `X-Diverge-Toolbar: off`.
