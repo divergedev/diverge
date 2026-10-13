@@ -226,8 +226,8 @@ Send an HTTP request routed to a preview `Environment` or `PreviewGroup` (automa
 - `-X, --method` — HTTP method (default: `GET`)
 - `-H, --header` — Additional HTTP headers (`Key: Value`, repeatable)
 - `-d, --data` — HTTP request body payload
-- `--url` — Override target base URL (defaults to `status.url`, `spec.routing.externalURL`, or `http://localhost:8080`)
-- `--compare-baseline` — Send a second unrouted baseline request and display status code, latency, and line-by-line body diffs
+- `--base-url` — Override target base URL (defaults to `status.url`, `spec.routing.externalURL`, or `http://localhost:8080`)
+- `--compare-baseline` — Send an unrouted baseline request before the routed preview request and display status code, latency, and line-by-line body diffs
 - `--timeout` — Request timeout (default: `30s`)
 
 **Examples:**
@@ -241,10 +241,9 @@ diverge curl pr-42 /api/checkout --compare-baseline
 
 ### `diverge open`
 
-Open a preview `Environment` or `PreviewGroup` URL in your default browser.
+Open a preview `Environment` URL in your default browser.
 
 **Usage:** `diverge open <env-name> [flags]`
 
 **Flags:**
-- `--magic` — Append `?_diverge_env=<headerValue>` so `diverge-proxy` sets the `diverge_env` sticky routing cookie on first visit
-- `--no-browser` — Print the resolved URL without launching a browser
+- `-m, --magic` — Append `?_diverge_env=<headerValue>` so `diverge-proxy` sets the `diverge_env` sticky routing cookie on first visit

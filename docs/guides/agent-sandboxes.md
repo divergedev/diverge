@@ -224,7 +224,7 @@ Collaborators (`OWNER`, `MEMBER`, or `COLLABORATOR`) can spawn and control `Agen
 
 ### Automatic PR / MR Status Comments (`SCMTaskNotifier`)
 
-When `notifierProvider` (`github` or `gitlab`) is configured on the controller, `SCMTaskNotifier` posts and idempotently updates a sticky comment (`<!-- diverge-agent-task -->`) on the associated Pull Request or Merge Request whenever the `AgentTask` transitions across `Active`, `Paused`, `Completed`, or `Failed` phases. The comment includes:
+When `notifierProvider` (`github` or `gitlab`) and supported runtime notifier wiring are enabled (note: `AgentTaskReconciler` does not currently receive a notifier by default), `SCMTaskNotifier` posts and idempotently updates a sticky comment (`<!-- diverge-agent-task -->`) on the associated Pull Request or Merge Request whenever the `AgentTask` transitions across `Active`, `Paused`, `Completed`, or `Failed` phases. The comment includes:
 - Current phase badge (`🟢 Completed`, `🟡 Paused`, `🔵 Active`, `🔴 Failed`)
 - Task objective and working branch
 - One-click **Magic Link** (`?_diverge_env=`) to open the agent's linked preview environment and an **Exit Preview** (`?_diverge_env=clear`) link

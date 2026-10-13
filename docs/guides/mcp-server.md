@@ -126,7 +126,7 @@ The MCP server provides the following tools grouped by service:
 | `diverge_fetch_errors` | Retrieve the last error-level (`ERROR`, `FATAL`, `panic`) log lines from an environment to diagnose failures. |
 | `diverge_doctor` | Run cluster and environment health checks (GatewayClass, CRDs, RBAC, database connectivity). |
 | `diverge_loadtest` | Run a bounded HTTP/gRPC load test against a preview environment and return latency/error percentiles. |
-| `diverge_visual_test` | Compare baseline and preview PNG screenshots (`baseline_path`/`preview_path` or batch `baseline_dir`/`preview_dir`) and return pixel-diff pass/fail metrics and diff images. |
+| `diverge_visual_test` | Compare baseline and preview PNG screenshots (`baseline_path`/`preview_path` or batch `baseline_dir`/`preview_dir`) and return pixel-diff pass/fail metrics (writing diff PNGs when `diff_output_path` is set and diff data exists). |
 
 ### Autonomous AgentTask Tools
 
