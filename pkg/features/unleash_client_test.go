@@ -166,13 +166,12 @@ func TestUnleashClient_Methods(t *testing.T) {
 	uc, err := NewUnleashClient(ts.URL, "default", "development", "test-admin", "", nil)
 	require.NoError(t, err)
 
-	// 1. EnsureFeature creates when 404 and enables the feature in the target environment
+	// 1. EnsureFeature creates when 404
 	feat, err := uc.EnsureFeature(ctx, "dark_mode")
 	require.NoError(t, err)
 	assert.Equal(t, "dark_mode", feat.Name)
-	assert.True(t, envEnabled)
 	assert.Equal(t, http.MethodPost, lastMethod)
-	assert.Equal(t, "/api/admin/projects/default/features/dark_mode/environments/development/on", lastPath)
+	assert.Equal(t, "/api/admin/projects/default/features", lastPath)
 	assert.Equal(t, "test-admin", lastAuth)
 
 	// 2. EnsureFeature returns existing when 200
@@ -186,6 +185,13 @@ func TestUnleashClient_Methods(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "strat-1", strat.ID)
 	assert.Equal(t, http.MethodPost, lastMethod)
+
+	// 3b. EnableFeatureInEnvironment enables the feature in the target environment after strategy upsert
+	err = uc.EnableFeatureInEnvironment(ctx, "dark_mode")
+	require.NoError(t, err)
+	assert.True(t, envEnabled)
+	assert.Equal(t, http.MethodPost, lastMethod)
+	assert.Equal(t, "/api/admin/projects/default/features/dark_mode/environments/development/on", lastPath)
 
 	// 4. UpsertPreviewStrategy updates existing strategy when title matches
 	strat, err = uc.UpsertPreviewStrategy(ctx, "dark_mode", "diverge-pr-1", "pr-1", true, "variant-b")
