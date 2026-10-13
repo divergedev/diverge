@@ -286,9 +286,13 @@ func BuildSandboxClaimSpec(task *v1alpha1.AgentTask) map[string]interface{} {
 			},
 		},
 		"spec": map[string]interface{}{
+			"automountServiceAccountToken": false,
 			"securityContext": map[string]interface{}{
 				"runAsNonRoot": true,
 				"runAsUser":    int64(10001),
+				"seccompProfile": map[string]interface{}{
+					"type": "RuntimeDefault",
+				},
 			},
 			"containers": []interface{}{
 				map[string]interface{}{
@@ -298,6 +302,7 @@ func BuildSandboxClaimSpec(task *v1alpha1.AgentTask) map[string]interface{} {
 					"resources": DefaultResourceBounds,
 					"securityContext": map[string]interface{}{
 						"allowPrivilegeEscalation": false,
+						"readOnlyRootFilesystem":   true,
 						"capabilities": map[string]interface{}{
 							"drop": []interface{}{"ALL"},
 						},

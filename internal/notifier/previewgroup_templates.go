@@ -32,7 +32,7 @@ const pgReadyTmplStr = `## 🟢 Diverge Preview — Ready!
 | Field | Value |
 |-------|-------|
 | **Status** | ✅ Running |
-{{if .URL}}| **Preview Link** | [🔗 Open Preview]({{.URL | sanitize}}?preview={{.HeaderValue | sanitize}}) |
+{{if .URL}}| **Preview Link** | [🔗 Open Preview]({{.URL | sanitize}}?_diverge_env={{.HeaderValue | sanitize}}) ([Exit Preview]({{.URL | sanitize}}?_diverge_env=clear)) |
 {{end}}| **Environment** | ` + "`{{.Name | sanitize}}`" + ` |
 | **Services** | {{.ServiceCount}} ({{.RunningCount}} running) |
 

@@ -2,6 +2,10 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
+	"image"
+	"image/color"
+	"image/draw"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +15,7 @@ import (
 	"testing"
 
 	"connectrpc.com/connect"
+	"github.com/protocgen/proto2mcp/pkg/mcpruntime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -142,6 +147,7 @@ func TestMCPToolRegistration(t *testing.T) {
 		"diverge_retry_hook",
 		"diverge_wait_for_ready",
 		"diverge_fetch_errors",
+		"diverge_visual_test",
 	}
 	for _, name := range expectedEnvTools {
 		assert.Contains(t, tools, name, "expected EnvironmentService tool %s to be registered", name)
@@ -357,4 +363,104 @@ func TestMCPBearerTokenAuth(t *testing.T) {
 	_, err = remoteHTTPClient.Get("http://diverge.example.com:8080/healthz")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "insecure HTTP scheme is only allowed for loopback addresses")
+}
+
+func TestMCPCmdVisibleInHelp(t *testing.T) {
+	cmd := newMCPCmd(&App{})
+	assert.False(t, cmd.Hidden, "diverge mcp command must not be hidden in --help")
+
+	var names []string
+	for _, def := range customTools() {
+		names = append(names, def.Name)
+	}
+	assert.Contains(t, names, "diverge_visual_test")
+}
+
+func TestMCPVisualTestTool(t *testing.T) {
+	registry := mcpruntime.NewToolRegistry()
+	registerVisualTest(registry)
+
+	handler, ok := registry.Lookup("diverge_visual_test")
+	require.True(t, ok)
+
+	tmpDir := t.TempDir()
+	baseDir := filepath.Join(tmpDir, "baseline")
+	prevDir := filepath.Join(tmpDir, "preview")
+	diffDir := filepath.Join(tmpDir, "diffs")
+	require.NoError(t, os.MkdirAll(baseDir, 0o755))
+	require.NoError(t, os.MkdirAll(prevDir, 0o755))
+
+	white := color.RGBA{255, 255, 255, 255}
+	red := color.RGBA{255, 0, 0, 255}
+
+	baseImg := image.NewRGBA(image.Rect(0, 0, 100, 100))
+	draw.Draw(baseImg, baseImg.Bounds(), &image.Uniform{C: white}, image.Point{}, draw.Src)
+	basePath := filepath.Join(baseDir, "home.png")
+	writeTestPNG(t, basePath, baseImg)
+
+	// Identical preview image
+	prevSamePath := filepath.Join(prevDir, "home.png")
+	writeTestPNG(t, prevSamePath, baseImg)
+
+	// 1. Single-file pass with diff output
+	singleDiffPath := filepath.Join(diffDir, "single-diff.png")
+	reqArgs, _ := json.Marshal(map[string]any{
+		"baseline_path":    basePath,
+		"preview_path":     prevSamePath,
+		"diff_output_path": singleDiffPath,
+	})
+	res, err := handler(context.Background(), mcpruntime.ToolRequest{
+		ToolName:  "diverge_visual_test",
+		Arguments: reqArgs,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.False(t, res.IsError)
+	assert.FileExists(t, singleDiffPath)
+
+	var fileRes visualTestFileResult
+	require.NoError(t, json.Unmarshal(res.Content, &fileRes))
+	assert.True(t, fileRes.Passed)
+	assert.Equal(t, 0.0, fileRes.DiffPercent)
+	assert.Equal(t, 0.1, fileRes.MaxDiffPercent)
+
+	// 2. Single-file drift exceeding default 0.1% threshold -> IsError: true
+	driftedImg := image.NewRGBA(image.Rect(0, 0, 100, 100))
+	draw.Draw(driftedImg, driftedImg.Bounds(), &image.Uniform{C: white}, image.Point{}, draw.Src)
+	draw.Draw(driftedImg, image.Rect(0, 0, 10, 10), &image.Uniform{C: red}, image.Point{}, draw.Src) // 1% drift
+	driftedPath := filepath.Join(tmpDir, "drifted.png")
+	writeTestPNG(t, driftedPath, driftedImg)
+
+	driftArgs, _ := json.Marshal(map[string]any{
+		"baseline_path": basePath,
+		"preview_path":  driftedPath,
+	})
+	driftRes, err := handler(context.Background(), mcpruntime.ToolRequest{
+		ToolName:  "diverge_visual_test",
+		Arguments: driftArgs,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, driftRes)
+	assert.True(t, driftRes.IsError)
+
+	// 3. Directory comparison mode
+	dirArgs, _ := json.Marshal(map[string]any{
+		"baseline_dir":     baseDir,
+		"preview_dir":      prevDir,
+		"diff_output_path": filepath.Join(diffDir, "batch"),
+	})
+	dirToolRes, err := handler(context.Background(), mcpruntime.ToolRequest{
+		ToolName:  "diverge_visual_test",
+		Arguments: dirArgs,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, dirToolRes)
+	assert.False(t, dirToolRes.IsError)
+
+	var batchRes visualTestDirResult
+	require.NoError(t, json.Unmarshal(dirToolRes.Content, &batchRes))
+	assert.True(t, batchRes.Passed)
+	assert.Equal(t, 1, batchRes.TotalFiles)
+	assert.Equal(t, 0, batchRes.FailedFiles)
+	assert.FileExists(t, filepath.Join(diffDir, "batch", "home.png"))
 }

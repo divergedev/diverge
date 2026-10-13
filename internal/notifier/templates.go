@@ -63,7 +63,7 @@ const readyTmplStr = `## 🟢 Diverge Preview Environment — Ready!
 | Field | Value |
 |-------|-------|
 | **Status** | ✅ Running |
-| **URL** | [🔗 Open Preview]({{.URL}}) |
+| **URL** | [🔗 Open Preview]({{.URL}}){{if .BaseURL}} • [✨ 1-Click Magic Link]({{.BaseURL}}?_diverge_env={{if .HeaderValue}}{{.HeaderValue | sanitize}}{{else}}{{.Name | sanitize}}{{end}}) ([Exit Preview]({{.BaseURL}}?_diverge_env=clear)){{else if .URL}} • [✨ 1-Click Magic Link]({{.URL}}?_diverge_env={{if .HeaderValue}}{{.HeaderValue | sanitize}}{{else}}{{.Name | sanitize}}{{end}}) ([Exit Preview]({{.URL}}?_diverge_env=clear)){{end}} |
 | **Environment** | ` + "`{{.Name | sanitize}}`" + ` |
 | **Branch** | ` + "`{{.Branch | sanitize}}`" + ` |
 | **Deploy Mode** | {{.Mode | sanitize}} ({{.NumServices}} services deployed) |
@@ -73,9 +73,9 @@ const readyTmplStr = `## 🟢 Diverge Preview Environment — Ready!
 {{range .Services}}- ✅ {{. | sanitize}}
 {{end}}
 {{if .BaseURL}}### Quick Access
-` + "```\n" + `curl -H "{{.HeaderKey | sanitize}}: {{.Name | sanitize}}" {{.BaseURL}}
+` + "```\n" + `curl -H "{{.HeaderKey | sanitize}}: {{if .HeaderValue}}{{.HeaderValue | sanitize}}{{else}}{{.Name | sanitize}}{{end}}" {{.BaseURL}}
 ` + "```\n" + `
-> 💡 **Tip:** Use the Diverge browser extension or add the header ` + "`{{.HeaderKey | sanitize}}: {{.Name | sanitize}}`" + ` to route traffic to this preview.
+> 💡 **Tip:** Open via 1-click [Magic Link]({{.BaseURL}}?_diverge_env={{if .HeaderValue}}{{.HeaderValue | sanitize}}{{else}}{{.Name | sanitize}}{{end}}) ([Exit Preview]({{.BaseURL}}?_diverge_env=clear)), use the Diverge browser extension, or add the header ` + "`{{.HeaderKey | sanitize}}: {{if .HeaderValue}}{{.HeaderValue | sanitize}}{{else}}{{.Name | sanitize}}{{end}}`" + ` to route traffic to this preview.
 {{end}}
 ---
 _Powered by [Diverge](https://github.com/divergedev/diverge) • Expires {{.ExpiryTime}}_`
@@ -115,6 +115,7 @@ type TemplateData struct {
 	ExpiryTime  string
 	Reason      string
 	HeaderKey   string // routing header key (defaults to x-diverge-env)
+	HeaderValue string // optional routing header value (defaults to Name)
 	Conditions  []ConditionData
 }
 

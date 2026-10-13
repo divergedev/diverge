@@ -20,7 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
-func buildTaskTestSetup() (*runtime.Scheme, *AgentTaskService) {
+func buildTaskTestSetupWithAuditBuffer() (*runtime.Scheme, *AgentTaskService, *bytes.Buffer) {
 	scheme := runtime.NewScheme()
 	_ = v1alpha1.AddToScheme(scheme)
 	_ = corev1.AddToScheme(scheme)
@@ -38,13 +38,18 @@ func buildTaskTestSetup() (*runtime.Scheme, *AgentTaskService) {
 	audit := NewAuditLogger(logger)
 
 	svc := NewAgentTaskService(c, k8s, nil, nil, logger, audit)
+	return scheme, svc, &buf
+}
+
+func buildTaskTestSetup() (*runtime.Scheme, *AgentTaskService) {
+	scheme, svc, _ := buildTaskTestSetupWithAuditBuffer()
 	return scheme, svc
 }
 
 func TestAgentTaskServiceCRUD(t *testing.T) {
 	ctx := context.Background()
 	ctx = auth.ContextWithUserInfo(ctx, &auth.UserInfo{Username: "test-user"})
-	_, svc := buildTaskTestSetup()
+	_, svc, auditBuf := buildTaskTestSetupWithAuditBuffer()
 
 	// 1. CreateTask
 	createReq := connect.NewRequest(&pb.CreateTaskRequest{
@@ -70,6 +75,7 @@ func TestAgentTaskServiceCRUD(t *testing.T) {
 	require.NotNil(t, createRes.Msg.Task)
 	assert.Equal(t, "task-auth-fix", createRes.Msg.Task.Name)
 	assert.Equal(t, "Fix auth race condition", createRes.Msg.Task.Spec.Objective)
+	assert.Contains(t, auditBuf.String(), "event=resource.created")
 
 	// 2. Duplicate CreateTask fails
 	_, err = svc.CreateTask(ctx, createReq)
@@ -102,6 +108,7 @@ func TestAgentTaskServiceCRUD(t *testing.T) {
 	}))
 	require.NoError(t, err)
 	assert.True(t, guideRes.Msg.Accepted)
+	assert.Contains(t, auditBuf.String(), "event=resource.guided")
 
 	// 6. PauseTask
 	pauseRes, err := svc.PauseTask(ctx, connect.NewRequest(&pb.PauseTaskRequest{
@@ -110,6 +117,7 @@ func TestAgentTaskServiceCRUD(t *testing.T) {
 	}))
 	require.NoError(t, err)
 	assert.True(t, pauseRes.Msg.Task.Spec.Suspended)
+	assert.Contains(t, auditBuf.String(), "event=resource.paused")
 
 	// 7. ResumeTask with budget bump (additive)
 	resumeRes, err := svc.ResumeTask(ctx, connect.NewRequest(&pb.ResumeTaskRequest{
@@ -122,6 +130,7 @@ func TestAgentTaskServiceCRUD(t *testing.T) {
 	assert.False(t, resumeRes.Msg.Task.Spec.Suspended)
 	assert.Equal(t, "15.00", resumeRes.Msg.Task.Spec.BudgetUsd)
 	assert.Equal(t, int64(150000), resumeRes.Msg.Task.Spec.BudgetTokens)
+	assert.Contains(t, auditBuf.String(), "event=resource.resumed")
 
 	// 8. DeleteTask
 	_, err = svc.DeleteTask(ctx, connect.NewRequest(&pb.DeleteTaskRequest{
@@ -129,6 +138,7 @@ func TestAgentTaskServiceCRUD(t *testing.T) {
 		Name:      "task-auth-fix",
 	}))
 	require.NoError(t, err)
+	assert.Contains(t, auditBuf.String(), "event=resource.deleted")
 
 	// 9. Get after delete returns CodeNotFound
 	_, err = svc.GetTask(ctx, connect.NewRequest(&pb.GetTaskRequest{

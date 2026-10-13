@@ -91,8 +91,22 @@ func newStatusCmd(app *App) *cobra.Command {
 			}
 
 			var pgList divergeiov1alpha1.PreviewGroupList
-			if err := c.List(cmd.Context(), &pgList); err != nil {
+			if err := c.List(cmd.Context(), &pgList, listOpts...); err != nil {
 				return fmt.Errorf("failed to list preview groups: %w", err)
+			}
+			if namespace != "" {
+				var clusterPGList divergeiov1alpha1.PreviewGroupList
+				if err := c.List(cmd.Context(), &clusterPGList); err == nil {
+					seenPG := make(map[string]bool, len(pgList.Items))
+					for _, pg := range pgList.Items {
+						seenPG[pg.Namespace+"/"+pg.Name] = true
+					}
+					for _, pg := range clusterPGList.Items {
+						if !seenPG[pg.Namespace+"/"+pg.Name] {
+							pgList.Items = append(pgList.Items, pg)
+						}
+					}
+				}
 			}
 
 			switch outputFormat {

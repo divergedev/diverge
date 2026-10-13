@@ -3,6 +3,8 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -18,8 +20,10 @@ const (
 	annotationPreviewBranch      = "divergedev.com/preview-branch"
 	annotationPreviewService     = "divergedev.com/preview-service"
 	annotationPreviewImage       = "divergedev.com/preview-image"
+	annotationPreviewPort        = "divergedev.com/preview-port"
 	annotationPreviewEnvironment = "divergedev.com/preview-environment"
 	annotationPreviewURL         = "divergedev.com/preview-url"
+	annotationSandboxIP          = "divergedev.com/sandbox-ip"
 
 	labelAgentTask           = "divergedev.com/agent-task"
 	managedByAgentTask       = "diverge-agenttask"
@@ -69,6 +73,21 @@ func resolveTaskPreviewImage(task *v1alpha1.AgentTask) string {
 		return img
 	}
 	return "nginx:alpine"
+}
+
+func resolveTaskPreviewPort(task *v1alpha1.AgentTask) int32 {
+	if task == nil || task.Annotations == nil {
+		return 0
+	}
+	raw := strings.TrimSpace(task.Annotations[annotationPreviewPort])
+	if raw == "" {
+		return 0
+	}
+	p, err := strconv.Atoi(raw)
+	if err != nil || p < 1 || p > 65535 {
+		return 0
+	}
+	return int32(p)
 }
 
 func linkedPreviewEnvironmentName(taskName string) string {
@@ -142,6 +161,13 @@ func (r *AgentTaskReconciler) reconcileLinkedPreviewEnvironment(ctx context.Cont
 		env.Labels[labelAgentTask] = truncateLabel(task.Name)
 		env.Labels[labelManagedBy] = managedByAgentTask
 
+		if task.Status.SandboxIP != "" {
+			if env.Annotations == nil {
+				env.Annotations = make(map[string]string)
+			}
+			env.Annotations[annotationSandboxIP] = task.Status.SandboxIP
+		}
+
 		if r.Scheme != nil {
 			if err := controllerutil.SetControllerReference(task, env, r.Scheme); err != nil {
 				return err
@@ -172,7 +198,9 @@ func (r *AgentTaskReconciler) reconcileLinkedPreviewEnvironment(ctx context.Cont
 		env.Spec.ServiceConfig.ServiceName = serviceName
 		env.Spec.ServiceConfig.Image = image
 		if env.Spec.ServiceConfig.Port == 0 {
-			if task.Annotations[annotationPreviewImage] == "" {
+			if customPort := resolveTaskPreviewPort(task); customPort > 0 {
+				env.Spec.ServiceConfig.Port = customPort
+			} else if task.Annotations[annotationPreviewImage] == "" {
 				env.Spec.ServiceConfig.Port = 80
 			} else {
 				env.Spec.ServiceConfig.Port = 8080

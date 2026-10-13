@@ -57,6 +57,8 @@ func TestRenderReadyTemplate(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Contains(t, res, "✅ Running")
 			assert.Contains(t, res, "[🔗 Open Preview](https://example.com/pr)")
+			assert.Contains(t, res, "https://api.example.com?_diverge_env=pr-123")
+			assert.Contains(t, res, "https://api.example.com?_diverge_env=clear")
 			assert.Contains(t, res, "`pr-123`")
 			assert.Contains(t, res, "`feature-x`")
 			assert.Contains(t, res, "ephemeral (2 services deployed)")

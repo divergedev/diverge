@@ -63,7 +63,6 @@ exposing Diverge operations as tools that AI agents can call.
 
 Configure in your AI editor (Cursor, Claude, etc.):
 	"diverge": { "command": "diverge", "args": ["mcp"] }`,
-		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runMCP(cmd.Context(), app, serverURL, allowDestructive)
 		},
@@ -321,10 +320,7 @@ func newMCPServer(envClient divergev1alpha1connect.EnvironmentServiceClient, pgC
 		divergev1alpha1.RegisterAgentTaskServiceMCP(registry, taskHandler, mcpruntime.WithToolNamer(divergeToolNamer))
 	}
 
-	registerWaitForReady(registry, envClient)
-	registerFetchErrors(registry, envClient)
-	registerLoadtest(registry)
-	registerDoctor(registry, envClient, diagnoser...)
+	registerCustomTools(registry, envClient, diagnoser...)
 
 	mcpServer := server.NewMCPServer("diverge", "1.0.0")
 

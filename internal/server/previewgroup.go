@@ -67,6 +67,9 @@ func (s *PreviewGroupService) CreatePreviewGroup(ctx context.Context, req *conne
 	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "create", namespace, "previewgroups"); err != nil {
 		return nil, err
 	}
+	if err := s.authorizeServiceNamespaces(ctx, namespace, msg.PreviewGroup.GetSpec()); err != nil {
+		return nil, err
+	}
 
 	realCrd, err := ProtoPgToCRD(msg.PreviewGroup)
 	if err != nil {
@@ -88,6 +91,30 @@ func (s *PreviewGroupService) CreatePreviewGroup(ctx context.Context, req *conne
 	return connect.NewResponse(&pb.CreatePreviewGroupResponse{
 		PreviewGroup: domBack,
 	}), nil
+}
+
+func (s *PreviewGroupService) authorizeServiceNamespaces(ctx context.Context, namespace string, spec *pb.PreviewGroupSpec) error {
+	if spec == nil {
+		return nil
+	}
+	checked := map[string]bool{namespace: true}
+	for _, svc := range spec.GetServices() {
+		svcNS := svc.GetNamespace()
+		if svcNS == "" || checked[svcNS] {
+			continue
+		}
+		if err := ValidateDNS1123Label(svcNS, "service.namespace"); err != nil {
+			return err
+		}
+		if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "create", svcNS, "environments"); err != nil {
+			if connect.CodeOf(err) == connect.CodePermissionDenied {
+				return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("permission denied for service namespace %s", svcNS))
+			}
+			return err
+		}
+		checked[svcNS] = true
+	}
+	return nil
 }
 
 func (s *PreviewGroupService) GetPreviewGroup(ctx context.Context, req *connect.Request[pb.GetPreviewGroupRequest]) (*connect.Response[pb.GetPreviewGroupResponse], error) {
@@ -218,6 +245,9 @@ func (s *PreviewGroupService) UpdatePreviewGroup(ctx context.Context, req *conne
 
 	// RBAC check
 	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "update", namespace, "previewgroups"); err != nil {
+		return nil, err
+	}
+	if err := s.authorizeServiceNamespaces(ctx, namespace, msg.PreviewGroup.GetSpec()); err != nil {
 		return nil, err
 	}
 

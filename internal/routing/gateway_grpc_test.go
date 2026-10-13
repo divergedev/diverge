@@ -37,7 +37,7 @@ func TestGatewayRouter_Reconcile_GRPCRoute(t *testing.T) {
 	require.NoError(t, err)
 
 	u := &unstructured.Unstructured{}
-	u.SetAPIVersion("gateway.networking.k8s.io/v1alpha2")
+	u.SetAPIVersion("gateway.networking.k8s.io/v1")
 	u.SetKind("GRPCRoute")
 	err = c.Get(context.Background(), client.ObjectKey{Name: "test-env-web", Namespace: "default"}, u)
 	require.NoError(t, err, "GRPCRoute should exist")
@@ -120,7 +120,7 @@ func TestGatewayRouter_Reconcile_GRPCWithGAMMA(t *testing.T) {
 
 	// Check mesh route
 	uMesh := &unstructured.Unstructured{}
-	uMesh.SetAPIVersion("gateway.networking.k8s.io/v1alpha2")
+	uMesh.SetAPIVersion("gateway.networking.k8s.io/v1")
 	uMesh.SetKind("GRPCRoute")
 	err = c.Get(context.Background(), client.ObjectKey{Name: "test-env-api-mesh", Namespace: "default"}, uMesh)
 	require.NoError(t, err, "Mesh GRPCRoute should exist")
@@ -143,7 +143,7 @@ func TestGatewayRouter_Teardown_GRPCRoutes(t *testing.T) {
 	}
 
 	u := &unstructured.Unstructured{}
-	u.SetAPIVersion("gateway.networking.k8s.io/v1alpha2")
+	u.SetAPIVersion("gateway.networking.k8s.io/v1")
 	u.SetKind("GRPCRoute")
 	u.SetName("test-env-web")
 	u.SetNamespace("default")

@@ -41,11 +41,21 @@ type LLMMeterResponse struct {
 
 // LLMMeterHandler enforces live cost, token, and model capability budgets for AgentTasks.
 type LLMMeterHandler struct {
-	mu               sync.Mutex
+	taskLocks        sync.Map // map[string]*sync.Mutex keyed by "namespace/taskID"
 	crdClient        client.Client
 	macaroonVerifier *pkgauth.MacaroonProvider
 	tokenStore       pkgauth.TokenStore
 	logger           *slog.Logger
+}
+
+func (h *LLMMeterHandler) taskLock(namespace, taskID string) *sync.Mutex {
+	key := namespace + "/" + taskID
+	if v, ok := h.taskLocks.Load(key); ok {
+		return v.(*sync.Mutex)
+	}
+	mu := &sync.Mutex{}
+	actual, _ := h.taskLocks.LoadOrStore(key, mu)
+	return actual.(*sync.Mutex)
 }
 
 // NewLLMMeterHandler creates a new LLMMeterHandler.
@@ -177,8 +187,9 @@ func (h *LLMMeterHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.mu.Lock()
-	defer h.mu.Unlock()
+	mu := h.taskLock(ns, claims.TaskID)
+	mu.Lock()
+	defer mu.Unlock()
 
 	if h.tokenStore != nil && h.tokenStore.IsRevoked(ctx, claims.TaskID, ns) {
 		writeMeterJSON(w, http.StatusUnauthorized, LLMMeterResponse{

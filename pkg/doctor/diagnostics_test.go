@@ -122,6 +122,49 @@ func TestDoctor_CrashLoopAndOOM(t *testing.T) {
 	assert.Contains(t, buf.String(), "Docs:        🔗 https://divergedev.com/guides/troubleshooting/#div-105-crashloopbackoff")
 }
 
+func TestDoctor_DivergedevComEnvironmentLabel(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, divergeiov1alpha1.AddToScheme(scheme))
+
+	podCrash := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "web-crash-pr-42",
+			Namespace: "default",
+			Labels: map[string]string{
+				"divergedev.com/environment": "pr-42",
+			},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name: "web",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{
+							Reason:  "CrashLoopBackOff",
+							Message: "back-off 5m0s restarting failed container=web",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(podCrash).
+		Build()
+
+	diagnoser := NewDiagnoser(c)
+	report, err := diagnoser.Diagnose(context.Background(), "default", "pr-42")
+	require.NoError(t, err)
+	assert.False(t, report.Healthy)
+	require.Len(t, report.Issues, 1)
+	assert.Equal(t, CodeCrashLoopBackOff, report.Issues[0].Code)
+	assert.Contains(t, report.Issues[0].Component, "web-crash-pr-42")
+}
+
 func TestDoctor_EnvironmentDegradedAndMigrationFailed(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, corev1.AddToScheme(scheme))

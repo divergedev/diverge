@@ -142,6 +142,14 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 			}
 		}
 
+		if len(errs) > 0 && (env.Annotations["divergedev.com/force-teardown"] == "true" || (!env.DeletionTimestamp.IsZero() && time.Since(env.DeletionTimestamp.Time) > 15*time.Minute)) {
+			log.FromContext(ctx).Info("Force-teardown threshold or annotation reached; bypassing teardown errors to release finalizer", "errors", errors.Join(errs...))
+			if r.Recorder != nil {
+				r.Recorder.Event(env, "Warning", "ForceTeardown", "Bypassed external teardown errors after timeout or force-teardown annotation")
+			}
+			errs = nil
+		}
+
 		if len(errs) > 0 {
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, errors.Join(errs...)
 		}

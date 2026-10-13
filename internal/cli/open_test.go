@@ -1,9 +1,15 @@
 package cli
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 )
 
 func TestOpenCmdRejectsNonHTTPScheme(t *testing.T) {
@@ -18,19 +24,83 @@ func TestOpenCmdRejectsNonHTTPScheme(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// We can't run the full command without a k8s cluster,
-			// but we can verify the URL validation logic directly.
-			// The validation rejects schemes other than http/https.
-			assert.Contains(t, tt.want, "refusing")
+			env := &divergeiov1alpha1.Environment{
+				ObjectMeta: metav1.ObjectMeta{Name: "pr-42", Namespace: "default"},
+				Status:     divergeiov1alpha1.EnvironmentStatus{URL: tt.url},
+			}
+			_, err := buildPreviewURL(env)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
 		})
 	}
 }
 
 func TestOpenCmdRejectsEmptyHostname(t *testing.T) {
-	// Verifies the URL hostname validation exists by checking the open
-	// command is constructed with the proper validation.
 	app := &App{Namespace: "default"}
 	cmd := newOpenCmd(app)
 	assert.NotNil(t, cmd)
 	assert.Equal(t, "open <name>", cmd.Use)
+
+	env := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "pr-42", Namespace: "default"},
+		Status:     divergeiov1alpha1.EnvironmentStatus{URL: "https:///path"},
+	}
+	_, err := buildPreviewURL(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "has no hostname")
+}
+
+func TestBuildPreviewURLAndMagicFlag(t *testing.T) {
+	origOpenBrowser := openBrowser
+	defer func() { openBrowser = origOpenBrowser }()
+
+	var openedURL string
+	openBrowser = func(targetURL string) error {
+		openedURL = targetURL
+		return nil
+	}
+
+	env := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-42",
+			Namespace: "default",
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Routing: divergeiov1alpha1.EnvironmentRouting{
+				Mode:        "header",
+				HeaderKey:   "x-diverge-env",
+				HeaderValue: "pr-42",
+			},
+		},
+		Status: divergeiov1alpha1.EnvironmentStatus{
+			Phase: divergeiov1alpha1.PhaseRunning,
+			URL:   "https://app.example.com",
+		},
+	}
+
+	// Default buildPreviewURL preserves subdomain preview URL
+	defaultURL, err := buildPreviewURL(env)
+	require.NoError(t, err)
+	assert.Equal(t, "https://pr-42.preview.app.example.com", defaultURL)
+
+	// Magic buildPreviewURL constructs cookie-setting URL
+	magicURL, err := buildPreviewURL(env, true)
+	require.NoError(t, err)
+	assert.Equal(t, "https://app.example.com?_diverge_env=pr-42", magicURL)
+
+	// Execute diverge open --magic pr-42
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(newTestScheme()).
+		WithObjects(env).
+		Build()
+	app := &App{Namespace: "default", Client: fakeClient}
+	cmd := newOpenCmd(app)
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--magic", "pr-42"})
+
+	require.NoError(t, cmd.Execute())
+	assert.Equal(t, "https://app.example.com?_diverge_env=pr-42", openedURL)
+	assert.Contains(t, out.String(), "Opening https://app.example.com?_diverge_env=pr-42")
 }

@@ -230,6 +230,12 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			if r.needsUpdate(&existingEnv, desiredEnv) {
 				existingEnv.Spec = desiredEnv.Spec
 				existingEnv.Labels = desiredEnv.Labels
+				if tp := desiredEnv.Annotations["divergedev.com/traceparent"]; tp != "" {
+					if existingEnv.Annotations == nil {
+						existingEnv.Annotations = make(map[string]string)
+					}
+					existingEnv.Annotations["divergedev.com/traceparent"] = tp
+				}
 				if err := r.Update(ctx, &existingEnv); err != nil {
 					return ctrl.Result{}, fmt.Errorf("failed to update child Environment %s/%s: %w", targetNS, envName, err)
 				}
@@ -496,6 +502,12 @@ func (r *PreviewGroupReconciler) buildChildEnvironment(
 		},
 	}
 
+	if tp := pg.Annotations["divergedev.com/traceparent"]; tp != "" {
+		env.Annotations = map[string]string{
+			"divergedev.com/traceparent": tp,
+		}
+	}
+
 	// Lifecycle — copy TTL/cleanup from group
 	if pg.Spec.Lifecycle != nil {
 		env.Spec.Lifecycle = divergeiov1alpha1.EnvironmentLifecycle{
@@ -519,6 +531,9 @@ func (r *PreviewGroupReconciler) needsUpdate(existing, desired *divergeiov1alpha
 		if existing.Labels[k] != v {
 			return true
 		}
+	}
+	if tp := desired.Annotations["divergedev.com/traceparent"]; tp != "" && existing.Annotations["divergedev.com/traceparent"] != tp {
+		return true
 	}
 	return false
 }
@@ -652,7 +667,7 @@ func (r *PreviewGroupReconciler) cleanupRoutesAndEndpoints(ctx context.Context, 
 		cleanupCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
 		var grpcRouteList unstructured.UnstructuredList
-		grpcRouteList.SetAPIVersion("gateway.networking.k8s.io/v1alpha2")
+		grpcRouteList.SetAPIVersion("gateway.networking.k8s.io/v1")
 		grpcRouteList.SetKind("GRPCRouteList")
 		if err := r.List(cleanupCtx, &grpcRouteList, client.MatchingLabels{labelPreviewGroup: pgName}); err != nil {
 			if meta.IsNoMatchError(err) {

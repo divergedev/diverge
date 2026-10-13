@@ -55,6 +55,16 @@ func buildJob(cfg HookJobConfig) *batchv1.Job {
 		labels[k] = truncateLabel(v)
 	}
 
+	envVars := cfg.EnvVars
+	if cfg.Owner != nil {
+		if tp := cfg.Owner.GetAnnotations()["divergedev.com/traceparent"]; tp != "" {
+			envVars = append(append([]corev1.EnvVar(nil), envVars...), corev1.EnvVar{
+				Name:  "TRACEPARENT",
+				Value: tp,
+			})
+		}
+	}
+
 	nonRoot := true
 	runAsUser := int64(65534)
 	noPrivEsc := false
@@ -98,7 +108,7 @@ func buildJob(cfg HookJobConfig) *batchv1.Job {
 							Name:    "hook",
 							Image:   cfg.Image,
 							Args:    cfg.Args,
-							Env:     cfg.EnvVars,
+							Env:     envVars,
 							EnvFrom: cfg.EnvFrom,
 							SecurityContext: &corev1.SecurityContext{
 								AllowPrivilegeEscalation: &noPrivEsc,

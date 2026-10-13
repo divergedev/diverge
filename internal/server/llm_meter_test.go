@@ -390,3 +390,16 @@ func TestLLMMeterHandler_TokensOverflowAndConflictRetry(t *testing.T) {
 	assert.False(t, overflowResp.Allowed)
 	assert.Equal(t, "tokensUsed overflows accumulated usage", overflowResp.Reason)
 }
+
+func TestLLMMeterHandler_PerTaskLocking(t *testing.T) {
+	_, _, _, handler := setupLLMMeterTest(t)
+
+	muA1 := handler.taskLock("default", "task-a")
+	muA2 := handler.taskLock("default", "task-a")
+	muB := handler.taskLock("default", "task-b")
+	muOtherNS := handler.taskLock("staging", "task-a")
+
+	assert.Same(t, muA1, muA2, "same namespace and taskID should return identical mutex")
+	assert.NotSame(t, muA1, muB, "different taskIDs should use distinct mutexes")
+	assert.NotSame(t, muA1, muOtherNS, "different namespaces should use distinct mutexes")
+}

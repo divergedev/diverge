@@ -167,14 +167,17 @@ func TestBuildSandboxClaimSpec(t *testing.T) {
 	assert.Equal(t, "/etc/diverge/token/token", envMap["DIVERGE_TOKEN_FILE"])
 
 	// Assert securityContext & volumes
+	assert.Equal(t, false, tmplSpec["automountServiceAccountToken"])
 	secCtx, ok := tmplSpec["securityContext"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Equal(t, true, secCtx["runAsNonRoot"])
 	assert.Equal(t, int64(10001), secCtx["runAsUser"])
+	assert.Equal(t, map[string]interface{}{"type": "RuntimeDefault"}, secCtx["seccompProfile"])
 
 	cSecCtx, ok := container["securityContext"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Equal(t, false, cSecCtx["allowPrivilegeEscalation"])
+	assert.Equal(t, true, cSecCtx["readOnlyRootFilesystem"])
 	caps, ok := cSecCtx["capabilities"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Equal(t, []interface{}{"ALL"}, caps["drop"])

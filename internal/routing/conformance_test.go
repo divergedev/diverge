@@ -233,7 +233,7 @@ func TestGatewayAPIConformance_GRPCRoute(t *testing.T) {
 	require.NoError(t, err)
 
 	u := &unstructured.Unstructured{}
-	u.SetAPIVersion("gateway.networking.k8s.io/v1alpha2")
+	u.SetAPIVersion("gateway.networking.k8s.io/v1")
 	u.SetKind("GRPCRoute")
 	err = c.Get(ctx, client.ObjectKey{Name: "pr-grpc-grpc-backend", Namespace: "default"}, u)
 	require.NoError(t, err)

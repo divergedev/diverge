@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -64,15 +66,22 @@ type EnvironmentReconciler struct {
 
 // Reconcile performs its designated operation.
 func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, retErr error) {
-	ctx, span := otel.Tracer("diverge").Start(ctx, "Reconcile")
-	defer span.End()
-
-	logger := log.FromContext(ctx)
-
 	var env divergeiov1alpha1.Environment
 	if err := r.Get(ctx, req.NamespacedName, &env); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+
+	if tp := env.Annotations["divergedev.com/traceparent"]; tp != "" {
+		ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier{"traceparent": tp})
+	}
+	ctx, span := otel.Tracer("diverge").Start(ctx, "Reconcile")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("environment.name", env.Name),
+		attribute.String("environment.namespace", env.Namespace),
+	)
+
+	logger := log.FromContext(ctx)
 
 	startTime := time.Now()
 
@@ -88,16 +97,19 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			metrics.ReconcileOutcomes.WithLabelValues("success").Inc()
 		}
 
-		// Update TTL gauge if applicable.
+		// Update TTL and cost gauges if applicable.
 		// Skip on deletion path — handleTeardown already deleted the series.
-		if env.DeletionTimestamp.IsZero() && env.Status.ExpiresAt != nil {
-			remaining := time.Until(env.Status.ExpiresAt.Time).Seconds()
-			if remaining < 0 {
-				remaining = 0
+		if env.DeletionTimestamp.IsZero() {
+			metrics.EstimateEnvironmentCost(&env, time.Now(), metrics.DefaultCostRateCard())
+			if env.Status.ExpiresAt != nil {
+				remaining := time.Until(env.Status.ExpiresAt.Time).Seconds()
+				if remaining < 0 && (env.Status.Phase == divergeiov1alpha1.PhaseTerminating || env.Status.Phase == divergeiov1alpha1.EnvironmentPhase("Expired")) {
+					remaining = 0
+				}
+				metrics.EnvironmentTTLRemaining.WithLabelValues(
+					env.Name, env.Namespace,
+				).Set(remaining)
 			}
-			metrics.EnvironmentTTLRemaining.WithLabelValues(
-				env.Name, env.Namespace,
-			).Set(remaining)
 		}
 	}()
 

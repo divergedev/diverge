@@ -242,3 +242,46 @@ func TestAgentTaskPreview_DoesNotOverwriteConflictingControllerOwner(t *testing.
 	require.Len(t, fetched.OwnerReferences, 1)
 	assert.Equal(t, "other-task", fetched.OwnerReferences[0].Name)
 }
+
+func TestAgentTaskPreview_CustomPortAndSandboxIP(t *testing.T) {
+	ctx := context.Background()
+	s := newAgentTaskTestScheme(t)
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "live-sandbox-task",
+			Namespace: "default",
+			UID:       "uid-live-sandbox",
+			Annotations: map[string]string{
+				"divergedev.com/preview-port": "3000",
+			},
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective: "Live sandbox routing test",
+			Repository: v1alpha1.AgentTaskRepository{
+				URL:           "https://github.com/org/repo",
+				WorkingBranch: "agent/live-sandbox-task",
+			},
+		},
+		Status: v1alpha1.AgentTaskStatus{
+			SandboxIP: "10.244.1.42",
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(task).
+		WithStatusSubresource(&v1alpha1.AgentTask{}, &v1alpha1.Environment{}).
+		Build()
+	reconciler := &AgentTaskReconciler{Client: c, Scheme: s}
+
+	require.NoError(t, reconciler.reconcileLinkedPreviewEnvironment(ctx, task))
+
+	expectedEnvName := linkedPreviewEnvironmentName(task.Name)
+	var env v1alpha1.Environment
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: expectedEnvName, Namespace: "default"}, &env))
+
+	require.NotNil(t, env.Spec.ServiceConfig)
+	assert.Equal(t, int32(3000), env.Spec.ServiceConfig.Port)
+	assert.Equal(t, "10.244.1.42", env.Annotations["divergedev.com/sandbox-ip"])
+}
