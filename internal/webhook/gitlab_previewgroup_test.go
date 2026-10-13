@@ -122,6 +122,9 @@ services:
 				if len(pg.Spec.Services) != 2 {
 					t.Errorf("expected 2 services, got %d", len(pg.Spec.Services))
 				}
+				if !w3cTraceparentPattern.MatchString(pg.Annotations[TraceparentAnnotation]) {
+					t.Errorf("expected valid W3C traceparent annotation on PreviewGroup, got %q", pg.Annotations[TraceparentAnnotation])
+				}
 			},
 		},
 		{

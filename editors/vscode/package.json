@@ -1,9 +1,10 @@
 {
   "name": "diverge-vscode",
   "displayName": "Diverge Preview Environments",
-  "description": "Preview environments, ephemeral load testing, visual diffs, and dev session management for VS Code, Cursor, and OpenCode.",
+  "description": "Preview environments, ephemeral load testing, visual diffs, and dev session management for Antigravity, VS Code, Cursor, and OpenCode.",
   "version": "0.15.0",
   "publisher": "divergedev",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/divergedev/diverge"
@@ -81,6 +82,16 @@
         "icon": "$(link-external)"
       },
       {
+        "command": "diverge.openMagicLink",
+        "title": "Diverge: Open Magic Preview Link (?_diverge_env)",
+        "icon": "$(wand)"
+      },
+      {
+        "command": "diverge.compareBaseline",
+        "title": "Diverge: Compare Endpoint Against Baseline",
+        "icon": "$(diff-sidebyside)"
+      },
+      {
         "command": "diverge.startDev",
         "title": "Start Local Dev Session (diverge dev)",
         "icon": "$(play)"
@@ -131,6 +142,16 @@
           "group": "inline"
         },
         {
+          "command": "diverge.openMagicLink",
+          "when": "view == diverge-environments",
+          "group": "1_preview"
+        },
+        {
+          "command": "diverge.compareBaseline",
+          "when": "view == diverge-environments",
+          "group": "1_preview"
+        },
+        {
           "command": "diverge.startDev",
           "when": "view == diverge-environments",
           "group": "2_lifecycle"
@@ -166,7 +187,9 @@
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "package:vsix": "npx --yes @vscode/vsce package --no-dependencies",
+    "publish:openvsx": "npx --yes ovsx publish --no-dependencies"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

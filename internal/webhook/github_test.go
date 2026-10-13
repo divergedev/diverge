@@ -410,8 +410,55 @@ func TestGitHubWebhookIssueCommentSlashCommand(t *testing.T) {
 	if tasks.Items[0].Spec.Repository.BaseBranch != "feat/race-fix" {
 		t.Errorf("Expected resolved PR head branch feat/race-fix, got %s", tasks.Items[0].Spec.Repository.BaseBranch)
 	}
+	if tasks.Items[0].Annotations["divergedev.com/provider"] != "github" {
+		t.Errorf("Expected provider annotation github, got %s", tasks.Items[0].Annotations["divergedev.com/provider"])
+	}
+	if tasks.Items[0].Annotations["divergedev.com/project"] != "divergedev/demo-api" {
+		t.Errorf("Expected project annotation divergedev/demo-api, got %s", tasks.Items[0].Annotations["divergedev.com/project"])
+	}
 	if tasks.Items[0].Annotations["divergedev.com/pr-number"] != "77" {
 		t.Errorf("Expected pr-number annotation 77, got %s", tasks.Items[0].Annotations["divergedev.com/pr-number"])
+	}
+	if !w3cTraceparentPattern.MatchString(tasks.Items[0].Annotations[TraceparentAnnotation]) {
+		t.Errorf("Expected valid W3C traceparent annotation on AgentTask, got %q", tasks.Items[0].Annotations[TraceparentAnnotation])
+	}
+}
+
+func TestGitHubWebhookTraceparentPropagation(t *testing.T) {
+	fakeK8s := newTestClient()
+	handler := &GitHubWebhookHandler{
+		Client:    fakeK8s,
+		Config:    WebhookConfig{SecretToken: "secret"},
+		DefaultNS: "preview",
+	}
+
+	expectedTP := "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+	prBody := `{
+		"action": "opened",
+		"pull_request": {
+			"number": 42,
+			"head": {"ref": "feat/trace", "sha": "abc123def456789"},
+			"base": {"ref": "main"}
+		},
+		"repository": {"full_name": "divergedev/demo-payments-api"}
+	}`
+	req, _ := http.NewRequest(http.MethodPost, "/", bytes.NewBufferString(prBody))
+	req.Header.Set("X-Hub-Signature-256", generateSignature("secret", prBody))
+	req.Header.Set("X-GitHub-Event", "pull_request")
+	req.Header.Set("traceparent", expectedTP)
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Expected 200, got %d", rr.Code)
+	}
+
+	env := &divergeiov1alpha1.Environment{}
+	if err := fakeK8s.Get(context.Background(), client.ObjectKey{Name: "pr-661f4f5e-42", Namespace: "preview"}, env); err != nil {
+		t.Fatalf("Expected Environment CR to be created, got %v", err)
+	}
+	if env.Annotations[TraceparentAnnotation] != expectedTP {
+		t.Errorf("Expected Environment traceparent %q, got %q", expectedTP, env.Annotations[TraceparentAnnotation])
 	}
 }
 

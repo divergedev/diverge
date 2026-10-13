@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" fill="none">
+  <defs>
+    <linearGradient id="diverge-grad" x1="16" y1="112" x2="112" y2="16" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#10b981"/>
+    </linearGradient>
+  </defs>
+  <rect x="14" y="14" width="100" height="100" rx="24" fill="#0f172a" stroke="url(#diverge-grad)" stroke-width="4"/>
+  <path d="M38 90L64 64M64 64L90 38M90 38H68M90 38V60" stroke="#10b981" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M64 64L90 90M90 90H68M90 90V68" stroke="#818cf8" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="64" cy="64" r="9" fill="#f8fafc" stroke="#6366f1" stroke-width="4"/>
+  <circle cx="38" cy="90" r="7" fill="#10b981"/>
+</svg>

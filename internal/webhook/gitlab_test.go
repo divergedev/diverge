@@ -407,8 +407,59 @@ func TestGitLabWebhookNoteSlashCommand(t *testing.T) {
 	if tasks.Items[0].Spec.Objective != "update database connection pool timeout" {
 		t.Errorf("Unexpected objective: %s", tasks.Items[0].Spec.Objective)
 	}
+	if tasks.Items[0].Annotations["divergedev.com/provider"] != "gitlab" {
+		t.Errorf("Expected provider annotation gitlab, got %s", tasks.Items[0].Annotations["divergedev.com/provider"])
+	}
+	if tasks.Items[0].Annotations["divergedev.com/project"] != "team/payments-api" {
+		t.Errorf("Expected project annotation team/payments-api, got %s", tasks.Items[0].Annotations["divergedev.com/project"])
+	}
+	if tasks.Items[0].Annotations["divergedev.com/mr-iid"] != "88" {
+		t.Errorf("Expected mr-iid annotation 88, got %s", tasks.Items[0].Annotations["divergedev.com/mr-iid"])
+	}
 	if tasks.Items[0].Annotations["divergedev.com/pr-number"] != "88" {
 		t.Errorf("Expected pr-number annotation 88, got %s", tasks.Items[0].Annotations["divergedev.com/pr-number"])
+	}
+	if !w3cTraceparentPattern.MatchString(tasks.Items[0].Annotations[TraceparentAnnotation]) {
+		t.Errorf("Expected valid W3C traceparent annotation on AgentTask, got %q", tasks.Items[0].Annotations[TraceparentAnnotation])
+	}
+}
+
+func TestGitLabWebhookTraceparentPropagation(t *testing.T) {
+	fakeK8s := newTestClient()
+	handler := &GitLabWebhookHandler{
+		Client:    fakeK8s,
+		Config:    WebhookConfig{SecretToken: "secret"},
+		DefaultNS: "preview",
+	}
+
+	expectedTP := "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+	body := `{
+		"object_kind": "merge_request",
+		"object_attributes": {
+			"iid": 42,
+			"action": "open",
+			"source_branch": "feat/new-payments",
+			"last_commit": {"id": "abc123def456789"}
+		},
+		"project": {"path_with_namespace": "team/payments-api"}
+	}`
+
+	req, _ := http.NewRequest(http.MethodPost, "/", bytes.NewBufferString(body))
+	req.Header.Set("X-Gitlab-Token", "secret")
+	req.Header.Set("traceparent", expectedTP)
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Expected 200, got %d", rr.Code)
+	}
+
+	env := &divergeiov1alpha1.Environment{}
+	if err := fakeK8s.Get(context.Background(), client.ObjectKey{Name: "mr-0d7c4cc4-42", Namespace: "preview"}, env); err != nil {
+		t.Fatalf("Expected Environment CR to be created, got %v", err)
+	}
+	if env.Annotations[TraceparentAnnotation] != expectedTP {
+		t.Errorf("Expected Environment traceparent %q, got %q", expectedTP, env.Annotations[TraceparentAnnotation])
 	}
 }
 

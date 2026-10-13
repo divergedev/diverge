@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -107,7 +108,8 @@ func (h *GitLabWebhookHandler) isAuthorizedGitLabCommenter(payload *GitLabNotePa
 }
 
 func (h *GitLabWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	traceparent := ResolveTraceparent(r)
+	ctx := WithTraceparent(r.Context(), traceparent)
 	logger := log.FromContext(ctx).WithName("gitlab-webhook")
 
 	start := time.Now()
@@ -243,13 +245,55 @@ func (h *GitLabWebhookHandler) handleNoteEvent(ctx context.Context, w http.Respo
 		branch = "main"
 	}
 
-	if err := ExecuteSlashCommand(ctx, h.Client, h.DefaultNS, cmd, repoURL, branch, mrIID); err != nil {
-		logger.Error(err, "Failed to execute GitLab slash command", "action", cmd.Action, "mr", mrIID)
+	var execErr error
+	if cmd.Action == "fix" {
+		execErr = h.handleFixCommand(ctx, &payload, cmd, repoURL, branch, mrIID)
+	} else {
+		execErr = ExecuteSlashCommand(ctx, h.Client, h.DefaultNS, cmd, repoURL, branch, mrIID)
+	}
+	if execErr != nil {
+		logger.Error(execErr, "Failed to execute GitLab slash command", "action", cmd.Action, "mr", mrIID)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+func (h *GitLabWebhookHandler) handleFixCommand(ctx context.Context, payload *GitLabNotePayload, cmd *SlashCommand, repoURL, branch string, mrIID int) error {
+	if err := ExecuteSlashCommand(ctx, h.Client, h.DefaultNS, cmd, repoURL, branch, mrIID); err != nil {
+		return err
+	}
+	if h.Client == nil {
+		return nil
+	}
+	ns := h.DefaultNS
+	if ns == "" {
+		ns = "default"
+	}
+	effectiveRepoURL := repoURL
+	if effectiveRepoURL == "" {
+		effectiveRepoURL = "https://github.com/unknown/repository"
+	}
+	taskName := buildCommandTaskName(effectiveRepoURL, mrIID, cmd.Objective)
+	var task v1alpha1.AgentTask
+	if err := h.Client.Get(ctx, client.ObjectKey{Name: taskName, Namespace: ns}, &task); err != nil {
+		return err
+	}
+	if task.Annotations == nil {
+		task.Annotations = make(map[string]string)
+	}
+	task.Annotations["divergedev.com/provider"] = "gitlab"
+	if payload != nil && payload.Project.PathWithNamespace != "" {
+		task.Annotations["divergedev.com/project"] = payload.Project.PathWithNamespace
+	}
+	if mrIID > 0 {
+		mrStr := strconv.Itoa(mrIID)
+		task.Annotations["divergedev.com/mr-iid"] = mrStr
+		task.Annotations["divergedev.com/pr-number"] = mrStr
+	}
+	SetTraceparentAnnotation(&task, TraceparentFromContext(ctx))
+	return h.Client.Update(ctx, &task)
 }
 
 func (h *GitLabWebhookHandler) reconcileEnvironment(ctx context.Context, payload *GitLabMRPayload) error {
@@ -267,6 +311,7 @@ func (h *GitLabWebhookHandler) reconcileEnvironment(ctx context.Context, payload
 	}
 
 	_, err := ctrl.CreateOrUpdate(ctx, h.Client, env, func() error {
+		SetTraceparentAnnotation(env, TraceparentFromContext(ctx))
 		env.Spec.Source = v1alpha1.EnvironmentSource{
 			Provider:  "gitlab",
 			Project:   payload.Project.PathWithNamespace,

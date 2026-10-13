@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,7 +52,8 @@ type GitHubPRPayload struct {
 }
 
 func (h *GitHubWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	traceparent := ResolveTraceparent(r)
+	ctx := WithTraceparent(r.Context(), traceparent)
 	logger := log.FromContext(ctx).WithName("github-webhook")
 
 	start := time.Now()
@@ -245,13 +247,53 @@ func (h *GitHubWebhookHandler) handleIssueComment(ctx context.Context, w http.Re
 		branch = "main"
 	}
 
-	if err := ExecuteSlashCommand(ctx, h.Client, h.DefaultNS, cmd, repoURL, branch, prNumber); err != nil {
-		logger.Error(err, "Failed to execute slash command", "action", cmd.Action, "pr", prNumber)
+	var execErr error
+	if cmd.Action == "fix" {
+		execErr = h.handleFixCommand(ctx, &payload, cmd, repoURL, branch, prNumber)
+	} else {
+		execErr = ExecuteSlashCommand(ctx, h.Client, h.DefaultNS, cmd, repoURL, branch, prNumber)
+	}
+	if execErr != nil {
+		logger.Error(execErr, "Failed to execute slash command", "action", cmd.Action, "pr", prNumber)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+func (h *GitHubWebhookHandler) handleFixCommand(ctx context.Context, payload *GitHubIssueCommentPayload, cmd *SlashCommand, repoURL, branch string, prNumber int) error {
+	if err := ExecuteSlashCommand(ctx, h.Client, h.DefaultNS, cmd, repoURL, branch, prNumber); err != nil {
+		return err
+	}
+	if h.Client == nil {
+		return nil
+	}
+	ns := h.DefaultNS
+	if ns == "" {
+		ns = "default"
+	}
+	effectiveRepoURL := repoURL
+	if effectiveRepoURL == "" {
+		effectiveRepoURL = "https://github.com/unknown/repository"
+	}
+	taskName := buildCommandTaskName(effectiveRepoURL, prNumber, cmd.Objective)
+	var task v1alpha1.AgentTask
+	if err := h.Client.Get(ctx, client.ObjectKey{Name: taskName, Namespace: ns}, &task); err != nil {
+		return err
+	}
+	if task.Annotations == nil {
+		task.Annotations = make(map[string]string)
+	}
+	task.Annotations["divergedev.com/provider"] = "github"
+	if payload != nil && payload.Repository.FullName != "" {
+		task.Annotations["divergedev.com/project"] = payload.Repository.FullName
+	}
+	if prNumber > 0 {
+		task.Annotations["divergedev.com/pr-number"] = strconv.Itoa(prNumber)
+	}
+	SetTraceparentAnnotation(&task, TraceparentFromContext(ctx))
+	return h.Client.Update(ctx, &task)
 }
 
 func (h *GitHubWebhookHandler) fetchGitHubPRHeadRef(ctx context.Context, prAPIURL string) string {
@@ -319,6 +361,7 @@ func (h *GitHubWebhookHandler) reconcileEnvironment(ctx context.Context, payload
 	}
 
 	_, err := ctrl.CreateOrUpdate(ctx, h.Client, env, func() error {
+		SetTraceparentAnnotation(env, TraceparentFromContext(ctx))
 		env.Spec.Source = v1alpha1.EnvironmentSource{
 			Provider:  "github",
 			Project:   payload.Repository.FullName,

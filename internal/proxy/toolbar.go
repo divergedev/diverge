@@ -165,12 +165,16 @@ const floatingToolbarJS = `(function() {
     constructor() {
       super();
       this.attachShadow({ mode: 'open' });
+      let initialCollapsed = false;
+      try {
+        initialCollapsed = localStorage.getItem('diverge_toolbar_collapsed') === '1';
+      } catch (_) {}
       this.state = {
         activeEnvironment: '',
         headerKey: 'x-diverge-env',
         previewDomain: '',
         environments: [],
-        collapsed: false,
+        collapsed: initialCollapsed,
         copied: false
       };
     }
@@ -178,6 +182,18 @@ const floatingToolbarJS = `(function() {
     connectedCallback() {
       this.render();
       this.fetchContext();
+    }
+
+    toggleCollapse() {
+      this.state.collapsed = !this.state.collapsed;
+      try {
+        localStorage.setItem('diverge_toolbar_collapsed', this.state.collapsed ? '1' : '0');
+      } catch (_) {}
+      this.render();
+      const collapseBtn = this.shadowRoot && this.shadowRoot.getElementById('diverge-collapse-btn');
+      if (collapseBtn && typeof collapseBtn.focus === 'function') {
+        collapseBtn.focus();
+      }
     }
 
     async fetchContext() {
@@ -240,6 +256,18 @@ const floatingToolbarJS = `(function() {
             box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
             backdrop-filter: blur(8px);
           }
+          .toolbar.collapsed {
+            padding: 4px 10px;
+            gap: 6px;
+          }
+          .toolbar-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+          }
+          .toolbar.collapsed .toolbar-controls {
+            display: none;
+          }
           .badge {
             font-weight: 600;
             white-space: nowrap;
@@ -258,14 +286,19 @@ const floatingToolbarJS = `(function() {
             border-color: rgba(167, 139, 250, 0.8);
           }
         </style>
-        <div class="toolbar" role="region" aria-label="Diverge Preview Toolbar">
-          <span class="badge">🟣 Diverge: ${active}</span>
-          ${envs.length > 0 ? '<select id="env-select" aria-label="Switch preview environment">' + optionsHtml + '</select>' : ''}
-          <button id="copy-magic" type="button" title="Copy Magic Link (?_diverge_env=...)">
-            ${this.state.copied ? 'Copied!' : 'Copy Magic Link (?_diverge_env=...)'}
-          </button>
-          <button id="reset-baseline" type="button" title="Reset to Baseline (?_diverge_env=clear)">
-            Reset to Baseline (?_diverge_env=clear)
+        <div class="toolbar${this.state.collapsed ? ' collapsed' : ''}" role="region" aria-label="Diverge Preview Toolbar">
+          <span class="badge">${this.state.collapsed ? '🔀 ' + active : '🟣 Diverge: ' + active}</span>
+          <div class="toolbar-controls" style="${this.state.collapsed ? 'display: none;' : ''}">
+            ${envs.length > 0 ? '<select id="env-select" aria-label="Switch preview environment">' + optionsHtml + '</select>' : ''}
+            <button id="copy-magic" type="button" title="Copy Magic Link (?_diverge_env=...)">
+              ${this.state.copied ? 'Copied!' : 'Copy Magic Link (?_diverge_env=...)'}
+            </button>
+            <button id="reset-baseline" type="button" title="Reset to Baseline (?_diverge_env=clear)">
+              Reset to Baseline (?_diverge_env=clear)
+            </button>
+          </div>
+          <button id="diverge-collapse-btn" type="button" aria-expanded="${!this.state.collapsed}" aria-label="${this.state.collapsed ? 'Expand Diverge toolbar' : 'Collapse Diverge toolbar'}" title="Toggle toolbar">
+            ${this.state.collapsed ? '+' : '−'}
           </button>
         </div>
       ` + "`" + `;
@@ -301,6 +334,11 @@ const floatingToolbarJS = `(function() {
         resetBtn.addEventListener('click', () => {
           window.location.href = this.buildResetLink();
         });
+      }
+
+      const collapseBtn = this.shadowRoot.getElementById('diverge-collapse-btn');
+      if (collapseBtn) {
+        collapseBtn.addEventListener('click', () => this.toggleCollapse());
       }
     }
   }

@@ -190,4 +190,81 @@ describe('EnvironmentDetail', () => {
       expect(screen.getByText('beta_mode')).toBeInTheDocument()
     })
   })
+
+  it('displays FinOps estimated cost and copies magic preview link', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+
+    server.use(
+      http.post('*/diverge.v1alpha1.EnvironmentService/GetEnvironment', () =>
+        HttpResponse.json(mockEnv),
+      ),
+      http.post('*/diverge.v1alpha1.EnvironmentService/ListHookJobs', () =>
+        HttpResponse.json({ jobs: [] }),
+      ),
+    )
+
+    renderPage()
+
+    expect(await screen.findByText('Estimated Cost')).toBeInTheDocument()
+    expect(screen.getByText('$0.025/hr')).toBeInTheDocument()
+    expect(screen.getByText('Hibernation')).toBeInTheDocument()
+    expect(screen.getByText('Active')).toBeInTheDocument()
+
+    const magicBtn = screen.getByRole('button', { name: 'Copy magic link' })
+    fireEvent.click(magicBtn)
+
+    expect(writeText).toHaveBeenCalledWith('https://test-env.preview.example.com/?_diverge_env=test-env')
+    expect(await screen.findByRole('status')).toHaveTextContent('Magic preview link copied to clipboard')
+  })
+
+  it('toggles hibernation state via UpdateEnvironment', async () => {
+    let updatedAnnotations: Record<string, string> = {}
+    let receivedPaths: string[] = []
+
+    server.use(
+      http.post('*/diverge.v1alpha1.EnvironmentService/GetEnvironment', () =>
+        HttpResponse.json({
+          environment: {
+            ...mockEnv.environment,
+            annotations: updatedAnnotations,
+          },
+        }),
+      ),
+      http.post('*/diverge.v1alpha1.EnvironmentService/ListHookJobs', () =>
+        HttpResponse.json({ jobs: [] }),
+      ),
+      http.post('*/diverge.v1alpha1.EnvironmentService/UpdateEnvironment', async ({ request }) => {
+        const body = (await request.json()) as {
+          environment?: { annotations?: Record<string, string> }
+          updateMask?: string | { paths?: string[] }
+        }
+        updatedAnnotations = body.environment?.annotations ?? {}
+        if (typeof body.updateMask === 'string') {
+          receivedPaths = body.updateMask.split(',')
+        } else {
+          receivedPaths = body.updateMask?.paths ?? []
+        }
+        return HttpResponse.json({
+          environment: {
+            ...mockEnv.environment,
+            annotations: updatedAnnotations,
+          },
+        })
+      }),
+    )
+
+    renderPage()
+
+    const hibernateBtn = await screen.findByRole('button', { name: 'Hibernate environment' })
+    fireEvent.click(hibernateBtn)
+
+    await waitFor(() => {
+      expect(updatedAnnotations['divergedev.com/hibernated']).toBe('true')
+      expect(receivedPaths).toContain('annotations')
+      expect(screen.getByRole('button', { name: 'Wake environment' })).toBeInTheDocument()
+      expect(screen.getByText('Hibernated (0 replicas)')).toBeInTheDocument()
+      expect(screen.getByText('$0.000/hr')).toBeInTheDocument()
+    })
+  })
 })

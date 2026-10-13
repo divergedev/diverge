@@ -97,17 +97,33 @@ func completeEnvironmentNames(app *App) func(cmd *cobra.Command, args []string, 
 		ctx, cancel := context.WithTimeout(baseCtx, 2*time.Second)
 		defer cancel()
 
-		var envList divergeiov1alpha1.EnvironmentList
-		if err := c.List(ctx, &envList, client.InNamespace(ns)); err != nil {
-			return nil, cobra.ShellCompDirectiveNoFileComp
-		}
-
+		seen := make(map[string]struct{})
 		var names []string
-		for _, env := range envList.Items {
-			if strings.HasPrefix(env.Name, toComplete) {
-				names = append(names, env.Name)
+
+		var envList divergeiov1alpha1.EnvironmentList
+		if err := c.List(ctx, &envList, client.InNamespace(ns)); err == nil {
+			for _, env := range envList.Items {
+				if strings.HasPrefix(env.Name, toComplete) {
+					if _, ok := seen[env.Name]; !ok {
+						seen[env.Name] = struct{}{}
+						names = append(names, env.Name)
+					}
+				}
 			}
 		}
+
+		var pgList divergeiov1alpha1.PreviewGroupList
+		if err := c.List(ctx, &pgList, client.InNamespace(ns)); err == nil {
+			for _, pg := range pgList.Items {
+				if strings.HasPrefix(pg.Name, toComplete) {
+					if _, ok := seen[pg.Name]; !ok {
+						seen[pg.Name] = struct{}{}
+						names = append(names, pg.Name)
+					}
+				}
+			}
+		}
+
 		sort.Strings(names)
 		return names, cobra.ShellCompDirectiveNoFileComp
 	}

@@ -195,6 +195,7 @@ func executePreviewCommand(ctx context.Context, c client.Client, ns, repoURL, br
 		if env.Annotations == nil {
 			env.Annotations = make(map[string]string)
 		}
+		SetTraceparentAnnotation(env, TraceparentFromContext(ctx))
 		if prNumber > 0 {
 			env.Labels[prNumberAnnotationKey] = prStr
 			env.Annotations[prNumberAnnotationKey] = prStr
