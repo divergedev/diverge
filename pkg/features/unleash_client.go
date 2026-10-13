@@ -234,7 +234,7 @@ func (c *UnleashClient) doRequest(ctx context.Context, method, path string, body
 	return respData, resp.StatusCode, nil
 }
 
-// EnsureFeature ensures a feature toggle exists in the configured Unleash project and is enabled in the target environment.
+// EnsureFeature ensures a feature toggle exists in the configured Unleash project.
 func (c *UnleashClient) EnsureFeature(ctx context.Context, featureName string) (*UnleashFeature, error) {
 	if strings.TrimSpace(featureName) == "" {
 		return nil, errors.New("featureName cannot be empty")
@@ -269,16 +269,6 @@ func (c *UnleashClient) EnsureFeature(ctx context.Context, featureName string) (
 		return nil, fmt.Errorf("creating unleash feature %q: %w", featureName, createErr)
 	}
 
-	enablePath := fmt.Sprintf(
-		"/api/admin/projects/%s/features/%s/environments/%s/on",
-		url.PathEscape(c.projectID),
-		url.PathEscape(featureName),
-		url.PathEscape(c.environment),
-	)
-	if _, _, enableErr := c.doRequest(ctx, http.MethodPost, enablePath, nil); enableErr != nil && !errors.Is(enableErr, ErrUnleashNotFound) {
-		return nil, fmt.Errorf("enabling unleash feature %q in environment %q: %w", featureName, c.environment, enableErr)
-	}
-
 	var created UnleashFeature
 	if len(createdData) > 0 {
 		if unmarshalErr := json.Unmarshal(createdData, &created); unmarshalErr != nil {
@@ -289,6 +279,24 @@ func (c *UnleashClient) EnsureFeature(ctx context.Context, featureName string) (
 		created.Name = featureName
 	}
 	return &created, nil
+}
+
+// EnableFeatureInEnvironment enables a feature toggle in the configured Unleash environment.
+func (c *UnleashClient) EnableFeatureInEnvironment(ctx context.Context, featureName string) error {
+	if strings.TrimSpace(featureName) == "" {
+		return errors.New("featureName cannot be empty")
+	}
+
+	enablePath := fmt.Sprintf(
+		"/api/admin/projects/%s/features/%s/environments/%s/on",
+		url.PathEscape(c.projectID),
+		url.PathEscape(featureName),
+		url.PathEscape(c.environment),
+	)
+	if _, _, err := c.doRequest(ctx, http.MethodPost, enablePath, nil); err != nil {
+		return fmt.Errorf("enabling unleash feature %q in environment %q: %w", featureName, c.environment, err)
+	}
+	return nil
 }
 
 // ListStrategies returns the strategies configured on a feature in the target Unleash environment.

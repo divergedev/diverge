@@ -222,6 +222,11 @@ func (p *UnleashProvider) resolveConnection(ctx context.Context, env *v1alpha1.E
 	return cfg, nil
 }
 
+// UnleashManagedOverridesAnnotation records the comma-separated feature override keys
+// managed by the last successful Unleash Provision reconcile so stale strategy cleanup
+// only inspects removed overrides rather than scanning the entire Unleash project.
+const UnleashManagedOverridesAnnotation = "divergedev.com/unleash-managed-overrides"
+
 // Provision configures Unleash feature toggles and preview-scoped activation strategies for the environment.
 func (p *UnleashProvider) Provision(ctx context.Context, env *v1alpha1.Environment) (*FeatureResult, error) {
 	if env == nil {
@@ -272,22 +277,57 @@ func (p *UnleashProvider) Provision(ctx context.Context, env *v1alpha1.Environme
 		if _, err := unleashClient.UpsertPreviewStrategy(ctx, k, strategyTitle, env.Name, enabled, variantVal); err != nil {
 			return nil, fmt.Errorf("failed to configure unleash strategy for feature %s: %w", k, err)
 		}
-	}
 
-	// Clean up stale preview strategies on features that are no longer in overrides.
-	allFeatures, err := unleashClient.ListProjectFeatures(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list unleash features for stale strategy cleanup: %w", err)
-	}
-	var staleFeatures []string
-	for _, feat := range allFeatures {
-		if _, active := overrides[feat]; !active {
-			staleFeatures = append(staleFeatures, feat)
+		if err := unleashClient.EnableFeatureInEnvironment(ctx, k); err != nil {
+			return nil, fmt.Errorf("failed to enable unleash feature %s in environment %s: %w", k, conn.environment, err)
 		}
 	}
-	if len(staleFeatures) > 0 {
-		if err := unleashClient.DeletePreviewStrategies(ctx, strategyTitle, staleFeatures); err != nil {
-			return nil, fmt.Errorf("failed to delete stale unleash strategies for %s: %w", strategyTitle, err)
+
+	// Clean up stale preview strategies only for previously managed override keys that were removed.
+	var prevCSV string
+	if env.Annotations != nil {
+		prevCSV = env.Annotations[UnleashManagedOverridesAnnotation]
+	}
+	if prevCSV != "" {
+		var staleFeatures []string
+		for _, prevKey := range strings.Split(prevCSV, ",") {
+			prevKey = strings.TrimSpace(prevKey)
+			if prevKey == "" {
+				continue
+			}
+			if _, active := overrides[prevKey]; !active {
+				staleFeatures = append(staleFeatures, prevKey)
+			}
+		}
+		if len(staleFeatures) > 0 {
+			if err := unleashClient.DeletePreviewStrategies(ctx, strategyTitle, staleFeatures); err != nil {
+				return nil, fmt.Errorf("failed to delete stale unleash strategies for %s: %w", strategyTitle, err)
+			}
+		}
+	}
+
+	// Persist current override keys in annotation for future stale cleanup diffs.
+	currentCSV := strings.Join(keys, ",")
+	if env.Annotations == nil {
+		env.Annotations = make(map[string]string)
+	}
+	if currentCSV != "" {
+		env.Annotations[UnleashManagedOverridesAnnotation] = currentCSV
+	} else {
+		delete(env.Annotations, UnleashManagedOverridesAnnotation)
+	}
+	if p.client != nil && env.Name != "" && env.Namespace != "" {
+		var latest v1alpha1.Environment
+		if getErr := p.client.Get(ctx, types.NamespacedName{Name: env.Name, Namespace: env.Namespace}, &latest); getErr == nil {
+			if latest.Annotations == nil {
+				latest.Annotations = make(map[string]string)
+			}
+			if currentCSV != "" {
+				latest.Annotations[UnleashManagedOverridesAnnotation] = currentCSV
+			} else {
+				delete(latest.Annotations, UnleashManagedOverridesAnnotation)
+			}
+			_ = p.client.Update(ctx, &latest)
 		}
 	}
 
@@ -297,16 +337,20 @@ func (p *UnleashProvider) Provision(ctx context.Context, env *v1alpha1.Environme
 		"overrideCount", len(overrides))
 
 	sdkToken := conn.clientToken
+	sdkURL := strings.TrimRight(strings.TrimSpace(conn.url), "/")
+	if !strings.HasSuffix(sdkURL, "/api") {
+		sdkURL += "/api"
+	}
 
 	return &FeatureResult{
 		ProviderType: "unleash",
 		EnvVars: map[string]string{
-			"UNLEASH_URL":                   conn.url,
+			"UNLEASH_URL":                   sdkURL,
 			"UNLEASH_API_TOKEN":             sdkToken,
 			"UNLEASH_PROJECT":               conn.projectID,
 			"UNLEASH_ENVIRONMENT":           conn.environment,
 			"UNLEASH_STRATEGY_TITLE":        strategyTitle,
-			"OPENFEATURE_UNLEASH_URL":       conn.url,
+			"OPENFEATURE_UNLEASH_URL":       sdkURL,
 			"OPENFEATURE_UNLEASH_API_TOKEN": sdkToken,
 			"OPENFEATURE_TARGET_KEY":        strategyTitle,
 		},

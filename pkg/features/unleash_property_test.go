@@ -119,7 +119,7 @@ func TestUnleashProvision_Property(t *testing.T) {
 		res, err := provider.Provision(ctx, env)
 		require.NoError(ht, err)
 		assert.Equal(ht, "unleash", res.ProviderType)
-		assert.Equal(ht, ts.URL, res.EnvVars["UNLEASH_URL"])
+		assert.Equal(ht, ts.URL+"/api", res.EnvVars["UNLEASH_URL"])
 		expectedTitle := UnleashStrategyTitle(env.Namespace, envName)
 		assert.Equal(ht, expectedTitle, res.EnvVars["UNLEASH_STRATEGY_TITLE"])
 
