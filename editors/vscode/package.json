@@ -81,6 +81,16 @@
         "icon": "$(link-external)"
       },
       {
+        "command": "diverge.openMagicLink",
+        "title": "Diverge: Open Magic Preview Link (?_diverge_env)",
+        "icon": "$(wand)"
+      },
+      {
+        "command": "diverge.compareBaseline",
+        "title": "Diverge: Compare Endpoint Against Baseline",
+        "icon": "$(diff-sidebyside)"
+      },
+      {
         "command": "diverge.startDev",
         "title": "Start Local Dev Session (diverge dev)",
         "icon": "$(play)"
@@ -129,6 +139,16 @@
           "command": "diverge.openPreviewUrl",
           "when": "view == diverge-environments",
           "group": "inline"
+        },
+        {
+          "command": "diverge.openMagicLink",
+          "when": "view == diverge-environments",
+          "group": "1_preview"
+        },
+        {
+          "command": "diverge.compareBaseline",
+          "when": "view == diverge-environments",
+          "group": "1_preview"
         },
         {
           "command": "diverge.startDev",

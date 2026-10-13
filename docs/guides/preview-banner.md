@@ -77,6 +77,7 @@ When traffic is routed through `diverge-proxy`, Diverge injects a Shadow DOM-iso
 - **Environment Switcher Dropdown**: Populated dynamically from `GET /-/api/context`, allowing 1-click switching between preview environments visible in the proxy's configured Kubernetes namespace.
 - **Copy Magic Link (`?_diverge_env=<env>`)**: Copies a shareable URL that sets the `diverge_env` cookie automatically for PMs, designers, or QA reviewers.
 - **Reset to Baseline**: Navigates to `?_diverge_env=clear` (or `?_diverge_env=reset`) to expire the preview cookie and return to baseline traffic.
+- **Collapsible Pill (`localStorage` Persistence)**: Includes an interactive collapse/expand toggle (`#diverge-collapse-btn`, `aria-expanded`) that minimizes the toolbar down to a compact `⚡ <env>` pill and persists state across page reloads via `localStorage` (`diverge_toolbar_collapsed`).
 
 ### Disabling the Floating DevToolbar per Request
 

@@ -60,10 +60,16 @@ func TestCompleteEnvironmentNames(t *testing.T) {
 	envOtherNs := &divergeiov1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{Name: "pr-99", Namespace: "other"},
 	}
+	pg1 := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "pr-77"},
+	}
+	pgDup := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "pr-42", Namespace: "default"},
+	}
 
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(env1, env2, env3, envOtherNs).
+		WithObjects(env1, env2, env3, envOtherNs, pg1, pgDup).
 		Build()
 
 	app := &App{
@@ -75,7 +81,7 @@ func TestCompleteEnvironmentNames(t *testing.T) {
 	fn := completeEnvironmentNames(app)
 	names, dir := fn(cmd, nil, "pr-")
 	assert.Equal(t, cobra.ShellCompDirectiveNoFileComp, dir)
-	assert.Equal(t, []string{"pr-10", "pr-42"}, names)
+	assert.Equal(t, []string{"pr-10", "pr-42", "pr-77"}, names)
 
 	// Already has 1 arg -> no further completion
 	names, dir = fn(cmd, []string{"pr-42"}, "")

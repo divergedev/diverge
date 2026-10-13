@@ -7,11 +7,15 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
 
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/pkg/registry"
 )
 
 const (
@@ -20,6 +24,7 @@ const (
 
 	annotationPRNumber           = "divergedev.com/pr-number"
 	annotationMRNumber           = "divergedev.com/mr-number"
+	annotationMRIID              = "divergedev.com/mr-iid"
 	annotationProject            = "divergedev.com/project"
 	annotationPreviewURL         = "divergedev.com/preview-url"
 	annotationPreviewEnvironment = "divergedev.com/preview-environment"
@@ -32,6 +37,64 @@ var (
 	scpRepoRegex  = regexp.MustCompile(`^[^@]+@[^:]+:(.+)$`)
 )
 
+// TaskPhaseNotifier notifies external observers when an AgentTask changes phases.
+type TaskPhaseNotifier interface {
+	NotifyPhaseChange(ctx context.Context, task *v1alpha1.AgentTask, oldPhase, newPhase v1alpha1.AgentTaskPhase) error
+}
+
+// NoopTaskPhaseNotifier is a default no-op implementation of TaskPhaseNotifier.
+type NoopTaskPhaseNotifier struct{}
+
+// NotifyPhaseChange does nothing.
+func (n *NoopTaskPhaseNotifier) NotifyPhaseChange(_ context.Context, _ *v1alpha1.AgentTask, _, _ v1alpha1.AgentTaskPhase) error {
+	return nil
+}
+
+// TaskProviders is the registry of TaskPhaseNotifier providers.
+var TaskProviders = registry.New[TaskPhaseNotifier]("task_notifier")
+
+func init() {
+	TaskProviders.Register("noop", registry.Provider[TaskPhaseNotifier]{
+		Create: func(_ registry.Deps) (TaskPhaseNotifier, error) {
+			return &NoopTaskPhaseNotifier{}, nil
+		},
+		Description: "No-op AgentTask phase notifications",
+	})
+
+	TaskProviders.Register("github", registry.Provider[TaskPhaseNotifier]{
+		Create: func(deps registry.Deps) (TaskPhaseNotifier, error) {
+			token := firstNonEmptyEnv("DIVERGE_NOTIFIER_TOKEN", "GITHUB_TOKEN")
+			baseURL := firstNonEmptyEnv("DIVERGE_BASE_URL", "GITHUB_API_URL")
+			if tn := NewTaskNotifier("github", token, baseURL, deps.Client); tn != nil {
+				return tn, nil
+			}
+			return &NoopTaskPhaseNotifier{}, nil
+		},
+		Description: "GitHub PR AgentTask phase notifications",
+	})
+
+	TaskProviders.Register("gitlab", registry.Provider[TaskPhaseNotifier]{
+		Create: func(deps registry.Deps) (TaskPhaseNotifier, error) {
+			token := firstNonEmptyEnv("DIVERGE_NOTIFIER_TOKEN", "DIVERGE_GITLAB_TOKEN", "GITLAB_TOKEN")
+			baseURL := firstNonEmptyEnv("DIVERGE_BASE_URL", "GITLAB_API_URL")
+			if tn := NewTaskNotifier("gitlab", token, baseURL, deps.Client); tn != nil {
+				return tn, nil
+			}
+			return &NoopTaskPhaseNotifier{}, nil
+		},
+		Description: "GitLab MR AgentTask phase notifications",
+	})
+}
+
+func firstNonEmptyEnv(keys ...string) string {
+	for _, k := range keys {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // SCMCommentClient abstracts PR/MR comment lookup, creation, and updates across GitHub and GitLab.
 type SCMCommentClient interface {
 	FindExistingComment(ctx context.Context, project string, mrID int, marker string) (int64, error)
@@ -42,11 +105,51 @@ type SCMCommentClient interface {
 // SCMTaskNotifier posts and updates autonomous AgentTask progress comments on GitHub PRs and GitLab MRs.
 type SCMTaskNotifier struct {
 	Underlying SCMCommentClient
+	Client     client.Client
 }
 
 // NewSCMTaskNotifier creates an SCMTaskNotifier backed by the provided SCMCommentClient.
 func NewSCMTaskNotifier(underlying SCMCommentClient) *SCMTaskNotifier {
 	return &SCMTaskNotifier{Underlying: underlying}
+}
+
+// NewGitHubTaskNotifier creates an SCMTaskNotifier configured for GitHub PR comments.
+func NewGitHubTaskNotifier(token, baseURL string, k8sClient client.Client) *SCMTaskNotifier {
+	cleanBase := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	gh := NewGitHubNotifier(cleanBase, strings.TrimSpace(token))
+	return &SCMTaskNotifier{
+		Underlying: gh,
+		Client:     k8sClient,
+	}
+}
+
+// NewGitLabTaskNotifier creates an SCMTaskNotifier configured for GitLab MR notes.
+func NewGitLabTaskNotifier(token, baseURL string, k8sClient client.Client) *SCMTaskNotifier {
+	cleanBase := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if cleanBase == "" {
+		cleanBase = "https://gitlab.com"
+	}
+	gl := NewGitLabNotifier(cleanBase, strings.TrimSpace(token))
+	return &SCMTaskNotifier{
+		Underlying: gl,
+		Client:     k8sClient,
+	}
+}
+
+// NewTaskNotifier creates a provider-specific SCMTaskNotifier when provider is "github" or "gitlab"
+// and token is non-empty; otherwise returns nil.
+func NewTaskNotifier(provider, token, baseURL string, k8sClient client.Client) *SCMTaskNotifier {
+	if strings.TrimSpace(token) == "" {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "github":
+		return NewGitHubTaskNotifier(token, baseURL, k8sClient)
+	case "gitlab":
+		return NewGitLabTaskNotifier(token, baseURL, k8sClient)
+	default:
+		return nil
+	}
 }
 
 // NotifyTaskStarted posts or updates the PR/MR comment when an AgentTask starts running.
@@ -223,7 +326,7 @@ func extractTaskMRID(task *v1alpha1.AgentTask) int {
 		if m == nil {
 			continue
 		}
-		for _, key := range []string{annotationPRNumber, annotationMRNumber} {
+		for _, key := range []string{annotationPRNumber, annotationMRNumber, annotationMRIID} {
 			if raw := strings.TrimSpace(m[key]); raw != "" {
 				if n, err := strconv.Atoi(raw); err == nil && n > 0 {
 					return n

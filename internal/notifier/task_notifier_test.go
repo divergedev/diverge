@@ -8,10 +8,15 @@ import (
 	"testing"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/pkg/registry"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+func TaskProvidersDeps() registry.Deps {
+	return registry.Deps{}
+}
 
 type mockSCMCommentClient struct {
 	existingID  int64
@@ -361,5 +366,70 @@ func TestSCMTaskNotifier_WithGitHubAndGitLabNotifiers(t *testing.T) {
 		require.NoError(t, tn.NotifyPhaseChange(ctx, task, v1alpha1.AgentTaskPhaseActive, v1alpha1.AgentTaskPhasePaused))
 		require.Len(t, notes, 1)
 		assert.Contains(t, notes[0]["body"], "⏸️ Paused")
+	})
+}
+
+func TestNewTaskNotifier_And_TaskProvidersRegistry(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("NewTaskNotifier returns nil for empty token or unknown provider", func(t *testing.T) {
+		assert.Nil(t, NewTaskNotifier("github", "", "", nil))
+		assert.Nil(t, NewTaskNotifier("gitlab", "   ", "", nil))
+		assert.Nil(t, NewTaskNotifier("noop", "secret-token", "", nil))
+		assert.Nil(t, NewTaskNotifier("unknown", "secret-token", "", nil))
+	})
+
+	t.Run("NewTaskNotifier constructs GitHub and GitLab task notifiers", func(t *testing.T) {
+		ghTN := NewTaskNotifier("GitHub", "gh-tok", "https://api.github.example.com/", nil)
+		require.NotNil(t, ghTN)
+		ghUnderlying, ok := ghTN.Underlying.(*GitHubNotifier)
+		require.True(t, ok)
+		assert.Equal(t, "gh-tok", ghUnderlying.Token)
+		assert.Equal(t, "https://api.github.example.com", ghUnderlying.BaseURL)
+
+		glTN := NewTaskNotifier("GITLAB", "gl-tok", "", nil)
+		require.NotNil(t, glTN)
+		glUnderlying, ok := glTN.Underlying.(*GitLabNotifier)
+		require.True(t, ok)
+		assert.Equal(t, "gl-tok", glUnderlying.Token)
+		assert.Equal(t, "https://gitlab.com", glUnderlying.BaseURL)
+	})
+
+	t.Run("extractTaskProjectAndMR supports divergedev.com/mr-iid annotation", func(t *testing.T) {
+		task := &v1alpha1.AgentTask{
+			ObjectMeta: metav1.ObjectMeta{
+				Annotations: map[string]string{
+					"divergedev.com/provider": "gitlab",
+					"divergedev.com/project":  "group/service",
+					"divergedev.com/mr-iid":   "88",
+				},
+			},
+		}
+		proj, mr := extractTaskProjectAndMR(task)
+		assert.Equal(t, "group/service", proj)
+		assert.Equal(t, 88, mr)
+	})
+
+	t.Run("TaskProviders registry creates noop, github, and gitlab providers", func(t *testing.T) {
+		noopProvider, err := TaskProviders.Create("noop", TaskProvidersDeps())
+		require.NoError(t, err)
+		require.NoError(t, noopProvider.NotifyPhaseChange(ctx, nil, v1alpha1.AgentTaskPhasePending, v1alpha1.AgentTaskPhaseActive))
+
+		t.Setenv("DIVERGE_NOTIFIER_TOKEN", "")
+		t.Setenv("GITHUB_TOKEN", "env-gh-token")
+		t.Setenv("GITHUB_API_URL", "https://gh.internal.example.com")
+		ghProvider, err := TaskProviders.Create("github", TaskProvidersDeps())
+		require.NoError(t, err)
+		_, isSCM := ghProvider.(*SCMTaskNotifier)
+		assert.True(t, isSCM)
+
+		t.Setenv("DIVERGE_NOTIFIER_TOKEN", "")
+		t.Setenv("DIVERGE_GITLAB_TOKEN", "")
+		t.Setenv("GITLAB_TOKEN", "env-gl-token")
+		t.Setenv("GITLAB_API_URL", "https://gl.internal.example.com")
+		glProvider, err := TaskProviders.Create("gitlab", TaskProvidersDeps())
+		require.NoError(t, err)
+		_, isSCM = glProvider.(*SCMTaskNotifier)
+		assert.True(t, isSCM)
 	})
 }

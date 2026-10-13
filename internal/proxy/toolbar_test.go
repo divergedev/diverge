@@ -31,6 +31,11 @@ func TestToolbarScriptEndpoint(t *testing.T) {
 	assert.Contains(t, body, "Copy Magic Link (?_diverge_env=...)")
 	assert.Contains(t, body, "Reset to Baseline (?_diverge_env=clear)")
 	assert.Contains(t, body, "/-/api/context")
+	assert.Contains(t, body, "diverge-collapse-btn")
+	assert.Contains(t, body, "aria-expanded=")
+	assert.Contains(t, body, "localStorage.getItem('diverge_toolbar_collapsed')")
+	assert.Contains(t, body, "localStorage.setItem('diverge_toolbar_collapsed'")
+	assert.Contains(t, body, "toggleCollapse()")
 }
 
 func TestToolbarContextEndpoint(t *testing.T) {

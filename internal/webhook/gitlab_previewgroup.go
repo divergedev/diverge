@@ -25,7 +25,8 @@ type GitLabPreviewGroupWebhookHandler struct {
 }
 
 func (h *GitLabPreviewGroupWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	traceparent := ResolveTraceparent(r)
+	ctx := WithTraceparent(r.Context(), traceparent)
 	logger := log.FromContext(ctx).WithName("gitlab-previewgroup-webhook")
 
 	start := time.Now()
@@ -89,6 +90,7 @@ func (h *GitLabPreviewGroupWebhookHandler) reconcilePreviewGroup(ctx context.Con
 	}
 
 	_, err := ctrl.CreateOrUpdate(ctx, h.Client, pg, func() error {
+		SetTraceparentAnnotation(pg, TraceparentFromContext(ctx))
 		pg.Spec.Source = v1alpha1.EnvironmentSource{
 			Provider:  "gitlab",
 			Project:   payload.Project.PathWithNamespace,

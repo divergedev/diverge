@@ -315,11 +315,17 @@ func main() {
 			}
 			setupLog.Info("generated ephemeral macaroon root key; set DIVERGE_MACAROON_ROOT_KEY for persistent token verification")
 		}
+		var taskNotifier controller.TaskNotifier = &controller.NoopTaskNotifier{}
+		notifierBaseURL := os.Getenv("DIVERGE_BASE_URL")
+		if tn := notifier.NewTaskNotifier(notifierProvider, notifierToken, notifierBaseURL, mgr.GetClient()); tn != nil {
+			taskNotifier = tn
+		}
 		if err = (&controller.AgentTaskReconciler{
 			Client:          mgr.GetClient(),
 			Scheme:          mgr.GetScheme(),
 			SandboxRegistry: pkgsandbox.Providers,
 			TokenMinter:     pkgauth.NewMacaroonProvider(macaroonKey),
+			Notifier:        taskNotifier,
 			FeatureGate:     &controller.StaticFeatureGate{Enabled: true},
 			DefaultProvider: sandboxProvider,
 		}).SetupWithManager(mgr); err != nil {

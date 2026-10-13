@@ -1,5 +1,5 @@
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { useGetEnvironment, useDeleteEnvironment, useExtendTTL, useListHookJobs } from '@/api/queries'
+import { useGetEnvironment, useDeleteEnvironment, useExtendTTL, useListHookJobs, useUpdateEnvironment } from '@/api/queries'
 import { StatusBadge } from '@/components/StatusBadge'
 import { TTLCountdown } from '@/components/TTLCountdown'
 import { LogViewer } from '@/components/LogViewer'
@@ -13,7 +13,13 @@ import { useState, useEffect } from 'react'
 import { stringify as yamlStringify } from 'yaml'
 import { TopologyView } from '@/components/topology/TopologyView'
 import { FlagsTab } from '@/components/FlagsTab'
-import { ArrowLeft, ExternalLink, Copy, Trash2, Clock, AlertCircle, Flag, CheckCircle } from 'lucide-react'
+import { ArrowLeft, ExternalLink, Copy, Trash2, Clock, AlertCircle, CheckCircle, Wand2, Moon, Sun } from 'lucide-react'
+import {
+  estimateEnvironmentHourlyCostUSD,
+  formatHourlyCostUSD,
+  isEnvironmentHibernated,
+  buildMagicPreviewUrl,
+} from '@/lib/finops'
 
 const TTL_DURATIONS = [
   { label: '1 hour', value: '3600s' },
@@ -30,6 +36,7 @@ export default function EnvironmentDetail() {
   const { data, isLoading, error, refetch } = useGetEnvironment(namespace, name)
   const deleteEnv = useDeleteEnvironment()
   const extendTtl = useExtendTTL()
+  const updateEnv = useUpdateEnvironment()
   const hookJobs = useListHookJobs(namespace, name)
   const failedHookCount = (hookJobs.data?.jobs ?? []).filter(j => j.phase === 'Failed').length
   const [mutationError, setMutationError] = useState<string | null>(null)
@@ -65,6 +72,44 @@ export default function EnvironmentDetail() {
   }
 
   const featureFlagCount = Object.keys(env.spec?.features?.overrides ?? {}).length
+  const hibernated = isEnvironmentHibernated(env)
+  const magicUrl = buildMagicPreviewUrl(env)
+  const estimatedCost = formatHourlyCostUSD(estimateEnvironmentHourlyCostUSD(env))
+  const hibernationLabel = hibernated
+    ? 'Hibernated (0 replicas)'
+    : env.annotations?.['divergedev.com/hibernate-after']
+      ? `Auto after ${env.annotations['divergedev.com/hibernate-after']}`
+      : 'Active'
+
+  const handleCopyMagicLink = () => {
+    if (!magicUrl) return
+    navigator.clipboard.writeText(magicUrl)
+    setSuccessMessage('Magic preview link copied to clipboard')
+  }
+
+  const handleToggleHibernate = async () => {
+    setMutationError(null)
+    const nextHibernated = !hibernated
+    try {
+      await updateEnv.mutateAsync({
+        environment: {
+          name: env.name,
+          namespace: env.namespace,
+          resourceVersion: env.resourceVersion,
+          labels: env.labels,
+          annotations: {
+            ...(env.annotations ?? {}),
+            'divergedev.com/hibernated': nextHibernated ? 'true' : 'false',
+          },
+          spec: env.spec,
+        },
+        updateMask: { paths: ['annotations'] },
+      })
+      setSuccessMessage(nextHibernated ? 'Environment hibernated (scaled to 0 replicas)' : 'Environment waking up')
+    } catch (err) {
+      setMutationError(err instanceof Error ? err.message : 'Failed to update hibernation state')
+    }
+  }
 
   const handleDelete = async () => {
     if (!confirm(`Delete environment ${namespace}/${name}?`)) return
@@ -135,6 +180,24 @@ export default function EnvironmentDetail() {
               </Button>
             </>
           )}
+          {magicUrl && (
+            <Button variant="outline" size="sm" aria-label="Copy magic link" onClick={handleCopyMagicLink}>
+              <Wand2 className="h-4 w-4 mr-2" />Copy Magic Link
+            </Button>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            aria-label={hibernated ? 'Wake environment' : 'Hibernate environment'}
+            onClick={handleToggleHibernate}
+            disabled={updateEnv.isPending}
+          >
+            {hibernated ? (
+              <><Sun className="h-4 w-4 mr-2" />Wake Up</>
+            ) : (
+              <><Moon className="h-4 w-4 mr-2" />Hibernate</>
+            )}
+          </Button>
           <Button variant="outline" size="sm" onClick={() => setExtendDialogOpen(true)}>
             <Clock className="h-4 w-4 mr-2" />Extend TTL
           </Button>
@@ -200,7 +263,20 @@ export default function EnvironmentDetail() {
               </button>
             </div>
           )}
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid gap-4 md:grid-cols-3">
+            <Card>
+              <CardHeader><CardTitle className="text-base">Details</CardTitle></CardHeader>
+              <CardContent className="space-y-2 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Estimated Cost</span>
+                  <span className="font-mono font-medium">{estimatedCost}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Hibernation</span>
+                  <span className="font-medium">{hibernationLabel}</span>
+                </div>
+              </CardContent>
+            </Card>
             <Card>
               <CardHeader><CardTitle className="text-base">Spec</CardTitle></CardHeader>
               <CardContent>

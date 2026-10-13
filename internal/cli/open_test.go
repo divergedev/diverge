@@ -104,3 +104,84 @@ func TestBuildPreviewURLAndMagicFlag(t *testing.T) {
 	assert.Equal(t, "https://app.example.com?_diverge_env=pr-42", openedURL)
 	assert.Contains(t, out.String(), "Opening https://app.example.com?_diverge_env=pr-42")
 }
+
+func TestOpenCmdPreviewGroupAndNoBrowser(t *testing.T) {
+	origOpenBrowser := openBrowser
+	defer func() { openBrowser = origOpenBrowser }()
+
+	var browserCalled bool
+	var openedURL string
+	openBrowser = func(targetURL string) error {
+		browserCalled = true
+		openedURL = targetURL
+		return nil
+	}
+
+	pg := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-101",
+			Namespace: "default",
+		},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Routing: divergeiov1alpha1.PreviewGroupRouting{
+				Mode:        "header",
+				HeaderKey:   "x-diverge-env",
+				HeaderValue: "pr-101",
+			},
+		},
+		Status: divergeiov1alpha1.PreviewGroupStatus{
+			Phase: divergeiov1alpha1.PreviewGroupPhaseRunning,
+			Services: []divergeiov1alpha1.PreviewGroupServiceStatus{
+				{
+					Name: "checkout",
+					URL:  "https://shop.example.com",
+				},
+			},
+		},
+	}
+
+	// Unit test buildPreviewGroupURL directly
+	pgDefaultURL, err := buildPreviewGroupURL(pg)
+	require.NoError(t, err)
+	assert.Equal(t, "https://pr-101.preview.shop.example.com", pgDefaultURL)
+
+	pgMagicURL, err := buildPreviewGroupURL(pg, true)
+	require.NoError(t, err)
+	assert.Equal(t, "https://shop.example.com?_diverge_env=pr-101", pgMagicURL)
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(newTestScheme()).
+		WithObjects(pg).
+		Build()
+
+	t.Run("opens PreviewGroup with --no-browser (-p) without calling openBrowser", func(t *testing.T) {
+		browserCalled = false
+		app := &App{Namespace: "default", Client: fakeClient}
+		cmd := newOpenCmd(app)
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&out)
+		cmd.SetArgs([]string{"-p", "pr-101"})
+
+		require.NoError(t, cmd.Execute())
+		assert.False(t, browserCalled)
+		assert.Equal(t, "https://pr-101.preview.shop.example.com\n", out.String())
+	})
+
+	t.Run("opens PreviewGroup with --magic and launches browser", func(t *testing.T) {
+		browserCalled = false
+		openedURL = ""
+		app := &App{Namespace: "default", Client: fakeClient}
+		cmd := newOpenCmd(app)
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&out)
+		cmd.SetArgs([]string{"--magic", "pr-101"})
+
+		require.NoError(t, cmd.Execute())
+		assert.True(t, browserCalled)
+		assert.Equal(t, "https://shop.example.com?_diverge_env=pr-101", openedURL)
+		assert.Contains(t, out.String(), "Note: PreviewGroup uses header routing")
+		assert.Contains(t, out.String(), "Opening https://shop.example.com?_diverge_env=pr-101")
+	})
+}

@@ -241,9 +241,10 @@ diverge curl pr-42 /api/checkout --compare-baseline
 
 ### `diverge open`
 
-Open a preview `Environment` URL in your default browser.
+Open a preview `Environment` or `PreviewGroup` URL in your default browser (or print it to stdout). Resolves an `Environment` first and automatically falls back to a `PreviewGroup` of the same name (`spec.routing.externalURL` or the first ready child service URL).
 
-**Usage:** `diverge open <env-name> [flags]`
+**Usage:** `diverge open <env-or-previewgroup-name> [flags]`
 
 **Flags:**
 - `-m, --magic` — Append `?_diverge_env=<headerValue>` so `diverge-proxy` sets the `diverge_env` sticky routing cookie on first visit
+- `-p, --no-browser` — Print the resolved URL to stdout without launching a browser (ideal for CI logs, remote SSH sessions, or piping to `pbcopy`)

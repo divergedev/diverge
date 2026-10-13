@@ -5,8 +5,10 @@ import { EnvironmentTable } from '@/components/EnvironmentTable'
 import { CreateEnvironmentModal } from '@/components/CreateEnvironmentModal'
 import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { Plus, Search, Layers } from 'lucide-react'
+import { Plus, Search, Layers, DollarSign, Moon } from 'lucide-react'
+import { estimateEnvironmentHourlyCostUSD, formatHourlyCostUSD, isEnvironmentHibernated } from '@/lib/finops'
 
 export default function EnvironmentList() {
   const [namespace] = useState<string | undefined>(undefined)
@@ -20,6 +22,11 @@ export default function EnvironmentList() {
     ? environments.filter((e) => e.name.toLowerCase().includes(search.toLowerCase()) || e.namespace.toLowerCase().includes(search.toLowerCase()))
     : environments
 
+  const totalHourlyCost = environments.reduce((sum, e) => sum + estimateEnvironmentHourlyCostUSD(e), 0)
+  const monthlyRunRate = totalHourlyCost * 730
+  const hibernatedCount = environments.filter(isEnvironmentHibernated).length
+  const activeCount = environments.length - hibernatedCount
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -28,6 +35,44 @@ export default function EnvironmentList() {
           <p className="text-muted-foreground">Manage your preview environments</p>
         </div>
         <Button onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4 mr-2" />Create Environment</Button>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-3">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Estimated Hourly Spend</CardTitle>
+            <DollarSign className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold font-mono">{formatHourlyCostUSD(totalHourlyCost)}</div>
+            <p className="text-xs text-muted-foreground mt-1">
+              ~${monthlyRunRate.toFixed(2)}/mo projected run-rate
+            </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Compute State</CardTitle>
+            <Moon className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">
+              {activeCount} Active · {hibernatedCount} Hibernated
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              Scale-to-zero idle hibernation
+            </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Total Environments</CardTitle>
+            <Layers className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{environments.length}</div>
+          </CardContent>
+        </Card>
       </div>
 
       <div className="flex items-center gap-4">

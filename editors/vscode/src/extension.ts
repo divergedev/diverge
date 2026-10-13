@@ -153,6 +153,33 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand("diverge.openMagicLink", async (item?: EnvironmentTreeItem) => {
+      const envName = item?.env.name || (await vscode.window.showInputBox({
+        prompt: "Enter preview environment name to open via magic link",
+      }));
+      if (!envName) return;
+      runCLI(["open", envName, "--magic"], `Diverge Open Magic Link (${envName})`);
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("diverge.compareBaseline", async (item?: EnvironmentTreeItem) => {
+      const envName = item?.env.name || (await vscode.window.showInputBox({
+        prompt: "Enter preview environment name to compare against baseline",
+      }));
+      if (!envName) return;
+
+      const httpPath = (await vscode.window.showInputBox({
+        prompt: "Enter HTTP path or URL to compare against baseline",
+        value: "/",
+        placeHolder: "/api/orders",
+      })) || "/";
+
+      runCLI(["curl", envName, httpPath, "--compare-baseline"], `Diverge Compare Baseline (${envName} ${httpPath})`);
+    })
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand("diverge.startDev", async () => {
       const service = await vscode.window.showInputBox({
         prompt: "Enter service name to develop locally (leave empty for default)",
@@ -185,6 +212,8 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("diverge.showQuickMenu", async () => {
       const choice = await vscode.window.showQuickPick([
         { label: "$(refresh) Refresh Diverge State", action: "diverge.refresh" },
+        { label: "$(wand) Open Magic Preview Link (?_diverge_env)", action: "diverge.openMagicLink" },
+        { label: "$(diff-sidebyside) Compare Endpoint Against Baseline", action: "diverge.compareBaseline" },
         { label: "$(play) Start Dev Session (diverge dev)", action: "diverge.startDev" },
         { label: "$(stop) Stop Dev Session (release)", action: "diverge.stopDev" },
         { label: "$(info) Show Environment Status", action: "diverge.status" },
