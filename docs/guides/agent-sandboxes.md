@@ -29,7 +29,7 @@ flowchart LR
    - Resuming a paused task mints a fresh capability token with updated budget/expiry caveats.
 3. **Defense-in-Depth Network Isolation**:
    - The default `NetworkPolicy` (`<release>-sandbox-isolation`) denies all ingress to sandbox pods, restricts egress to DNS (53) and HTTPS/SSH (443/22), and blocks cloud metadata (`169.254.169.254/32`, `169.254.0.0/16`) and the in-cluster Kubernetes API (`10.96.0.1/32`).
-   - Pod specs set `AutomountServiceAccountToken: false`, `ReadOnlyRootFilesystem: true`, `RunAsNonRoot: true`, and drop `ALL` Linux capabilities.
+   - Pod specs set `AutomountServiceAccountToken: false`, `ReadOnlyRootFilesystem: true` (with writable `emptyDir` mounts at `/workspace` and `/tmp`), `RunAsNonRoot: true`, and drop `ALL` Linux capabilities.
 
 ---
 
@@ -57,7 +57,8 @@ helm upgrade --install diverge charts/diverge \
 ```
 
 > [!TIP]
-> For local Kind/k3d testing without the upstream `agents.x-k8s.io` CRDs installed, set `--set sandbox.provider=noop`.
+> **Built-in Kubernetes `pod` Sandbox Provider & Automatic Fallback**:
+> On clusters without the external `extensions.agents.x-k8s.io` (`agent-sandbox`) CRD controller installed, you can set `--set sandbox.provider=pod` (or `spec.sandbox.provider: pod`) to provision hardened Kubernetes `Pod`s (`sb-pod-<task>`) with dropped capabilities, `runAsNonRoot: true`, `RuntimeDefault` seccomp, optional `divergedev.com/runtime-class` (`gvisor` / `kata`), `10Gi` workspace `emptyDir`, and mounted Macaroon tokens. Even when `provider: agent-sandbox` is selected, Diverge automatically falls back to the native `pod` provider if the `SandboxClaim` CRD is not registered on the cluster. For dry-run testing without creating pods, set `--set sandbox.provider=noop`.
 
 ---
 
@@ -144,6 +145,44 @@ curl -s -X POST "https://diverge-server.diverge-system.svc:8443/api/v1/agenttask
   "totalTokensUsed": 1500,
   "totalCostUSD": 0.0225
 }
+```
+
+### Node.js & Python SDK Metering Helpers
+
+Both `@divergedev/sdk` (Node.js) and `diverge-sdk` (Python) include built-in metering helpers that automatically read `DIVERGE_MACAROON_TOKEN` or `/etc/diverge/token/token`:
+
+```typescript
+// Node.js (@divergedev/sdk)
+import { meterLLMUsage, LLMMeterError } from '@divergedev/sdk';
+
+try {
+  const res = await meterLLMUsage({
+    model: 'claude-3-7-sonnet',
+    tokensUsed: 1500,
+    costUSD: 0.0225,
+  });
+} catch (err) {
+  if (err instanceof LLMMeterError && err.isBudgetExceeded) {
+    process.exit(0); // Task auto-paused by diverge-server
+  }
+  throw err;
+}
+```
+
+```python
+# Python (diverge-sdk)
+from diverge_sdk import meter_llm_usage, LLMMeterError
+
+try:
+    res = meter_llm_usage(
+        model="claude-3-7-sonnet",
+        tokens_used=1500,
+        cost_usd=0.0225,
+    )
+except LLMMeterError as err:
+    if err.is_budget_exceeded:
+        raise SystemExit(0)
+    raise
 ```
 
 ### Guardrails Enforced by `/api/v1/agenttask/meter`

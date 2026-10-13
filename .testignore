@@ -33,6 +33,7 @@ internal/routing/noop_register.go
 internal/routing/providers.go
 internal/sandbox/agent_sandbox_register.go
 internal/sandbox/noop_register.go
+internal/sandbox/pod_register.go
 internal/testing/github_register.go
 internal/testing/gitlab_register.go
 internal/testing/noop_register.go
@@ -54,15 +55,3 @@ internal/proxy/pages.go
 # --- Instrumented wrappers (thin delegation, tested via integration) ---
 internal/deployer/instrumented.go
 internal/routing/instrumented.go
-
-# --- Complex integrations requiring live services (future work) ---
-# These have no _test.go and need envtest or mock servers.
-# TODO: Add tests — tracked via GitHub Issues.
-internal/cli/environment.go
-internal/notifier/github_status.go
-internal/notifier/gitlab_status.go
-internal/notifier/previewgroup_templates.go
-internal/testing/github.go
-internal/testing/gitlab.go
-internal/testing/helpers.go
-pkg/sdk/temporal/context.go

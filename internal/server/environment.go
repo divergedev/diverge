@@ -251,11 +251,17 @@ func (s *EnvironmentService) UpdateEnvironment(ctx context.Context, req *connect
 	// Nested paths like "spec.source" are not supported and will be rejected.
 	// Full sub-field updates require replacing the entire parent (e.g., path="spec").
 	if msg.UpdateMask != nil && len(msg.UpdateMask.Paths) > 0 {
-		allowedPaths := map[string]bool{"spec": true, "labels": true, "annotations": true}
+		allowedPaths := map[string]bool{
+			"spec":                    true,
+			"spec.features":           true,
+			"spec.features.overrides": true,
+			"labels":                  true,
+			"annotations":             true,
+		}
 		for _, path := range msg.UpdateMask.Paths {
 			if !allowedPaths[path] {
 				return nil, connect.NewError(connect.CodeInvalidArgument,
-					fmt.Errorf("unsupported field mask path: %q; allowed paths are: spec, labels, annotations", path))
+					fmt.Errorf("unsupported field mask path: %q; allowed paths are: spec, spec.features, spec.features.overrides, labels, annotations", path))
 			}
 		}
 
@@ -263,6 +269,17 @@ func (s *EnvironmentService) UpdateEnvironment(ctx context.Context, req *connect
 			switch path {
 			case "spec":
 				existingCrd.Spec = newCrd.Spec
+			case "spec.features":
+				existingCrd.Spec.Features = newCrd.Spec.Features
+			case "spec.features.overrides":
+				if existingCrd.Spec.Features == nil {
+					existingCrd.Spec.Features = &v1alpha1.FeatureSpec{}
+				}
+				if newCrd.Spec.Features != nil {
+					existingCrd.Spec.Features.Overrides = newCrd.Spec.Features.Overrides
+				} else {
+					existingCrd.Spec.Features.Overrides = nil
+				}
 			case "labels":
 				existingCrd.Labels = newCrd.Labels
 			case "annotations":

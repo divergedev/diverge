@@ -1,9 +1,12 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import type { PartialMessage } from '@bufbuild/protobuf'
 import type { Environment } from '@/api/gen/diverge/v1alpha1/environment_pb'
+import { useUpdateEnvironment } from '@/api/queries'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { StatusBadge } from '@/components/StatusBadge'
 import {
   Flag,
@@ -14,9 +17,8 @@ import {
   Sliders,
   CheckCircle2,
   AlertCircle,
-  Clock,
-  Sparkles,
-  Info,
+  Plus,
+  Trash2,
 } from 'lucide-react'
 
 interface FlagsTabProps {
@@ -24,14 +26,24 @@ interface FlagsTabProps {
 }
 
 export function FlagsTab({ environment }: FlagsTabProps) {
+  const [currentEnv, setCurrentEnv] = useState<Environment>(environment)
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
+  const [newKey, setNewKey] = useState('')
+  const [newValue, setNewValue] = useState('')
+  const [mutationError, setMutationError] = useState<string | null>(null)
+  const [successMessage, setSuccessMessage] = useState<string | null>(null)
+  const updateEnv = useUpdateEnvironment()
 
-  const specFeatures = environment.spec?.features
+  useEffect(() => {
+    setCurrentEnv(environment)
+  }, [environment])
+
+  const specFeatures = currentEnv.spec?.features
   const provider = specFeatures?.provider || 'configmap'
   const rawOverrides = (specFeatures?.overrides ?? {}) as Record<string, string>
   const overrideEntries = Object.entries(rawOverrides)
 
-  const status = environment.status
+  const status = currentEnv.status
   const conditions = status?.conditions ?? []
   const featureCondition = conditions.find((c) => c.type === 'FeaturesReady')
   const featureEnvVars = (status?.featureEnvVars ?? {}) as Record<string, string>
@@ -41,6 +53,63 @@ export function FlagsTab({ environment }: FlagsTabProps) {
     navigator.clipboard.writeText(text)
     setCopiedKey(key)
     setTimeout(() => setCopiedKey(null), 2000)
+  }
+
+  const saveOverrides = async (nextOverrides: Record<string, string>, successMsg: string) => {
+    setMutationError(null)
+    setSuccessMessage(null)
+    const updatedEnv: PartialMessage<Environment> = {
+      name: currentEnv.name,
+      namespace: currentEnv.namespace,
+      resourceVersion: currentEnv.resourceVersion,
+      labels: currentEnv.labels,
+      annotations: currentEnv.annotations,
+      spec: {
+        ...currentEnv.spec,
+        features: {
+          provider: specFeatures?.provider ?? '',
+          connectionRef: specFeatures?.connectionRef ?? '',
+          overrides: nextOverrides,
+        },
+      },
+    }
+    try {
+      const resp = await updateEnv.mutateAsync({
+        environment: updatedEnv,
+        updateMask: { paths: ['spec.features.overrides'] },
+      })
+      if (resp.environment) {
+        setCurrentEnv(resp.environment)
+      }
+      setSuccessMessage(successMsg)
+      return true
+    } catch (err) {
+      setMutationError(err instanceof Error ? err.message : 'Failed to update feature flag overrides')
+      return false
+    }
+  }
+
+  const handleAddOverride = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const key = newKey.trim()
+    const value = newValue.trim()
+    if (!key || !value) return
+    const ok = await saveOverrides({ ...rawOverrides, [key]: value }, `Saved override for ${key}`)
+    if (ok) {
+      setNewKey('')
+      setNewValue('')
+    }
+  }
+
+  const handleToggleOverride = async (key: string, currentValue: string) => {
+    const nextValue = currentValue === 'true' ? 'false' : 'true'
+    await saveOverrides({ ...rawOverrides, [key]: nextValue }, `Toggled ${key} to ${nextValue}`)
+  }
+
+  const handleRemoveOverride = async (key: string) => {
+    const nextOverrides = { ...rawOverrides }
+    delete nextOverrides[key]
+    await saveOverrides(nextOverrides, `Removed override ${key}`)
   }
 
   const getProviderInfo = () => {
@@ -96,6 +165,26 @@ export function FlagsTab({ environment }: FlagsTabProps) {
 
   return (
     <div className="space-y-6">
+      {mutationError && (
+        <div
+          className="bg-destructive/10 border border-destructive/20 text-destructive px-4 py-3 rounded-md flex items-center gap-2 text-sm"
+          role="alert"
+        >
+          <AlertCircle className="h-4 w-4 flex-shrink-0" />
+          {mutationError}
+        </div>
+      )}
+
+      {successMessage && (
+        <div
+          className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-400 px-4 py-3 rounded-md flex items-center gap-2 text-sm"
+          role="status"
+        >
+          <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
+          {successMessage}
+        </div>
+      )}
+
       {/* Provider & Health Summary Cards */}
       <div className="grid gap-4 md:grid-cols-3">
         <Card className="md:col-span-2">
@@ -178,7 +267,7 @@ export function FlagsTab({ environment }: FlagsTabProps) {
 
       {/* Flag Overrides Table */}
       <Card>
-        <CardHeader>
+        <CardHeader className="space-y-4">
           <div className="flex items-center justify-between">
             <div>
               <CardTitle className="text-base font-semibold flex items-center gap-2">
@@ -193,17 +282,42 @@ export function FlagsTab({ environment }: FlagsTabProps) {
               {overrideEntries.length} {overrideEntries.length === 1 ? 'flag' : 'flags'}
             </Badge>
           </div>
+
+          <form onSubmit={handleAddOverride} className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+            <Input
+              aria-label="Flag key"
+              placeholder="Flag key (e.g. new_checkout)"
+              value={newKey}
+              onChange={(e) => setNewKey(e.target.value)}
+              className="flex-1 font-mono text-xs"
+            />
+            <Input
+              aria-label="Flag value"
+              placeholder="Override value (e.g. true or variant-a)"
+              value={newValue}
+              onChange={(e) => setNewValue(e.target.value)}
+              className="flex-1 font-mono text-xs"
+            />
+            <Button
+              type="submit"
+              size="sm"
+              disabled={updateEnv.isPending || !newKey.trim() || !newValue.trim()}
+            >
+              <Plus className="h-4 w-4 mr-1.5" />
+              Add Override
+            </Button>
+          </form>
         </CardHeader>
         <CardContent className="p-0">
           {overrideEntries.length > 0 ? (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-[30%]">Flag Key</TableHead>
-                  <TableHead className="w-[15%]">Type</TableHead>
-                  <TableHead className="w-[20%]">Override Value</TableHead>
-                  <TableHead className="w-[25%]">Targeting Scope</TableHead>
-                  <TableHead className="w-[10%] text-right">Actions</TableHead>
+                  <TableHead className="w-[28%]">Flag Key</TableHead>
+                  <TableHead className="w-[14%]">Type</TableHead>
+                  <TableHead className="w-[18%]">Override Value</TableHead>
+                  <TableHead className="w-[20%]">Targeting Scope</TableHead>
+                  <TableHead className="w-[20%] text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -253,19 +367,44 @@ export function FlagsTab({ environment }: FlagsTabProps) {
                         </code>
                       </TableCell>
                       <TableCell className="text-right">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7"
-                          title={`Copy ${key}`}
-                          onClick={() => handleCopy(key, key)}
-                        >
-                          {copiedKey === key ? (
-                            <Check className="h-3.5 w-3.5 text-green-500" />
-                          ) : (
-                            <Copy className="h-3.5 w-3.5 text-muted-foreground" />
+                        <div className="inline-flex items-center justify-end gap-1">
+                          {isBoolean && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 px-2 text-xs"
+                              aria-label={`Toggle ${key}`}
+                              disabled={updateEnv.isPending}
+                              onClick={() => handleToggleOverride(key, value)}
+                            >
+                              Toggle
+                            </Button>
                           )}
-                        </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2 text-xs text-destructive hover:text-destructive"
+                            aria-label={`Remove ${key}`}
+                            disabled={updateEnv.isPending}
+                            onClick={() => handleRemoveOverride(key)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5 mr-1" />
+                            Remove
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            title={`Copy ${key}`}
+                            onClick={() => handleCopy(key, key)}
+                          >
+                            {copiedKey === key ? (
+                              <Check className="h-3.5 w-3.5 text-green-500" />
+                            ) : (
+                              <Copy className="h-3.5 w-3.5 text-muted-foreground" />
+                            )}
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   )

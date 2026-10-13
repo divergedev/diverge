@@ -64,8 +64,15 @@ test-sdk-node: ## Run Node SDK tests.
 test-sdk-python: ## Run Python SDK tests.
 	cd pkg/sdk/python && uv sync --all-extras && uv run pytest tests/ -v
 
+.PHONY: test-vscode
+test-vscode: ## Compile VS Code extension.
+	cd editors/vscode && npm ci && npm run compile
+
+.PHONY: test-sdk
+test-sdk: test-sdk-node test-sdk-python test-vscode ## Run all SDK and editor extension tests.
+
 .PHONY: test-all
-test-all: test test-web test-sdk-node test-sdk-python ## Run all test suites (Go + Web + SDKs).
+test-all: test test-web test-sdk-node test-sdk-python test-vscode ## Run all test suites (Go + Web + SDKs).
 
 .PHONY: e2e-setup e2e-run e2e-teardown e2e
 

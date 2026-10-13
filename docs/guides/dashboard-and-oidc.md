@@ -79,3 +79,14 @@ server:
 - **CSRF State + Sanitized Redirects**: `/auth/login` generates a cryptographic random state stored in an `HttpOnly`, `SameSite=Lax` cookie and sanitizes `return_url` to prevent open redirects.
 - **Group Enforcement**: When `allowedGroups` is configured, `/auth/callback` verifies group membership before issuing the `diverge_token` session cookie.
 - **Namespace-Scoped Authorization**: Human and `ServiceAccount` principals are checked with Kubernetes RBAC / `SubjectAccessReview`; Macaroon callers are checked against their caveats.
+
+---
+
+## 4. Interactive Dashboard Features
+
+- **Environment Detail & Live Feature Flag Overrides (`FlagsTab`)**:
+  - Add, toggle (`true` / `false`), or remove feature flag overrides (`spec.features.overrides`) directly from the **Flags** tab using partial `UpdateMask` (`spec.features.overrides`) updates, alongside one-click TTL extension and hook job retries.
+- **Multi-Service `PreviewGroup` Detail**:
+  - Inspect `Overview` (source branch/PR, copyable routing headers, TTL countdown, and child service status table with direct links to each child `Environment`), interactive `Topology` graph, Kubernetes `Conditions`, and live `YAML`.
+- **Autonomous `AgentTask` Steering & Linked Previews**:
+  - Send live steering guidance, pause/resume execution with optional USD budget bumps, stream sandbox pod logs, and jump directly to the task's **Linked Preview Environment** (`agent-preview-<task>`) and external preview URL.

@@ -91,6 +91,25 @@ export function useDeleteEnvironment() {
   })
 }
 
+export function useUpdateEnvironment() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (req: Parameters<typeof environmentClient.updateEnvironment>[0]) =>
+      environmentClient.updateEnvironment(req),
+    onSuccess: (data, vars) => {
+      const ns = data.environment?.namespace || vars.environment?.namespace || ''
+      const name = data.environment?.name || vars.environment?.name || ''
+      if (ns && name) {
+        if (data.environment) {
+          qc.setQueryData(queryKeys.environment(ns, name), data)
+        }
+        qc.invalidateQueries({ queryKey: queryKeys.environment(ns, name) })
+      }
+      qc.invalidateQueries({ queryKey: ['environments'] })
+    },
+  })
+}
+
 export function useExtendTTL() {
   const qc = useQueryClient()
   return useMutation({

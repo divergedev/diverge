@@ -43,10 +43,12 @@ web/src/api/gen/
 internal/server/dashboard/dist/assets/
 **/.diverge/
 
-# SDK packages
+# SDK packages & IDE extensions
 pkg/sdk/node/node_modules/
 pkg/sdk/node/dist/
 pkg/sdk/python/__pycache__/
 pkg/sdk/python/**/__pycache__/
 pkg/sdk/python/**/*.egg-info/
 pkg/sdk/python/.venv/
+editors/vscode/node_modules/
+editors/vscode/dist/

@@ -4,6 +4,7 @@ package sandbox
 
 import (
 	"k8s.io/client-go/kubernetes"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/divergedev/diverge/pkg/registry"
 	pkgsandbox "github.com/divergedev/diverge/pkg/sandbox"
@@ -12,8 +13,14 @@ import (
 func init() {
 	pkgsandbox.Providers.Register("agent-sandbox", registry.Provider[pkgsandbox.SandboxProvider]{
 		Create: func(deps registry.Deps) (pkgsandbox.SandboxProvider, error) {
-			var cs kubernetes.Interface
-			// Create a clientset if possible or pass nil
+			cs := deps.Clientset
+			if cs == nil {
+				if cfg, err := ctrl.GetConfig(); err == nil && cfg != nil {
+					if c, err := kubernetes.NewForConfig(cfg); err == nil {
+						cs = c
+					}
+				}
+			}
 			return NewAgentSandboxProvider(deps.Client, cs, deps.Scheme), nil
 		},
 		Description: "Kubernetes Agent Sandbox (SIG Apps) provider",

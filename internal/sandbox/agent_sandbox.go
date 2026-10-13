@@ -11,6 +11,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -30,6 +31,10 @@ var (
 		Kind:    "SandboxClaim",
 	}
 )
+
+func isCRDUnavailableError(err error) bool {
+	return meta.IsNoMatchError(err) || runtime.IsNotRegisteredError(err)
+}
 
 // AgentSandboxProvider integrates with the Kubernetes Agent Sandbox (SIG Apps) controller.
 type AgentSandboxProvider struct {
@@ -70,8 +75,13 @@ func (p *AgentSandboxProvider) Provision(ctx context.Context, task *v1alpha1.Age
 	}
 
 	err := p.client.Create(ctx, claim)
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		return nil, fmt.Errorf("create SandboxClaim: %w", err)
+	if err != nil {
+		if isCRDUnavailableError(err) {
+			return NewPodSandboxProvider(p.client, p.clientset, p.scheme).Provision(ctx, task)
+		}
+		if !apierrors.IsAlreadyExists(err) {
+			return nil, fmt.Errorf("create SandboxClaim: %w", err)
+		}
 	}
 
 	// Fetch status
@@ -103,6 +113,9 @@ func (p *AgentSandboxProvider) Teardown(ctx context.Context, task *v1alpha1.Agen
 	claim.SetNamespace(task.Namespace)
 
 	if err := p.client.Delete(ctx, claim); err != nil {
+		if isCRDUnavailableError(err) {
+			return NewPodSandboxProvider(p.client, p.clientset, p.scheme).Teardown(ctx, task)
+		}
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
@@ -118,6 +131,9 @@ func (p *AgentSandboxProvider) Status(ctx context.Context, task *v1alpha1.AgentT
 	claim.SetGroupVersionKind(sandboxClaimGVK)
 
 	if err := p.client.Get(ctx, client.ObjectKey{Namespace: task.Namespace, Name: claimName}, claim); err != nil {
+		if isCRDUnavailableError(err) {
+			return NewPodSandboxProvider(p.client, p.clientset, p.scheme).Status(ctx, task)
+		}
 		if apierrors.IsNotFound(err) {
 			return &pkgsandbox.SandboxStatus{
 				ClaimName: claimName,
