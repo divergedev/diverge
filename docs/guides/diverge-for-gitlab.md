@@ -16,7 +16,7 @@ helm install diverge diverge/diverge \
   --namespace diverge-system \
   --create-namespace \
   -f gitlab-values.yaml \
-  --version 0.1.1
+  --version 0.15.0
 ```
 
 ## 2. Configure GitLab Webhook
@@ -94,7 +94,7 @@ Include the official Diverge GitLab CI/CD Component (`templates/preview/template
 
 ```yaml
 include:
-  - component: $CI_SERVER_FQDN/divergedev/diverge/preview@v1
+  - component: $CI_SERVER_FQDN/divergedev/diverge/preview@v0.15.0
     inputs:
       diverge_registry: "$CI_REGISTRY_IMAGE"
       diverge_base_url: "https://staging.example.com"

@@ -65,14 +65,14 @@ diverge dev --service my-app
   <img src="docs/assets/delta-vs-duplicated.svg" alt="Delta Preview vs Traditional Full-Stack Duplication" width="100%">
 </p>
 
-### Turnkey CI/CD (`divergedev/diverge@v1`)
+### Turnkey CI/CD (`divergedev/diverge@v0.15.0`)
 
 Deploy a delta `PreviewGroup` for only the services modified in a Pull Request and pass `routing-header-json` directly into Playwright E2E tests:
 
 ```yaml
 - name: Deploy Diverge Delta Preview
   id: diverge
-  uses: divergedev/diverge@v1
+  uses: divergedev/diverge@v0.15.0
   with:
     kubeconfig: ${{ secrets.PREVIEW_KUBECONFIG }}
     image-registry: ghcr.io/acme
@@ -187,9 +187,10 @@ spec:
 The `diverge` CLI helps you manage environments efficiently:
 *   `diverge init` - Initialize a `.diverge.yaml` config
 *   `diverge create` - Create a new environment
+*   `diverge curl` - Send HTTP requests to a preview environment and compare against baseline (`--compare-baseline`)
 *   `diverge list` - List active environments
 *   `diverge status` - Check the status of an environment
-*   `diverge open` - Open the preview URL in your browser
+*   `diverge open` - Open the preview URL in your browser (`--magic` for one-click `?_diverge_env=` cookie URL)
 *   `diverge logs` - Stream logs for a preview environment
 *   `diverge dev` - Local development mode with preview routing
 *   `diverge doctor` - Diagnose cluster, CRD, Gateway, and environment health

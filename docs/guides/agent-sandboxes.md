@@ -205,10 +205,11 @@ When `spec.repository.url` is set on an `AgentTask` (and `divergedev.com/preview
 | `divergedev.com/preview-enabled` | `"true"` (when `spec.repository.url` is set) | Set to `"false"` to disable automatic preview environment creation, or `"true"` to force-enable. |
 | `divergedev.com/preview-service` | `<task.name>` | Target Kubernetes service name for the linked `Environment`. |
 | `divergedev.com/preview-image` | `nginx:alpine` (port `80`) | Container image deployed in the linked preview `Environment`. |
+| `divergedev.com/preview-port` | `80` (or `8080` for custom images) | Container/service port exposed on the linked preview `Environment`. |
 | `divergedev.com/preview-branch` | `spec.repository.workingBranch` / `baseBranch` | Git branch tracked by the linked `Environment`. |
 
 ### Output Annotations & Status Conditions
-- **Output Annotations**: Once reconciled, the controller writes `divergedev.com/preview-environment` (the child `Environment` name) and `divergedev.com/preview-url` (the live preview URL once ready) onto the `AgentTask`.
+- **Output Annotations**: Once reconciled, the controller writes `divergedev.com/preview-environment` (the child `Environment` name) and `divergedev.com/preview-url` (the live preview URL once ready) onto the `AgentTask`, and propagates `divergedev.com/sandbox-ip` (the live sandbox pod IP) onto the linked `Environment`.
 - **Status Condition**: Tracks readiness via the `PreviewEnvironmentReady` condition (`Reason: EnvironmentProvisioning` -> `Reason: EnvironmentRunning`).
 
 ---
@@ -221,3 +222,10 @@ Collaborators (`OWNER`, `MEMBER`, or `COLLABORATOR`) can spawn and control `Agen
 - `/diverge pause` — Suspends active `AgentTask` execution for the PR/MR (`spec.suspended = true`).
 - `/diverge resume` — Resumes a paused `AgentTask` for the PR/MR (`spec.suspended = false`).
 
+### Automatic PR / MR Status Comments (`SCMTaskNotifier`)
+
+When `notifierProvider` (`github` or `gitlab`) is configured on the controller, `SCMTaskNotifier` posts and idempotently updates a sticky comment (`<!-- diverge-agent-task -->`) on the associated Pull Request or Merge Request whenever the `AgentTask` transitions across `Active`, `Paused`, `Completed`, or `Failed` phases. The comment includes:
+- Current phase badge (`🟢 Completed`, `🟡 Paused`, `🔵 Active`, `🔴 Failed`)
+- Task objective and working branch
+- One-click **Magic Link** (`?_diverge_env=`) to open the agent's linked preview environment and an **Exit Preview** (`?_diverge_env=clear`) link
+- Live cumulative LLM token and USD spend (`status.tokensConsumed` / `status.costUSD`)

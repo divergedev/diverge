@@ -34,7 +34,7 @@ services:
 
 ### Turnkey Composite Action (Recommended)
 
-Use the official `divergedev/diverge@v1` GitHub Action to validate `.diverge.yaml`, run `diverge diff`, deploy a delta `PreviewGroup`, and expose routing headers to Playwright or Cypress:
+Use the official `divergedev/diverge@v0.15.0` GitHub Action to validate `.diverge.yaml`, run `diverge diff`, deploy a delta `PreviewGroup`, and expose routing headers to Playwright or Cypress:
 
 ```yaml
 name: Preview Environment
@@ -54,7 +54,7 @@ jobs:
 
       - name: Deploy Diverge Delta Preview
         id: diverge
-        uses: divergedev/diverge@v1
+        uses: divergedev/diverge@v0.15.0
         with:
           action: deploy
           kubeconfig: ${{ secrets.PREVIEW_KUBECONFIG }}
@@ -74,7 +74,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: divergedev/diverge@v1
+      - uses: divergedev/diverge@v0.15.0
         with:
           action: teardown
           kubeconfig: ${{ secrets.PREVIEW_KUBECONFIG }}
@@ -139,7 +139,7 @@ Include the official component (`templates/preview/template.yml`). It automatica
 
 ```yaml
 include:
-  - component: $CI_SERVER_FQDN/divergedev/diverge/preview@v1
+  - component: $CI_SERVER_FQDN/divergedev/diverge/preview@v0.15.0
     inputs:
       diverge_registry: "$CI_REGISTRY_IMAGE"
       diverge_base_url: "https://staging.example.com"

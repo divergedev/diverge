@@ -66,3 +66,23 @@ Then in your HTML:
 ### Option B: Inject via Proxy/Middleware
 
 If you have a proxy or API gateway in front of your application, you can configure it to append the script to HTML responses.
+
+---
+
+## In-Browser Floating DevToolbar (`<diverge-toolbar>`)
+
+When traffic is routed through `diverge-proxy`, Diverge automatically injects a collapsible, Shadow DOM-isolated floating toolbar (`<script src="/-/toolbar.js" defer></script>`) before `</body>` on `text/html` responses:
+
+- **Active Environment Pill**: Displays the currently active preview environment (`diverge_env` cookie, subdomain, or header) or `baseline`.
+- **Environment Switcher Dropdown**: Populated dynamically from `GET /-/api/context`, allowing 1-click switching between any active preview environment in the cluster.
+- **Copy Magic Link (`?_diverge_env=<env>`)**: Copies a shareable URL that sets the `diverge_env` cookie automatically for PMs, designers, or QA reviewers.
+- **Reset to Baseline**: Navigates to `?_diverge_env=clear` (or `?_diverge_env=reset`) to expire the preview cookie and return to baseline traffic.
+
+### Disabling the Floating DevToolbar per Request
+
+Automated screenshot tests or scrapers can skip `<diverge-toolbar>` HTML injection on any request by sending the `X-Diverge-Toolbar: off` HTTP request header:
+
+```bash
+curl -H "X-Diverge-Toolbar: off" https://preview.example.com/
+```
+

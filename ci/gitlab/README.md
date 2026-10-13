@@ -10,7 +10,7 @@ Include the component in your `.gitlab-ci.yml` file:
 
 ```yaml
 include:
-  - component: $CI_SERVER_FQDN/divergedev/diverge/preview@v1
+  - component: $CI_SERVER_FQDN/divergedev/diverge/preview@v0.15.0
     inputs:
       diverge_registry: "$CI_REGISTRY_IMAGE"
       diverge_base_url: "https://staging.example.com"

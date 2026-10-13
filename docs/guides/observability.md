@@ -7,10 +7,12 @@ Diverge provides built-in observability by exposing Prometheus metrics and stand
 The controller uses standard controller-runtime metrics at `:8080/metrics` (workqueue depth, reconcile duration, etc).
 
 In addition, Diverge exposes custom controller and environment metrics:
-- `diverge_environment_estimated_hourly_cost_usd` (labels: `environment`, `namespace`) — Estimated hourly cloud cost (USD) for each preview environment based on active replica counts and database provisioning mode:
-  - **Compute Rate Card**: `$0.025/hr` per active pod replica (`0` when scaled to zero or hibernating).
+- `diverge_environment_estimated_hourly_cost_usd` (labels: `environment`, `namespace`) — Estimated hourly cloud cost (USD) for each preview environment based on active replica counts, explicit `cpuRequest` / `memoryRequest` resource specifications (falling back to `$0.025/hr` per default pod when omitted), and database provisioning mode:
+  - **Compute Rate Card**: Scales with `spec.deploy.resources.cpuRequest` (`$0.031611/vCPU-hr`) and `memoryRequest` (`$0.004237/GiB-hr`), or `$0.025/hr` per default pod (`0` when scaled to zero or annotated with `divergedev.com/hibernated: "true"`).
+  - **Idle Hibernation**: Setting `divergedev.com/hibernate-after: "30m"` automatically marks idle environments `divergedev.com/hibernated: "true"`, emits a `Hibernated` Kubernetes Event, and zeroes active compute cost.
   - **Database Rate Card**: `$0.05/hr` for dedicated cluster/branch modes (`cnpg`, `neon`), `$0.02/hr` for `snapshot`/`fresh` modes, `$0.005/hr` for `schema` mode, and `$0.00/hr` for `shared`/`noop`.
-- `diverge_environment_ttl_remaining_seconds` (labels: `environment`, `namespace`) — Seconds remaining until TTL expiry.
+- `diverge_environment_ttl_remaining_seconds` (labels: `environment`, `namespace`) — Seconds remaining until TTL expiry (exports negative values when an environment is stuck past `ExpiresAt` so `DivergeEnvironmentStuck` alerts fire accurately; environments stuck in `Terminating` for more than 15 minutes or annotated with `divergedev.com/force-teardown: "true"` bypass external finalizer blockers and emit a `ForceTeardown` Warning event).
+- **End-to-End W3C Trace Context (`divergedev.com/traceparent`)**: When a webhook or API request attaches `divergedev.com/traceparent`, `PreviewGroupReconciler` and `EnvironmentReconciler` link their OpenTelemetry reconcile spans (`environment.name`, `environment.namespace`) to the caller's trace and inject `TRACEPARENT` into database migration and hook `Job` containers.
 - `diverge_controller_async_provisions_total` (labels: `protocol`, `result`) — Total async route provisions
 - `diverge_controller_async_provision_duration_seconds` (labels: `protocol`) — Async route provisioning duration
 - `diverge_controller_async_teardowns_total` (labels: `protocol`, `result`) — Total async route teardowns
