@@ -1,0 +1,13 @@
+---
+description: Diverge preview environment configuration, routing, diagnostics, and verification rules
+globs: "**/.diverge.yaml,**/diverge.yaml,internal/**,api/**"
+alwaysApply: false
+---
+
+# Diverge Preview Environment Rules
+
+- **Validate Configuration**: Whenever creating or modifying `.diverge.yaml` or `diverge.yaml`, always run `diverge validate -c <path>` and `diverge diff --output json` to verify schema compliance and service path mappings.
+- **Standard Routing Headers**: Default header-based routing uses `x-diverge-env: <env-name>` and W3C Baggage `baggage: diverge.env=<env-name>`.
+- **Verify Preview vs. Baseline**: Use `diverge curl <env-name> <path> --compare-baseline` to compare baseline and preview HTTP responses side-by-side instead of crafting manual `curl` header flags.
+- **Diagnose Before Guessing**: If a preview environment is not `Running`, run `diverge doctor <env-name> --json` (or the `diverge_doctor` and `diverge_fetch_errors` MCP tools) to identify CrashLoopBackOff, OOMKilled, image pull, or migration hook failures.
+- **Browser Magic Links & Toolbar**: Shareable browser sessions can be activated via `?_diverge_env=<env-name>` (`diverge open --magic <env-name>`) and reset to baseline via `?_diverge_env=clear` or `?_diverge_env=reset`. Send `X-Diverge-Toolbar: off` when fetching HTML in automated tests that assert exact response bodies.

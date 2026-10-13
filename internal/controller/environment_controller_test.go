@@ -2,17 +2,22 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/metrics"
 )
 
 func TestEnsureNamespace(t *testing.T) {
@@ -211,4 +216,153 @@ func TestEnsureNamespace(t *testing.T) {
 		// The old label is removed because CreateOrUpdate rewrites the map in our implementation
 		assert.NotContains(t, ns.Labels, "initial")
 	})
+}
+
+func TestReconcile_CostAndStuckTTLMetrics(t *testing.T) {
+	pastExpiry := metav1.NewTime(time.Now().Add(-10 * time.Minute))
+	env := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "stuck-env",
+			Namespace: "default",
+			Annotations: map[string]string{
+				"divergedev.com/traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+			},
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Deploy: divergeiov1alpha1.EnvironmentDeploy{
+				ChangedServices: []string{"api"},
+			},
+		},
+		Status: divergeiov1alpha1.EnvironmentStatus{
+			Phase:     divergeiov1alpha1.PhaseRunning,
+			ExpiresAt: &pastExpiry,
+		},
+	}
+
+	r, _, _, _, _ := newTestReconciler(t, env, nil, "")
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "stuck-env", Namespace: "default"}}
+
+	// Reconcile adds finalizer and runs deferred metrics update
+	_, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+
+	ttlRemaining := testutil.ToFloat64(metrics.EnvironmentTTLRemaining.WithLabelValues("stuck-env", "default"))
+	assert.Less(t, ttlRemaining, 0.0, "stuck Running environment past ExpiresAt must export negative TTL remaining")
+
+	hourlyCost := testutil.ToFloat64(metrics.EnvironmentEstimatedHourlyCostUSD.WithLabelValues("stuck-env", "default"))
+	assert.Greater(t, hourlyCost, 0.0)
+
+	metrics.EnvironmentTTLRemaining.DeleteLabelValues("stuck-env", "default")
+	metrics.DeleteEnvironmentCostMetric("stuck-env", "default")
+}
+
+func TestReconcileLifecycle_IdleHibernation(t *testing.T) {
+	created := metav1.NewTime(time.Now().Add(-2 * time.Hour))
+	env := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "idle-env",
+			Namespace:         "default",
+			CreationTimestamp: created,
+			Annotations: map[string]string{
+				metrics.AnnotationHibernateAfter: "30m",
+			},
+		},
+		Status: divergeiov1alpha1.EnvironmentStatus{
+			Phase:     divergeiov1alpha1.PhaseRunning,
+			CreatedAt: &created,
+		},
+	}
+
+	r, _, _, _, _ := newTestReconciler(t, env, nil, "")
+	statusBase := env.DeepCopy()
+	_, _, _, err := r.reconcileLifecycle(context.Background(), env, statusBase, divergeiov1alpha1.PhaseRunning)
+	require.NoError(t, err)
+	assert.Equal(t, "true", env.Annotations[metrics.AnnotationHibernated])
+	assert.Equal(t, 0.0, testutil.ToFloat64(metrics.EnvironmentEstimatedHourlyCostUSD.WithLabelValues("idle-env", "default")))
+
+	metrics.DeleteEnvironmentCostMetric("idle-env", "default")
+}
+
+func TestHandleTeardown_ForceTeardownEscapeHatch(t *testing.T) {
+	t.Run("force-teardown annotation bypasses errors", func(t *testing.T) {
+		now := metav1.Now()
+		env := &divergeiov1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "force-env",
+				Namespace:         "default",
+				Finalizers:        []string{environmentFinalizer},
+				DeletionTimestamp: &now,
+				Annotations: map[string]string{
+					"divergedev.com/force-teardown": "true",
+				},
+			},
+		}
+		r, _, dep, _, db := newTestReconciler(t, env, nil, "")
+		dep.teardownErr = errors.New("deployer unreachable")
+		db.teardownErr = errors.New("db unreachable")
+
+		res, err := r.handleTeardown(context.Background(), env)
+		require.NoError(t, err)
+		assert.Empty(t, res)
+	})
+
+	t.Run("deletion timeout over 15m bypasses errors", func(t *testing.T) {
+		expiredDel := metav1.NewTime(time.Now().Add(-20 * time.Minute))
+		env := &divergeiov1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "wedged-env",
+				Namespace:         "default",
+				Finalizers:        []string{environmentFinalizer},
+				DeletionTimestamp: &expiredDel,
+			},
+		}
+		r, _, _, _, db := newTestReconciler(t, env, nil, "")
+		db.teardownErr = errors.New("db unreachable")
+
+		res, err := r.handleTeardown(context.Background(), env)
+		require.NoError(t, err)
+		assert.Empty(t, res)
+	})
+}
+
+func TestHookJobAndPreviewGroup_TraceparentPropagation(t *testing.T) {
+	tp := "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+	env := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "traced-env",
+			UID:  "uid-1",
+			Annotations: map[string]string{
+				"divergedev.com/traceparent": tp,
+			},
+		},
+	}
+
+	job := buildJob(HookJobConfig{
+		JobName:   "traced-hook",
+		Namespace: "default",
+		Image:     "alpine:latest",
+		Owner:     env,
+	})
+	require.Len(t, job.Spec.Template.Spec.Containers, 1)
+	assert.Contains(t, job.Spec.Template.Spec.Containers[0].Env, corev1.EnvVar{
+		Name:  "TRACEPARENT",
+		Value: tp,
+	})
+
+	pg := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "traced-pg",
+			Annotations: map[string]string{
+				"divergedev.com/traceparent": tp,
+			},
+		},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Routing: divergeiov1alpha1.PreviewGroupRouting{
+				HeaderValue: "traced-pg",
+			},
+		},
+	}
+	pgReconciler := &PreviewGroupReconciler{}
+	child := pgReconciler.buildChildEnvironment(pg, divergeiov1alpha1.PreviewGroupServiceSpec{Name: "api"}, "child-api", "default")
+	assert.Equal(t, tp, child.Annotations["divergedev.com/traceparent"])
 }

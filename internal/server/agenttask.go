@@ -133,6 +133,10 @@ func (s *AgentTaskService) CreateTask(ctx context.Context, req *connect.Request[
 		return nil, SanitizeK8sError(s.logger, err)
 	}
 
+	if s.auditLogger != nil {
+		s.auditLogger.LogMutation(ctx, "resource.created", "agenttask", task.Name, task.Namespace)
+	}
+
 	return connect.NewResponse(&pb.CreateTaskResponse{
 		Task: toProtoAgentTask(task),
 	}), nil
@@ -262,6 +266,10 @@ func (s *AgentTaskService) DeleteTask(ctx context.Context, req *connect.Request[
 		return nil, SanitizeK8sError(s.logger, err)
 	}
 
+	if s.auditLogger != nil {
+		s.auditLogger.LogMutation(ctx, "resource.deleted", "agenttask", msg.Name, namespace)
+	}
+
 	return connect.NewResponse(&pb.DeleteTaskResponse{}), nil
 }
 
@@ -301,6 +309,10 @@ func (s *AgentTaskService) PauseTask(ctx context.Context, req *connect.Request[p
 	})
 	if err != nil {
 		return nil, SanitizeK8sError(s.logger, err)
+	}
+
+	if s.auditLogger != nil {
+		s.auditLogger.LogMutation(ctx, "resource.paused", "agenttask", msg.Name, namespace)
 	}
 
 	return connect.NewResponse(&pb.PauseTaskResponse{
@@ -368,6 +380,10 @@ func (s *AgentTaskService) ResumeTask(ctx context.Context, req *connect.Request[
 		return nil, SanitizeK8sError(s.logger, err)
 	}
 
+	if s.auditLogger != nil {
+		s.auditLogger.LogMutation(ctx, "resource.resumed", "agenttask", msg.Name, namespace)
+	}
+
 	return connect.NewResponse(&pb.ResumeTaskResponse{
 		Task: toProtoAgentTask(updatedTask),
 	}), nil
@@ -416,6 +432,10 @@ func (s *AgentTaskService) GuideTask(ctx context.Context, req *connect.Request[p
 			return nil, err
 		}
 		return nil, SanitizeK8sError(s.logger, err)
+	}
+
+	if s.auditLogger != nil {
+		s.auditLogger.LogMutation(ctx, "resource.guided", "agenttask", msg.Name, namespace)
 	}
 
 	return connect.NewResponse(&pb.GuideTaskResponse{Accepted: true}), nil

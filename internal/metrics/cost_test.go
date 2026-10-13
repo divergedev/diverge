@@ -77,6 +77,46 @@ func TestShouldHibernateIdleEnvironment(t *testing.T) {
 	assert.False(t, ShouldHibernateIdleEnvironment(env, base, base.Add(2*time.Hour), 30*time.Minute))
 }
 
+func TestEstimateEnvironmentCost_ResourceOverridesAndHibernated(t *testing.T) {
+	created := time.Date(2026, 10, 11, 10, 0, 0, 0, time.UTC)
+	now := created.Add(1 * time.Hour)
+
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "pr-resources",
+			Namespace:         "default",
+			CreationTimestamp: metav1.NewTime(created),
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Deploy: v1alpha1.EnvironmentDeploy{
+				ChangedServices: []string{"api"},
+			},
+			ServiceConfig: &v1alpha1.ServicePreviewConfig{
+				Resources: &v1alpha1.ResourceOverride{
+					CPURequest:    "1",
+					MemoryRequest: "2Gi",
+				},
+			},
+		},
+		Status: v1alpha1.EnvironmentStatus{
+			Phase: v1alpha1.PhaseRunning,
+		},
+	}
+
+	est := EstimateEnvironmentCost(env, now, DefaultCostRateCard())
+	// 1 vCPU * 0.04 + 2 GiB * 0.004 = 0.048/hr
+	assert.InDelta(t, 0.048, est.HourlyUSD, 1e-6)
+
+	// Mark hibernated -> hourlyUSD should be 0
+	env.Annotations = map[string]string{
+		AnnotationHibernated: "true",
+	}
+	estHibernated := EstimateEnvironmentCost(env, now, DefaultCostRateCard())
+	assert.Equal(t, 0.0, estHibernated.HourlyUSD)
+
+	DeleteEnvironmentCostMetric("pr-resources", "default")
+}
+
 func TestEstimateEnvironmentCost_PropertyMonotonicity(t *testing.T) {
 	baseTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 

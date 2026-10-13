@@ -55,3 +55,16 @@ environments:
         recommendations_v2: "true"
         items_per_page: "50"
         experiment_tier: "enterprise"
+
+  # Enterprise preview using Unleash provider with context-constrained flexibleRollout strategies
+  enterprise-preview:
+    trigger: label
+    label: "diverge/enterprise"
+    features:
+      provider: unleash
+      connection_ref: unleash-credentials
+      overrides:
+        new_nav_bar: "true"
+        recommendations_v2: "true"
+        legacy_banner: "false"
+        pricing_tier: "enterprise"

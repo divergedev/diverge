@@ -352,6 +352,29 @@ func TestProxySetPreviewCookieViaQueryParam(t *testing.T) {
 	require.Len(t, selectCookies, 1)
 	assert.Equal(t, "pr-42", selectCookies[0].Value)
 	assert.True(t, selectCookies[0].Secure)
+
+	// 5. GET /?_diverge_env=reset also expires the cookie
+	req5 := httptest.NewRequest(http.MethodGet, "http://preview.example.com/?_diverge_env=reset", nil)
+	w5 := httptest.NewRecorder()
+	server.ServeHTTP(w5, req5)
+
+	assert.Equal(t, http.StatusFound, w5.Code)
+	assert.Equal(t, "/", w5.Header().Get("Location"))
+	resetCookies := w5.Result().Cookies()
+	require.Len(t, resetCookies, 1)
+	assert.Equal(t, PreviewCookieName, resetCookies[0].Name)
+	assert.Equal(t, "", resetCookies[0].Value)
+	assert.Equal(t, -1, resetCookies[0].MaxAge)
+
+	// 6. GET /-/select?reset=1 also expires the cookie and strips reset param
+	req6 := httptest.NewRequest(http.MethodGet, "http://preview.example.com/-/select?reset=1", nil)
+	w6 := httptest.NewRecorder()
+	server.ServeHTTP(w6, req6)
+
+	assert.Equal(t, http.StatusFound, w6.Code)
+	assert.Equal(t, "/", w6.Header().Get("Location"))
+	require.Len(t, w6.Result().Cookies(), 1)
+	assert.Equal(t, -1, w6.Result().Cookies()[0].MaxAge)
 }
 
 func TestProxyInvalidPreviewEnvAndSuffixSpoofing(t *testing.T) {

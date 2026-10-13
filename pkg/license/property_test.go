@@ -15,7 +15,9 @@ import (
 
 func TestLicense_SignAndValidateRoundTrip_PBT(t *testing.T) {
 	// Generate key material once outside the property loop.
-	_, privKey, err := ed25519.GenerateKey(rand.Reader)
+	pubKey, privKey, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	otherPubKey, _, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
 	secret := []byte(privKey)
 
@@ -45,6 +47,17 @@ func TestLicense_SignAndValidateRoundTrip_PBT(t *testing.T) {
 		require.Equal(ht, claims.Org, parsed.Org)
 		require.Equal(ht, claims.Seats, parsed.Seats)
 		require.True(ht, claims.ExpiresAt.Equal(parsed.ExpiresAt))
+
+		edRes, err := ParseAndValidateEd25519(tok, pubKey, now)
+		require.NoError(ht, err)
+		require.False(ht, edRes.IsGrace)
+		require.Equal(ht, claims.Tier, edRes.Tier)
+		require.Equal(ht, claims.Org, edRes.Org)
+		require.Equal(ht, claims.Seats, edRes.Seats)
+
+		// Wrong public key is rejected
+		_, err = ParseAndValidateEd25519(tok, otherPubKey, now)
+		require.True(ht, errors.Is(err, ErrInvalidSignature))
 
 		// 2. Grace period: ExpiresAt between -6 days and -1 minute -> Valid (err == nil) && isGrace == true
 		graceMinutesAgo := hegel.Draw(ht, hegel.Integers(1, 6*24*60))

@@ -9,6 +9,7 @@ Preview environments often require specific features to be toggled on or off dur
 In this example:
 - **Default preview environments** (`preview`) use the zero-dependency `configmap` provider, automatically creating a `flagd`-compatible JSON ConfigMap for each preview environment.
 - **Staging previews** (`staging-preview`) demonstrate connecting to a remote [Flipt](https://flipt.io) engine, dynamically provisioning an isolated ephemeral namespace (`diverge-<envName>`) with boolean and variant flag overrides.
+- **Enterprise previews** (`enterprise-preview`) demonstrate connecting to [Unleash](https://www.getunleash.io/), provisioning context-constrained `flexibleRollout` activation strategies (`diverge.environment IN [<envName>]`) and strategy-level variants.
 
 ---
 
@@ -40,6 +41,23 @@ stringData:
   clientToken: "your-flipt-client-token"
 ```
 
+3. (Optional for Unleash) A running Unleash instance and a Kubernetes Secret containing `unleash-credentials`:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: unleash-credentials
+  namespace: diverge-system
+type: Opaque
+stringData:
+  url: "https://unleash.example.com"
+  adminToken: "*:*.your-unleash-admin-token"
+  clientToken: "default:development.your-unleash-client-token"
+  project: "default"
+  environment: "development"
+```
+
 ---
 
 ## How It Works
@@ -60,6 +78,14 @@ When `features.provider: flipt` is specified:
 2. Diverge creates an isolated namespace `diverge-<envName>` and writes the configured flag overrides.
 3. Workloads receive `FLIPT_URL`, `FLIPT_NAMESPACE`, and `FLIPT_AUTH_TOKEN`.
 4. When the preview environment expires or is destroyed, Diverge idempotently deletes the Flipt namespace.
+
+### 3. Remote Unleash Provider
+
+When `features.provider: unleash` is specified:
+1. Diverge contacts the Unleash Admin API at the secret's `url` using `adminToken`.
+2. Diverge ensures each overridden feature toggle exists and attaches a preview-scoped `flexibleRollout` strategy (`diverge-[<namespace>-]<envName>-<hash8>`) constrained to `diverge.environment IN [<envName>]`.
+3. Workloads receive `UNLEASH_URL`, `UNLEASH_API_TOKEN` (from `clientToken`), `UNLEASH_PROJECT`, `UNLEASH_ENVIRONMENT`, `UNLEASH_STRATEGY_TITLE`, and `OPENFEATURE_TARGET_KEY`.
+4. When the preview environment expires or is destroyed, Diverge removes the preview activation strategies and exclusion constraints cleanly.
 
 ---
 

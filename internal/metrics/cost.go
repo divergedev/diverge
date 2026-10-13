@@ -5,12 +5,16 @@ import (
 
 	"github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/prometheus/client_golang/prometheus"
+	"k8s.io/apimachinery/pkg/api/resource"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 const (
 	AnnotationHibernateAfter = "divergedev.com/hibernate-after"
 	AnnotationLastTrafficAt  = "divergedev.com/last-traffic-at"
+	AnnotationHibernated     = "divergedev.com/hibernated"
+	DefaultServiceCPUCores   = 0.25
+	DefaultServiceMemoryGiB  = 0.5
 	defaultIdleThreshold     = 30 * time.Minute
 	defaultPreviewTTL        = 24 * time.Hour
 )
@@ -89,14 +93,33 @@ func EstimateEnvironmentCost(env *v1alpha1.Environment, now time.Time, rate Cost
 		serviceCount = 1
 	}
 
-	// Default per-service footprint: 0.25 vCPU and 0.5 GiB RAM
-	perServiceHourly := 0.25*rate.VCPUHourUSD + 0.5*rate.MemoryGiBHourUSD
+	cpuCores := DefaultServiceCPUCores
+	memoryGiB := DefaultServiceMemoryGiB
+	if env.Spec.ServiceConfig != nil && env.Spec.ServiceConfig.Resources != nil {
+		if env.Spec.ServiceConfig.Resources.CPURequest != "" {
+			if q, err := resource.ParseQuantity(env.Spec.ServiceConfig.Resources.CPURequest); err == nil {
+				if cores := q.AsApproximateFloat64(); cores > 0 {
+					cpuCores = cores
+				}
+			}
+		}
+		if env.Spec.ServiceConfig.Resources.MemoryRequest != "" {
+			if q, err := resource.ParseQuantity(env.Spec.ServiceConfig.Resources.MemoryRequest); err == nil {
+				if gib := float64(q.Value()) / (1024 * 1024 * 1024); gib > 0 {
+					memoryGiB = gib
+				}
+			}
+		}
+	}
+
+	// Default per-service footprint: 0.25 vCPU and 0.5 GiB RAM (overridden by ServiceConfig.Resources)
+	perServiceHourly := cpuCores*rate.VCPUHourUSD + memoryGiB*rate.MemoryGiBHourUSD
 	hourlyUSD := float64(serviceCount) * perServiceHourly
 
 	if env.Spec.Database.Mode != "" && env.Spec.Database.Mode != "none" {
 		hourlyUSD += rate.DatabaseSchemaHrUSD
 	}
-	if hourlyUSD < 0 {
+	if hourlyUSD < 0 || env.Annotations[AnnotationHibernated] == "true" {
 		hourlyUSD = 0
 	}
 
@@ -163,6 +186,13 @@ func ShouldHibernateIdleEnvironment(env *v1alpha1.Environment, lastTrafficAt tim
 	}
 
 	refTime := lastTrafficAt
+	if refTime.IsZero() {
+		if raw, ok := env.Annotations[AnnotationLastTrafficAt]; ok && raw != "" {
+			if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
+				refTime = parsed
+			}
+		}
+	}
 	if refTime.IsZero() {
 		refTime = env.CreationTimestamp.Time
 	}

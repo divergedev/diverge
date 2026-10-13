@@ -100,12 +100,21 @@ func (d *Diagnoser) Diagnose(ctx context.Context, namespace, envName string) (*R
 		listOpts := []client.ListOption{client.InNamespace(namespace)}
 		if envName != "" {
 			listOpts = append(listOpts, client.MatchingLabels{
-				"diverge.io/environment": envName,
+				"divergedev.com/environment": envName,
 			})
 		}
 
 		if err := d.client.List(ctx, &podList, listOpts...); err != nil {
 			return nil, fmt.Errorf("failed to list pods in namespace %s: %w", namespace, err)
+		}
+		if envName != "" && len(podList.Items) == 0 {
+			legacyOpts := []client.ListOption{
+				client.InNamespace(namespace),
+				client.MatchingLabels{"diverge.io/environment": envName},
+			}
+			if err := d.client.List(ctx, &podList, legacyOpts...); err != nil {
+				return nil, fmt.Errorf("failed to list pods in namespace %s: %w", namespace, err)
+			}
 		}
 		for i := range podList.Items {
 			d.checkPod(&podList.Items[i], report)

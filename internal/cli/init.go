@@ -332,7 +332,7 @@ func runInitConfig(outputPath string, force bool) error {
 	sb.WriteString("  routing:\n")
 	sb.WriteString("    mode: header\n")
 	sb.WriteString("    baseline_namespace: default\n")
-	sb.WriteString("    header_key: X-Preview-Env\n")
+	sb.WriteString("    header_key: x-diverge-env\n")
 	sb.WriteString("  lifecycle:\n")
 	sb.WriteString("    ttl: 72h\n")
 	sb.WriteString("    cleanup_on_merge: true\n")

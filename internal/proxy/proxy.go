@@ -41,6 +41,8 @@ type Config struct {
 	Port int
 	// HideEnvironmentList hides active environments on 404
 	HideEnvironmentList bool
+	// DisableToolbar disables automatic injection of the floating DevToolbar into HTML responses
+	DisableToolbar bool
 }
 
 // Server is the Magic URL reverse proxy server
@@ -66,11 +68,11 @@ type ReadinessChecker interface {
 // EnvironmentInfo holds metadata about a resolved preview environment,
 // including its deployment phase and upstream target URL.
 type EnvironmentInfo struct {
-	Name      string
-	Phase     string
-	URL       string
-	BaseURL   string
-	HeaderKey string
+	Name      string `json:"name"`
+	Phase     string `json:"phase"`
+	URL       string `json:"url,omitempty"`
+	BaseURL   string `json:"baseURL,omitempty"`
+	HeaderKey string `json:"headerKey,omitempty"`
 }
 
 // NewServer creates a new reverse proxy Server. It parses the BaseURL from cfg,
@@ -99,6 +101,9 @@ func NewServer(cfg Config, lister EnvironmentLister) (*Server, error) {
 			}
 		},
 	}
+	if !s.config.DisableToolbar {
+		s.proxy.ModifyResponse = s.injectToolbarModifyResponse
+	}
 	if r, ok := lister.(ReadinessChecker); ok {
 		s.readiness = r
 	}
@@ -125,6 +130,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 		return
 	}
+	if r.URL.Path == "/-/toolbar.js" {
+		s.serveToolbarScript(w, r)
+		return
+	}
+	if r.URL.Path == "/-/api/context" {
+		s.serveToolbarContext(w, r)
+		return
+	}
 
 	host := r.Host
 	if strings.Contains(host, ":") {
@@ -140,7 +153,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if qEnv == "" && r.URL.Path == "/-/select" {
 		qEnv = r.URL.Query().Get("env")
 	}
-	if qEnv == "clear" || (r.URL.Path == "/-/select" && r.URL.Query().Get("clear") != "") {
+	if qEnv == "clear" || qEnv == "reset" || (r.URL.Path == "/-/select" && (r.URL.Query().Get("clear") != "" || r.URL.Query().Get("reset") != "")) {
 		if host != s.config.PreviewDomain {
 			http.Redirect(w, r, apexSelectionURL(r, s.config.PreviewDomain), http.StatusFound)
 			return
@@ -298,6 +311,7 @@ func cleanRedirectTarget(r *http.Request) string {
 	if r.URL.Path == "/-/select" {
 		q.Del("env")
 		q.Del("clear")
+		q.Del("reset")
 	}
 	encoded := q.Encode()
 	if encoded != "" {

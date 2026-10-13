@@ -12,7 +12,68 @@ import (
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 )
 
+var openBrowser = defaultOpenBrowser
+
+func defaultOpenBrowser(targetURL string) error {
+	var execCmd string
+	var execArgs []string
+
+	switch runtime.GOOS {
+	case "linux":
+		execCmd = "xdg-open"
+		execArgs = []string{targetURL}
+	case "windows":
+		execCmd = "rundll32"
+		execArgs = []string{"url.dll,FileProtocolHandler", targetURL}
+	case "darwin":
+		execCmd = "open"
+		execArgs = []string{targetURL}
+	default:
+		return fmt.Errorf("unsupported platform")
+	}
+
+	return exec.Command(execCmd, execArgs...).Start()
+}
+
+func buildPreviewURL(env *divergeiov1alpha1.Environment, magic ...bool) (string, error) {
+	if env == nil || env.Status.URL == "" {
+		return "", fmt.Errorf("environment URL is not set")
+	}
+
+	parsed, err := urlPkg.Parse(env.Status.URL)
+	if err != nil {
+		return "", fmt.Errorf("invalid environment URL: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("refusing to open URL with scheme %q (only http/https allowed)", parsed.Scheme)
+	}
+	if parsed.Hostname() == "" {
+		return "", fmt.Errorf("environment URL %q has no hostname", env.Status.URL)
+	}
+
+	useMagic := len(magic) > 0 && magic[0]
+	if useMagic {
+		headerVal := env.Spec.Routing.HeaderValue
+		if headerVal == "" {
+			headerVal = env.Name
+		}
+		q := parsed.Query()
+		q.Set("_diverge_env", headerVal)
+		parsed.RawQuery = q.Encode()
+		return parsed.String(), nil
+	}
+
+	if env.Spec.Routing.Mode == "header" {
+		parsed.Host = fmt.Sprintf("%s.preview.%s", env.Name, parsed.Host)
+		return parsed.String(), nil
+	}
+
+	return env.Status.URL, nil
+}
+
 func newOpenCmd(app *App) *cobra.Command {
+	var magic bool
+
 	cmd := &cobra.Command{
 		Use:               "open <name>",
 		Short:             "Open the environment URL in the browser",
@@ -30,59 +91,31 @@ func newOpenCmd(app *App) *cobra.Command {
 				return fmt.Errorf("failed to get environment %s: %w", name, err)
 			}
 
-			url := env.Status.URL
-			if url == "" {
-				return fmt.Errorf("environment URL is not set")
-			}
-
-			// Validate URL scheme to prevent opening dangerous URIs
-			parsed, err := urlPkg.Parse(url)
+			targetURL, err := buildPreviewURL(&env, magic)
 			if err != nil {
-				return fmt.Errorf("invalid environment URL: %w", err)
-			}
-			if parsed.Scheme != "http" && parsed.Scheme != "https" {
-				return fmt.Errorf("refusing to open URL with scheme %q (only http/https allowed)", parsed.Scheme)
-			}
-			if parsed.Hostname() == "" {
-				return fmt.Errorf("environment URL %q has no hostname", url)
+				return err
 			}
 
 			if env.Spec.Routing.Mode == "header" {
-				// Construct magic URL for opening
-				u, err := urlPkg.Parse(env.Status.URL)
-				if err != nil || u.Host == "" {
-					fmt.Printf("Note: Environment uses header routing. You can curl it like this:\n")
-					fmt.Printf("curl -H \"%s: %s\" %s\n", env.Spec.Routing.HeaderKey, env.Spec.Routing.HeaderValue, env.Status.URL)
-					return nil
+				headerKey := env.Spec.Routing.HeaderKey
+				if headerKey == "" {
+					headerKey = "x-diverge-env"
 				}
-				u.Host = fmt.Sprintf("%s.preview.%s", env.Name, u.Host)
-				url = u.String()
-				fmt.Printf("Note: Environment uses header routing. You can also curl it like this:\n")
-				fmt.Printf("curl -H \"%s: %s\" %s\n\n", env.Spec.Routing.HeaderKey, env.Spec.Routing.HeaderValue, env.Status.URL)
+				headerVal := env.Spec.Routing.HeaderValue
+				if headerVal == "" {
+					headerVal = env.Name
+				}
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Note: Environment uses header routing. You can also curl it like this:\n")
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "diverge curl %s\n", env.Name)
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "curl -H \"%s: %s\" %s\n\n", headerKey, headerVal, env.Status.URL)
 			}
 
-			fmt.Printf("Opening %s\n", url)
-
-			var execCmd string
-			var execArgs []string
-
-			switch runtime.GOOS {
-			case "linux":
-				execCmd = "xdg-open"
-				execArgs = []string{url}
-			case "windows":
-				execCmd = "rundll32"
-				execArgs = []string{"url.dll,FileProtocolHandler", url}
-			case "darwin":
-				execCmd = "open"
-				execArgs = []string{url}
-			default:
-				return fmt.Errorf("unsupported platform")
-			}
-
-			return exec.Command(execCmd, execArgs...).Start()
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Opening %s\n", targetURL)
+			return openBrowser(targetURL)
 		},
 	}
+
+	cmd.Flags().BoolVarP(&magic, "magic", "m", false, "Open the cookie-setting magic URL (?_diverge_env=<env>)")
 
 	return cmd
 }

@@ -187,3 +187,87 @@ func TestPreviewGroupService_ValidationAndWatchUnimplemented(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
 }
+
+func TestPreviewGroupService_CrossNamespaceServiceAuthz(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1alpha1.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	k8s := fakek8s.NewSimpleClientset()
+	k8s.PrependReactor("create", "subjectaccessreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		sar := action.(k8stesting.CreateAction).GetObject().(*authorizationv1.SubjectAccessReview)
+		attrs := sar.Spec.ResourceAttributes
+		// Allow actions in "team-a", deny in "restricted-ns"
+		if attrs != nil && attrs.Namespace == "restricted-ns" {
+			sar.Status.Allowed = false
+			return true, sar, nil
+		}
+		sar.Status.Allowed = true
+		return true, sar, nil
+	})
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	audit := NewAuditLogger(logger)
+	svc := NewPreviewGroupService(c, k8s, nil, NewStreamLimiter(250, 20), logger, audit)
+	ctx := auth.ContextWithUserInfo(context.Background(), &auth.UserInfo{Username: "alice"})
+
+	// Creating a PreviewGroup in "team-a" referencing a service in "restricted-ns" is rejected with CodePermissionDenied
+	_, err := svc.CreatePreviewGroup(ctx, connect.NewRequest(&pb.CreatePreviewGroupRequest{
+		Namespace: "team-a",
+		PreviewGroup: &pb.PreviewGroup{
+			Name: "pg-cross-ns",
+			Spec: &pb.PreviewGroupSpec{
+				Services: []*pb.PreviewGroupServiceSpec{
+					{
+						Name:      "billing",
+						Namespace: "restricted-ns",
+					},
+				},
+			},
+		},
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "permission denied for service namespace restricted-ns")
+	assert.Contains(t, buf.String(), "authz.denied")
+
+	// Creating a PreviewGroup with services in the same namespace ("team-a") succeeds
+	createRes, err := svc.CreatePreviewGroup(ctx, connect.NewRequest(&pb.CreatePreviewGroupRequest{
+		Namespace: "team-a",
+		PreviewGroup: &pb.PreviewGroup{
+			Name: "pg-same-ns",
+			Spec: &pb.PreviewGroupSpec{
+				Services: []*pb.PreviewGroupServiceSpec{
+					{
+						Name:      "frontend",
+						Namespace: "team-a",
+					},
+				},
+			},
+		},
+	}))
+	require.NoError(t, err)
+	rv := createRes.Msg.PreviewGroup.ResourceVersion
+
+	// Updating that PreviewGroup to reference "restricted-ns" is also rejected with CodePermissionDenied
+	_, err = svc.UpdatePreviewGroup(ctx, connect.NewRequest(&pb.UpdatePreviewGroupRequest{
+		PreviewGroup: &pb.PreviewGroup{
+			Name:            "pg-same-ns",
+			Namespace:       "team-a",
+			ResourceVersion: rv,
+			Spec: &pb.PreviewGroupSpec{
+				Services: []*pb.PreviewGroupServiceSpec{
+					{
+						Name:      "billing",
+						Namespace: "restricted-ns",
+					},
+				},
+			},
+		},
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "permission denied for service namespace restricted-ns")
+}

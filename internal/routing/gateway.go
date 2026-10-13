@@ -325,7 +325,7 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 	}
 
 	oppositeKind := "GRPCRoute"
-	oppositeAPIVersion := "gateway.networking.k8s.io/v1alpha2"
+	oppositeAPIVersion := "gateway.networking.k8s.io/v1"
 	if kind == "GRPCRoute" {
 		oppositeKind = "HTTPRoute"
 		oppositeAPIVersion = "gateway.networking.k8s.io/v1"
@@ -348,7 +348,7 @@ func (r *GatewayRouter) reconcileHTTPRoute(ctx context.Context, env *v1alpha1.En
 
 // reconcileGRPCRoute creates or updates a single GRPCRoute for gRPC services.
 func (r *GatewayRouter) reconcileGRPCRoute(ctx context.Context, env *v1alpha1.Environment, routeName, svc, ns, parentRefName, headerKey, headerValue string, backendPort int64) error {
-	return r.reconcileRoute(ctx, env, "GRPCRoute", "gateway.networking.k8s.io/v1alpha2", routeName, svc, ns, parentRefName, headerKey, headerValue, backendPort)
+	return r.reconcileRoute(ctx, env, "GRPCRoute", "gateway.networking.k8s.io/v1", routeName, svc, ns, parentRefName, headerKey, headerValue, backendPort)
 }
 
 // isServiceName heuristically determines if a parentRef name refers to a
@@ -395,7 +395,7 @@ func (r *GatewayRouter) Teardown(ctx context.Context, env *v1alpha1.Environment)
 
 	// Delete GRPCRoutes
 	var grpcRouteList unstructured.UnstructuredList
-	grpcRouteList.SetAPIVersion("gateway.networking.k8s.io/v1alpha2")
+	grpcRouteList.SetAPIVersion("gateway.networking.k8s.io/v1")
 	grpcRouteList.SetKind("GRPCRouteList")
 
 	if err := r.Client.List(ctx, &grpcRouteList,

@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/metrics"
 )
 
 func (r *EnvironmentReconciler) reconcileLifecycle(ctx context.Context, env *divergeiov1alpha1.Environment, statusBase *divergeiov1alpha1.Environment, oldPhase divergeiov1alpha1.EnvironmentPhase) (time.Duration, ctrl.Result, bool, error) {
@@ -43,6 +44,17 @@ func (r *EnvironmentReconciler) reconcileLifecycle(ctx context.Context, env *div
 		}
 		// C1: Requeue when TTL expires so the controller wakes up to delete
 		requeueAfter = time.Until(expiryTime)
+	}
+
+	if metrics.ShouldHibernateIdleEnvironment(env, time.Time{}, time.Now(), 0) && env.Annotations[metrics.AnnotationHibernated] != "true" {
+		if env.Annotations == nil {
+			env.Annotations = make(map[string]string)
+		}
+		env.Annotations[metrics.AnnotationHibernated] = "true"
+		metrics.EstimateEnvironmentCost(env, time.Now(), metrics.DefaultCostRateCard())
+		if r.Recorder != nil {
+			r.Recorder.Event(env, "Normal", "Hibernated", "Environment idle threshold exceeded; marked for scale-to-zero hibernation")
+		}
 	}
 
 	if r.Notifier != nil && oldPhase != newPhase {

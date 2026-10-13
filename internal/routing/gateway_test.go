@@ -670,7 +670,7 @@ func TestGatewayRouter_Reconcile_StickyCookie(t *testing.T) {
 			apiVersion := "gateway.networking.k8s.io/v1"
 			if tt.protocol == "grpc" {
 				kind = "GRPCRoute"
-				apiVersion = "gateway.networking.k8s.io/v1alpha2"
+				apiVersion = "gateway.networking.k8s.io/v1"
 			}
 
 			u := &unstructured.Unstructured{}

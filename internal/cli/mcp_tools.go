@@ -380,3 +380,41 @@ func registerDoctor(registry mcpruntime.Registry, client divergev1alpha1connect.
 		}, nil
 	})
 }
+
+func customTools() []mcpruntime.ToolDefinition {
+	return []mcpruntime.ToolDefinition{
+		{
+			Name:        "diverge_wait_for_ready",
+			Description: "Block until a preview environment reaches Ready or Failed phase. Use this after creating an environment instead of polling status repeatedly. Returns the final environment state. Maximum wait: 5 minutes.",
+			InputSchema: waitForReadySchema,
+		},
+		{
+			Name:        "diverge_fetch_errors",
+			Description: "Fetch the last error-level log lines from a preview environment. Use this to debug deployment failures instead of streaming all logs. Returns only ERROR and FATAL level entries, truncated to protect context windows.",
+			InputSchema: fetchErrorsSchema,
+		},
+		{
+			Name:        "diverge_loadtest",
+			Description: "Run a targeted ephemeral load and benchmark test against a preview environment or endpoint. Measures latency percentiles (p50, p90, p95, p99) and error rates, with optional baseline comparison.",
+			InputSchema: loadtestSchema,
+		},
+		{
+			Name:        "diverge_doctor",
+			Description: "Diagnose an environment or workload failure. Evaluates phase, status conditions, and provides root-cause recommendations.",
+			InputSchema: doctorSchema,
+		},
+		{
+			Name:        "diverge_visual_test",
+			Description: "Run pixel-by-pixel visual regression comparison between baseline and preview screenshots (single file pair or directory batch). Highlights visual drift and optionally writes diff PNG artifacts.",
+			InputSchema: visualTestSchema,
+		},
+	}
+}
+
+func registerCustomTools(registry mcpruntime.Registry, envClient divergev1alpha1connect.EnvironmentServiceClient, diagnoser ...*doctor.Diagnoser) {
+	registerWaitForReady(registry, envClient)
+	registerFetchErrors(registry, envClient)
+	registerLoadtest(registry)
+	registerDoctor(registry, envClient, diagnoser...)
+	registerVisualTest(registry)
+}
