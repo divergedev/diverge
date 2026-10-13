@@ -135,6 +135,7 @@ func (p *PodSandboxProvider) Provision(ctx context.Context, task *v1alpha1.Agent
 					},
 					SecurityContext: &corev1.SecurityContext{
 						AllowPrivilegeEscalation: ptr(false),
+						ReadOnlyRootFilesystem:   ptr(true),
 						Capabilities: &corev1.Capabilities{
 							Drop: []corev1.Capability{"ALL"},
 						},
@@ -143,6 +144,10 @@ func (p *PodSandboxProvider) Provision(ctx context.Context, task *v1alpha1.Agent
 						{
 							Name:      "workspace",
 							MountPath: "/workspace",
+						},
+						{
+							Name:      "tmp",
+							MountPath: "/tmp",
 						},
 						{
 							Name:      "token",
@@ -158,6 +163,14 @@ func (p *PodSandboxProvider) Provision(ctx context.Context, task *v1alpha1.Agent
 					VolumeSource: corev1.VolumeSource{
 						EmptyDir: &corev1.EmptyDirVolumeSource{
 							SizeLimit: ptr(resource.MustParse("10Gi")),
+						},
+					},
+				},
+				{
+					Name: "tmp",
+					VolumeSource: corev1.VolumeSource{
+						EmptyDir: &corev1.EmptyDirVolumeSource{
+							SizeLimit: ptr(resource.MustParse("1Gi")),
 						},
 					},
 				},
@@ -236,14 +249,10 @@ func (p *PodSandboxProvider) Status(ctx context.Context, task *v1alpha1.AgentTas
 
 	isReady := false
 	if pod.Status.Phase == corev1.PodRunning {
-		if len(pod.Status.Conditions) == 0 {
-			isReady = true
-		} else {
-			for _, c := range pod.Status.Conditions {
-				if c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue {
-					isReady = true
-					break
-				}
+		for _, c := range pod.Status.Conditions {
+			if c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue {
+				isReady = true
+				break
 			}
 		}
 	}

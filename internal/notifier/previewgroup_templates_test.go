@@ -115,11 +115,13 @@ func TestPreviewGroupTemplates_AllPhases(t *testing.T) {
 		data := buildPreviewGroupTemplateData(pg, "worker degraded")
 		assert.Equal(t, 2, data.RunningCount)
 
-		out, err := renderTemplate(pgReadyTemplate, data)
+		out, err := renderTemplate(pgFailedTemplate, data)
 		require.NoError(t, err)
-		assert.Contains(t, out, "3 (2 running)")
-		assert.Contains(t, out, "| ✅ api | Running | preview-pr-42 |")
-		assert.Contains(t, out, "| ❌ worker | Failed | staging |")
+		assert.Contains(t, out, "## 🔴 Diverge Preview — Failed")
+		assert.Contains(t, out, "| **Status** | ❌ Failed |")
+		assert.Contains(t, out, "| **Reason** | worker degraded |")
+		assert.Contains(t, out, "| ✅ api | Running |  |")
+		assert.Contains(t, out, "| ❌ worker | Failed | HeartbeatExpired |")
 	})
 
 	t.Run("Failed phase template", func(t *testing.T) {

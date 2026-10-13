@@ -260,6 +260,9 @@ func TestAgentSandboxProvider_FallbackToPodOnNoMatchError(t *testing.T) {
 	require.NoError(t, fakeClient.Get(ctx, client.ObjectKey{Namespace: "default", Name: "sb-pod-fallback-task"}, pod))
 	pod.Status.Phase = corev1.PodRunning
 	pod.Status.PodIP = "10.0.0.42"
+	pod.Status.Conditions = []corev1.PodCondition{
+		{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+	}
 	require.NoError(t, fakeClient.Status().Update(ctx, pod))
 
 	status, err := p.Status(ctx, task)

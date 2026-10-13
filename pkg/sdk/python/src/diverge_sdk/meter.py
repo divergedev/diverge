@@ -128,7 +128,10 @@ def meter_llm_usage(
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw_body = resp.read().decode("utf-8", errors="replace")
-            parsed = json.loads(raw_body) if raw_body else {}
+            try:
+                parsed = json.loads(raw_body) if raw_body else {}
+            except ValueError:
+                parsed = None
             meter_resp = _parse_meter_response(parsed)
             if meter_resp is None:
                 raise LLMMeterError(

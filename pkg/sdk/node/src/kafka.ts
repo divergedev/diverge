@@ -19,10 +19,32 @@ export function getOutboundHeaders(): Record<string, string> {
 export function injectKafkaHeaders<
   T extends Record<string, unknown> = Record<string, string>,
 >(headers?: T): T & Record<string, string> {
+  const outbound = getOutboundHeaders();
+  const outboundKeys = Object.keys(outbound);
+  if (outboundKeys.length === 0) {
+    return {
+      ...(headers ?? ({} as T)),
+    } as T & Record<string, string>;
+  }
+
+  const blockedKeys = new Set<string>([
+    DEFAULT_HEADER_KEY.toLowerCase(),
+    ...outboundKeys.map((k) => k.toLowerCase()),
+  ]);
+
+  const cleaned: Record<string, unknown> = {};
+  if (headers) {
+    for (const [k, v] of Object.entries(headers)) {
+      if (!blockedKeys.has(k.toLowerCase())) {
+        cleaned[k] = v;
+      }
+    }
+  }
+
   return {
-    ...(headers ?? ({} as T)),
-    ...getOutboundHeaders(),
-  };
+    ...cleaned,
+    ...outbound,
+  } as T & Record<string, string>;
 }
 
 export function extractKafkaHeaderValue(val: unknown): string | undefined {

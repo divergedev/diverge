@@ -9,6 +9,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -60,6 +61,7 @@ func (g *StaticFeatureGate) IsEnabled(_ context.Context, _ string) bool {
 // AgentTaskReconciler reconciles an AgentTask object.
 type AgentTaskReconciler struct {
 	client.Client
+	Clientset       kubernetes.Interface
 	Scheme          *runtime.Scheme
 	SandboxRegistry *registry.Registry[pkgsandbox.SandboxProvider]
 	TokenMinter     auth.Minter
@@ -571,13 +573,19 @@ func (r *AgentTaskReconciler) resolveSandboxProvider(task *v1alpha1.AgentTask) (
 	}
 
 	return reg.Create(providerName, registry.Deps{
-		Client: r.Client,
-		Scheme: r.Scheme,
+		Client:    r.Client,
+		Clientset: r.Clientset,
+		Scheme:    r.Scheme,
 	})
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *AgentTaskReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if r.Clientset == nil && mgr.GetConfig() != nil {
+		if cs, err := kubernetes.NewForConfig(mgr.GetConfig()); err == nil {
+			r.Clientset = cs
+		}
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.AgentTask{}).
 		Complete(r)

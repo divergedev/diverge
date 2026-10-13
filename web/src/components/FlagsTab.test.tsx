@@ -129,10 +129,24 @@ describe('FlagsTab', () => {
     })
 
     const updateSpy = vi.spyOn(environmentClient, 'updateEnvironment')
+    let serverEnv = env
     server.use(
-      http.post('*/diverge.v1alpha1.EnvironmentService/UpdateEnvironment', () =>
-        HttpResponse.json({ environment: env.toJson() }),
-      ),
+      http.post('*/diverge.v1alpha1.EnvironmentService/UpdateEnvironment', async ({ request }) => {
+        const body = (await request.json()) as {
+          environment?: { spec?: { features?: { overrides?: Record<string, string> } } }
+        }
+        serverEnv = Environment.fromJson({
+          name: 'pr-42',
+          namespace: 'default',
+          spec: {
+            features: {
+              provider: 'configmap',
+              overrides: body.environment?.spec?.features?.overrides ?? {},
+            },
+          },
+        })
+        return HttpResponse.json({ environment: serverEnv.toJson() })
+      }),
     )
 
     render(<FlagsTab environment={env} />)
@@ -165,7 +179,7 @@ describe('FlagsTab', () => {
           spec: expect.objectContaining({
             features: expect.objectContaining({
               overrides: {
-                new_checkout: 'true',
+                new_checkout: 'false',
               },
             }),
           }),

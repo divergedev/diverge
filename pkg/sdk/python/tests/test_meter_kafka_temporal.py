@@ -25,6 +25,7 @@ from diverge_sdk.context import _current_env
 class _MockMeterHandler(BaseHTTPRequestHandler):
     status_code: int = 200
     response_body: Dict[str, Any] = {}
+    raw_response_bytes: bytes = b""
     recorded_requests: List[Dict[str, Any]] = []
 
     def do_POST(self) -> None:
@@ -37,7 +38,10 @@ class _MockMeterHandler(BaseHTTPRequestHandler):
                 "body": json.loads(raw),
             }
         )
-        payload = json.dumps(self.__class__.response_body).encode("utf-8")
+        if self.__class__.raw_response_bytes:
+            payload = self.__class__.raw_response_bytes
+        else:
+            payload = json.dumps(self.__class__.response_body).encode("utf-8")
         self.send_response(self.__class__.status_code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
@@ -52,6 +56,7 @@ class _MockMeterHandler(BaseHTTPRequestHandler):
 def meter_server():
     _MockMeterHandler.recorded_requests = []
     _MockMeterHandler.status_code = 200
+    _MockMeterHandler.raw_response_bytes = b""
     _MockMeterHandler.response_body = {
         "allowed": True,
         "suspended": False,
@@ -151,6 +156,26 @@ def test_meter_llm_usage_403_model_disallowed(meter_server):
     assert err.is_model_disallowed is True
     assert err.is_budget_exceeded is False
     assert "not allowed" in str(err)
+
+
+def test_meter_llm_usage_200_malformed_json(meter_server):
+    base_url, handler = meter_server
+    handler.status_code = 200
+    handler.raw_response_bytes = b"not-valid-json"
+
+    with pytest.raises(LLMMeterError) as exc_info:
+        meter_llm_usage(
+            "claude-sonnet-4-6",
+            100,
+            0.01,
+            server_url=base_url,
+            token="test",
+        )
+
+    err = exc_info.value
+    assert err.status_code == 200
+    assert str(err) == "Invalid meter response payload"
+    assert err.response is None
 
 
 def test_resolve_sandbox_token_from_file(tmp_path, monkeypatch):

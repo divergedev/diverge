@@ -103,7 +103,10 @@ export async function meterLLMUsage(
 
   let data: LLMMeterResponse | undefined;
   try {
-    data = (await res.json()) as LLMMeterResponse;
+    const parsed: unknown = await res.json();
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      data = parsed as LLMMeterResponse;
+    }
   } catch {
     data = undefined;
   }
@@ -116,5 +119,9 @@ export async function meterLLMUsage(
     );
   }
 
-  return data as LLMMeterResponse;
+  if (!data || typeof data !== 'object') {
+    throw new LLMMeterError('Invalid meter response payload', res.status);
+  }
+
+  return data;
 }

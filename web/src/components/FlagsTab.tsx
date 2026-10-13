@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { PartialMessage } from '@bufbuild/protobuf'
 import type { Environment } from '@/api/gen/diverge/v1alpha1/environment_pb'
 import { useUpdateEnvironment } from '@/api/queries'
@@ -26,6 +26,7 @@ interface FlagsTabProps {
 }
 
 export function FlagsTab({ environment }: FlagsTabProps) {
+  const [currentEnv, setCurrentEnv] = useState<Environment>(environment)
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
   const [newKey, setNewKey] = useState('')
   const [newValue, setNewValue] = useState('')
@@ -33,12 +34,16 @@ export function FlagsTab({ environment }: FlagsTabProps) {
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const updateEnv = useUpdateEnvironment()
 
-  const specFeatures = environment.spec?.features
+  useEffect(() => {
+    setCurrentEnv(environment)
+  }, [environment])
+
+  const specFeatures = currentEnv.spec?.features
   const provider = specFeatures?.provider || 'configmap'
   const rawOverrides = (specFeatures?.overrides ?? {}) as Record<string, string>
   const overrideEntries = Object.entries(rawOverrides)
 
-  const status = environment.status
+  const status = currentEnv.status
   const conditions = status?.conditions ?? []
   const featureCondition = conditions.find((c) => c.type === 'FeaturesReady')
   const featureEnvVars = (status?.featureEnvVars ?? {}) as Record<string, string>
@@ -54,13 +59,13 @@ export function FlagsTab({ environment }: FlagsTabProps) {
     setMutationError(null)
     setSuccessMessage(null)
     const updatedEnv: PartialMessage<Environment> = {
-      name: environment.name,
-      namespace: environment.namespace,
-      resourceVersion: environment.resourceVersion,
-      labels: environment.labels,
-      annotations: environment.annotations,
+      name: currentEnv.name,
+      namespace: currentEnv.namespace,
+      resourceVersion: currentEnv.resourceVersion,
+      labels: currentEnv.labels,
+      annotations: currentEnv.annotations,
       spec: {
-        ...environment.spec,
+        ...currentEnv.spec,
         features: {
           provider: specFeatures?.provider ?? '',
           connectionRef: specFeatures?.connectionRef ?? '',
@@ -69,10 +74,13 @@ export function FlagsTab({ environment }: FlagsTabProps) {
       },
     }
     try {
-      await updateEnv.mutateAsync({
+      const resp = await updateEnv.mutateAsync({
         environment: updatedEnv,
         updateMask: { paths: ['spec.features.overrides'] },
       })
+      if (resp.environment) {
+        setCurrentEnv(resp.environment)
+      }
       setSuccessMessage(successMsg)
       return true
     } catch (err) {

@@ -137,27 +137,35 @@ func TestPodSandboxProvider_ProvisionAndSpec(t *testing.T) {
 	require.NotNil(t, container.SecurityContext)
 	require.NotNil(t, container.SecurityContext.AllowPrivilegeEscalation)
 	assert.False(t, *container.SecurityContext.AllowPrivilegeEscalation)
+	require.NotNil(t, container.SecurityContext.ReadOnlyRootFilesystem)
+	assert.True(t, *container.SecurityContext.ReadOnlyRootFilesystem)
 	require.NotNil(t, container.SecurityContext.Capabilities)
 	assert.Equal(t, []corev1.Capability{"ALL"}, container.SecurityContext.Capabilities.Drop)
 
 	// VolumeMounts & Volumes
-	require.Len(t, container.VolumeMounts, 2)
+	require.Len(t, container.VolumeMounts, 3)
 	assert.Equal(t, corev1.VolumeMount{Name: "workspace", MountPath: "/workspace"}, container.VolumeMounts[0])
-	assert.Equal(t, corev1.VolumeMount{Name: "token", MountPath: "/etc/diverge/token", ReadOnly: true}, container.VolumeMounts[1])
+	assert.Equal(t, corev1.VolumeMount{Name: "tmp", MountPath: "/tmp"}, container.VolumeMounts[1])
+	assert.Equal(t, corev1.VolumeMount{Name: "token", MountPath: "/etc/diverge/token", ReadOnly: true}, container.VolumeMounts[2])
 
-	require.Len(t, pod.Spec.Volumes, 2)
+	require.Len(t, pod.Spec.Volumes, 3)
 	assert.Equal(t, "workspace", pod.Spec.Volumes[0].Name)
 	require.NotNil(t, pod.Spec.Volumes[0].EmptyDir)
 	require.NotNil(t, pod.Spec.Volumes[0].EmptyDir.SizeLimit)
 	assert.Equal(t, resource.MustParse("10Gi"), *pod.Spec.Volumes[0].EmptyDir.SizeLimit)
 
-	assert.Equal(t, "token", pod.Spec.Volumes[1].Name)
-	require.NotNil(t, pod.Spec.Volumes[1].Secret)
-	assert.Equal(t, pkgauth.SecretName("fix-checkout"), pod.Spec.Volumes[1].Secret.SecretName)
-	require.NotNil(t, pod.Spec.Volumes[1].Secret.DefaultMode)
-	assert.Equal(t, int32(0400), *pod.Spec.Volumes[1].Secret.DefaultMode)
-	require.NotNil(t, pod.Spec.Volumes[1].Secret.Optional)
-	assert.True(t, *pod.Spec.Volumes[1].Secret.Optional)
+	assert.Equal(t, "tmp", pod.Spec.Volumes[1].Name)
+	require.NotNil(t, pod.Spec.Volumes[1].EmptyDir)
+	require.NotNil(t, pod.Spec.Volumes[1].EmptyDir.SizeLimit)
+	assert.Equal(t, resource.MustParse("1Gi"), *pod.Spec.Volumes[1].EmptyDir.SizeLimit)
+
+	assert.Equal(t, "token", pod.Spec.Volumes[2].Name)
+	require.NotNil(t, pod.Spec.Volumes[2].Secret)
+	assert.Equal(t, pkgauth.SecretName("fix-checkout"), pod.Spec.Volumes[2].Secret.SecretName)
+	require.NotNil(t, pod.Spec.Volumes[2].Secret.DefaultMode)
+	assert.Equal(t, int32(0400), *pod.Spec.Volumes[2].Secret.DefaultMode)
+	require.NotNil(t, pod.Spec.Volumes[2].Secret.Optional)
+	assert.True(t, *pod.Spec.Volumes[2].Secret.Optional)
 }
 
 func TestPodSandboxProvider_StatusTransitionsAndTeardown(t *testing.T) {
@@ -194,7 +202,7 @@ func TestPodSandboxProvider_StatusTransitionsAndTeardown(t *testing.T) {
 	assert.Equal(t, "Pending", st.Phase)
 	assert.False(t, st.Ready)
 
-	// 3. Transition Pod to Running without conditions (fake client default) -> Ready=true
+	// 3. Transition Pod to Running without conditions -> Ready=false until PodReady=True
 	pod := &corev1.Pod{}
 	require.NoError(t, c.Get(ctx, client.ObjectKey{Namespace: "default", Name: "sb-pod-task-lifecycle"}, pod))
 	pod.Status.Phase = corev1.PodRunning
@@ -204,7 +212,7 @@ func TestPodSandboxProvider_StatusTransitionsAndTeardown(t *testing.T) {
 	st, err = p.Status(ctx, task)
 	require.NoError(t, err)
 	assert.Equal(t, "Running", st.Phase)
-	assert.True(t, st.Ready)
+	assert.False(t, st.Ready)
 	assert.Equal(t, "10.244.0.15", st.PodIP)
 
 	// 4. Running with PodReady=False -> Ready=false

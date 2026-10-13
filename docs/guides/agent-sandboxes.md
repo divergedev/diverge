@@ -29,7 +29,7 @@ flowchart LR
    - Resuming a paused task mints a fresh capability token with updated budget/expiry caveats.
 3. **Defense-in-Depth Network Isolation**:
    - The default `NetworkPolicy` (`<release>-sandbox-isolation`) denies all ingress to sandbox pods, restricts egress to DNS (53) and HTTPS/SSH (443/22), and blocks cloud metadata (`169.254.169.254/32`, `169.254.0.0/16`) and the in-cluster Kubernetes API (`10.96.0.1/32`).
-   - Pod specs set `AutomountServiceAccountToken: false`, `ReadOnlyRootFilesystem: true`, `RunAsNonRoot: true`, and drop `ALL` Linux capabilities.
+   - Pod specs set `AutomountServiceAccountToken: false`, `ReadOnlyRootFilesystem: true` (with writable `emptyDir` mounts at `/workspace` and `/tmp`), `RunAsNonRoot: true`, and drop `ALL` Linux capabilities.
 
 ---
 

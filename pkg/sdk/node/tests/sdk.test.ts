@@ -141,6 +141,24 @@ describe('LLM Usage Metering', () => {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  it('throws LLMMeterError when a 2xx response contains malformed or non-object JSON', async () => {
+    const mockFetch: typeof fetch = async () =>
+      new Response('not-json', { status: 200, headers: { 'Content-Type': 'application/json' } });
+
+    await expect(
+      meterLLMUsage(
+        { model: 'claude-sonnet-4-6', tokensUsed: 100, costUSD: 0.003 },
+        { token: 'tok-123', fetchImpl: mockFetch }
+      )
+    ).rejects.toSatisfy((err: unknown) => {
+      expect(err).toBeInstanceOf(LLMMeterError);
+      const meterErr = err as LLMMeterError;
+      expect(meterErr.statusCode).toBe(200);
+      expect(meterErr.message).toBe('Invalid meter response payload');
+      return true;
+    });
+  });
 });
 
 describe('Kafka Context Propagation & Topic Resolution', () => {
@@ -152,12 +170,14 @@ describe('Kafka Context Propagation & Topic Resolution', () => {
 
   it('injects and extracts Kafka headers across message boundaries', () => {
     const outboundHeaders = setEnvironment('pr-42', () =>
-      injectKafkaHeaders({ 'x-trace-id': 'abc' })
+      injectKafkaHeaders({ 'x-trace-id': 'abc', 'X-Diverge-Env': 'stale-env', Baggage: 'diverge-env=stale-env' })
     );
 
     expect(outboundHeaders['x-trace-id']).toBe('abc');
     expect(outboundHeaders['x-diverge-env']).toBe('pr-42');
+    expect(outboundHeaders['X-Diverge-Env']).toBeUndefined();
     expect(outboundHeaders.baggage).toBe('diverge-env=pr-42');
+    expect(outboundHeaders.Baggage).toBeUndefined();
 
     const observed = withKafkaMessage(
       {

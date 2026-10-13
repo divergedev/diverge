@@ -190,7 +190,17 @@ export default function PreviewGroupDetail() {
                       size="icon"
                       className="h-6 w-6"
                       aria-label="Copy routing header"
-                      onClick={() => navigator.clipboard.writeText(routingHeader)}
+                      onClick={async () => {
+                        if (!navigator.clipboard) {
+                          setMutationError('Failed to copy routing header')
+                          return
+                        }
+                        try {
+                          await navigator.clipboard.writeText(routingHeader)
+                        } catch {
+                          setMutationError('Failed to copy routing header')
+                        }
+                      }}
                     >
                       <Copy className="h-3.5 w-3.5" />
                     </Button>
