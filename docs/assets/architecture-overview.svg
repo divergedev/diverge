@@ -96,7 +96,7 @@
     <rect x="12" y="168" width="190" height="102" rx="8" fill="#1e293b" stroke="#475569" stroke-width="1" />
     <text x="24" y="188" class="font-sans card-title">CI/CD &amp; Slash Commands</text>
     <rect x="22" y="196" width="170" height="20" rx="4" fill="#0f172a" stroke="#334155" stroke-width="0.8" />
-    <text x="28" y="210" class="font-mono code-pill" fill="#e2e8f0">divergedev/diverge@v1</text>
+    <text x="28" y="210" class="font-mono code-pill" fill="#e2e8f0">divergedev/diverge@v0.15.0</text>
     <rect x="22" y="220" width="170" height="20" rx="4" fill="#0f172a" stroke="#334155" stroke-width="0.8" />
     <text x="28" y="234" class="font-mono code-pill" fill="#fcd34d">/diverge fix &lt;objective&gt;</text>
     <rect x="22" y="244" width="170" height="20" rx="4" fill="#0f172a" stroke="#334155" stroke-width="0.8" />

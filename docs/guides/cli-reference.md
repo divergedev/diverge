@@ -8,6 +8,7 @@ The `diverge` CLI manages your local development environments and interacts with
 |---------|-------------|
 | `diverge completion [bash\|zsh\|fish\|powershell]` | Generate shell completion scripts with live `Environment` and `AgentTask` tab-completion |
 | `diverge create` | Create an environment from the current branch |
+| `diverge curl <env> [path]` | Send an HTTP request routed to a preview environment (`--compare-baseline` for side-by-side diff) |
 | `diverge delete <name>` | Delete an environment |
 | `diverge dev` | Route cluster traffic for a service to your local machine |
 | `diverge dev sessions` | List active developer sessions across services |
@@ -22,7 +23,7 @@ The `diverge` CLI manages your local development environments and interacts with
 | `diverge list` | List all environments in the cluster |
 | `diverge logs [env-name]` | Stream logs from a preview environment |
 | `diverge mcp` | Run MCP server over stdio for AI agent integration |
-| `diverge open <name>` | Open the environment URL in browser |
+| `diverge open <name>` | Open the environment URL in browser (`--magic` for one-click `?_diverge_env=` cookie link) |
 | `diverge plugins` | Manage plugins |
 | `diverge preview create` | Create a preview group from current branch |
 | `diverge preview status <name>` | Show status of a preview group |
@@ -215,4 +216,34 @@ Run automated root-cause diagnostics across `Environment` CRs, database migratio
 **Flags:**
 - `--json` — Output machine-readable JSON diagnostic report (including `code` and `doc_url` fields per issue)
 
+### `diverge curl`
 
+Send an HTTP request routed to a preview `Environment` or `PreviewGroup` (automatically injecting `x-diverge-env` / custom routing headers and W3C `baggage: diverge.env=<env>`), with optional side-by-side baseline comparison.
+
+**Usage:** `diverge curl <env-name> [path] [flags]`
+
+**Flags:**
+- `-X, --method` — HTTP method (default: `GET`)
+- `-H, --header` — Additional HTTP headers (`Key: Value`, repeatable)
+- `-d, --data` — HTTP request body payload
+- `--base-url` — Override target base URL (defaults to `status.url`, `spec.routing.externalURL`, or `http://localhost:8080`)
+- `--compare-baseline` — Send an unrouted baseline request before the routed preview request and display status code, latency, and line-by-line body diffs
+- `--timeout` — Request timeout (default: `30s`)
+
+**Examples:**
+```bash
+# Send a preview-routed GET request to /api/checkout
+diverge curl pr-42 /api/checkout
+
+# Compare preview response and latency side-by-side against baseline
+diverge curl pr-42 /api/checkout --compare-baseline
+```
+
+### `diverge open`
+
+Open a preview `Environment` URL in your default browser.
+
+**Usage:** `diverge open <env-name> [flags]`
+
+**Flags:**
+- `-m, --magic` — Append `?_diverge_env=<headerValue>` so `diverge-proxy` sets the `diverge_env` sticky routing cookie on first visit
