@@ -29,8 +29,14 @@ func TestNewUnleashClient_DirectValidation(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "host cannot be empty")
 
-	// Prohibited SSRF hosts
-	for _, host := range []string{"http://metadata.google.internal", "http://metadata", "http://instance-data", "http://169.254.169.254"} {
+	// Prohibited SSRF hosts and metadata IPs (including Alibaba 100.100.100.200)
+	for _, host := range []string{
+		"http://metadata.google.internal",
+		"http://metadata",
+		"http://instance-data",
+		"http://169.254.169.254",
+		"http://100.100.100.200",
+	} {
 		_, err := NewUnleashClient(host, "", "", "test-admin", "", nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "prohibited")
@@ -49,12 +55,13 @@ func TestNewUnleashClient_DirectValidation(t *testing.T) {
 	assert.Equal(t, custom.Timeout, uc.httpClient.Timeout)
 	assert.NotNil(t, uc.httpClient.CheckRedirect)
 
-	// Default project and environment
+	// Default project, environment, and dial-time SSRF transport
 	ucDefault, err := NewUnleashClient("http://unleash:4242", "", "", "test-admin", "", nil)
 	require.NoError(t, err)
 	assert.Equal(t, "default", ucDefault.projectID)
 	assert.Equal(t, "development", ucDefault.environment)
 	assert.Equal(t, 10*time.Second, ucDefault.httpClient.Timeout)
+	assert.NotNil(t, ucDefault.httpClient.Transport)
 }
 
 // TestUnleashClient_CrossOriginRedirect verifies that Authorization headers are stripped on cross-origin redirects.
@@ -85,6 +92,7 @@ func TestUnleashClient_Methods(t *testing.T) {
 	var lastMethod, lastPath, lastAuth string
 	var lastBody map[string]interface{}
 	featureExists := false
+	envEnabled := false
 	strategiesExist := false
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -112,6 +120,11 @@ func TestUnleashClient_Methods(t *testing.T) {
 			featureExists = true
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"name":"dark_mode","type":"release"}`))
+
+		case r.URL.Path == "/api/admin/projects/default/features/dark_mode/environments/development/on" && r.Method == http.MethodPost:
+			envEnabled = true
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
 
 		case r.URL.Path == "/api/admin/projects/default/features/dark_mode/environments/development/strategies" && r.Method == http.MethodGet:
 			if !strategiesExist {
@@ -153,12 +166,13 @@ func TestUnleashClient_Methods(t *testing.T) {
 	uc, err := NewUnleashClient(ts.URL, "default", "development", "test-admin", "", nil)
 	require.NoError(t, err)
 
-	// 1. EnsureFeature creates when 404
+	// 1. EnsureFeature creates when 404 and enables the feature in the target environment
 	feat, err := uc.EnsureFeature(ctx, "dark_mode")
 	require.NoError(t, err)
 	assert.Equal(t, "dark_mode", feat.Name)
+	assert.True(t, envEnabled)
 	assert.Equal(t, http.MethodPost, lastMethod)
-	assert.Equal(t, "/api/admin/projects/default/features", lastPath)
+	assert.Equal(t, "/api/admin/projects/default/features/dark_mode/environments/development/on", lastPath)
 	assert.Equal(t, "test-admin", lastAuth)
 
 	// 2. EnsureFeature returns existing when 200

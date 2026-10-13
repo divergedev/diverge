@@ -178,7 +178,7 @@ Standard traits automatically injected for identity targeting:
 
 ### 4. Unleash Provider
 
-The `unleash` provider ensures feature toggles exist in your Unleash project and configures a preview-scoped `flexibleRollout` activation strategy (`diverge-[<namespace>-]<envName>-<hash8>`) constrained to `diverge.environment IN [<envName>]`. Boolean overrides (`"true"` / `"false"`) set `rollout` (`100` / `0`) and `disabled` (`false` / `true`); string or numeric overrides attach a strategy-level variant (`weight: 1000`, `payload.type: "string"`). On environment teardown, all preview strategies matching the environment's strategy title are removed cleanly:
+The `unleash` provider ensures feature toggles exist and are enabled in your target Unleash project/environment, and configures a preview-scoped `flexibleRollout` activation strategy (`diverge-[<namespace>-]<envName>-<hash8>`, `sortOrder: 0`) constrained to `diverge.environment IN [<envName>]`. Boolean overrides (`"true"` / `"false"`) set `rollout` (`100` / `0`) and `disabled` (`false` / `true`), and `"false"` overrides also attach a `diverge.environment NOT_IN [<envName>]` exclusion constraint to other strategies on that feature so broader strategies cannot turn the flag on in the preview environment. String or numeric overrides attach a strategy-level variant (`weight: 1000`, `payload.type: "string"`). When overrides are removed or the environment is torn down, all preview strategies and exclusion constraints for the environment are removed cleanly:
 
 ```yaml
 apiVersion: divergedev.com/v1alpha1
@@ -208,14 +208,14 @@ type: Opaque
 stringData:
   url: "https://unleash.internal.example.com"
   adminToken: "*:*.unleash_admin_token..."          # Used by Diverge controller for Admin API
-  clientToken: "default:development.client_token..." # Injected into workloads
+  clientToken: "default:development.client_token..." # Injected into workloads (required for SDK evaluation)
   project: "default"                                 # Optional (defaults to "default")
   environment: "development"                         # Optional (defaults to "development")
 ```
 
 Injected Pod environment variables:
 - `UNLEASH_URL`: Base URL of the Unleash instance.
-- `UNLEASH_API_TOKEN`: Client SDK token (falls back to `adminToken` if `clientToken` is omitted).
+- `UNLEASH_API_TOKEN`: Client SDK token from `clientToken` (required for workload flag evaluation; `adminToken` is never sent to preview workloads).
 - `UNLEASH_PROJECT`: Target Unleash project ID.
 - `UNLEASH_ENVIRONMENT`: Target Unleash environment.
 - `UNLEASH_STRATEGY_TITLE`: `diverge-[<namespace>-]<envName>-<hash8>`

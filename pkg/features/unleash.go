@@ -144,8 +144,10 @@ func (p *UnleashProvider) resolveConnection(ctx context.Context, env *v1alpha1.E
 	}
 
 	cfg := &unleashConnectionConfig{}
+	urlFromSecret := false
 	if secret != nil {
 		cfg.url = extractSecretValue(secret, "url", "UNLEASH_URL", "endpoint", "UNLEASH_ENDPOINT", "UNLEASH_API_URL")
+		urlFromSecret = cfg.url != ""
 		cfg.adminToken = extractSecretValue(secret, "adminToken", "UNLEASH_ADMIN_TOKEN", "apiToken", "UNLEASH_API_TOKEN", "token")
 		cfg.clientToken = extractSecretValue(secret, "clientToken", "UNLEASH_CLIENT_TOKEN", "sdkToken", "frontendToken")
 		cfg.projectID = extractSecretValue(secret, "project", "projectId", "UNLEASH_PROJECT")
@@ -164,7 +166,7 @@ func (p *UnleashProvider) resolveConnection(ctx context.Context, env *v1alpha1.E
 		}
 	}
 
-	if cfg.adminToken == "" {
+	if cfg.adminToken == "" && !urlFromSecret {
 		for _, envKey := range []string{"DIVERGE_UNLEASH_ADMIN_TOKEN", "UNLEASH_ADMIN_TOKEN", "UNLEASH_API_TOKEN"} {
 			if v := strings.TrimSpace(os.Getenv(envKey)); v != "" {
 				cfg.adminToken = v
@@ -173,7 +175,7 @@ func (p *UnleashProvider) resolveConnection(ctx context.Context, env *v1alpha1.E
 		}
 	}
 
-	if cfg.clientToken == "" {
+	if cfg.clientToken == "" && !urlFromSecret {
 		for _, envKey := range []string{"DIVERGE_UNLEASH_CLIENT_TOKEN", "UNLEASH_CLIENT_TOKEN"} {
 			if v := strings.TrimSpace(os.Getenv(envKey)); v != "" {
 				cfg.clientToken = v
@@ -272,15 +274,29 @@ func (p *UnleashProvider) Provision(ctx context.Context, env *v1alpha1.Environme
 		}
 	}
 
+	// Clean up stale preview strategies on features that are no longer in overrides.
+	allFeatures, err := unleashClient.ListProjectFeatures(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list unleash features for stale strategy cleanup: %w", err)
+	}
+	var staleFeatures []string
+	for _, feat := range allFeatures {
+		if _, active := overrides[feat]; !active {
+			staleFeatures = append(staleFeatures, feat)
+		}
+	}
+	if len(staleFeatures) > 0 {
+		if err := unleashClient.DeletePreviewStrategies(ctx, strategyTitle, staleFeatures); err != nil {
+			return nil, fmt.Errorf("failed to delete stale unleash strategies for %s: %w", strategyTitle, err)
+		}
+	}
+
 	p.logger.Info("Unleash preview strategies provisioned",
 		"environment", env.Name,
 		"strategyTitle", strategyTitle,
 		"overrideCount", len(overrides))
 
 	sdkToken := conn.clientToken
-	if sdkToken == "" {
-		sdkToken = conn.adminToken
-	}
 
 	return &FeatureResult{
 		ProviderType: "unleash",
@@ -317,16 +333,8 @@ func (p *UnleashProvider) Teardown(ctx context.Context, env *v1alpha1.Environmen
 	}
 
 	strategyTitle := UnleashStrategyTitle(env.Namespace, env.Name)
-	var featureNames []string
-	if env.Spec.Features != nil && len(env.Spec.Features.Overrides) > 0 {
-		featureNames = make([]string, 0, len(env.Spec.Features.Overrides))
-		for k := range env.Spec.Features.Overrides {
-			featureNames = append(featureNames, k)
-		}
-		sort.Strings(featureNames)
-	}
-
-	if err := unleashClient.DeletePreviewStrategies(ctx, strategyTitle, featureNames); err != nil {
+	// Scan all project features so strategies of removed overrides are also deleted.
+	if err := unleashClient.DeletePreviewStrategies(ctx, strategyTitle, nil); err != nil {
 		p.logger.Error(err, "Failed to delete unleash preview strategies", "strategyTitle", strategyTitle)
 		return fmt.Errorf("failed to delete unleash strategies for %s: %w", strategyTitle, err)
 	}

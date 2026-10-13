@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -53,6 +54,7 @@ type UnleashStrategy struct {
 	Name        string              `json:"name"`
 	Title       string              `json:"title,omitempty"`
 	Disabled    bool                `json:"disabled"`
+	SortOrder   int                 `json:"sortOrder"`
 	Constraints []UnleashConstraint `json:"constraints,omitempty"`
 	Parameters  map[string]string   `json:"parameters,omitempty"`
 	Variants    []UnleashVariant    `json:"variants,omitempty"`
@@ -74,6 +76,10 @@ type UnleashClient struct {
 	adminToken  string
 	clientToken string
 	httpClient  *http.Client
+}
+
+func isProhibitedUnleashIP(ip net.IP) bool {
+	return ip == nil || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.Equal(net.ParseIP("100.100.100.200"))
 }
 
 // NewUnleashClient creates a new UnleashClient with validated URL and SSRF protections.
@@ -100,7 +106,7 @@ func NewUnleashClient(baseURL, projectID, environment, adminToken, clientToken s
 		return nil, fmt.Errorf("prohibited unleash host %q", hostOnly)
 	}
 	if ip := net.ParseIP(hostOnly); ip != nil {
-		if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.Equal(net.ParseIP("169.254.169.254")) {
+		if isProhibitedUnleashIP(ip) {
 			return nil, fmt.Errorf("prohibited unleash IP destination %s", hostOnly)
 		}
 	}
@@ -116,8 +122,23 @@ func NewUnleashClient(baseURL, projectID, environment, adminToken, clientToken s
 
 	client := customHTTPClient
 	if client == nil {
+		dialer := &net.Dialer{
+			Timeout: 5 * time.Second,
+			Control: func(_, address string, _ syscall.RawConn) error {
+				host, _, splitErr := net.SplitHostPort(address)
+				if splitErr != nil {
+					return splitErr
+				}
+				ip := net.ParseIP(host)
+				if isProhibitedUnleashIP(ip) {
+					return fmt.Errorf("prohibited unleash IP destination %s", host)
+				}
+				return nil
+			},
+		}
 		client = &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout:   10 * time.Second,
+			Transport: &http.Transport{DialContext: dialer.DialContext},
 		}
 	}
 
@@ -213,7 +234,7 @@ func (c *UnleashClient) doRequest(ctx context.Context, method, path string, body
 	return respData, resp.StatusCode, nil
 }
 
-// EnsureFeature ensures a feature toggle exists in the configured Unleash project.
+// EnsureFeature ensures a feature toggle exists in the configured Unleash project and is enabled in the target environment.
 func (c *UnleashClient) EnsureFeature(ctx context.Context, featureName string) (*UnleashFeature, error) {
 	if strings.TrimSpace(featureName) == "" {
 		return nil, errors.New("featureName cannot be empty")
@@ -246,6 +267,16 @@ func (c *UnleashClient) EnsureFeature(ctx context.Context, featureName string) (
 	createdData, _, createErr := c.doRequest(ctx, http.MethodPost, createPath, createPayload)
 	if createErr != nil {
 		return nil, fmt.Errorf("creating unleash feature %q: %w", featureName, createErr)
+	}
+
+	enablePath := fmt.Sprintf(
+		"/api/admin/projects/%s/features/%s/environments/%s/on",
+		url.PathEscape(c.projectID),
+		url.PathEscape(featureName),
+		url.PathEscape(c.environment),
+	)
+	if _, _, enableErr := c.doRequest(ctx, http.MethodPost, enablePath, nil); enableErr != nil && !errors.Is(enableErr, ErrUnleashNotFound) {
+		return nil, fmt.Errorf("enabling unleash feature %q in environment %q: %w", featureName, c.environment, enableErr)
 	}
 
 	var created UnleashFeature
@@ -297,6 +328,8 @@ func (c *UnleashClient) ListStrategies(ctx context.Context, featureName string) 
 }
 
 // UpsertPreviewStrategy creates or updates an activation strategy constrained to diverge.environment IN [previewEnvValue].
+// When enabled is false, it also adds a diverge.environment NOT_IN [previewEnvValue] exclusion constraint to any other
+// strategies on the feature so broader strategies cannot turn the flag on in the preview environment.
 func (c *UnleashClient) UpsertPreviewStrategy(
 	ctx context.Context,
 	featureName, strategyTitle, previewEnvValue string,
@@ -319,9 +352,10 @@ func (c *UnleashClient) UpsertPreviewStrategy(
 	}
 
 	strategy := UnleashStrategy{
-		Name:     "flexibleRollout",
-		Title:    strategyTitle,
-		Disabled: !enabled,
+		Name:      "flexibleRollout",
+		Title:     strategyTitle,
+		Disabled:  !enabled,
+		SortOrder: 0,
 		Constraints: []UnleashConstraint{
 			{
 				ContextName: "diverge.environment",
@@ -395,7 +429,137 @@ func (c *UnleashClient) UpsertPreviewStrategy(
 	if saved.Title == "" {
 		saved.Title = strategyTitle
 	}
+
+	if err := c.reconcileOtherStrategiesForPreview(ctx, featureName, basePath, strategyTitle, saved.ID, previewEnvValue, enabled, existingList); err != nil {
+		return nil, err
+	}
+
 	return &saved, nil
+}
+
+// reconcileOtherStrategiesForPreview ensures that:
+// 1. When enabled == false, non-preview strategies exclude previewEnvValue via a diverge.environment NOT_IN constraint.
+// 2. When enabled == true, any prior exclusion for previewEnvValue is removed from non-preview strategies.
+// 3. The preview strategy is ordered first so its variants take precedence over broader strategies.
+func (c *UnleashClient) reconcileOtherStrategiesForPreview(
+	ctx context.Context,
+	featureName, basePath, strategyTitle, previewStrategyID, previewEnvValue string,
+	enabled bool,
+	existingList []UnleashStrategy,
+) error {
+	for _, other := range existingList {
+		if other.Title == strategyTitle || other.ID == "" {
+			continue
+		}
+		var updated UnleashStrategy
+		var changed bool
+		if !enabled {
+			updated, changed = addPreviewExclusionConstraint(other, previewEnvValue)
+		} else {
+			updated, changed = removePreviewExclusionConstraint(other, previewEnvValue)
+		}
+		if changed {
+			putPath := fmt.Sprintf("%s/%s", basePath, url.PathEscape(other.ID))
+			if _, _, err := c.doRequest(ctx, http.MethodPut, putPath, updated); err != nil {
+				return fmt.Errorf("updating exclusion constraint on strategy %q for %q: %w", other.ID, featureName, err)
+			}
+		}
+	}
+
+	// Ensure preview strategy is evaluated first when other strategies exist
+	if previewStrategyID != "" && len(existingList) > 0 && existingList[0].ID != previewStrategyID {
+		type sortOrderEntry struct {
+			ID        string `json:"id"`
+			SortOrder int    `json:"sortOrder"`
+		}
+		orderPayload := []sortOrderEntry{{ID: previewStrategyID, SortOrder: 0}}
+		orderIdx := 1
+		for _, s := range existingList {
+			if s.ID == "" || s.ID == previewStrategyID || s.Title == strategyTitle {
+				continue
+			}
+			orderPayload = append(orderPayload, sortOrderEntry{ID: s.ID, SortOrder: orderIdx})
+			orderIdx++
+		}
+		if len(orderPayload) > 1 {
+			sortPath := fmt.Sprintf("%s/set-strategies-sort-order", basePath)
+			if _, _, err := c.doRequest(ctx, http.MethodPut, sortPath, orderPayload); err != nil && !errors.Is(err, ErrUnleashNotFound) {
+				return fmt.Errorf("setting unleash strategy sort order on %q: %w", featureName, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+func addPreviewExclusionConstraint(s UnleashStrategy, previewEnvValue string) (UnleashStrategy, bool) {
+	constraints := make([]UnleashConstraint, len(s.Constraints))
+	copy(constraints, s.Constraints)
+
+	for i := range constraints {
+		c := &constraints[i]
+		if c.ContextName == "diverge.environment" && (c.Operator == "NOT_IN" || (c.Operator == "IN" && c.Inverted)) {
+			for _, v := range c.Values {
+				if v == previewEnvValue {
+					return s, false
+				}
+			}
+			vals := make([]string, len(c.Values)+1)
+			copy(vals, c.Values)
+			vals[len(c.Values)] = previewEnvValue
+			c.Values = vals
+			s.Constraints = constraints
+			return s, true
+		}
+	}
+
+	constraints = append(constraints, UnleashConstraint{
+		ContextName: "diverge.environment",
+		Operator:    "NOT_IN",
+		Values:      []string{previewEnvValue},
+	})
+	s.Constraints = constraints
+	return s, true
+}
+
+func removePreviewExclusionConstraint(s UnleashStrategy, previewEnvValue string) (UnleashStrategy, bool) {
+	if len(s.Constraints) == 0 || previewEnvValue == "" {
+		return s, false
+	}
+	var updated []UnleashConstraint
+	changed := false
+	for _, c := range s.Constraints {
+		if c.ContextName == "diverge.environment" && (c.Operator == "NOT_IN" || (c.Operator == "IN" && c.Inverted)) {
+			var remaining []string
+			for _, v := range c.Values {
+				if v == previewEnvValue {
+					changed = true
+					continue
+				}
+				remaining = append(remaining, v)
+			}
+			if len(remaining) > 0 {
+				c.Values = remaining
+				updated = append(updated, c)
+			}
+			continue
+		}
+		updated = append(updated, c)
+	}
+	if !changed {
+		return s, false
+	}
+	s.Constraints = updated
+	return s, true
+}
+
+func extractPreviewEnvValueFromStrategy(s UnleashStrategy) string {
+	for _, c := range s.Constraints {
+		if c.ContextName == "diverge.environment" && c.Operator == "IN" && !c.Inverted && len(c.Values) > 0 {
+			return c.Values[0]
+		}
+	}
+	return ""
 }
 
 // ListProjectFeatures lists feature names in the configured Unleash project.
@@ -433,7 +597,8 @@ func (c *UnleashClient) ListProjectFeatures(ctx context.Context) ([]string, erro
 	return names, nil
 }
 
-// DeletePreviewStrategies deletes all strategies matching strategyTitle across the specified features (or all project features when empty).
+// DeletePreviewStrategies deletes all strategies matching strategyTitle across the specified features (or all project features when empty)
+// and cleans up any diverge.environment NOT_IN exclusion constraints added for that preview environment.
 func (c *UnleashClient) DeletePreviewStrategies(ctx context.Context, strategyTitle string, featureNames []string) error {
 	if strings.TrimSpace(strategyTitle) == "" {
 		return errors.New("strategyTitle cannot be empty")
@@ -453,19 +618,39 @@ func (c *UnleashClient) DeletePreviewStrategies(ctx context.Context, strategyTit
 		if err != nil {
 			return err
 		}
+
+		basePath := fmt.Sprintf(
+			"/api/admin/projects/%s/features/%s/environments/%s/strategies",
+			url.PathEscape(c.projectID),
+			url.PathEscape(featureName),
+			url.PathEscape(c.environment),
+		)
+
+		var previewEnvVal string
 		for _, s := range strategies {
 			if s.Title != strategyTitle || s.ID == "" {
 				continue
 			}
-			delPath := fmt.Sprintf(
-				"/api/admin/projects/%s/features/%s/environments/%s/strategies/%s",
-				url.PathEscape(c.projectID),
-				url.PathEscape(featureName),
-				url.PathEscape(c.environment),
-				url.PathEscape(s.ID),
-			)
+			if previewEnvVal == "" {
+				previewEnvVal = extractPreviewEnvValueFromStrategy(s)
+			}
+			delPath := fmt.Sprintf("%s/%s", basePath, url.PathEscape(s.ID))
 			if _, _, delErr := c.doRequest(ctx, http.MethodDelete, delPath, nil); delErr != nil && !errors.Is(delErr, ErrUnleashNotFound) {
 				return fmt.Errorf("deleting unleash strategy %q on feature %q: %w", s.ID, featureName, delErr)
+			}
+		}
+
+		if previewEnvVal != "" {
+			for _, other := range strategies {
+				if other.Title == strategyTitle || other.ID == "" {
+					continue
+				}
+				if updated, changed := removePreviewExclusionConstraint(other, previewEnvVal); changed {
+					putPath := fmt.Sprintf("%s/%s", basePath, url.PathEscape(other.ID))
+					if _, _, putErr := c.doRequest(ctx, http.MethodPut, putPath, updated); putErr != nil && !errors.Is(putErr, ErrUnleashNotFound) {
+						return fmt.Errorf("cleaning exclusion constraint on strategy %q for feature %q: %w", other.ID, featureName, putErr)
+					}
+				}
 			}
 		}
 	}

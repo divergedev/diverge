@@ -22,19 +22,21 @@ import (
 )
 
 type mockUnleashServer struct {
-	mu             sync.Mutex
-	features       map[string]UnleashFeature
-	strategies     map[string][]UnleashStrategy // featureName -> strategies
-	reqAdminToken  string
-	forceHealthErr bool
-	nextStratID    int
+	mu              sync.Mutex
+	features        map[string]UnleashFeature
+	enabledFeatures map[string]bool
+	strategies      map[string][]UnleashStrategy // featureName -> strategies
+	reqAdminToken   string
+	forceHealthErr  bool
+	nextStratID     int
 }
 
 func newMockUnleashServer(reqAdminToken string) (*httptest.Server, *mockUnleashServer) {
 	mock := &mockUnleashServer{
-		features:      make(map[string]UnleashFeature),
-		strategies:    make(map[string][]UnleashStrategy),
-		reqAdminToken: reqAdminToken,
+		features:        make(map[string]UnleashFeature),
+		enabledFeatures: make(map[string]bool),
+		strategies:      make(map[string][]UnleashStrategy),
+		reqAdminToken:   reqAdminToken,
 	}
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -116,6 +118,16 @@ func newMockUnleashServer(reqAdminToken string) (*httptest.Server, *mockUnleashS
 				return
 			}
 
+			// POST /api/admin/projects/{project}/features/{featureName}/environments/{env}/on
+			if len(parts) == 9 && parts[4] == "features" && parts[6] == "environments" && parts[8] == "on" && r.Method == http.MethodPost {
+				featureName := parts[5]
+				mock.enabledFeatures[featureName] = true
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{}`))
+				return
+			}
+
 			// /api/admin/projects/{project}/features/{featureName}/environments/{env}/strategies
 			if len(parts) >= 9 && parts[4] == "features" && parts[6] == "environments" && parts[8] == "strategies" {
 				featureName := parts[5]
@@ -149,6 +161,10 @@ func newMockUnleashServer(reqAdminToken string) (*httptest.Server, *mockUnleashS
 
 				if len(parts) == 10 {
 					stratID := parts[9]
+					if stratID == "set-strategies-sort-order" && r.Method == http.MethodPut {
+						w.WriteHeader(http.StatusOK)
+						return
+					}
 					switch r.Method {
 					case http.MethodPut:
 						var s UnleashStrategy
@@ -223,6 +239,17 @@ func TestUnleashProvider_Provision_Tier1Secret(t *testing.T) {
 	ts, mock := newMockUnleashServer("tier1-admin-token")
 	defer ts.Close()
 
+	// Seed a baseline strategy on dark_mode to verify false override adds NOT_IN exclusion constraint
+	mock.features["dark_mode"] = UnleashFeature{Name: "dark_mode", Type: "release"}
+	mock.strategies["dark_mode"] = []UnleashStrategy{
+		{
+			ID:         "baseline-strat",
+			Name:       "flexibleRollout",
+			Title:      "baseline-rollout",
+			Parameters: map[string]string{"rollout": "100"},
+		},
+	}
+
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
 	_ = v1alpha1.AddToScheme(scheme)
@@ -277,11 +304,13 @@ func TestUnleashProvider_Provision_Tier1Secret(t *testing.T) {
 	assert.Equal(t, expectedTitle, res.EnvVars["UNLEASH_STRATEGY_TITLE"])
 	assert.Equal(t, expectedTitle, res.EnvVars["OPENFEATURE_TARGET_KEY"])
 
-	// Verify strategies in mock server
+	// Verify strategies and environment enablement in mock server
 	mock.mu.Lock()
 	assert.Contains(t, mock.features, "checkout_v2")
+	assert.True(t, mock.enabledFeatures["checkout_v2"])
 	assert.Contains(t, mock.features, "dark_mode")
 	assert.Contains(t, mock.features, "theme")
+	assert.True(t, mock.enabledFeatures["theme"])
 
 	checkoutStrats := mock.strategies["checkout_v2"]
 	require.Len(t, checkoutStrats, 1)
@@ -290,14 +319,29 @@ func TestUnleashProvider_Provision_Tier1Secret(t *testing.T) {
 	assert.False(t, checkoutStrats[0].Disabled)
 
 	darkStrats := mock.strategies["dark_mode"]
-	require.Len(t, darkStrats, 1)
-	assert.Equal(t, "0", darkStrats[0].Parameters["rollout"])
-	assert.True(t, darkStrats[0].Disabled)
+	require.Len(t, darkStrats, 2)
+	// Baseline strategy must have diverge.environment NOT_IN ["pr-42"] exclusion constraint
+	assert.Equal(t, "baseline-strat", darkStrats[0].ID)
+	require.Len(t, darkStrats[0].Constraints, 1)
+	assert.Equal(t, "diverge.environment", darkStrats[0].Constraints[0].ContextName)
+	assert.Equal(t, "NOT_IN", darkStrats[0].Constraints[0].Operator)
+	assert.Equal(t, []string{"pr-42"}, darkStrats[0].Constraints[0].Values)
+	// Preview strategy is disabled with rollout 0
+	assert.Equal(t, "0", darkStrats[1].Parameters["rollout"])
+	assert.True(t, darkStrats[1].Disabled)
 
 	themeStrats := mock.strategies["theme"]
 	require.Len(t, themeStrats, 1)
 	require.Len(t, themeStrats[0].Variants, 1)
 	assert.Equal(t, "solarized", themeStrats[0].Variants[0].Payload.Value)
+	mock.mu.Unlock()
+
+	// Remove "theme" from overrides and re-provision -> stale strategy on "theme" must be deleted
+	delete(env.Spec.Features.Overrides, "theme")
+	_, err = provider.Provision(ctx, env)
+	require.NoError(t, err)
+	mock.mu.Lock()
+	assert.Empty(t, mock.strategies["theme"])
 	mock.mu.Unlock()
 
 	// Status check
@@ -306,13 +350,16 @@ func TestUnleashProvider_Provision_Tier1Secret(t *testing.T) {
 	require.NotNil(t, status)
 	assert.True(t, status.Ready)
 
-	// Teardown
+	// Remove "checkout_v2" from overrides before Teardown -> Teardown still scans all project features and removes it
+	delete(env.Spec.Features.Overrides, "checkout_v2")
 	err = provider.Teardown(ctx, env)
 	require.NoError(t, err)
 
 	mock.mu.Lock()
 	assert.Empty(t, mock.strategies["checkout_v2"])
-	assert.Empty(t, mock.strategies["dark_mode"])
+	require.Len(t, mock.strategies["dark_mode"], 1)
+	assert.Equal(t, "baseline-strat", mock.strategies["dark_mode"][0].ID)
+	assert.Empty(t, mock.strategies["dark_mode"][0].Constraints, "exclusion constraint must be cleaned up on teardown")
 	assert.Empty(t, mock.strategies["theme"])
 	mock.mu.Unlock()
 }
@@ -325,7 +372,7 @@ func TestUnleashProvider_Provision_Tier2AndDefaultSecrets(t *testing.T) {
 	_ = corev1.AddToScheme(scheme)
 	_ = v1alpha1.AddToScheme(scheme)
 
-	// Secret in diverge-system
+	// Secret in diverge-system without clientToken: adminToken must NOT be leaked to workload EnvVars
 	sec := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "unleash-connection",
@@ -354,8 +401,59 @@ func TestUnleashProvider_Provision_Tier2AndDefaultSecrets(t *testing.T) {
 
 	res, err := provider.Provision(context.Background(), env)
 	require.NoError(t, err)
-	assert.Equal(t, "shared-admin-token", res.EnvVars["UNLEASH_API_TOKEN"])
+	assert.Empty(t, res.EnvVars["UNLEASH_API_TOKEN"], "adminToken must never be sent to preview workloads")
+	assert.Empty(t, res.EnvVars["OPENFEATURE_UNLEASH_API_TOKEN"], "adminToken must never be sent to preview workloads")
 	assert.Equal(t, UnleashStrategyTitle(env.Namespace, env.Name), res.EnvVars["UNLEASH_STRATEGY_TITLE"])
+}
+
+func TestUnleashProvider_TenantSecretURLDoesNotUseEnvVarTokens(t *testing.T) {
+	var receivedAuth string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"features":[]}`))
+	}))
+	defer ts.Close()
+
+	t.Setenv("DIVERGE_UNLEASH_ADMIN_TOKEN", "controller-admin-token")
+	t.Setenv("DIVERGE_UNLEASH_CLIENT_TOKEN", "controller-client-token")
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = v1alpha1.AddToScheme(scheme)
+
+	// Tenant Secret supplies only `url` without tokens
+	sec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "tenant-unleash",
+			Namespace: "tenant-ns",
+		},
+		Data: map[string][]byte{
+			"url": []byte(ts.URL),
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sec).Build()
+	provider := NewUnleashProvider(c, scheme, logr.Discard())
+
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-99",
+			Namespace: "tenant-ns",
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Features: &v1alpha1.FeatureSpec{
+				Provider:      "unleash",
+				ConnectionRef: "tenant-unleash",
+			},
+		},
+	}
+
+	res, err := provider.Provision(context.Background(), env)
+	require.NoError(t, err)
+	assert.Empty(t, receivedAuth, "controller admin token must not be sent to a Secret-supplied URL")
+	assert.Empty(t, res.EnvVars["UNLEASH_API_TOKEN"], "controller client token must not be paired with a Secret-supplied URL")
 }
 
 func TestUnleashProvider_Provision_EnvVarFallback(t *testing.T) {

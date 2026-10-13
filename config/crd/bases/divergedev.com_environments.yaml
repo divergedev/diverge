@@ -259,11 +259,12 @@ spec:
                   provider:
                     default: configmap
                     description: 'Provider selects the feature flag provider: "configmap",
-                      "flipt", "flagsmith".'
+                      "flipt", "flagsmith", "unleash".'
                     enum:
                     - configmap
                     - flipt
                     - flagsmith
+                    - unleash
                     type: string
                 type: object
               lifecycle:
