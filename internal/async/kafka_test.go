@@ -4,6 +4,7 @@ package async
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -15,11 +16,14 @@ import (
 )
 
 type capturingKafkaAdmin struct {
-	lastPartitions  int32
-	lastReplication int16
-	lastConfigs     map[string]*string
-	lastTopics      []string
-	closed          bool
+	lastPartitions   int32
+	lastReplication  int16
+	lastConfigs      map[string]*string
+	lastTopics       []string
+	lastAlterConfigs []kadm.AlterConfig
+	lastAlterTopics  []string
+	createTopicErr   error
+	closed           bool
 }
 
 func (m *capturingKafkaAdmin) CreateTopics(_ context.Context, partitions int32, replication int16, configs map[string]*string, topics ...string) (kadm.CreateTopicResponses, error) {
@@ -29,7 +33,17 @@ func (m *capturingKafkaAdmin) CreateTopics(_ context.Context, partitions int32, 
 	m.lastTopics = topics
 	resp := make(kadm.CreateTopicResponses)
 	for _, t := range topics {
-		resp[t] = kadm.CreateTopicResponse{Topic: t}
+		resp[t] = kadm.CreateTopicResponse{Topic: t, Err: m.createTopicErr}
+	}
+	return resp, nil
+}
+
+func (m *capturingKafkaAdmin) AlterTopicConfigs(_ context.Context, configs []kadm.AlterConfig, topics ...string) (kadm.AlterConfigsResponses, error) {
+	m.lastAlterConfigs = configs
+	m.lastAlterTopics = topics
+	var resp kadm.AlterConfigsResponses
+	for _, t := range topics {
+		resp = append(resp, kadm.AlterConfigsResponse{Name: t})
 	}
 	return resp, nil
 }
@@ -139,5 +153,37 @@ func TestKafkaProvisioner_Provision_RetentionMs(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, admin.lastConfigs["retention.ms"])
 		assert.Equal(t, "3600000", *admin.lastConfigs["retention.ms"])
+	})
+
+	t.Run("existing topic updates retention.ms via AlterTopicConfigs", func(t *testing.T) {
+		admin := &capturingKafkaAdmin{
+			createTopicErr: errors.New("TOPIC_ALREADY_EXISTS: Topic with this name already exists."),
+		}
+		p := &KafkaProvisioner{
+			Brokers:           []string{"localhost:9092"},
+			NumPartitions:     1,
+			ReplicationFactor: 1,
+			AdminFactory: func(_ []string) (KafkaAdmin, error) {
+				return admin, nil
+			},
+		}
+		env := &v1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "pr-42",
+				Annotations: map[string]string{
+					AnnotationKafkaRetentionMs: "7200000",
+				},
+			},
+		}
+
+		res, err := p.Provision(context.Background(), env, route)
+		require.NoError(t, err)
+		assert.Equal(t, "orders--pr-42", res.ResolvedTarget)
+		assert.Equal(t, []string{"orders--pr-42"}, admin.lastAlterTopics)
+		require.Len(t, admin.lastAlterConfigs, 1)
+		assert.Equal(t, kadm.SetConfig, admin.lastAlterConfigs[0].Op)
+		assert.Equal(t, "retention.ms", admin.lastAlterConfigs[0].Name)
+		require.NotNil(t, admin.lastAlterConfigs[0].Value)
+		assert.Equal(t, "7200000", *admin.lastAlterConfigs[0].Value)
 	})
 }

@@ -44,9 +44,14 @@ any existing MCP servers already configured in your workspace.`,
 			var targets []string
 			switch strings.ToLower(strings.TrimSpace(clientTarget)) {
 			case "all", "":
+				windsurfPath, err := resolveWindsurfConfigPath()
+				if err != nil {
+					return err
+				}
 				targets = []string{
 					filepath.Join(targetDir, ".cursor", "mcp.json"),
 					filepath.Join(targetDir, ".mcp.json"),
+					windsurfPath,
 				}
 			case "cursor":
 				targets = []string{
@@ -57,8 +62,12 @@ any existing MCP servers already configured in your workspace.`,
 					filepath.Join(targetDir, ".mcp.json"),
 				}
 			case "windsurf":
+				windsurfPath, err := resolveWindsurfConfigPath()
+				if err != nil {
+					return err
+				}
 				targets = []string{
-					filepath.Join(targetDir, ".codeium", "windsurf", "mcp_config.json"),
+					windsurfPath,
 				}
 			default:
 				return fmt.Errorf("unsupported --client %q (supported: all, cursor, claude, windsurf)", clientTarget)
@@ -83,9 +92,25 @@ any existing MCP servers already configured in your workspace.`,
 	return cmd
 }
 
+func resolveWindsurfConfigPath() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(homeDir) == "" {
+		return "", fmt.Errorf("resolve user home directory for Windsurf MCP config: %w", err)
+	}
+	return filepath.Join(homeDir, ".codeium", "windsurf", "mcp_config.json"), nil
+}
+
 func upsertMCPConfigFile(path string, serverEntry map[string]interface{}) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create directory for %s: %w", path, err)
+	}
+
+	fileMode := os.FileMode(0o644)
+	if info, statErr := os.Stat(path); statErr == nil {
+		fileMode = info.Mode().Perm()
+	} else if !os.IsNotExist(statErr) {
+		return fmt.Errorf("stat existing MCP config %s: %w", path, statErr)
 	}
 
 	root := make(map[string]interface{})
@@ -110,8 +135,32 @@ func upsertMCPConfigFile(path string, serverEntry map[string]interface{}) error 
 	}
 	encoded = append(encoded, '\n')
 
-	if err := os.WriteFile(path, encoded, 0o644); err != nil {
-		return fmt.Errorf("write MCP config %s: %w", path, err)
+	tmpFile, err := os.CreateTemp(dir, ".mcp-config-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp MCP config in %s: %w", dir, err)
 	}
+	tmpPath := tmpFile.Name()
+	cleanupTmp := true
+	defer func() {
+		if cleanupTmp {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if _, err := tmpFile.Write(encoded); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("write temp MCP config %s: %w", tmpPath, err)
+	}
+	if err := tmpFile.Chmod(fileMode); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("chmod temp MCP config %s: %w", tmpPath, err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("close temp MCP config %s: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("replace MCP config %s: %w", path, err)
+	}
+	cleanupTmp = false
 	return nil
 }

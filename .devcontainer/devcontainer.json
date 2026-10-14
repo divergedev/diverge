@@ -27,7 +27,7 @@
       "onAutoForward": "silent"
     }
   },
-  "postCreateCommand": "go build -o /usr/local/bin/diverge ./cmd/diverge && diverge version",
+  "postCreateCommand": "go install ./cmd/diverge && diverge version",
   "customizations": {
     "vscode": {
       "extensions": [

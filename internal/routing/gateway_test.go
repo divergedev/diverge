@@ -1035,6 +1035,7 @@ func TestGatewayRouter_Reconcile_CrossNamespaceReferenceGrant(t *testing.T) {
 	assert.Equal(t, map[string]interface{}{
 		"group": "",
 		"kind":  "Service",
+		"name":  "test-env-web",
 	}, toSlice[0])
 
 	// Verify Teardown deletes the ReferenceGrant in previewNS

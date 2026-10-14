@@ -13,6 +13,9 @@ import (
 
 func TestMCPSetupDefaultAllClients(t *testing.T) {
 	tmpDir := t.TempDir()
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
 	app := &App{}
 	rootCmd := NewRootCmd(app)
 
@@ -26,10 +29,12 @@ func TestMCPSetupDefaultAllClients(t *testing.T) {
 
 	cursorPath := filepath.Join(tmpDir, ".cursor", "mcp.json")
 	claudePath := filepath.Join(tmpDir, ".mcp.json")
+	windsurfPath := filepath.Join(homeDir, ".codeium", "windsurf", "mcp_config.json")
 	assert.FileExists(t, cursorPath)
 	assert.FileExists(t, claudePath)
+	assert.FileExists(t, windsurfPath)
 
-	for _, path := range []string{cursorPath, claudePath} {
+	for _, path := range []string{cursorPath, claudePath, windsurfPath} {
 		raw, err := os.ReadFile(path)
 		require.NoError(t, err)
 
@@ -62,12 +67,16 @@ func TestMCPSetupPreservesExistingServers(t *testing.T) {
 	}
 }
 `
-	require.NoError(t, os.WriteFile(cursorPath, []byte(existingContent), 0o644))
+	require.NoError(t, os.WriteFile(cursorPath, []byte(existingContent), 0o600))
 
 	app := &App{}
 	rootCmd := NewRootCmd(app)
 	rootCmd.SetArgs([]string{"mcp", "setup", "--client", "cursor", "--dir", tmpDir})
 	require.NoError(t, rootCmd.Execute())
+
+	info, err := os.Stat(cursorPath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 
 	raw, err := os.ReadFile(cursorPath)
 	require.NoError(t, err)
@@ -84,6 +93,9 @@ func TestMCPSetupPreservesExistingServers(t *testing.T) {
 
 func TestMCPSetupWindsurfAndDestructiveAndInvalidClient(t *testing.T) {
 	tmpDir := t.TempDir()
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
 	app := &App{}
 	rootCmd := NewRootCmd(app)
 	rootCmd.SetArgs([]string{
@@ -94,8 +106,9 @@ func TestMCPSetupWindsurfAndDestructiveAndInvalidClient(t *testing.T) {
 	})
 	require.NoError(t, rootCmd.Execute())
 
-	windsurfPath := filepath.Join(tmpDir, ".codeium", "windsurf", "mcp_config.json")
+	windsurfPath := filepath.Join(homeDir, ".codeium", "windsurf", "mcp_config.json")
 	assert.FileExists(t, windsurfPath)
+	assert.NoFileExists(t, filepath.Join(tmpDir, ".codeium", "windsurf", "mcp_config.json"))
 
 	raw, err := os.ReadFile(windsurfPath)
 	require.NoError(t, err)

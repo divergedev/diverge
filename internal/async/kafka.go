@@ -39,6 +39,7 @@ func resolveTopicRetentionMs(env *v1alpha1.Environment) string {
 // KafkaAdmin abstracts the Kafka admin operations for testability.
 type KafkaAdmin interface {
 	CreateTopics(ctx context.Context, partitions int32, replication int16, configs map[string]*string, topics ...string) (kadm.CreateTopicResponses, error)
+	AlterTopicConfigs(ctx context.Context, configs []kadm.AlterConfig, topics ...string) (kadm.AlterConfigsResponses, error)
 	DeleteTopics(ctx context.Context, topics ...string) (kadm.DeleteTopicResponses, error)
 	Close()
 }
@@ -62,6 +63,10 @@ type realKafkaAdmin struct {
 
 func (r *realKafkaAdmin) CreateTopics(ctx context.Context, partitions int32, replication int16, configs map[string]*string, topics ...string) (kadm.CreateTopicResponses, error) {
 	return r.admin.CreateTopics(ctx, partitions, replication, configs, topics...)
+}
+
+func (r *realKafkaAdmin) AlterTopicConfigs(ctx context.Context, configs []kadm.AlterConfig, topics ...string) (kadm.AlterConfigsResponses, error) {
+	return r.admin.AlterTopicConfigs(ctx, configs, topics...)
 }
 
 func (r *realKafkaAdmin) DeleteTopics(ctx context.Context, topics ...string) (kadm.DeleteTopicResponses, error) {
@@ -113,8 +118,23 @@ func (k *KafkaProvisioner) Provision(ctx context.Context, env *v1alpha1.Environm
 	}
 	for _, t := range resp.Sorted() {
 		if t.Err != nil {
-			// TopicAlreadyExists is not an error (idempotent)
+			// TopicAlreadyExists is not an error (idempotent), but ensure retention.ms is updated
 			if strings.Contains(t.Err.Error(), "already exists") {
+				alterResp, alterErr := admin.AlterTopicConfigs(ctx, []kadm.AlterConfig{
+					{
+						Op:    kadm.SetConfig,
+						Name:  "retention.ms",
+						Value: &retentionMs,
+					},
+				}, t.Topic)
+				if alterErr != nil {
+					return nil, fmt.Errorf("kafka alter topic %q config failed: %w", t.Topic, alterErr)
+				}
+				for _, ar := range alterResp {
+					if ar.Err != nil {
+						return nil, fmt.Errorf("kafka alter topic %q config: %w", ar.Name, ar.Err)
+					}
+				}
 				continue
 			}
 			return nil, fmt.Errorf("kafka topic %q: %w", t.Topic, t.Err)

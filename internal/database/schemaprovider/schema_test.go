@@ -280,6 +280,9 @@ func TestSchemaDatabaseProvider_Provision_PublicSchemaWriteProtection(t *testing
 	assert.Contains(t, res.SetupSQL, `REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA public FROM "diverge_preview_preview_test_env";`)
 	assert.Contains(t, res.SetupSQL, `GRANT USAGE ON SCHEMA public TO "diverge_preview_preview_test_env";`)
 	assert.Contains(t, res.SetupSQL, `GRANT SELECT ON ALL TABLES IN SCHEMA public TO "diverge_preview_preview_test_env";`)
+	assert.Contains(t, res.SetupSQL, "DO $diverge_verify_public$")
+	assert.Contains(t, res.SetupSQL, "has_schema_privilege('diverge_preview_preview_test_env', 'public', 'CREATE')")
+	assert.Contains(t, res.SetupSQL, "has_table_privilege('diverge_preview_preview_test_env'")
 }
 
 func TestSchemaDatabaseProvider_Provision_SeedSource_SchemaCopy(t *testing.T) {
@@ -300,8 +303,10 @@ func TestSchemaDatabaseProvider_Provision_SeedSource_SchemaCopy(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, res.Ready)
 		assert.Contains(t, res.SetupSQL, "DO $diverge_seed$")
-		assert.Contains(t, res.SetupSQL, "INSERT INTO %I.%I OVERRIDING SYSTEM VALUE SELECT * FROM %I.%I ON CONFLICT DO NOTHING")
-		assert.Contains(t, res.SetupSQL, "'preview_test_env', row.table_name, 'public', row.table_name")
+		assert.Contains(t, res.SetupSQL, "INSERT INTO %I.%I (%s) OVERRIDING SYSTEM VALUE SELECT %s FROM %I.%I ON CONFLICT DO NOTHING")
+		assert.Contains(t, res.SetupSQL, "'preview_test_env', row.table_name, col_list, col_list, 'public', row.table_name")
+		assert.Contains(t, res.SetupSQL, "pg_get_serial_sequence")
+		assert.Contains(t, res.SetupSQL, "SELECT setval(%L")
 		assert.Contains(t, mockExec.lastSQL, "DO $diverge_seed$")
 	})
 
@@ -321,8 +326,8 @@ func TestSchemaDatabaseProvider_Provision_SeedSource_SchemaCopy(t *testing.T) {
 		res, err := provider.Provision(context.Background(), env)
 		require.NoError(t, err)
 		assert.True(t, res.Ready)
-		assert.Contains(t, res.SetupSQL, "WHERE table_schema = 'baseline_seed' AND table_type = 'BASE TABLE'")
-		assert.Contains(t, res.SetupSQL, "'preview_test_env', row.table_name, 'baseline_seed', row.table_name")
+		assert.Contains(t, res.SetupSQL, "AND s_tbl.table_schema = 'baseline_seed' AND s_tbl.table_type = 'BASE TABLE'")
+		assert.Contains(t, res.SetupSQL, "'preview_test_env', row.table_name, col_list, col_list, 'baseline_seed', row.table_name")
 	})
 
 	t.Run("rejects invalid schema name", func(t *testing.T) {

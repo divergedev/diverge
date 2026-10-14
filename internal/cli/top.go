@@ -208,6 +208,25 @@ func estimateEnvHourlyCost(env *divergeiov1alpha1.Environment) float64 {
 	return hourlyUSD
 }
 
+func previewGroupMatchesNamespace(pg *divergeiov1alpha1.PreviewGroup, namespace string) bool {
+	if pg == nil || namespace == "" {
+		return true
+	}
+	if pg.Namespace == namespace {
+		return true
+	}
+	for _, svc := range pg.Spec.Services {
+		svcNS := strings.TrimSpace(svc.Namespace)
+		if svcNS == "" {
+			svcNS = "default"
+		}
+		if svcNS == namespace {
+			return true
+		}
+	}
+	return false
+}
+
 func collectTopSnapshot(ctx context.Context, c client.Client, namespace string) (*TopSnapshot, error) {
 	listOpts := []client.ListOption{}
 	if namespace != "" {
@@ -224,18 +243,26 @@ func collectTopSnapshot(ctx context.Context, c client.Client, namespace string) 
 		return nil, fmt.Errorf("failed to list preview groups: %w", err)
 	}
 	if namespace != "" {
-		var clusterPGList divergeiov1alpha1.PreviewGroupList
-		if err := c.List(ctx, &clusterPGList); err == nil {
-			seenPG := make(map[string]bool, len(pgList.Items))
-			for _, pg := range pgList.Items {
+		filtered := make([]divergeiov1alpha1.PreviewGroup, 0, len(pgList.Items))
+		seenPG := make(map[string]bool, len(pgList.Items))
+		for _, pg := range pgList.Items {
+			if previewGroupMatchesNamespace(&pg, namespace) {
+				filtered = append(filtered, pg)
 				seenPG[pg.Namespace+"/"+pg.Name] = true
 			}
-			for _, pg := range clusterPGList.Items {
-				if !seenPG[pg.Namespace+"/"+pg.Name] {
-					pgList.Items = append(pgList.Items, pg)
-				}
+		}
+		var clusterPGList divergeiov1alpha1.PreviewGroupList
+		if err := c.List(ctx, &clusterPGList); err != nil {
+			return nil, fmt.Errorf("failed to list cluster preview groups: %w", err)
+		}
+		for _, pg := range clusterPGList.Items {
+			key := pg.Namespace + "/" + pg.Name
+			if !seenPG[key] && previewGroupMatchesNamespace(&pg, namespace) {
+				filtered = append(filtered, pg)
+				seenPG[key] = true
 			}
 		}
+		pgList.Items = filtered
 	}
 
 	var taskList divergeiov1alpha1.AgentTaskList

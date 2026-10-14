@@ -357,12 +357,21 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 }
 
 // reconcileReferenceGrant creates or updates a ReferenceGrant in backendNS
-// allowing HTTPRoute and GRPCRoute in ns to reference Services in backendNS.
+// allowing HTTPRoute and GRPCRoute in ns to reference preview Services in backendNS.
 func (r *GatewayRouter) reconcileReferenceGrant(ctx context.Context, env *v1alpha1.Environment, ns, backendNS string) error {
 	logger := log.FromContext(ctx).WithName("gateway-router")
 	grantName := fmt.Sprintf("diverge-%s-grant", env.Name)
 	apiVersion := "gateway.networking.k8s.io/v1beta1"
 	kind := "ReferenceGrant"
+
+	toEntries := make([]interface{}, 0, len(env.Spec.Deploy.ChangedServices))
+	for _, svc := range env.Spec.Deploy.ChangedServices {
+		toEntries = append(toEntries, map[string]interface{}{
+			"group": "",
+			"kind":  "Service",
+			"name":  fmt.Sprintf("%s-%s", env.Name, svc),
+		})
+	}
 
 	spec := map[string]interface{}{
 		"from": []interface{}{
@@ -377,12 +386,7 @@ func (r *GatewayRouter) reconcileReferenceGrant(ctx context.Context, env *v1alph
 				"namespace": ns,
 			},
 		},
-		"to": []interface{}{
-			map[string]interface{}{
-				"group": "",
-				"kind":  "Service",
-			},
-		},
+		"to": toEntries,
 	}
 
 	existing := &unstructured.Unstructured{}
@@ -392,8 +396,7 @@ func (r *GatewayRouter) reconcileReferenceGrant(ctx context.Context, env *v1alph
 	err := r.Client.Get(ctx, client.ObjectKey{Name: grantName, Namespace: backendNS}, existing)
 	if err != nil {
 		if meta.IsNoMatchError(err) {
-			logger.V(1).Info("ReferenceGrant CRD not installed, skipping", "name", grantName, "namespace", backendNS)
-			return nil
+			return fmt.Errorf("ReferenceGrant CRD (gateway.networking.k8s.io/v1beta1) is required for cross-namespace routing from %s to %s: %w", ns, backendNS, err)
 		}
 		if client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("failed to get ReferenceGrant %s: %w", grantName, err)
@@ -410,8 +413,7 @@ func (r *GatewayRouter) reconcileReferenceGrant(ctx context.Context, env *v1alph
 		u.Object["spec"] = spec
 		if err := r.Client.Create(ctx, u); err != nil {
 			if meta.IsNoMatchError(err) {
-				logger.V(1).Info("ReferenceGrant CRD not installed, skipping", "name", grantName, "namespace", backendNS)
-				return nil
+				return fmt.Errorf("ReferenceGrant CRD (gateway.networking.k8s.io/v1beta1) is required for cross-namespace routing from %s to %s: %w", ns, backendNS, err)
 			}
 			return fmt.Errorf("failed to create ReferenceGrant %s: %w", grantName, err)
 		}
