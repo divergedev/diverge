@@ -37,11 +37,12 @@ var ClusterGVK = schema.GroupVersionKind{
 
 // CNPGDatabaseProvider provisions and tears down ephemeral CloudNativePG Clusters.
 type CNPGDatabaseProvider struct {
-	Client        client.Client
-	Scheme        *runtime.Scheme
-	StorageSize   string // default "1Gi"
-	Instances     int64  // default 1
-	SourceCluster string // optional default source cluster for recovery/clone
+	Client          client.Client
+	Scheme          *runtime.Scheme
+	StorageSize     string // default "1Gi"
+	Instances       int64  // default 1
+	SourceCluster   string // optional default source cluster for recovery/clone
+	SourceNamespace string // optional default namespace for source cluster
 }
 
 var _ pkgdb.DatabaseProvider = (*CNPGDatabaseProvider)(nil)
@@ -124,6 +125,11 @@ func (p *CNPGDatabaseProvider) Provision(ctx context.Context, env *v1alpha1.Envi
 		env.Spec.Database.SeedSource,
 		p.SourceCluster,
 	)
+	sourceNS := firstNonEmpty(
+		env.Annotations["divergedev.com/cnpg-source-namespace"],
+		p.SourceNamespace,
+		baseNS,
+	)
 
 	spec := map[string]any{
 		"instances": instances,
@@ -135,9 +141,21 @@ func (p *CNPGDatabaseProvider) Provision(ctx context.Context, env *v1alpha1.Envi
 	if source != "" && env.Spec.Database.Mode != "fresh" {
 		bootstrapMode := strings.TrimSpace(env.Annotations["divergedev.com/cnpg-bootstrap-mode"])
 		if bootstrapMode == "recovery" {
+			barmanDest := strings.TrimSpace(env.Annotations["divergedev.com/cnpg-barman-destination-path"])
+			if barmanDest == "" {
+				return nil, fmt.Errorf("cnpg recovery bootstrap mode requires annotation divergedev.com/cnpg-barman-destination-path")
+			}
 			spec["bootstrap"] = map[string]any{
 				"recovery": map[string]any{
 					"source": source,
+				},
+			}
+			spec["externalClusters"] = []any{
+				map[string]any{
+					"name": source,
+					"barmanObjectStore": map[string]any{
+						"destinationPath": barmanDest,
+					},
 				},
 			}
 		} else {
@@ -148,16 +166,28 @@ func (p *CNPGDatabaseProvider) Provision(ctx context.Context, env *v1alpha1.Envi
 					"owner":    "app",
 				},
 			}
-		}
-		spec["externalClusters"] = []any{
-			map[string]any{
-				"name": source,
-				"connectionParameters": map[string]any{
-					"host":   fmt.Sprintf("%s-rw.%s.svc", source, baseNS),
-					"user":   "postgres",
-					"dbname": "app",
+			secretName := firstNonEmpty(
+				env.Annotations["divergedev.com/cnpg-source-secret"],
+				source+"-superuser",
+			)
+			secretKey := firstNonEmpty(
+				env.Annotations["divergedev.com/cnpg-source-secret-key"],
+				"password",
+			)
+			spec["externalClusters"] = []any{
+				map[string]any{
+					"name": source,
+					"connectionParameters": map[string]any{
+						"host":   fmt.Sprintf("%s-rw.%s.svc", source, sourceNS),
+						"user":   "postgres",
+						"dbname": "app",
+					},
+					"password": map[string]any{
+						"name": secretName,
+						"key":  secretKey,
+					},
 				},
-			},
+			}
 		}
 	} else {
 		spec["bootstrap"] = map[string]any{
@@ -194,6 +224,7 @@ func (p *CNPGDatabaseProvider) Provision(ctx context.Context, env *v1alpha1.Envi
 	}
 
 	dsn := fmt.Sprintf("postgres://app@%s-rw.%s.svc:5432/app?sslmode=disable", clusterName, targetNS)
+	hasSecretURI := false
 	var appSecret corev1.Secret
 	if err := p.Client.Get(ctx, types.NamespacedName{
 		Name:      clusterName + "-app",
@@ -201,7 +232,14 @@ func (p *CNPGDatabaseProvider) Provision(ctx context.Context, env *v1alpha1.Envi
 	}, &appSecret); err == nil {
 		if uri := strings.TrimSpace(string(appSecret.Data["uri"])); uri != "" {
 			dsn = uri
+			hasSecretURI = true
 		}
+	}
+
+	ready := status.Provisioned && hasSecretURI
+	msg := status.Message
+	if status.Provisioned && !hasSecretURI {
+		msg = fmt.Sprintf("Waiting for CNPG credentials secret %s/%s", targetNS, clusterName+"-app")
 	}
 
 	return &pkgdb.DatabaseResult{
@@ -211,8 +249,8 @@ func (p *CNPGDatabaseProvider) Provision(ctx context.Context, env *v1alpha1.Envi
 			"DATABASE_URL":         dsn,
 			"DIVERGE_CNPG_CLUSTER": clusterName,
 		},
-		Ready:   status.Provisioned,
-		Message: status.Message,
+		Ready:   ready,
+		Message: msg,
 	}, nil
 }
 

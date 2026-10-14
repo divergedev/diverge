@@ -233,7 +233,7 @@ database:
 
 In addition to lightweight PostgreSQL schema isolation (`mode: schema`), Diverge includes a native **CloudNativePG** (`postgresql.cnpg.io/v1` `Cluster`) database provider (`internal/database/cnpg`) for full cluster-level isolation inside Kubernetes:
 
-- **Fresh Cluster (`mode: fresh` or `--database-provider=cnpg`)**: Provisions an ephemeral single-instance CloudNativePG `Cluster` (`diverge-pg-<env>`) bootstrapped via `initdb` (`database: app`, `owner: app`).
-- **Cloned Snapshot Cluster (`mode: snapshot`)**: When `spec.database.seedSource` (or annotation `divergedev.com/cnpg-source-cluster` / `DIVERGE_CNPG_SOURCE_CLUSTER`) references an in-cluster baseline CNPG cluster, Diverge provisions `diverge-pg-<env>` using `pg_basebackup` streaming clone (or `recovery` when `divergedev.com/cnpg-bootstrap-mode: recovery` is set).
+- **Fresh Cluster (`mode: fresh` or annotation `divergedev.com/database-provider: cnpg`)**: Provisions an ephemeral single-instance CloudNativePG `Cluster` (`diverge-pg-<env>`) bootstrapped via `initdb` (`database: app`, `owner: app`).
+- **Cloned Snapshot Cluster (`mode: snapshot`)**: When `spec.database.seedSource` (or annotation `divergedev.com/cnpg-source-cluster` / `DIVERGE_CNPG_SOURCE_CLUSTER`) references an in-cluster baseline CNPG cluster, Diverge provisions `diverge-pg-<env>` using `pg_basebackup` streaming clone (with configurable `divergedev.com/cnpg-source-namespace` and `divergedev.com/cnpg-source-secret`), or via `recovery` when `divergedev.com/cnpg-bootstrap-mode: recovery` and an object-store backup path (`divergedev.com/cnpg-barman-destination-path`) are configured.
 - **Automatic Secret Wiring & Teardown**: Once the CNPG `Cluster` reports healthy, Diverge reads the generated `<cluster>-app` Secret URI and injects `DATABASE_URL` and `DIVERGE_CNPG_CLUSTER` into `diverge-db-env-<env>`, and automatically deletes the `Cluster` when the preview `Environment` is torn down.
 

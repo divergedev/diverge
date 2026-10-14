@@ -431,10 +431,13 @@ const (
 
 // EnvironmentStatus defines the observed state of Environment
 type EnvironmentStatus struct {
-	Phase              EnvironmentPhase   `json:"phase,omitempty"`
-	URL                string             `json:"url,omitempty"`
-	Services           []string           `json:"services,omitempty"`
-	DatabaseStatus     string             `json:"databaseStatus,omitempty"`
+	Phase          EnvironmentPhase `json:"phase,omitempty"`
+	URL            string           `json:"url,omitempty"`
+	Services       []string         `json:"services,omitempty"`
+	DatabaseStatus string           `json:"databaseStatus,omitempty"`
+	// DatabaseProvider records the resolved database provider name for consistent teardown.
+	// +optional
+	DatabaseProvider   string             `json:"databaseProvider,omitempty"`
 	CreatedAt          *metav1.Time       `json:"createdAt,omitempty"`
 	ExpiresAt          *metav1.Time       `json:"expiresAt,omitempty"`
 	ObservedGeneration int64              `json:"observedGeneration,omitempty"`

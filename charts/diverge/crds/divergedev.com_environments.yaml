@@ -695,6 +695,10 @@ spec:
               createdAt:
                 format: date-time
                 type: string
+              databaseProvider:
+                description: DatabaseProvider records the resolved database provider
+                  name for consistent teardown.
+                type: string
               databaseStatus:
                 type: string
               expiresAt:

@@ -98,10 +98,12 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 	// 6. Ensure database
 	tCtxDB, cancelDB := context.WithTimeout(ctx, 15*time.Second)
 	defer cancelDB()
-	dbProv := r.getDatabaseProvider(env)
+	dbProv, resolvedDBName, err := r.resolveDatabaseProvider(env, false)
+	if resolvedDBName != "" {
+		env.Status.DatabaseProvider = resolvedDBName
+	}
 	var dbStatus *pkgdb.DatabaseResult
-	var err error
-	if dbProv != nil {
+	if err == nil && dbProv != nil {
 		dbStatus, err = dbProv.Provision(tCtxDB, env)
 	}
 	if err != nil {
@@ -472,27 +474,59 @@ func (r *EnvironmentReconciler) getFeatureProvider(env *divergeiov1alpha1.Enviro
 	return nil, fmt.Errorf("feature provider %q not registered", providerName)
 }
 
-func (r *EnvironmentReconciler) getDatabaseProvider(env *divergeiov1alpha1.Environment) pkgdb.DatabaseProvider {
+var allowedEnvDatabaseProviders = map[string]bool{
+	"cnpg":     true,
+	"fresh":    true,
+	"snapshot": true,
+	"schema":   true,
+	"noop":     true,
+	"none":     true,
+}
+
+func (r *EnvironmentReconciler) resolveDatabaseProvider(env *divergeiov1alpha1.Environment, forTeardown bool) (pkgdb.DatabaseProvider, string, error) {
 	if env != nil {
+		if forTeardown {
+			recorded := strings.TrimSpace(env.Status.DatabaseProvider)
+			if recorded != "" && pkgdb.Providers.Has(recorded) {
+				deps := registry.Deps{
+					Client: r.Client,
+					Scheme: r.Scheme,
+				}
+				prov, err := pkgdb.Providers.Create(recorded, deps)
+				if err != nil {
+					return nil, recorded, fmt.Errorf("failed to create recorded database provider %q: %w", recorded, err)
+				}
+				return prov, recorded, nil
+			}
+		}
+
 		explicit := strings.TrimSpace(env.Annotations["divergedev.com/database-provider"])
 		mode := strings.TrimSpace(env.Spec.Database.Mode)
 		var candidate string
 		if explicit != "" {
+			if !allowedEnvDatabaseProviders[explicit] {
+				return nil, "", fmt.Errorf("unsupported database provider annotation %q", explicit)
+			}
 			candidate = explicit
 		} else if (mode == "snapshot" || mode == "cnpg" || mode == "fresh") && isDefaultOrNoopDBProvider(r.DatabaseProvider) {
 			candidate = mode
 		}
-		if candidate != "" && pkgdb.Providers.Has(candidate) {
+		if candidate != "" {
+			if !pkgdb.Providers.Has(candidate) {
+				return nil, candidate, fmt.Errorf("database provider %q is not registered", candidate)
+			}
 			deps := registry.Deps{
 				Client: r.Client,
 				Scheme: r.Scheme,
 			}
-			if prov, err := pkgdb.Providers.Create(candidate, deps); err == nil && prov != nil {
-				return prov
+			prov, err := pkgdb.Providers.Create(candidate, deps)
+			if err != nil {
+				return nil, candidate, fmt.Errorf("failed to create database provider %q: %w", candidate, err)
 			}
+			return prov, candidate, nil
 		}
 	}
-	return r.DatabaseProvider
+	return r.DatabaseProvider, "", nil
 }
 
 func isDefaultOrNoopDBProvider(p pkgdb.DatabaseProvider) bool {

@@ -31,6 +31,9 @@ func (v *environmentValidator) ValidateCreate(_ context.Context, env *Environmen
 
 // ValidateUpdate validates an updated Environment.
 func (v *environmentValidator) ValidateUpdate(_ context.Context, _ *Environment, newEnv *Environment) (admission.Warnings, error) {
+	if newEnv != nil && newEnv.DeletionTimestamp != nil {
+		return nil, nil
+	}
 	return nil, ValidateEnvironment(newEnv).ToAggregate()
 }
 

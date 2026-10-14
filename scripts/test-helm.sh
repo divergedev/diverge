@@ -100,5 +100,17 @@ if ! echo "$admission_output" | grep -qE '^kind: ValidatingAdmissionPolicyBindin
   echo 'FAIL: ValidatingAdmissionPolicyBinding not found when webhook.admissionPolicy.enabled=true'
   exit 1
 fi
+if helm template diverge charts/diverge/ --set webhook.validatingWebhook.enabled=true --set certManager.enabled=false > /dev/null 2>&1; then
+  echo 'FAIL: Expected helm template to fail when validatingWebhook.enabled=true and certManager.enabled=false without caBundle'
+  exit 1
+fi
+cabundle_output=$(helm template diverge charts/diverge/ \
+  --set webhook.validatingWebhook.enabled=true \
+  --set certManager.enabled=false \
+  --set webhook.validatingWebhook.caBundle=dGVzdC1jYQ==)
+if ! echo "$cabundle_output" | grep -q 'caBundle: "dGVzdC1jYQ=="'; then
+  echo 'FAIL: Expected caBundle to be rendered in ValidatingWebhookConfiguration'
+  exit 1
+fi
 
 echo '✅ All Helm tests passed'

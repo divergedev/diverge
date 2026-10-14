@@ -82,6 +82,52 @@ func TestCNPGDatabaseProvider_Provision_CloneFromSeedSource(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, found)
 	require.Len(t, extClusters, 1)
+	extClusterMap, ok := extClusters[0].(map[string]any)
+	require.True(t, ok)
+	pwMap, ok := extClusterMap["password"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "main-db-superuser", pwMap["name"])
+	assert.Equal(t, "password", pwMap["key"])
+}
+
+func TestCNPGDatabaseProvider_Provision_RecoveryModeValidation(t *testing.T) {
+	scheme := newTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	prov := &CNPGDatabaseProvider{
+		Client: k8sClient,
+		Scheme: scheme,
+	}
+
+	envMissingBarman := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-rec-fail",
+			Namespace: "default",
+			Annotations: map[string]string{
+				"divergedev.com/cnpg-source-cluster": "main-db",
+				"divergedev.com/cnpg-bootstrap-mode": "recovery",
+			},
+		},
+	}
+	_, err := prov.Provision(context.Background(), envMissingBarman)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "divergedev.com/cnpg-barman-destination-path")
+
+	envValidBarman := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-rec-ok",
+			Namespace: "default",
+			UID:       "uid-rec-ok",
+			Annotations: map[string]string{
+				"divergedev.com/cnpg-source-cluster":          "main-db",
+				"divergedev.com/cnpg-bootstrap-mode":          "recovery",
+				"divergedev.com/cnpg-barman-destination-path": "s3://backups/main-db",
+			},
+		},
+	}
+	res, err := prov.Provision(context.Background(), envValidBarman)
+	require.NoError(t, err)
+	assert.False(t, res.Ready)
 }
 
 func TestCNPGDatabaseProvider_Provision_FreshInitDBAndSecretURI(t *testing.T) {
@@ -169,10 +215,28 @@ func TestCNPGDatabaseProvider_StatusAndTeardown(t *testing.T) {
 	assert.True(t, st.Provisioned)
 	assert.Contains(t, st.Message, "Cluster in healthy state")
 
-	// Provision again when healthy returns Ready: true
+	// Provision when healthy but <cluster>-app Secret does not exist yet returns Ready: false
+	resNoSecret, err := prov.Provision(context.Background(), env)
+	require.NoError(t, err)
+	assert.False(t, resNoSecret.Ready)
+	assert.Contains(t, resNoSecret.Message, "Waiting for CNPG credentials secret")
+
+	// Create <cluster>-app Secret and verify Provision returns Ready: true with authenticated URI
+	appSec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "diverge-pg-pr-status-app",
+			Namespace: "default",
+		},
+		Data: map[string][]byte{
+			"uri": []byte("postgres://app:secret-pw@diverge-pg-pr-status-rw.default.svc:5432/app"),
+		},
+	}
+	require.NoError(t, k8sClient.Create(context.Background(), appSec))
+
 	res, err := prov.Provision(context.Background(), env)
 	require.NoError(t, err)
 	assert.True(t, res.Ready)
+	assert.Equal(t, "postgres://app:secret-pw@diverge-pg-pr-status-rw.default.svc:5432/app", res.DSN)
 
 	// Teardown deletes the cluster and is idempotent
 	require.NoError(t, prov.Teardown(context.Background(), env))

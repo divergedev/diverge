@@ -33,6 +33,9 @@ func (v *agentTaskValidator) ValidateCreate(_ context.Context, task *AgentTask) 
 
 // ValidateUpdate validates an updated AgentTask.
 func (v *agentTaskValidator) ValidateUpdate(_ context.Context, _ *AgentTask, newTask *AgentTask) (admission.Warnings, error) {
+	if newTask != nil && newTask.DeletionTimestamp != nil {
+		return nil, nil
+	}
 	return nil, ValidateAgentTask(newTask).ToAggregate()
 }
 

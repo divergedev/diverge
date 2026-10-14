@@ -14,11 +14,12 @@ func init() {
 			storageSize = DefaultStorageSize
 		}
 		return &CNPGDatabaseProvider{
-			Client:        deps.Client,
-			Scheme:        deps.Scheme,
-			StorageSize:   storageSize,
-			Instances:     DefaultInstances,
-			SourceCluster: os.Getenv("DIVERGE_CNPG_SOURCE_CLUSTER"),
+			Client:          deps.Client,
+			Scheme:          deps.Scheme,
+			StorageSize:     storageSize,
+			Instances:       DefaultInstances,
+			SourceCluster:   os.Getenv("DIVERGE_CNPG_SOURCE_CLUSTER"),
+			SourceNamespace: os.Getenv("DIVERGE_CNPG_SOURCE_NAMESPACE"),
 		}, nil
 	}
 

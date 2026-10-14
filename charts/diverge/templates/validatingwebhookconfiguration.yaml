@@ -1,4 +1,7 @@
 {{- if and .Values.webhook.validatingWebhook.enabled (not .Values.rbac.namespaceScoped) }}
+{{- if and (not .Values.certManager.enabled) (not .Values.webhook.validatingWebhook.caBundle) }}
+{{- fail "webhook.validatingWebhook.caBundle is required when webhook.validatingWebhook.enabled=true and certManager.enabled=false" }}
+{{- end }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
 metadata:
@@ -14,6 +17,9 @@ webhooks:
     admissionReviewVersions:
       - v1
     clientConfig:
+      {{- if .Values.webhook.validatingWebhook.caBundle }}
+      caBundle: {{ .Values.webhook.validatingWebhook.caBundle | quote }}
+      {{- end }}
       service:
         name: {{ include "diverge.fullname" . }}-webhook-service
         namespace: {{ .Release.Namespace }}
@@ -34,6 +40,9 @@ webhooks:
     admissionReviewVersions:
       - v1
     clientConfig:
+      {{- if .Values.webhook.validatingWebhook.caBundle }}
+      caBundle: {{ .Values.webhook.validatingWebhook.caBundle | quote }}
+      {{- end }}
       service:
         name: {{ include "diverge.fullname" . }}-webhook-service
         namespace: {{ .Release.Namespace }}
@@ -54,6 +63,9 @@ webhooks:
     admissionReviewVersions:
       - v1
     clientConfig:
+      {{- if .Values.webhook.validatingWebhook.caBundle }}
+      caBundle: {{ .Values.webhook.validatingWebhook.caBundle | quote }}
+      {{- end }}
       service:
         name: {{ include "diverge.fullname" . }}-webhook-service
         namespace: {{ .Release.Namespace }}

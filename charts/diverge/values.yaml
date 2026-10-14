@@ -49,6 +49,7 @@ webhook:
   validatingWebhook:
     enabled: false
     failurePolicy: Fail
+    caBundle: ""
   admissionPolicy:
     enabled: false
 

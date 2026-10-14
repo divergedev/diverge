@@ -501,7 +501,9 @@ func TestGetDatabaseProvider_DynamicResolution(t *testing.T) {
 			Database: divergeiov1alpha1.EnvironmentDatabase{Mode: "snapshot"},
 		},
 	}
-	prov := r.getDatabaseProvider(envSnapshot)
+	prov, name, err := r.resolveDatabaseProvider(envSnapshot, false)
+	require.NoError(t, err)
+	assert.Equal(t, "snapshot", name)
 	assert.IsType(t, &cnpg.CNPGDatabaseProvider{}, prov)
 
 	envFresh := &divergeiov1alpha1.Environment{
@@ -510,7 +512,9 @@ func TestGetDatabaseProvider_DynamicResolution(t *testing.T) {
 			Database: divergeiov1alpha1.EnvironmentDatabase{Mode: "fresh"},
 		},
 	}
-	provFresh := r.getDatabaseProvider(envFresh)
+	provFresh, nameFresh, err := r.resolveDatabaseProvider(envFresh, false)
+	require.NoError(t, err)
+	assert.Equal(t, "fresh", nameFresh)
 	assert.IsType(t, &cnpg.CNPGDatabaseProvider{}, provFresh)
 
 	envExplicit := &divergeiov1alpha1.Environment{
@@ -522,6 +526,37 @@ func TestGetDatabaseProvider_DynamicResolution(t *testing.T) {
 			},
 		},
 	}
-	provExplicit := r.getDatabaseProvider(envExplicit)
+	provExplicit, nameExplicit, err := r.resolveDatabaseProvider(envExplicit, false)
+	require.NoError(t, err)
+	assert.Equal(t, "cnpg", nameExplicit)
 	assert.IsType(t, &cnpg.CNPGDatabaseProvider{}, provExplicit)
+
+	// Teardown uses recorded Status.DatabaseProvider even if annotation was removed
+	envTeardown := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-teardown",
+			Namespace: "default",
+		},
+		Status: divergeiov1alpha1.EnvironmentStatus{
+			DatabaseProvider: "cnpg",
+		},
+	}
+	provTeardown, nameTeardown, err := r.resolveDatabaseProvider(envTeardown, true)
+	require.NoError(t, err)
+	assert.Equal(t, "cnpg", nameTeardown)
+	assert.IsType(t, &cnpg.CNPGDatabaseProvider{}, provTeardown)
+
+	// Unsupported annotation is rejected
+	envInvalid := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-invalid",
+			Namespace: "default",
+			Annotations: map[string]string{
+				"divergedev.com/database-provider": "unknown-provider",
+			},
+		},
+	}
+	_, _, err = r.resolveDatabaseProvider(envInvalid, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported database provider annotation")
 }

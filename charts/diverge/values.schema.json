@@ -124,7 +124,8 @@
             "failurePolicy": {
               "type": "string",
               "enum": ["Fail", "Ignore"]
-            }
+            },
+            "caBundle": { "type": "string" }
           }
         },
         "admissionPolicy": {

@@ -381,4 +381,11 @@ func TestEnvironmentValidatorLifecycle(t *testing.T) {
 	if _, err := v.ValidateDelete(ctx, invalidEnv); err != nil {
 		t.Errorf("ValidateDelete returned error: %v", err)
 	}
+
+	now := metav1.Now()
+	deletingInvalidEnv := invalidEnv.DeepCopy()
+	deletingInvalidEnv.DeletionTimestamp = &now
+	if _, err := v.ValidateUpdate(ctx, invalidEnv, deletingInvalidEnv); err != nil {
+		t.Errorf("ValidateUpdate on deleting env returned error: %v", err)
+	}
 }

@@ -77,7 +77,9 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		}
 		cancelR()
 
-		if dbProv := r.getDatabaseProvider(env); dbProv != nil {
+		if dbProv, _, dbResolveErr := r.resolveDatabaseProvider(env, true); dbResolveErr != nil {
+			errs = append(errs, fmt.Errorf("failed to resolve database provider for teardown: %w", dbResolveErr))
+		} else if dbProv != nil {
 			tCtxDB, cancelDB := context.WithTimeout(ctx, 15*time.Second)
 			if err := dbProv.Teardown(tCtxDB, env); err != nil {
 				errs = append(errs, fmt.Errorf("failed to teardown database: %w", err))

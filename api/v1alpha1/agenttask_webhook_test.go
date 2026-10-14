@@ -283,4 +283,11 @@ func TestAgentTaskValidatorLifecycle(t *testing.T) {
 	if _, err := v.ValidateDelete(ctx, invalidTask); err != nil {
 		t.Errorf("ValidateDelete returned error: %v", err)
 	}
+
+	now := metav1.Now()
+	deletingInvalidTask := invalidTask.DeepCopy()
+	deletingInvalidTask.DeletionTimestamp = &now
+	if _, err := v.ValidateUpdate(ctx, invalidTask, deletingInvalidTask); err != nil {
+		t.Errorf("ValidateUpdate on deleting task returned error: %v", err)
+	}
 }
