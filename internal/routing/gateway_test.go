@@ -952,3 +952,148 @@ func TestGatewayRouter_Reconcile_WebSocketScoping(t *testing.T) {
 	rulesWeb, _, _ := unstructured.NestedSlice(uWeb.Object, "spec", "rules")
 	assert.Len(t, rulesWeb, 1)
 }
+
+func TestGatewayRouter_Reconcile_CrossNamespaceReferenceGrant(t *testing.T) {
+	c := fake.NewClientBuilder().Build()
+	r := &GatewayRouter{Client: c, Namespace: "default"}
+
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-env",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Deploy: v1alpha1.EnvironmentDeploy{
+				Namespace:       "create",
+				ChangedServices: []string{"web"},
+			},
+			ServiceConfig: &v1alpha1.ServicePreviewConfig{
+				WebSocket: &v1alpha1.WebSocketSpec{
+					Enabled: true,
+					Path:    "/ws",
+				},
+			},
+		},
+	}
+
+	previewNS := env.PreviewNamespace()
+	require.NotEqual(t, "default", previewNS)
+
+	err := r.Reconcile(context.Background(), env)
+	require.NoError(t, err)
+
+	// Verify HTTPRoute has backendRefs[0].namespace = previewNS on both rules (wsRule and main rule)
+	u := &unstructured.Unstructured{}
+	u.SetAPIVersion("gateway.networking.k8s.io/v1")
+	u.SetKind("HTTPRoute")
+	err = c.Get(context.Background(), client.ObjectKey{Name: "test-env-web", Namespace: "default"}, u)
+	require.NoError(t, err)
+
+	rules, found, err := unstructured.NestedSlice(u.Object, "spec", "rules")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, rules, 2)
+
+	for i, rawRule := range rules {
+		rule := rawRule.(map[string]interface{})
+		backends, _, _ := unstructured.NestedSlice(rule, "backendRefs")
+		require.Len(t, backends, 1, "rule %d should have 1 backendRef", i)
+		backend := backends[0].(map[string]interface{})
+		assert.Equal(t, "test-env-web", backend["name"])
+		assert.Equal(t, previewNS, backend["namespace"], "rule %d backendRef should target preview namespace", i)
+	}
+
+	// Verify ReferenceGrant was created in previewNS
+	grant := &unstructured.Unstructured{}
+	grant.SetAPIVersion("gateway.networking.k8s.io/v1beta1")
+	grant.SetKind("ReferenceGrant")
+	err = c.Get(context.Background(), client.ObjectKey{Name: "diverge-test-env-grant", Namespace: previewNS}, grant)
+	require.NoError(t, err)
+
+	assert.Equal(t, "test-env", grant.GetLabels()["divergedev.com/environment"])
+	assert.Equal(t, "diverge", grant.GetLabels()["divergedev.com/managed-by"])
+
+	fromSlice, found, err := unstructured.NestedSlice(grant.Object, "spec", "from")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, fromSlice, 2)
+	assert.Equal(t, map[string]interface{}{
+		"group":     "gateway.networking.k8s.io",
+		"kind":      "HTTPRoute",
+		"namespace": "default",
+	}, fromSlice[0])
+	assert.Equal(t, map[string]interface{}{
+		"group":     "gateway.networking.k8s.io",
+		"kind":      "GRPCRoute",
+		"namespace": "default",
+	}, fromSlice[1])
+
+	toSlice, found, err := unstructured.NestedSlice(grant.Object, "spec", "to")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, toSlice, 1)
+	assert.Equal(t, map[string]interface{}{
+		"group": "",
+		"kind":  "Service",
+	}, toSlice[0])
+
+	// Verify Teardown deletes the ReferenceGrant in previewNS
+	err = r.Teardown(context.Background(), env)
+	require.NoError(t, err)
+
+	err = c.Get(context.Background(), client.ObjectKey{Name: "diverge-test-env-grant", Namespace: previewNS}, grant)
+	assert.Error(t, err, "ReferenceGrant in preview namespace should be deleted on Teardown")
+}
+
+func TestGatewayRouter_Reconcile_GatewayNamespaceAnnotation(t *testing.T) {
+	c := fake.NewClientBuilder().Build()
+	r := &GatewayRouter{Client: c, Namespace: "default"}
+
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-env",
+			Namespace: "default",
+			Annotations: map[string]string{
+				"divergedev.com/gateway-namespace": "istio-ingress",
+			},
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Deploy: v1alpha1.EnvironmentDeploy{
+				ChangedServices: []string{"web"},
+			},
+			ServiceConfig: &v1alpha1.ServicePreviewConfig{
+				ServiceName: "web-svc",
+			},
+		},
+	}
+
+	err := r.Reconcile(context.Background(), env)
+	require.NoError(t, err)
+
+	// North-south HTTPRoute should set parentRefs[0].namespace = "istio-ingress"
+	u := &unstructured.Unstructured{}
+	u.SetAPIVersion("gateway.networking.k8s.io/v1")
+	u.SetKind("HTTPRoute")
+	err = c.Get(context.Background(), client.ObjectKey{Name: "test-env-web", Namespace: "default"}, u)
+	require.NoError(t, err)
+
+	parents, _, _ := unstructured.NestedSlice(u.Object, "spec", "parentRefs")
+	require.Len(t, parents, 1)
+	parent := parents[0].(map[string]interface{})
+	assert.Equal(t, "diverge-gateway", parent["name"])
+	assert.Equal(t, "istio-ingress", parent["namespace"])
+
+	// GAMMA mesh route (Service parentRef) should NOT set parentRefs[0].namespace
+	meshRoute := &unstructured.Unstructured{}
+	meshRoute.SetAPIVersion("gateway.networking.k8s.io/v1")
+	meshRoute.SetKind("HTTPRoute")
+	err = c.Get(context.Background(), client.ObjectKey{Name: "test-env-web-mesh", Namespace: "default"}, meshRoute)
+	require.NoError(t, err)
+
+	meshParents, _, _ := unstructured.NestedSlice(meshRoute.Object, "spec", "parentRefs")
+	require.Len(t, meshParents, 1)
+	meshParent := meshParents[0].(map[string]interface{})
+	assert.Equal(t, "web-svc", meshParent["name"])
+	assert.Equal(t, "Service", meshParent["kind"])
+	assert.Nil(t, meshParent["namespace"], "GAMMA Service parentRef should not have gateway-namespace")
+}

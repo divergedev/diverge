@@ -31,7 +31,7 @@ rules:
     verbs: [get, list, watch, create, update, patch, delete]
   # Gateway API
   - apiGroups: ["gateway.networking.k8s.io"]
-    resources: [httproutes, grpcroutes]
+    resources: [httproutes, grpcroutes, referencegrants]
     verbs: [get, list, watch, create, update, patch, delete]
   # NetworkPolicies
   - apiGroups: ["networking.k8s.io"]

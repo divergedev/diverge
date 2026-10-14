@@ -5,12 +5,36 @@ package async
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	v1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
+
+const (
+	// DefaultKafkaRetentionMs is the default topic retention (24h in milliseconds) for ephemeral preview topics.
+	DefaultKafkaRetentionMs = "86400000"
+	// AnnotationKafkaRetentionMs allows overriding the preview Kafka topic retention.ms in milliseconds.
+	AnnotationKafkaRetentionMs = "divergedev.com/kafka-retention-ms"
+)
+
+func resolveTopicRetentionMs(env *v1alpha1.Environment) string {
+	if env != nil && env.Annotations != nil {
+		if raw := strings.TrimSpace(env.Annotations[AnnotationKafkaRetentionMs]); raw != "" {
+			if ms, err := strconv.ParseInt(raw, 10, 64); err == nil && ms > 0 {
+				return strconv.FormatInt(ms, 10)
+			}
+		}
+	}
+	if env != nil && env.Spec.Lifecycle.TTL != nil && env.Spec.Lifecycle.TTL.Duration > 0 {
+		if ms := env.Spec.Lifecycle.TTL.Milliseconds(); ms > 0 {
+			return strconv.FormatInt(ms, 10)
+		}
+	}
+	return DefaultKafkaRetentionMs
+}
 
 // KafkaAdmin abstracts the Kafka admin operations for testability.
 type KafkaAdmin interface {
@@ -79,8 +103,11 @@ func (k *KafkaProvisioner) Provision(ctx context.Context, env *v1alpha1.Environm
 	}
 	defer admin.Close()
 
+	retentionMs := resolveTopicRetentionMs(env)
+	configs := map[string]*string{"retention.ms": &retentionMs}
+
 	// Create topic with preview-specific name
-	resp, err := admin.CreateTopics(ctx, k.NumPartitions, k.ReplicationFactor, nil, target)
+	resp, err := admin.CreateTopics(ctx, k.NumPartitions, k.ReplicationFactor, configs, target)
 	if err != nil {
 		return nil, fmt.Errorf("kafka create topic failed: %w", err)
 	}

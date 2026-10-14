@@ -70,6 +70,7 @@ Configure in your AI editor (Cursor, Claude, etc.):
 
 	cmd.Flags().StringVar(&serverURL, "server-url", "", "Diverge server URL (auto-discovered if empty)")
 	cmd.Flags().BoolVar(&allowDestructive, "allow-destructive", false, "Enable destructive tools (delete)")
+	cmd.AddCommand(newMCPSetupCmd(app))
 	return cmd
 }
 

@@ -132,13 +132,8 @@ rules:
   - gateway.networking.k8s.io
   resources:
   - grpcroutes
-  verbs:
-  - delete
-  - list
-- apiGroups:
-  - gateway.networking.k8s.io
-  resources:
   - httproutes
+  - referencegrants
   verbs:
   - create
   - delete

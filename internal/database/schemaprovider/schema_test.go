@@ -11,7 +11,11 @@ import (
 
 	"github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 type recordingExecutor struct {
@@ -259,4 +263,128 @@ func TestBuildWorkloadDSN_KeywordValueForm(t *testing.T) {
 	assert.Contains(t, res, "password=my_pass")
 	assert.Contains(t, res, "search_path=my_schema")
 	assert.NotContains(t, res, "admin")
+}
+
+func TestSchemaDatabaseProvider_Provision_PublicSchemaWriteProtection(t *testing.T) {
+	mockExec := &recordingExecutor{}
+	provider := &SchemaDatabaseProvider{AdminDSN: "postgres://admin@localhost/db", Executor: mockExec}
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-env",
+		},
+	}
+
+	res, err := provider.Provision(context.Background(), env)
+	require.NoError(t, err)
+	assert.Contains(t, res.SetupSQL, `REVOKE CREATE ON SCHEMA public FROM "diverge_preview_preview_test_env";`)
+	assert.Contains(t, res.SetupSQL, `REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA public FROM "diverge_preview_preview_test_env";`)
+	assert.Contains(t, res.SetupSQL, `GRANT USAGE ON SCHEMA public TO "diverge_preview_preview_test_env";`)
+	assert.Contains(t, res.SetupSQL, `GRANT SELECT ON ALL TABLES IN SCHEMA public TO "diverge_preview_preview_test_env";`)
+}
+
+func TestSchemaDatabaseProvider_Provision_SeedSource_SchemaCopy(t *testing.T) {
+	t.Run("public schema copy", func(t *testing.T) {
+		mockExec := &recordingExecutor{}
+		provider := &SchemaDatabaseProvider{AdminDSN: "postgres://admin@localhost/db", Executor: mockExec}
+		env := &v1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-env"},
+			Spec: v1alpha1.EnvironmentSpec{
+				Database: v1alpha1.EnvironmentDatabase{
+					Mode:       "schema",
+					SeedSource: "public",
+				},
+			},
+		}
+
+		res, err := provider.Provision(context.Background(), env)
+		require.NoError(t, err)
+		assert.True(t, res.Ready)
+		assert.Contains(t, res.SetupSQL, "DO $diverge_seed$")
+		assert.Contains(t, res.SetupSQL, "INSERT INTO %I.%I OVERRIDING SYSTEM VALUE SELECT * FROM %I.%I ON CONFLICT DO NOTHING")
+		assert.Contains(t, res.SetupSQL, "'preview_test_env', row.table_name, 'public', row.table_name")
+		assert.Contains(t, mockExec.lastSQL, "DO $diverge_seed$")
+	})
+
+	t.Run("named schema copy", func(t *testing.T) {
+		mockExec := &recordingExecutor{}
+		provider := &SchemaDatabaseProvider{AdminDSN: "postgres://admin@localhost/db", Executor: mockExec}
+		env := &v1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-env"},
+			Spec: v1alpha1.EnvironmentSpec{
+				Database: v1alpha1.EnvironmentDatabase{
+					Mode:       "schema",
+					SeedSource: "schema:baseline_seed",
+				},
+			},
+		}
+
+		res, err := provider.Provision(context.Background(), env)
+		require.NoError(t, err)
+		assert.True(t, res.Ready)
+		assert.Contains(t, res.SetupSQL, "WHERE table_schema = 'baseline_seed' AND table_type = 'BASE TABLE'")
+		assert.Contains(t, res.SetupSQL, "'preview_test_env', row.table_name, 'baseline_seed', row.table_name")
+	})
+
+	t.Run("rejects invalid schema name", func(t *testing.T) {
+		mockExec := &recordingExecutor{}
+		provider := &SchemaDatabaseProvider{AdminDSN: "postgres://admin@localhost/db", Executor: mockExec}
+		env := &v1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-env"},
+			Spec: v1alpha1.EnvironmentSpec{
+				Database: v1alpha1.EnvironmentDatabase{
+					Mode:       "schema",
+					SeedSource: "schema:bad;drop",
+				},
+			},
+		}
+
+		_, err := provider.Provision(context.Background(), env)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidSchemaName)
+		assert.False(t, mockExec.called)
+	})
+}
+
+func TestSchemaDatabaseProvider_Provision_SeedSource_ConfigMap(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	seedCM := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "preview-seed",
+			Namespace: "default",
+		},
+		Data: map[string]string{
+			"seed.sql": "INSERT INTO users (id, email) VALUES (1, 'dev@example.com') ON CONFLICT DO NOTHING;",
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(seedCM).Build()
+
+	mockExec := &recordingExecutor{}
+	provider := &SchemaDatabaseProvider{
+		AdminDSN: "postgres://admin@localhost/db",
+		Executor: mockExec,
+		Client:   k8sClient,
+	}
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-env",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Database: v1alpha1.EnvironmentDatabase{
+				Mode:       "schema",
+				SeedSource: "configmap:preview-seed",
+			},
+		},
+	}
+
+	res, err := provider.Provision(context.Background(), env)
+	require.NoError(t, err)
+	assert.True(t, res.Ready)
+	assert.True(t, res.SetupSQLExecuted)
+	assert.Contains(t, res.SetupSQL, "-- Seed SQL from ConfigMap preview-seed")
+	assert.Contains(t, res.SetupSQL, `SET LOCAL search_path TO "preview_test_env", public;`)
+	assert.Contains(t, res.SetupSQL, "INSERT INTO users (id, email) VALUES (1, 'dev@example.com') ON CONFLICT DO NOTHING;")
+	assert.Contains(t, mockExec.lastSQL, "INSERT INTO users (id, email) VALUES (1, 'dev@example.com') ON CONFLICT DO NOTHING;")
 }

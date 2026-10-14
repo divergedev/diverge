@@ -256,6 +256,16 @@ $diverge_role$;
 	setupSQL += fmt.Sprintf("GRANT ALL ON ALL TABLES IN SCHEMA %s TO %s;\n", schemaIdent, roleIdent)
 	setupSQL += fmt.Sprintf("GRANT ALL ON ALL SEQUENCES IN SCHEMA %s TO %s;\n", schemaIdent, roleIdent)
 	setupSQL += fmt.Sprintf("ALTER DEFAULT PRIVILEGES IN SCHEMA %s GRANT ALL ON TABLES TO %s;\n", schemaIdent, roleIdent)
+	setupSQL += fmt.Sprintf("REVOKE CREATE ON SCHEMA public FROM %s;\n", roleIdent)
+	setupSQL += fmt.Sprintf("REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA public FROM %s;\n", roleIdent)
+	setupSQL += fmt.Sprintf("GRANT USAGE ON SCHEMA public TO %s;\n", roleIdent)
+	setupSQL += fmt.Sprintf("GRANT SELECT ON ALL TABLES IN SCHEMA public TO %s;\n", roleIdent)
+
+	seedSQL, err := p.buildSeedSQL(ctx, env, schema, schemaIdent)
+	if err != nil {
+		return nil, err
+	}
+	setupSQL += seedSQL
 
 	dsn := buildWorkloadDSN(p.AdminDSN, roleName, password, schema)
 
@@ -297,6 +307,87 @@ $diverge_role$;
 
 	result.SetupSQLExecuted = true
 	return result, nil
+}
+
+func (p *SchemaDatabaseProvider) buildSeedSQL(ctx context.Context, env *v1alpha1.Environment, schema, schemaIdent string) (string, error) {
+	if env == nil {
+		return "", nil
+	}
+	seedSource := strings.TrimSpace(env.Spec.Database.SeedSource)
+	if seedSource == "" {
+		return "", nil
+	}
+
+	if seedSource == "public" || strings.HasPrefix(seedSource, "schema:") {
+		srcSchema := "public"
+		if strings.HasPrefix(seedSource, "schema:") {
+			srcSchema = strings.TrimSpace(strings.TrimPrefix(seedSource, "schema:"))
+		}
+		if srcSchema == "" || !validSchemaName.MatchString(srcSchema) {
+			return "", fmt.Errorf("invalid seedSource schema %q: %w", srcSchema, ErrInvalidSchemaName)
+		}
+		// editorconfig-checker-disable
+		return fmt.Sprintf(`
+DO $diverge_seed$
+DECLARE
+    row record;
+BEGIN
+    FOR row IN
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = '%[2]s' AND table_type = 'BASE TABLE'
+    LOOP
+        EXECUTE format('INSERT INTO %%I.%%I OVERRIDING SYSTEM VALUE SELECT * FROM %%I.%%I ON CONFLICT DO NOTHING', '%[1]s', row.table_name, '%[2]s', row.table_name);
+    END LOOP;
+END
+$diverge_seed$;
+`, schema, srcSchema), nil
+		// editorconfig-checker-enable
+	}
+
+	cmSpec := strings.TrimSpace(strings.TrimPrefix(seedSource, "configmap:"))
+	cmName := cmSpec
+	key := "seed.sql"
+	if idx := strings.IndexByte(cmSpec, '/'); idx >= 0 {
+		cmName = strings.TrimSpace(cmSpec[:idx])
+		if k := strings.TrimSpace(cmSpec[idx+1:]); k != "" {
+			key = k
+		}
+	}
+	if cmName == "" {
+		return "", fmt.Errorf("invalid seedSource %q: configmap name cannot be empty", seedSource)
+	}
+	if p.Client == nil {
+		return "", fmt.Errorf("kubernetes client is required to load seedSource ConfigMap %q", cmSpec)
+	}
+
+	ns := "default"
+	if env.Namespace != "" {
+		ns = env.Namespace
+	}
+	var cm corev1.ConfigMap
+	if err := p.Client.Get(ctx, types.NamespacedName{Name: cmName, Namespace: ns}, &cm); err != nil {
+		return "", fmt.Errorf("failed to get seedSource ConfigMap %s/%s: %w", ns, cmName, err)
+	}
+
+	sqlText, ok := cm.Data[key]
+	if !ok && key == "seed.sql" {
+		var sqlKeys []string
+		for k := range cm.Data {
+			if strings.HasSuffix(k, ".sql") {
+				sqlKeys = append(sqlKeys, k)
+			}
+		}
+		if len(sqlKeys) == 1 {
+			sqlText = cm.Data[sqlKeys[0]]
+			ok = true
+		}
+	}
+	if !ok || strings.TrimSpace(sqlText) == "" {
+		return "", fmt.Errorf("seedSource ConfigMap %s/%s does not contain non-empty SQL in key %q", ns, cmName, key)
+	}
+
+	return fmt.Sprintf("\n-- Seed SQL from ConfigMap %s\nSET LOCAL search_path TO %s, public;\n%s\n", cm.Name, schemaIdent, strings.TrimSpace(sqlText)), nil
 }
 
 // Teardown performs its designated operation.

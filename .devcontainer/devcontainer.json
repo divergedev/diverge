@@ -1,5 +1,5 @@
 {
-  "name": "Diverge Development Container",
+  "name": "Diverge Preview Environment & Development",
   "image": "mcr.microsoft.com/devcontainers/go:1-1.24-bookworm",
   "features": {
     "ghcr.io/devcontainers/features/docker-in-docker:2": {},
@@ -10,19 +10,30 @@
     },
     "ghcr.io/devcontainers/features/node:1": {
       "version": "22"
-    },
-    "ghcr.io/devcontainers/features/python:1": {
-      "version": "3.12"
     }
   },
-  "postCreateCommand": "go install sigs.k8s.io/kind@v0.29.0 && go install github.com/bufbuild/buf/cmd/buf@v1.50.0",
+  "forwardPorts": [8080, 8088, 9090],
+  "portsAttributes": {
+    "8080": {
+      "label": "Diverge Web Dashboard & API",
+      "onAutoForward": "notify"
+    },
+    "8088": {
+      "label": "Diverge L7 Proxy & DevToolbar",
+      "onAutoForward": "silent"
+    },
+    "9090": {
+      "label": "Controller Metrics",
+      "onAutoForward": "silent"
+    }
+  },
+  "postCreateCommand": "go build -o /usr/local/bin/diverge ./cmd/diverge && diverge version",
   "customizations": {
     "vscode": {
       "extensions": [
         "golang.go",
-        "ms-kubernetes-tools.vscode-kubernetes-tools",
-        "bufbuild.vscode-buf",
-        "esbenp.prettier-vscode"
+        "redhat.vscode-yaml",
+        "ms-kubernetes-tools.vscode-kubernetes-tools"
       ]
     }
   }
