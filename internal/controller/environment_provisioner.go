@@ -99,11 +99,11 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 	tCtxDB, cancelDB := context.WithTimeout(ctx, 15*time.Second)
 	defer cancelDB()
 	dbProv, resolvedDBName, err := r.resolveDatabaseProvider(env, false)
-	if resolvedDBName != "" {
-		env.Status.DatabaseProvider = resolvedDBName
-	}
 	var dbStatus *pkgdb.DatabaseResult
 	if err == nil && dbProv != nil {
+		if env.Status.DatabaseProvider == "" && resolvedDBName != "" {
+			env.Status.DatabaseProvider = resolvedDBName
+		}
 		dbStatus, err = dbProv.Provision(tCtxDB, env)
 	}
 	if err != nil {
@@ -485,19 +485,17 @@ var allowedEnvDatabaseProviders = map[string]bool{
 
 func (r *EnvironmentReconciler) resolveDatabaseProvider(env *divergeiov1alpha1.Environment, forTeardown bool) (pkgdb.DatabaseProvider, string, error) {
 	if env != nil {
-		if forTeardown {
-			recorded := strings.TrimSpace(env.Status.DatabaseProvider)
-			if recorded != "" && pkgdb.Providers.Has(recorded) {
-				deps := registry.Deps{
-					Client: r.Client,
-					Scheme: r.Scheme,
-				}
-				prov, err := pkgdb.Providers.Create(recorded, deps)
-				if err != nil {
-					return nil, recorded, fmt.Errorf("failed to create recorded database provider %q: %w", recorded, err)
-				}
-				return prov, recorded, nil
+		recorded := strings.TrimSpace(env.Status.DatabaseProvider)
+		if forTeardown && recorded != "" && pkgdb.Providers.Has(recorded) {
+			deps := registry.Deps{
+				Client: r.Client,
+				Scheme: r.Scheme,
 			}
+			prov, err := pkgdb.Providers.Create(recorded, deps)
+			if err != nil {
+				return nil, recorded, fmt.Errorf("failed to create recorded database provider %q: %w", recorded, err)
+			}
+			return prov, recorded, nil
 		}
 
 		explicit := strings.TrimSpace(env.Annotations["divergedev.com/database-provider"])
@@ -511,6 +509,14 @@ func (r *EnvironmentReconciler) resolveDatabaseProvider(env *divergeiov1alpha1.E
 		} else if (mode == "snapshot" || mode == "cnpg" || mode == "fresh") && isDefaultOrNoopDBProvider(r.DatabaseProvider) {
 			candidate = mode
 		}
+
+		if recorded != "" {
+			if candidate != "" && candidate != recorded {
+				return nil, recorded, fmt.Errorf("cannot change database provider from %q to %q after provisioning", recorded, candidate)
+			}
+			candidate = recorded
+		}
+
 		if candidate != "" {
 			if !pkgdb.Providers.Has(candidate) {
 				return nil, candidate, fmt.Errorf("database provider %q is not registered", candidate)

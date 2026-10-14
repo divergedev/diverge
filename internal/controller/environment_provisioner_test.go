@@ -546,6 +546,29 @@ func TestGetDatabaseProvider_DynamicResolution(t *testing.T) {
 	assert.Equal(t, "cnpg", nameTeardown)
 	assert.IsType(t, &cnpg.CNPGDatabaseProvider{}, provTeardown)
 
+	// Normal reconcile after annotation removal keeps recorded Status.DatabaseProvider
+	provRecorded, nameRecorded, err := r.resolveDatabaseProvider(envTeardown, false)
+	require.NoError(t, err)
+	assert.Equal(t, "cnpg", nameRecorded)
+	assert.IsType(t, &cnpg.CNPGDatabaseProvider{}, provRecorded)
+
+	// Changing database provider after Status.DatabaseProvider is recorded is rejected
+	envChanged := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-changed",
+			Namespace: "default",
+			Annotations: map[string]string{
+				"divergedev.com/database-provider": "noop",
+			},
+		},
+		Status: divergeiov1alpha1.EnvironmentStatus{
+			DatabaseProvider: "cnpg",
+		},
+	}
+	_, _, err = r.resolveDatabaseProvider(envChanged, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot change database provider")
+
 	// Unsupported annotation is rejected
 	envInvalid := &divergeiov1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{

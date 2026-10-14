@@ -94,6 +94,51 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+func (p *CNPGDatabaseProvider) ensureSourcePasswordSecret(ctx context.Context, env *v1alpha1.Environment, sourceNS, targetNS, secretName, secretKey string) error {
+	var dstSecret corev1.Secret
+	err := p.Client.Get(ctx, types.NamespacedName{Name: secretName, Namespace: targetNS}, &dstSecret)
+	if err == nil {
+		if len(dstSecret.Data[secretKey]) == 0 {
+			return fmt.Errorf("CNPG source secret %s/%s is missing key %q", targetNS, secretName, secretKey)
+		}
+		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("failed to get CNPG secret %s/%s: %w", targetNS, secretName, err)
+	}
+
+	if sourceNS != targetNS {
+		var srcSecret corev1.Secret
+		if err := p.Client.Get(ctx, types.NamespacedName{Name: secretName, Namespace: sourceNS}, &srcSecret); err != nil {
+			return fmt.Errorf("failed to get CNPG source secret %s/%s: %w", sourceNS, secretName, err)
+		}
+		pw, ok := srcSecret.Data[secretKey]
+		if !ok || len(pw) == 0 {
+			return fmt.Errorf("CNPG source secret %s/%s is missing key %q", sourceNS, secretName, secretKey)
+		}
+		copied := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      secretName,
+				Namespace: targetNS,
+				Labels: map[string]string{
+					"divergedev.com/environment":   env.Name,
+					"app.kubernetes.io/managed-by": "diverge",
+				},
+			},
+			Type: corev1.SecretTypeOpaque,
+			Data: map[string][]byte{
+				secretKey: append([]byte(nil), pw...),
+			},
+		}
+		if err := p.Client.Create(ctx, copied); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("failed to copy CNPG source secret to %s/%s: %w", targetNS, secretName, err)
+		}
+		return nil
+	}
+
+	return fmt.Errorf("CNPG source secret %s/%s not found", targetNS, secretName)
+}
+
 // Provision creates or reconciles a CloudNativePG Cluster for the preview environment.
 func (p *CNPGDatabaseProvider) Provision(ctx context.Context, env *v1alpha1.Environment) (*pkgdb.DatabaseResult, error) {
 	if env == nil {
@@ -174,6 +219,9 @@ func (p *CNPGDatabaseProvider) Provision(ctx context.Context, env *v1alpha1.Envi
 				env.Annotations["divergedev.com/cnpg-source-secret-key"],
 				"password",
 			)
+			if err := p.ensureSourcePasswordSecret(ctx, env, sourceNS, targetNS, secretName, secretKey); err != nil {
+				return nil, err
+			}
 			spec["externalClusters"] = []any{
 				map[string]any{
 					"name": source,

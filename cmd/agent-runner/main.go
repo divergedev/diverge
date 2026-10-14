@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/divergedev/diverge/internal/agentrunner"
@@ -24,10 +23,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	os.Exit(run(ctx, os.Getenv, os.Stdout, os.Stderr))
+	os.Exit(run(ctx, os.Args[1:], os.Getenv, os.Stdout, os.Stderr))
 }
 
-func run(ctx context.Context, getenv func(string) string, stdout, stderr io.Writer) int {
+func run(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer) int {
 	if stdout == nil {
 		stdout = io.Discard
 	}
@@ -40,15 +39,7 @@ func run(ctx context.Context, getenv func(string) string, stdout, stderr io.Writ
 	showVersion := fs.Bool("version", false, "Print version information and exit")
 	showHelp := fs.Bool("help", false, "Print usage information and exit")
 
-	var cliArgs []string
-	for _, arg := range os.Args[1:] {
-		if strings.HasPrefix(arg, "-test.") {
-			continue
-		}
-		cliArgs = append(cliArgs, arg)
-	}
-
-	if err := fs.Parse(cliArgs); err != nil {
+	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}

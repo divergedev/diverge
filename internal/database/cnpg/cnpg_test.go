@@ -35,7 +35,16 @@ func TestClusterName(t *testing.T) {
 
 func TestCNPGDatabaseProvider_Provision_CloneFromSeedSource(t *testing.T) {
 	scheme := newTestScheme(t)
-	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	srcSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "main-db-superuser",
+			Namespace: "default",
+		},
+		Data: map[string][]byte{
+			"password": []byte("supersecret"),
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(srcSecret).Build()
 
 	prov := &CNPGDatabaseProvider{
 		Client:      k8sClient,
@@ -51,6 +60,9 @@ func TestCNPGDatabaseProvider_Provision_CloneFromSeedSource(t *testing.T) {
 			UID:       "uid-10",
 		},
 		Spec: v1alpha1.EnvironmentSpec{
+			Deploy: v1alpha1.EnvironmentDeploy{
+				Namespace: "create",
+			},
 			Database: v1alpha1.EnvironmentDatabase{
 				Mode:       "snapshot",
 				SeedSource: "main-db",
@@ -58,19 +70,28 @@ func TestCNPGDatabaseProvider_Provision_CloneFromSeedSource(t *testing.T) {
 		},
 	}
 
+	previewNS := env.PreviewNamespace()
 	res, err := prov.Provision(context.Background(), env)
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	assert.False(t, res.Ready, "newly created cluster should not be ready until status is healthy")
-	assert.Equal(t, "postgres://app@diverge-pg-pr-10-rw.default.svc:5432/app?sslmode=disable", res.DSN)
+	assert.Contains(t, res.DSN, "diverge-pg-pr-10-rw."+previewNS+".svc:5432")
 	assert.Equal(t, "diverge-pg-pr-10", res.EnvVars["DIVERGE_CNPG_CLUSTER"])
+
+	// Verify source password Secret was copied into the preview namespace
+	var copiedSecret corev1.Secret
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{
+		Name:      "main-db-superuser",
+		Namespace: previewNS,
+	}, &copiedSecret))
+	assert.Equal(t, "supersecret", string(copiedSecret.Data["password"]))
 
 	// Verify Unstructured Cluster spec
 	cluster := &unstructured.Unstructured{}
 	cluster.SetGroupVersionKind(ClusterGVK)
 	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{
 		Name:      "diverge-pg-pr-10",
-		Namespace: "default",
+		Namespace: previewNS,
 	}, cluster))
 
 	source, found, err := unstructured.NestedString(cluster.Object, "spec", "bootstrap", "pg_basebackup", "source")

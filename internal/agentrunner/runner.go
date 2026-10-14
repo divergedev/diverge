@@ -389,8 +389,9 @@ func (r *Runner) Run(ctx context.Context) (*RunResult, error) {
 	}
 
 	var (
-		lastTokens int64
-		lastCost   float64
+		lastTokens  int64
+		lastCost    float64
+		lastFailure string
 	)
 
 	for iter := 1; iter <= r.Config.MaxIterations; iter++ {
@@ -401,14 +402,17 @@ func (r *Runner) Run(ctx context.Context) (*RunResult, error) {
 			lastTokens = meterResp.TotalTokensUsed
 			lastCost = meterResp.TotalCostUSD
 		}
-		if err != nil {
+		failedResult := func() *RunResult {
 			return &RunResult{
 				Succeeded:       false,
 				Iterations:      iter,
 				WorkingBranch:   r.Config.WorkingBranch,
 				TotalTokensUsed: lastTokens,
 				TotalCostUSD:    lastCost,
-			}, err
+			}
+		}
+		if err != nil {
+			return failedResult(), err
 		}
 
 		if r.Config.AgentCommand != "" {
@@ -418,18 +422,26 @@ func (r *Runner) Run(ctx context.Context) (*RunResult, error) {
 				fmt.Sprintf("DIVERGE_PREVIEW_URL=%s", r.Config.PreviewURL),
 				fmt.Sprintf("DIVERGE_MCP_URL=%s", r.Config.MCPURL),
 			}
+			if lastFailure != "" {
+				agentEnv = append(agentEnv, fmt.Sprintf("DIVERGE_LAST_FAILURE=%s", lastFailure))
+			}
 			if _, err := exec.Run(ctx, r.Config.WorkspaceDir, agentEnv, "sh", "-c", r.Config.AgentCommand); err != nil {
-				return nil, fmt.Errorf("agent command failed on iteration %d: %w", iter, err)
+				return failedResult(), fmt.Errorf("agent command failed on iteration %d: %w", iter, err)
 			}
 		}
 
 		if err := r.CheckPreviewHealth(ctx); err != nil {
+			lastFailure = err.Error()
 			r.logf("iteration %d preview health check failed: %v", iter, err)
 			continue
 		}
 
 		if r.Config.VerifyCommand != "" {
-			if _, err := exec.Run(ctx, r.Config.WorkspaceDir, nil, "sh", "-c", r.Config.VerifyCommand); err != nil {
+			if verifyOut, err := exec.Run(ctx, r.Config.WorkspaceDir, nil, "sh", "-c", r.Config.VerifyCommand); err != nil {
+				lastFailure = strings.TrimSpace(verifyOut)
+				if lastFailure == "" {
+					lastFailure = err.Error()
+				}
 				r.logf("iteration %d verification failed: %v", iter, err)
 				continue
 			}
@@ -437,20 +449,20 @@ func (r *Runner) Run(ctx context.Context) (*RunResult, error) {
 
 		statusRaw, err := exec.Run(ctx, r.Config.WorkspaceDir, nil, "git", "status", "--porcelain")
 		if err != nil {
-			return nil, fmt.Errorf("git status: %w", err)
+			return failedResult(), fmt.Errorf("git status: %w", err)
 		}
 
 		statusOut := strings.TrimSpace(statusRaw)
 		if statusOut != "" {
 			if _, err := exec.Run(ctx, r.Config.WorkspaceDir, nil, "git", "add", "-A"); err != nil {
-				return nil, fmt.Errorf("git add: %w", err)
+				return failedResult(), fmt.Errorf("git add: %w", err)
 			}
 			commitMsg := fmt.Sprintf("fix(%s): %s", r.Config.TaskName, r.Config.Objective)
 			if _, err := exec.Run(ctx, r.Config.WorkspaceDir, nil, "git", "commit", "-m", commitMsg); err != nil {
-				return nil, fmt.Errorf("git commit: %w", err)
+				return failedResult(), fmt.Errorf("git commit: %w", err)
 			}
 			if _, err := exec.Run(ctx, r.Config.WorkspaceDir, nil, "git", "push", "-u", "origin", r.Config.WorkingBranch); err != nil {
-				return nil, fmt.Errorf("git push: %w", err)
+				return failedResult(), fmt.Errorf("git push: %w", err)
 			}
 		}
 
