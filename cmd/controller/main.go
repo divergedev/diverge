@@ -31,7 +31,6 @@ import (
 	"github.com/divergedev/diverge/internal/controller"
 	"github.com/divergedev/diverge/internal/database"
 	_ "github.com/divergedev/diverge/internal/database/cnpg"
-	_ "github.com/divergedev/diverge/internal/database/schemaprovider"
 	"github.com/divergedev/diverge/internal/deployer"
 	"github.com/divergedev/diverge/internal/events"
 	_ "github.com/divergedev/diverge/internal/metrics"
