@@ -12,6 +12,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	internaldb "github.com/divergedev/diverge/internal/database"
+	"github.com/divergedev/diverge/internal/database/cnpg"
 	"github.com/divergedev/diverge/pkg/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -483,4 +485,101 @@ func TestReconcileProvisioning_AtlasMigration_NonBlocking_Failure(t *testing.T) 
 	require.NoError(t, err)
 	assert.Equal(t, "Succeeded", env.Status.MigrationStatus)
 	assert.NotEqual(t, divergeiov1alpha1.PhaseFailed, env.Status.Phase)
+}
+
+func TestGetDatabaseProvider_DynamicResolution(t *testing.T) {
+	r := &EnvironmentReconciler{
+		DatabaseProvider: &internaldb.InstrumentedDatabaseProvider{
+			Inner: &internaldb.NoopDatabaseProvider{},
+			Mode:  "none",
+		},
+	}
+
+	envSnapshot := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "pr-snapshot", Namespace: "default"},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Database: divergeiov1alpha1.EnvironmentDatabase{Mode: "snapshot"},
+		},
+	}
+	prov, name, err := r.resolveDatabaseProvider(envSnapshot, false)
+	require.NoError(t, err)
+	assert.Equal(t, "snapshot", name)
+	assert.IsType(t, &cnpg.CNPGDatabaseProvider{}, prov)
+
+	envFresh := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "pr-cnpg", Namespace: "default"},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Database: divergeiov1alpha1.EnvironmentDatabase{Mode: "fresh"},
+		},
+	}
+	provFresh, nameFresh, err := r.resolveDatabaseProvider(envFresh, false)
+	require.NoError(t, err)
+	assert.Equal(t, "fresh", nameFresh)
+	assert.IsType(t, &cnpg.CNPGDatabaseProvider{}, provFresh)
+
+	envExplicit := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-explicit",
+			Namespace: "default",
+			Annotations: map[string]string{
+				"divergedev.com/database-provider": "cnpg",
+			},
+		},
+	}
+	provExplicit, nameExplicit, err := r.resolveDatabaseProvider(envExplicit, false)
+	require.NoError(t, err)
+	assert.Equal(t, "cnpg", nameExplicit)
+	assert.IsType(t, &cnpg.CNPGDatabaseProvider{}, provExplicit)
+
+	// Teardown uses recorded Status.DatabaseProvider even if annotation was removed
+	envTeardown := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-teardown",
+			Namespace: "default",
+		},
+		Status: divergeiov1alpha1.EnvironmentStatus{
+			DatabaseProvider: "cnpg",
+		},
+	}
+	provTeardown, nameTeardown, err := r.resolveDatabaseProvider(envTeardown, true)
+	require.NoError(t, err)
+	assert.Equal(t, "cnpg", nameTeardown)
+	assert.IsType(t, &cnpg.CNPGDatabaseProvider{}, provTeardown)
+
+	// Normal reconcile after annotation removal keeps recorded Status.DatabaseProvider
+	provRecorded, nameRecorded, err := r.resolveDatabaseProvider(envTeardown, false)
+	require.NoError(t, err)
+	assert.Equal(t, "cnpg", nameRecorded)
+	assert.IsType(t, &cnpg.CNPGDatabaseProvider{}, provRecorded)
+
+	// Changing database provider after Status.DatabaseProvider is recorded is rejected
+	envChanged := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-changed",
+			Namespace: "default",
+			Annotations: map[string]string{
+				"divergedev.com/database-provider": "noop",
+			},
+		},
+		Status: divergeiov1alpha1.EnvironmentStatus{
+			DatabaseProvider: "cnpg",
+		},
+	}
+	_, _, err = r.resolveDatabaseProvider(envChanged, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot change database provider")
+
+	// Unsupported annotation is rejected
+	envInvalid := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-invalid",
+			Namespace: "default",
+			Annotations: map[string]string{
+				"divergedev.com/database-provider": "unknown-provider",
+			},
+		},
+	}
+	_, _, err = r.resolveDatabaseProvider(envInvalid, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported database provider annotation")
 }

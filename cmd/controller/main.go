@@ -30,6 +30,7 @@ import (
 	"github.com/divergedev/diverge/internal/changeset"
 	"github.com/divergedev/diverge/internal/controller"
 	"github.com/divergedev/diverge/internal/database"
+	_ "github.com/divergedev/diverge/internal/database/cnpg"
 	"github.com/divergedev/diverge/internal/deployer"
 	"github.com/divergedev/diverge/internal/events"
 	_ "github.com/divergedev/diverge/internal/metrics"
@@ -87,7 +88,7 @@ func main() {
 	flag.IntVar(&webhookPort, "webhook-port", 9443, "The port the webhook server binds to.")
 	flag.StringVar(&routingProvider, "routing-provider", "gateway", "The routing provider to use (gateway, istio, composite, noop, or comma-separated list like 'gateway,istio').")
 	flag.StringVar(&deployProvider, "deploy-provider", "noop", "Deployment provider (argocd|noop|direct|knative)")
-	flag.StringVar(&databaseProvider, "database-provider", "none", "Database provider (schema|none)")
+	flag.StringVar(&databaseProvider, "database-provider", "none", "Database provider (schema|cnpg|snapshot|fresh|none)")
 	flag.StringVar(&notifierProvider, "notifier-provider", "noop", "Notification provider (gitlab|github|noop)")
 	flag.StringVar(&asyncProvider, "async-provider", "noop", "Async provisioning provider (noop, webhook)")
 	flag.StringVar(&featureProvider, "feature-provider", "configmap", "Feature flag provider (configmap, noop)")
@@ -335,8 +336,16 @@ func main() {
 	}
 	// +kubebuilder:scaffold:builder
 
+	if err = divergeiov1alpha1.SetupEnvironmentWebhookWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create webhook", "webhook", "Environment")
+		os.Exit(1)
+	}
 	if err = divergeiov1alpha1.SetupPreviewGroupWebhookWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create webhook", "webhook", "PreviewGroup")
+		os.Exit(1)
+	}
+	if err = divergeiov1alpha1.SetupAgentTaskWebhookWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create webhook", "webhook", "AgentTask")
 		os.Exit(1)
 	}
 

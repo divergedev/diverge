@@ -1,0 +1,28 @@
+# Build stage for diverge-agent-runner
+FROM golang:1.26-alpine AS builder
+ARG TARGETOS=linux
+ARG TARGETARCH
+ENV GOTOOLCHAIN=auto
+
+WORKDIR /workspace
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY cmd/agent-runner/ cmd/agent-runner/
+COPY internal/agentrunner/ internal/agentrunner/
+
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -o /out/diverge-agent-runner ./cmd/agent-runner
+
+# Hardened Alpine runtime stage with git, curl, ca-certificates, and non-root UID 10001
+FROM alpine:3.21
+RUN apk add --no-cache git curl ca-certificates && \
+    addgroup -g 10001 -S agent && \
+    adduser -u 10001 -S -G agent -h /workspace agent && \
+    mkdir -p /workspace && \
+    chown -R 10001:10001 /workspace
+
+COPY --from=builder /out/diverge-agent-runner /usr/local/bin/diverge-agent-runner
+
+WORKDIR /workspace
+USER 10001:10001
+ENTRYPOINT ["/usr/local/bin/diverge-agent-runner"]

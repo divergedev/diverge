@@ -1,0 +1,514 @@
+package agentrunner
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+)
+
+type recordedCommand struct {
+	Dir  string
+	Env  []string
+	Name string
+	Args []string
+}
+
+type mockCommandExecutor struct {
+	mu      sync.Mutex
+	calls   []recordedCommand
+	handler func(callIndex int, cmd recordedCommand) (string, error)
+}
+
+func (m *mockCommandExecutor) Run(_ context.Context, dir string, env []string, name string, args ...string) (string, error) {
+	m.mu.Lock()
+	cmd := recordedCommand{
+		Dir:  dir,
+		Env:  append([]string(nil), env...),
+		Name: name,
+		Args: append([]string(nil), args...),
+	}
+	idx := len(m.calls)
+	m.calls = append(m.calls, cmd)
+	handler := m.handler
+	m.mu.Unlock()
+
+	if handler != nil {
+		return handler(idx, cmd)
+	}
+	return "", nil
+}
+
+func (m *mockCommandExecutor) Calls() []recordedCommand {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]recordedCommand, len(m.calls))
+	copy(out, m.calls)
+	return out
+}
+
+func TestLoadConfigFromEnv_DefaultsAndCustomValues(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		env := map[string]string{
+			"DIVERGE_TASK_NAME": "fix-checkout",
+			"DIVERGE_OBJECTIVE": "Fix null pointer in checkout handler",
+			"DIVERGE_REPO_URL":  "https://github.com/divergedev/shop.git",
+		}
+		cfg, err := LoadConfigFromEnv(func(k string) string { return env[k] })
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.TaskName != "fix-checkout" {
+			t.Errorf("TaskName = %q, want %q", cfg.TaskName, "fix-checkout")
+		}
+		if cfg.TaskNamespace != DefaultTaskNamespace {
+			t.Errorf("TaskNamespace = %q, want %q", cfg.TaskNamespace, DefaultTaskNamespace)
+		}
+		if cfg.BaseBranch != DefaultBaseBranch {
+			t.Errorf("BaseBranch = %q, want %q", cfg.BaseBranch, DefaultBaseBranch)
+		}
+		if cfg.WorkingBranch != "agent/fix-checkout" {
+			t.Errorf("WorkingBranch = %q, want %q", cfg.WorkingBranch, "agent/fix-checkout")
+		}
+		if cfg.MaxIterations != DefaultMaxIterations {
+			t.Errorf("MaxIterations = %d, want %d", cfg.MaxIterations, DefaultMaxIterations)
+		}
+		if cfg.TokenFile != DefaultTokenFile {
+			t.Errorf("TokenFile = %q, want %q", cfg.TokenFile, DefaultTokenFile)
+		}
+		if cfg.MCPURL != DefaultMCPURL {
+			t.Errorf("MCPURL = %q, want %q", cfg.MCPURL, DefaultMCPURL)
+		}
+		if cfg.MeterURL != DefaultMeterURL {
+			t.Errorf("MeterURL = %q, want %q", cfg.MeterURL, DefaultMeterURL)
+		}
+		if cfg.PreviewHeaderKey != DefaultPreviewHeaderKey {
+			t.Errorf("PreviewHeaderKey = %q, want %q", cfg.PreviewHeaderKey, DefaultPreviewHeaderKey)
+		}
+		if cfg.WorkspaceDir != DefaultWorkspaceDir {
+			t.Errorf("WorkspaceDir = %q, want %q", cfg.WorkspaceDir, DefaultWorkspaceDir)
+		}
+		if cfg.Model != DefaultModel {
+			t.Errorf("Model = %q, want %q", cfg.Model, DefaultModel)
+		}
+		if cfg.TokensPerIteration != DefaultTokensPerIteration {
+			t.Errorf("TokensPerIteration = %d, want %d", cfg.TokensPerIteration, DefaultTokensPerIteration)
+		}
+		if cfg.CostPerIterationUSD != DefaultCostPerIterationUSD {
+			t.Errorf("CostPerIterationUSD = %v, want %v", cfg.CostPerIterationUSD, DefaultCostPerIterationUSD)
+		}
+	})
+
+	t.Run("custom values", func(t *testing.T) {
+		env := map[string]string{
+			"DIVERGE_TASK_NAME":              "fix-auth",
+			"DIVERGE_TASK_NAMESPACE":         "staging",
+			"DIVERGE_OBJECTIVE":              "Harden JWT validation",
+			"DIVERGE_REPO_URL":               "https://github.com/divergedev/auth.git",
+			"DIVERGE_BASE_BRANCH":            "develop",
+			"DIVERGE_WORKING_BRANCH":         "feat/jwt-hardening",
+			"DIVERGE_BUDGET_USD":             "5.00",
+			"DIVERGE_MAX_ITERATIONS":         "8",
+			"DIVERGE_TOKEN_FILE":             "/tmp/custom-token",
+			"DIVERGE_MCP_URL":                "http://localhost:8080/mcp",
+			"DIVERGE_METER_URL":              "http://localhost:8080/api/v1/agenttask/meter",
+			"DIVERGE_PREVIEW_URL":            "https://pr-42.preview.example.com/healthz",
+			"DIVERGE_PREVIEW_HEADER_KEY":     "x-custom-env",
+			"DIVERGE_PREVIEW_HEADER_VALUE":   "pr-42",
+			"DIVERGE_WORKSPACE_DIR":          "/tmp/ws",
+			"DIVERGE_AGENT_CMD":              "claude-code --fix",
+			"DIVERGE_VERIFY_CMD":             "go test ./...",
+			"DIVERGE_MODEL":                  "claude-3-5-sonnet",
+			"DIVERGE_TOKENS_PER_ITERATION":   "4000",
+			"DIVERGE_COST_PER_ITERATION_USD": "0.12",
+		}
+		cfg, err := LoadConfigFromEnv(func(k string) string { return env[k] })
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.TaskNamespace != "staging" ||
+			cfg.BaseBranch != "develop" ||
+			cfg.WorkingBranch != "feat/jwt-hardening" ||
+			cfg.BudgetUSD != "5.00" ||
+			cfg.MaxIterations != 8 ||
+			cfg.TokenFile != "/tmp/custom-token" ||
+			cfg.PreviewURL != "https://pr-42.preview.example.com/healthz" ||
+			cfg.PreviewHeaderKey != "x-custom-env" ||
+			cfg.PreviewHeaderValue != "pr-42" ||
+			cfg.WorkspaceDir != "/tmp/ws" ||
+			cfg.AgentCommand != "claude-code --fix" ||
+			cfg.VerifyCommand != "go test ./..." ||
+			cfg.Model != "claude-3-5-sonnet" ||
+			cfg.TokensPerIteration != 4000 ||
+			cfg.CostPerIterationUSD != 0.12 {
+			t.Fatalf("unexpected custom config: %+v", cfg)
+		}
+	})
+
+	t.Run("missing required fields", func(t *testing.T) {
+		cases := []struct {
+			name string
+			env  map[string]string
+		}{
+			{
+				name: "missing task name",
+				env: map[string]string{
+					"DIVERGE_OBJECTIVE": "fix bug",
+					"DIVERGE_REPO_URL":  "https://github.com/org/repo.git",
+				},
+			},
+			{
+				name: "missing objective",
+				env: map[string]string{
+					"DIVERGE_TASK_NAME": "task-1",
+					"DIVERGE_REPO_URL":  "https://github.com/org/repo.git",
+				},
+			},
+			{
+				name: "missing repo url",
+				env: map[string]string{
+					"DIVERGE_TASK_NAME": "task-1",
+					"DIVERGE_OBJECTIVE": "fix bug",
+				},
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				if _, err := LoadConfigFromEnv(func(k string) string { return tc.env[k] }); err == nil {
+					t.Fatalf("expected error for %s, got nil", tc.name)
+				}
+			})
+		}
+	})
+}
+
+func writeTempToken(t *testing.T, token string) string {
+	t.Helper()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "token")
+	if err := os.WriteFile(p, []byte(token+"\n"), 0600); err != nil {
+		t.Fatalf("write temp token: %v", err)
+	}
+	return p
+}
+
+func TestRunner_Run_HappyPathIteration1(t *testing.T) {
+	t.Setenv("DIVERGE_MACAROON_TOKEN", "")
+	tokenPath := writeTempToken(t, "macaroon-secret-token-123")
+
+	var (
+		gotAuthHeader string
+		gotMeterReq   MeterRequest
+		previewHits   int
+		gotPreviewEnv string
+	)
+
+	meterSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuthHeader = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&gotMeterReq); err != nil {
+			t.Errorf("decode meter req: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(MeterResponse{
+			Allowed:         true,
+			Suspended:       false,
+			TotalTokensUsed: 2500,
+			TotalCostUSD:    0.05,
+		})
+	}))
+	defer meterSrv.Close()
+
+	previewSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		previewHits++
+		gotPreviewEnv = r.Header.Get("x-diverge-env")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer previewSrv.Close()
+
+	mockExec := &mockCommandExecutor{
+		handler: func(_ int, cmd recordedCommand) (string, error) {
+			if cmd.Name == "git" && len(cmd.Args) >= 1 && cmd.Args[0] == "status" {
+				return " M pkg/checkout/handler.go\n", nil
+			}
+			return "", nil
+		},
+	}
+
+	cfg := &Config{
+		TaskName:            "fix-checkout",
+		TaskNamespace:       "default",
+		Objective:           "Fix nil pointer in checkout",
+		RepoURL:             "https://github.com/divergedev/shop.git",
+		BaseBranch:          "main",
+		WorkingBranch:       "agent/fix-checkout",
+		MaxIterations:       3,
+		TokenFile:           tokenPath,
+		MCPURL:              "http://diverge-server.diverge-system.svc:8080/mcp",
+		MeterURL:            meterSrv.URL,
+		PreviewURL:          previewSrv.URL,
+		PreviewHeaderKey:    "x-diverge-env",
+		PreviewHeaderValue:  "pr-fix-checkout",
+		WorkspaceDir:        "/workspace/shop",
+		AgentCommand:        "run-agent-step",
+		VerifyCommand:       "go test ./...",
+		Model:               "claude-3-7-sonnet",
+		TokensPerIteration:  2500,
+		CostPerIterationUSD: 0.05,
+	}
+
+	var logBuf bytes.Buffer
+	runner := &Runner{
+		Config:     cfg,
+		Exec:       mockExec,
+		HTTPClient: meterSrv.Client(),
+		Logger:     &logBuf,
+	}
+
+	res, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Runner.Run returned unexpected error: %v", err)
+	}
+	if !res.Succeeded || res.Iterations != 1 || !res.Committed {
+		t.Fatalf("unexpected RunResult: %+v", res)
+	}
+	if res.WorkingBranch != "agent/fix-checkout" || res.TotalTokensUsed != 2500 || res.TotalCostUSD != 0.05 {
+		t.Fatalf("unexpected RunResult metrics: %+v", res)
+	}
+
+	if gotAuthHeader != "Bearer macaroon-secret-token-123" {
+		t.Errorf("Authorization header = %q, want %q", gotAuthHeader, "Bearer macaroon-secret-token-123")
+	}
+	if gotMeterReq.Model != "claude-3-7-sonnet" || gotMeterReq.TokensUsed != 2500 || gotMeterReq.CostUSD != 0.05 {
+		t.Errorf("unexpected MeterRequest: %+v", gotMeterReq)
+	}
+	if previewHits != 1 || gotPreviewEnv != "pr-fix-checkout" {
+		t.Errorf("previewHits = %d, gotPreviewEnv = %q", previewHits, gotPreviewEnv)
+	}
+
+	calls := mockExec.Calls()
+	if len(calls) != 8 {
+		t.Fatalf("expected 8 command executions, got %d: %+v", len(calls), calls)
+	}
+
+	// 0: git clone
+	if calls[0].Name != "git" || strings.Join(calls[0].Args, " ") != "clone --depth=50 --branch main https://github.com/divergedev/shop.git /workspace/shop" {
+		t.Errorf("unexpected clone call: %+v", calls[0])
+	}
+	// 1: git checkout -B
+	if calls[1].Name != "git" || calls[1].Dir != "/workspace/shop" || strings.Join(calls[1].Args, " ") != "checkout -B agent/fix-checkout" {
+		t.Errorf("unexpected checkout call: %+v", calls[1])
+	}
+	// 2: agent command
+	if calls[2].Name != "sh" || strings.Join(calls[2].Args, " ") != "-c run-agent-step" {
+		t.Errorf("unexpected agent call: %+v", calls[2])
+	}
+	// 3: verify command
+	if calls[3].Name != "sh" || strings.Join(calls[3].Args, " ") != "-c go test ./..." {
+		t.Errorf("unexpected verify call: %+v", calls[3])
+	}
+	// 4: git status --porcelain
+	if calls[4].Name != "git" || strings.Join(calls[4].Args, " ") != "status --porcelain" {
+		t.Errorf("unexpected status call: %+v", calls[4])
+	}
+	// 5: git add -A
+	if calls[5].Name != "git" || strings.Join(calls[5].Args, " ") != "add -A" {
+		t.Errorf("unexpected add call: %+v", calls[5])
+	}
+	// 6: git commit -m
+	if calls[6].Name != "git" || strings.Join(calls[6].Args, " ") != "commit -m fix(fix-checkout): Fix nil pointer in checkout" {
+		t.Errorf("unexpected commit call: %+v", calls[6])
+	}
+	// 7: git push -u origin agent/fix-checkout
+	if calls[7].Name != "git" || strings.Join(calls[7].Args, " ") != "push -u origin agent/fix-checkout" {
+		t.Errorf("unexpected push call: %+v", calls[7])
+	}
+}
+
+func TestRunner_Run_MultiIterationRecovery(t *testing.T) {
+	t.Setenv("DIVERGE_MACAROON_TOKEN", "inline-macaroon-token")
+
+	var meterCalls int
+	meterSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		meterCalls++
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(MeterResponse{
+			Allowed:         true,
+			Suspended:       false,
+			TotalTokensUsed: int64(meterCalls) * 2500,
+			TotalCostUSD:    float64(meterCalls) * 0.05,
+		})
+	}))
+	defer meterSrv.Close()
+
+	var verifyAttempts int
+	mockExec := &mockCommandExecutor{
+		handler: func(_ int, cmd recordedCommand) (string, error) {
+			if cmd.Name == "sh" && len(cmd.Args) == 2 && cmd.Args[1] == "go test ./..." {
+				verifyAttempts++
+				if verifyAttempts == 1 {
+					return "FAIL: TestCheckout", errors.New("exit status 1")
+				}
+				return "PASS", nil
+			}
+			if cmd.Name == "git" && len(cmd.Args) >= 1 && cmd.Args[0] == "status" {
+				return " M handler.go\n", nil
+			}
+			return "", nil
+		},
+	}
+
+	cfg := &Config{
+		TaskName:            "fix-retry",
+		TaskNamespace:       "default",
+		Objective:           "Retry until tests pass",
+		RepoURL:             "https://github.com/divergedev/shop.git",
+		BaseBranch:          "main",
+		WorkingBranch:       "agent/fix-retry",
+		MaxIterations:       4,
+		MeterURL:            meterSrv.URL,
+		WorkspaceDir:        "/workspace/shop",
+		AgentCommand:        "apply-patch",
+		VerifyCommand:       "go test ./...",
+		Model:               "claude-3-7-sonnet",
+		TokensPerIteration:  2500,
+		CostPerIterationUSD: 0.05,
+	}
+
+	runner := &Runner{
+		Config:     cfg,
+		Exec:       mockExec,
+		HTTPClient: meterSrv.Client(),
+		Logger:     &bytes.Buffer{},
+	}
+
+	res, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.Succeeded || res.Iterations != 2 || !res.Committed {
+		t.Fatalf("expected success on iteration 2, got: %+v", res)
+	}
+	if meterCalls != 2 || verifyAttempts != 2 {
+		t.Fatalf("meterCalls = %d, verifyAttempts = %d; want 2 each", meterCalls, verifyAttempts)
+	}
+	if res.TotalTokensUsed != 5000 || res.TotalCostUSD != 0.10 {
+		t.Fatalf("unexpected accumulated usage: %+v", res)
+	}
+}
+
+func TestRunner_Run_HaltsOnBudgetExceeded(t *testing.T) {
+	t.Setenv("DIVERGE_MACAROON_TOKEN", "inline-macaroon-token")
+
+	meterSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_ = json.NewEncoder(w).Encode(MeterResponse{
+			Allowed:         false,
+			Suspended:       true,
+			Reason:          "budget exceeded",
+			TotalTokensUsed: 12500,
+			TotalCostUSD:    1.05,
+		})
+	}))
+	defer meterSrv.Close()
+
+	mockExec := &mockCommandExecutor{}
+
+	cfg := &Config{
+		TaskName:            "fix-budget",
+		TaskNamespace:       "default",
+		Objective:           "Test budget guardrail",
+		RepoURL:             "https://github.com/divergedev/shop.git",
+		BaseBranch:          "main",
+		WorkingBranch:       "agent/fix-budget",
+		MaxIterations:       5,
+		MeterURL:            meterSrv.URL,
+		WorkspaceDir:        "/workspace/shop",
+		AgentCommand:        "should-not-run",
+		VerifyCommand:       "should-not-run",
+		Model:               "claude-3-7-sonnet",
+		TokensPerIteration:  2500,
+		CostPerIterationUSD: 0.05,
+	}
+
+	runner := &Runner{
+		Config:     cfg,
+		Exec:       mockExec,
+		HTTPClient: meterSrv.Client(),
+		Logger:     &bytes.Buffer{},
+	}
+
+	res, err := runner.Run(context.Background())
+	if !errors.Is(err, ErrBudgetExceeded) {
+		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
+	}
+	if res == nil || res.Succeeded || res.Iterations != 1 {
+		t.Fatalf("unexpected result on budget exceeded: %+v", res)
+	}
+
+	// Only git clone and git checkout should have executed; agent command must NOT run.
+	calls := mockExec.Calls()
+	if len(calls) != 2 {
+		t.Fatalf("expected only 2 git setup calls before budget halt, got %d: %+v", len(calls), calls)
+	}
+}
+
+func TestRunner_Run_HaltsOnModelDisallowed(t *testing.T) {
+	t.Setenv("DIVERGE_MACAROON_TOKEN", "inline-macaroon-token")
+
+	meterSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(MeterResponse{
+			Allowed:   false,
+			Suspended: false,
+			Reason:    `model "gpt-5-ultra" is not allowed`,
+		})
+	}))
+	defer meterSrv.Close()
+
+	mockExec := &mockCommandExecutor{}
+
+	cfg := &Config{
+		TaskName:            "fix-model",
+		TaskNamespace:       "default",
+		Objective:           "Test model caveat enforcement",
+		RepoURL:             "https://github.com/divergedev/shop.git",
+		BaseBranch:          "main",
+		WorkingBranch:       "agent/fix-model",
+		MaxIterations:       5,
+		MeterURL:            meterSrv.URL,
+		WorkspaceDir:        "/workspace/shop",
+		AgentCommand:        "should-not-run",
+		VerifyCommand:       "should-not-run",
+		Model:               "gpt-5-ultra",
+		TokensPerIteration:  2500,
+		CostPerIterationUSD: 0.05,
+	}
+
+	runner := &Runner{
+		Config:     cfg,
+		Exec:       mockExec,
+		HTTPClient: meterSrv.Client(),
+		Logger:     &bytes.Buffer{},
+	}
+
+	_, err := runner.Run(context.Background())
+	if !errors.Is(err, ErrModelDisallowed) {
+		t.Fatalf("expected ErrModelDisallowed, got: %v", err)
+	}
+
+	calls := mockExec.Calls()
+	if len(calls) != 2 {
+		t.Fatalf("expected only 2 git setup calls before model halt, got %d: %+v", len(calls), calls)
+	}
+}

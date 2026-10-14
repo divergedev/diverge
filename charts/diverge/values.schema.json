@@ -116,7 +116,24 @@
         "enabled": { "type": "boolean" },
         "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
         "secretName": { "type": "string" },
-        "tlsSecretName": { "type": "string" }
+        "tlsSecretName": { "type": "string" },
+        "validatingWebhook": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "failurePolicy": {
+              "type": "string",
+              "enum": ["Fail", "Ignore"]
+            },
+            "caBundle": { "type": "string" }
+          }
+        },
+        "admissionPolicy": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        }
       }
     },
     "deploy": {
@@ -139,7 +156,7 @@
       "properties": {
         "provider": {
           "type": "string",
-          "enum": ["noop", "shared", "schema"],
+          "enum": ["noop", "none", "shared", "schema", "snapshot", "cnpg", "fresh"],
           "description": "Database provider"
         },
         "host": { "type": "string" },

@@ -22,6 +22,8 @@ import (
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/config/banner"
 	"github.com/divergedev/diverge/internal/async"
+	internaldb "github.com/divergedev/diverge/internal/database"
+	pkgdb "github.com/divergedev/diverge/pkg/database"
 	"github.com/divergedev/diverge/pkg/features"
 	"github.com/divergedev/diverge/pkg/registry"
 )
@@ -96,7 +98,14 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 	// 6. Ensure database
 	tCtxDB, cancelDB := context.WithTimeout(ctx, 15*time.Second)
 	defer cancelDB()
-	dbStatus, err := r.DatabaseProvider.Provision(tCtxDB, env)
+	dbProv, resolvedDBName, err := r.resolveDatabaseProvider(env, false)
+	var dbStatus *pkgdb.DatabaseResult
+	if err == nil && dbProv != nil {
+		if env.Status.DatabaseProvider == "" && resolvedDBName != "" {
+			env.Status.DatabaseProvider = resolvedDBName
+		}
+		dbStatus, err = dbProv.Provision(tCtxDB, env)
+	}
 	if err != nil {
 		meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 			Type:    "DatabaseReady",
@@ -146,7 +155,11 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 		})
 		env.Status.DatabaseStatus = dbStatus.Message
 
-		if env.Spec.Database.ConnectionRef == "" && (len(dbStatus.EnvVars) > 0 || env.Spec.Database.Mode == "schema") {
+		isBranchingMode := env.Spec.Database.Mode == "snapshot" ||
+			env.Spec.Database.Mode == "cnpg" ||
+			env.Spec.Database.Mode == "fresh" ||
+			env.Annotations["divergedev.com/database-provider"] != ""
+		if (env.Spec.Database.ConnectionRef == "" || isBranchingMode) && (len(dbStatus.EnvVars) > 0 || env.Spec.Database.Mode == "schema") {
 			envVars := dbStatus.EnvVars
 			if len(envVars) == 0 {
 				envVars = map[string]string{
@@ -459,6 +472,80 @@ func (r *EnvironmentReconciler) getFeatureProvider(env *divergeiov1alpha1.Enviro
 		return r.FeatureProvider, nil
 	}
 	return nil, fmt.Errorf("feature provider %q not registered", providerName)
+}
+
+var allowedEnvDatabaseProviders = map[string]bool{
+	"cnpg":     true,
+	"fresh":    true,
+	"snapshot": true,
+	"schema":   true,
+	"noop":     true,
+	"none":     true,
+}
+
+func (r *EnvironmentReconciler) resolveDatabaseProvider(env *divergeiov1alpha1.Environment, forTeardown bool) (pkgdb.DatabaseProvider, string, error) {
+	if env != nil {
+		recorded := strings.TrimSpace(env.Status.DatabaseProvider)
+		if forTeardown && recorded != "" && pkgdb.Providers.Has(recorded) {
+			deps := registry.Deps{
+				Client: r.Client,
+				Scheme: r.Scheme,
+			}
+			prov, err := pkgdb.Providers.Create(recorded, deps)
+			if err != nil {
+				return nil, recorded, fmt.Errorf("failed to create recorded database provider %q: %w", recorded, err)
+			}
+			return prov, recorded, nil
+		}
+
+		explicit := strings.TrimSpace(env.Annotations["divergedev.com/database-provider"])
+		mode := strings.TrimSpace(env.Spec.Database.Mode)
+		var candidate string
+		if explicit != "" {
+			if !allowedEnvDatabaseProviders[explicit] {
+				return nil, "", fmt.Errorf("unsupported database provider annotation %q", explicit)
+			}
+			candidate = explicit
+		} else if (mode == "snapshot" || mode == "cnpg" || mode == "fresh") && isDefaultOrNoopDBProvider(r.DatabaseProvider) {
+			candidate = mode
+		}
+
+		if recorded != "" {
+			if candidate != "" && candidate != recorded {
+				return nil, recorded, fmt.Errorf("cannot change database provider from %q to %q after provisioning", recorded, candidate)
+			}
+			candidate = recorded
+		}
+
+		if candidate != "" {
+			if !pkgdb.Providers.Has(candidate) {
+				return nil, candidate, fmt.Errorf("database provider %q is not registered", candidate)
+			}
+			deps := registry.Deps{
+				Client: r.Client,
+				Scheme: r.Scheme,
+			}
+			prov, err := pkgdb.Providers.Create(candidate, deps)
+			if err != nil {
+				return nil, candidate, fmt.Errorf("failed to create database provider %q: %w", candidate, err)
+			}
+			return prov, candidate, nil
+		}
+	}
+	return r.DatabaseProvider, "", nil
+}
+
+func isDefaultOrNoopDBProvider(p pkgdb.DatabaseProvider) bool {
+	if p == nil {
+		return true
+	}
+	if _, ok := p.(*internaldb.NoopDatabaseProvider); ok {
+		return true
+	}
+	if inst, ok := p.(*internaldb.InstrumentedDatabaseProvider); ok {
+		return inst.Inner == nil || inst.Mode == "" || inst.Mode == "none" || inst.Mode == "noop" || isDefaultOrNoopDBProvider(inst.Inner)
+	}
+	return false
 }
 
 func (r *EnvironmentReconciler) ensureBannerConfigMap(ctx context.Context, env *divergeiov1alpha1.Environment) error {
