@@ -10,6 +10,46 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
+      path: /validate-divergedev-com-v1alpha1-agenttask
+  failurePolicy: Fail
+  name: vagenttask.divergedev.com
+  rules:
+  - apiGroups:
+    - divergedev.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - agenttasks
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-divergedev-com-v1alpha1-environment
+  failurePolicy: Fail
+  name: venvironment.divergedev.com
+  rules:
+  - apiGroups:
+    - divergedev.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - environments
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
       path: /validate-divergedev-com-v1alpha1-previewgroup
   failurePolicy: Fail
   name: vpreviewgroup.divergedev.com

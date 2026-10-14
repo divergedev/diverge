@@ -1,0 +1,47 @@
+{{- if and .Values.webhook.admissionPolicy.enabled (not .Values.rbac.namespaceScoped) }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "diverge.fullname" . }}-crd-guardrails
+  labels:
+    {{- include "diverge.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - divergedev.com
+        apiVersions:
+          - v1alpha1
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - environments
+          - previewgroups
+          - agenttasks
+  validations:
+    - expression: "!(object.metadata.namespace in ['kube-system', 'kube-public', 'kube-node-lease', 'istio-system'])"
+      message: "Diverge custom resources cannot be created in system namespaces (kube-system, kube-public, kube-node-lease, istio-system)."
+    - expression: "object.kind != 'Environment' || (!has(object.spec.envFrom) || object.spec.envFrom.all(r, !has(r.namespace) || r.namespace == '' || r.namespace == object.metadata.namespace))"
+      message: "Cross-namespace SecretRef is not allowed in Environment spec.envFrom."
+    - expression: "object.kind != 'Environment' || !has(object.spec.deploy) || !has(object.spec.deploy.envFrom) || object.spec.deploy.envFrom.all(r, !has(r.namespace) || r.namespace == '' || r.namespace == object.metadata.namespace)"
+      message: "Cross-namespace SecretRef is not allowed in Environment spec.deploy.envFrom."
+    - expression: "object.kind != 'Environment' || !has(object.spec.database) || !has(object.spec.database.migrationJob) || !has(object.spec.database.migrationJob.envFrom) || object.spec.database.migrationJob.envFrom.all(r, !has(r.namespace) || r.namespace == '' || r.namespace == object.metadata.namespace)"
+      message: "Cross-namespace SecretRef is not allowed in Environment spec.database.migrationJob.envFrom."
+    - expression: "object.kind != 'PreviewGroup' || (has(object.spec.routing) && has(object.spec.routing.headerValue) && size(object.spec.routing.headerValue) > 0)"
+      message: "PreviewGroup requires a non-empty spec.routing.headerValue."
+    - expression: "object.kind != 'AgentTask' || (has(object.spec.objective) && size(object.spec.objective.trim()) > 0 && has(object.spec.repository) && has(object.spec.repository.url) && size(object.spec.repository.url.trim()) > 0)"
+      message: "AgentTask requires non-empty spec.objective and spec.repository.url."
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "diverge.fullname" . }}-crd-guardrails
+  labels:
+    {{- include "diverge.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "diverge.fullname" . }}-crd-guardrails
+  validationActions:
+    - Deny
+{{- end }}

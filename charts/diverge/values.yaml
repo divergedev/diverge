@@ -46,6 +46,11 @@ prometheus:
 webhook:
   port: 9443
   secretName: diverge-webhook-token
+  validatingWebhook:
+    enabled: false
+    failurePolicy: Fail
+  admissionPolicy:
+    enabled: false
 
 deploy:
   provider: "noop"  # argocd | direct | noop

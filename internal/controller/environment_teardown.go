@@ -77,11 +77,13 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		}
 		cancelR()
 
-		tCtxDB, cancelDB := context.WithTimeout(ctx, 15*time.Second)
-		if err := r.DatabaseProvider.Teardown(tCtxDB, env); err != nil {
-			errs = append(errs, fmt.Errorf("failed to teardown database: %w", err))
+		if dbProv := r.getDatabaseProvider(env); dbProv != nil {
+			tCtxDB, cancelDB := context.WithTimeout(ctx, 15*time.Second)
+			if err := dbProv.Teardown(tCtxDB, env); err != nil {
+				errs = append(errs, fmt.Errorf("failed to teardown database: %w", err))
+			}
+			cancelDB()
 		}
-		cancelDB()
 
 		// Wait for preview workloads to be fully terminated before deleting
 		// feature flag ConfigMaps or namespaces, preventing live preview pods

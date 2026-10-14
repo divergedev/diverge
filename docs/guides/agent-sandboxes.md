@@ -230,3 +230,27 @@ When `notifierProvider` (`github` or `gitlab`) is configured on `diverge-control
 - One-click **Magic Link** (`?_diverge_env=`) to open the agent's linked preview environment and an **Exit Preview** (`?_diverge_env=clear`) link
 - Live cumulative LLM token and USD spend (`status.tokensConsumed` / `status.costUSD`)
 
+---
+
+## 8. Reference Autonomous Agent Runner (`cmd/agent-runner`) & Admission Guardrails
+
+Diverge ships a reference sandbox entrypoint binary (`cmd/agent-runner`, packaged via `Dockerfile.agent-runner` as `ghcr.io/divergedev/agent-runner`) that executes inside `PodSandboxProvider` and `AgentSandboxProvider` pods:
+
+1. **Capability Token Resolution**: Reads the attenuated Macaroon token from `DIVERGE_TOKEN_FILE` (`/etc/diverge/token/token`) or `DIVERGE_MACAROON_TOKEN`.
+2. **Shallow Workspace Clone**: Clones `DIVERGE_REPO_URL` (`--depth=50 --branch $DIVERGE_BASE_BRANCH`) into `DIVERGE_WORKSPACE_DIR` (`/workspace`) and checks out `DIVERGE_WORKING_BRANCH` (`agent/<task-name>`).
+3. **Metered Build-Verify-Fix Loop (`1..DIVERGE_MAX_ITERATIONS`)**:
+   - Reports token and USD consumption to `POST $DIVERGE_METER_URL` before each iteration, halting immediately on `429 Too Many Requests` (`ErrBudgetExceeded`) or `403 Forbidden` (`ErrModelDisallowed`).
+   - Runs `DIVERGE_AGENT_CMD` and validates the fix using `DIVERGE_VERIFY_CMD` plus optional live HTTP health checks against `DIVERGE_PREVIEW_URL` with the `x-diverge-env` routing header.
+   - Stages, commits (`fix(<task>): <objective>`), and pushes `DIVERGE_WORKING_BRANCH` once verification passes.
+
+### Admission Webhooks & CEL `ValidatingAdmissionPolicy`
+
+Enable admission-time validation for `Environment`, `PreviewGroup`, and `AgentTask` Custom Resources in the Helm chart:
+
+```bash
+helm upgrade --install diverge charts/diverge \
+  --namespace diverge-system \
+  --set certManager.enabled=true \
+  --set webhook.validatingWebhook.enabled=true \
+  --set webhook.admissionPolicy.enabled=true
+```

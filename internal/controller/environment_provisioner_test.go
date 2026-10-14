@@ -12,6 +12,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	internaldb "github.com/divergedev/diverge/internal/database"
+	"github.com/divergedev/diverge/internal/database/cnpg"
 	"github.com/divergedev/diverge/pkg/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -483,4 +485,43 @@ func TestReconcileProvisioning_AtlasMigration_NonBlocking_Failure(t *testing.T) 
 	require.NoError(t, err)
 	assert.Equal(t, "Succeeded", env.Status.MigrationStatus)
 	assert.NotEqual(t, divergeiov1alpha1.PhaseFailed, env.Status.Phase)
+}
+
+func TestGetDatabaseProvider_DynamicResolution(t *testing.T) {
+	r := &EnvironmentReconciler{
+		DatabaseProvider: &internaldb.InstrumentedDatabaseProvider{
+			Inner: &internaldb.NoopDatabaseProvider{},
+			Mode:  "none",
+		},
+	}
+
+	envSnapshot := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "pr-snapshot", Namespace: "default"},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Database: divergeiov1alpha1.EnvironmentDatabase{Mode: "snapshot"},
+		},
+	}
+	prov := r.getDatabaseProvider(envSnapshot)
+	assert.IsType(t, &cnpg.CNPGDatabaseProvider{}, prov)
+
+	envFresh := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "pr-cnpg", Namespace: "default"},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Database: divergeiov1alpha1.EnvironmentDatabase{Mode: "fresh"},
+		},
+	}
+	provFresh := r.getDatabaseProvider(envFresh)
+	assert.IsType(t, &cnpg.CNPGDatabaseProvider{}, provFresh)
+
+	envExplicit := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-explicit",
+			Namespace: "default",
+			Annotations: map[string]string{
+				"divergedev.com/database-provider": "cnpg",
+			},
+		},
+	}
+	provExplicit := r.getDatabaseProvider(envExplicit)
+	assert.IsType(t, &cnpg.CNPGDatabaseProvider{}, provExplicit)
 }
