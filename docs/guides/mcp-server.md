@@ -146,9 +146,21 @@ The MCP server provides the following tools grouped by service:
 
 Configure your AI assistant or editor to launch `diverge mcp` as a stdio tool server.
 
+### Automated 1-Command Setup (`diverge mcp setup`)
+
+Run `diverge mcp setup` in your repository root to automatically write or merge the `diverge` MCP server entry into **Cursor** (`.cursor/mcp.json`), **Claude Code** (`.mcp.json`), and **Windsurf Cascade** (`~/.codeium/windsurf/mcp_config.json`) without clobbering existing MCP servers:
+
+```bash
+# Configure all supported AI editors (Cursor, Claude Code, Windsurf)
+diverge mcp setup
+
+# Or target a specific client with a custom server URL
+diverge mcp setup --client cursor --server-url http://localhost:8080
+```
+
 ### Claude Code / Claude Desktop
 
-Add the server configuration to `~/.claude/claude_desktop_config.json` (or `~/.claude.json`):
+Add the server configuration to `.mcp.json` (workspace) or `~/.claude/claude_desktop_config.json` (or `~/.claude.json`):
 
 ```json
 {
