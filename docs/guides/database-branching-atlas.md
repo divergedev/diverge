@@ -11,17 +11,24 @@ Diverge isolates database state per preview environment so schema changes and se
 | Helm `database.provider` | Supported `spec.database.mode` | Provisioning Time | Best For |
 | :--- | :--- | :--- | :--- |
 | `noop` | `shared` | Instant (0s) | Stateless PRs with no schema or data changes |
-| `schema` | `schema` | < 1s | Postgres schema-per-PR (`SET search_path TO preview_mr_42`) |
-| `snapshot` | `snapshot`, `fresh` | 2–10s | Full DDL + seed data isolation inside Postgres |
-| `neon` | `snapshot`, `fresh` | 1–2s | Serverless Copy-on-Write Postgres branches on [Neon](https://neon.tech) |
-| `cnpg` | `fresh`, `snapshot` | 10–30s | Dedicated [CloudNativePG](https://cloudnative-pg.io) cluster per PR |
-| `cockroach` | `schema`, `fresh` | 1–3s | CockroachDB multi-tenant preview databases |
+| `schema` | `schema` | < 1s | Postgres schema-per-PR (`SET search_path TO preview_mr_42, public`) with `public` write-protection and table/SQL seeding |
+| `cnpg` | `fresh`, `snapshot` | 10–30s | Dedicated in-cluster [CloudNativePG](https://cloudnative-pg.io) `Cluster` per PR (`initdb`, `pg_basebackup` clone, or `recovery`) |
 
 ---
 
 ## 2. Schema-per-Environment (`mode: schema`)
 
 In `schema` mode, Diverge connects to your baseline Postgres instance, creates an isolated schema (`preview_<sanitized_env_name>`) and scoped credentials (`diverge_preview_<schema>`), and drops the schema automatically when the `Environment` CR is deleted.
+
+### `public` Schema Write-Protection
+Because the preview role's `search_path` includes `public` as a fallback (`SET search_path TO preview_<env>, public`), Diverge automatically hardens `public` during provisioning:
+- Executes `REVOKE CREATE ON SCHEMA public FROM <role>`, `REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA public FROM <role>`, and `GRANT USAGE ON SCHEMA public TO <role>`.
+- Verifies via `has_schema_privilege` and `has_table_privilege` that the preview role holds **zero** effective `CREATE` or write privileges on `public` (catching unsafe `PUBLIC` pseudogroup grants before pods start).
+
+### Declarative Schema & Data Seeding (`spec.database.seedSource`)
+Use `spec.database.seedSource` in `schema` mode to populate the isolated preview schema automatically during provisioning:
+- **`public` or `schema:<source_schema>`**: Clones table structures (`CREATE TABLE IF NOT EXISTS ... (LIKE <source>.<table> INCLUDING ALL)`), copies rows across compatible writable non-generated columns, and advances copied identity/serial sequences (`pg_get_serial_sequence` + `setval`).
+- **`configmap:<name>[/<key>]`**: Reads custom seed SQL from the specified ConfigMap in the environment's namespace (default key: `seed.sql`) and executes it inside a transaction scoped to `SET LOCAL search_path TO <preview_schema>, public`.
 
 When `spec.database.connectionRef` is omitted, `diverge-controller` automatically provisions an owned Kubernetes `Secret` named `diverge-db-env-<env>-<hash8>` containing:
 - `DATABASE_URL`: Scoped connection string (`postgres://diverge_preview_<schema>:.../postgres?sslmode=disable&search_path=preview_<env>,public`).
@@ -40,6 +47,7 @@ spec:
   image: ghcr.io/acme/payments-api:pr-42
   database:
     mode: schema
+    seedSource: public # or "schema:baseline_seed" or "configmap:payments-seed/seed.sql"
     migrationJob:
       image: ghcr.io/acme/payments-migrations:pr-42
       command: ["goose", "up"]

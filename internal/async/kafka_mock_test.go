@@ -25,6 +25,10 @@ func (m *mockKafkaAdmin) CreateTopics(ctx context.Context, partitions int32, rep
 	return m.createResp, m.createErr
 }
 
+func (m *mockKafkaAdmin) AlterTopicConfigs(ctx context.Context, configs []kadm.AlterConfig, topics ...string) (kadm.AlterConfigsResponses, error) {
+	return nil, nil
+}
+
 func (m *mockKafkaAdmin) DeleteTopics(ctx context.Context, topics ...string) (kadm.DeleteTopicResponses, error) {
 	return m.deleteResp, m.deleteErr
 }

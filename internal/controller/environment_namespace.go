@@ -44,6 +44,12 @@ func (r *EnvironmentReconciler) ensureNamespace(ctx context.Context, env *diverg
 			ns.Labels["pod-security.kubernetes.io/warn-version"] = "latest"
 			ns.Labels["pod-security.kubernetes.io/audit"] = "restricted"
 			ns.Labels["pod-security.kubernetes.io/audit-version"] = "latest"
+			if env.Annotations["divergedev.com/ambient-mesh"] == "true" {
+				ns.Labels["istio.io/dataplane-mode"] = "ambient"
+			}
+			if wp := strings.TrimSpace(env.Annotations["divergedev.com/waypoint"]); wp != "" {
+				ns.Labels["istio.io/use-waypoint"] = wp
+			}
 			return nil
 		})
 		if err != nil {

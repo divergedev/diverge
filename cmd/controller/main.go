@@ -79,6 +79,7 @@ func main() {
 	var featureProvider string
 	var enableAgentSandbox bool
 	var sandboxProvider string
+	var enableGAMMA bool
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -94,6 +95,7 @@ func main() {
 	flag.StringVar(&featureProvider, "feature-provider", "configmap", "Feature flag provider (configmap, noop)")
 	flag.BoolVar(&enableAgentSandbox, "enable-agent-sandbox", true, "Enable AgentTask controller and sandbox management")
 	flag.StringVar(&sandboxProvider, "sandbox-provider", "agent-sandbox", "Default sandbox provider (agent-sandbox, noop)")
+	flag.BoolVar(&enableGAMMA, "enable-gamma", false, "Enable GAMMA mesh routing for PreviewGroups (requires Istio Ambient or GAMMA-compatible mesh)")
 	flag.StringVar(&webhookSecretToken, "webhook-secret-token", "", "The secret token for authenticating webhooks (prefer DIVERGE_WEBHOOK_SECRET env var).")
 	flag.StringVar(&defaultNamespace, "default-namespace", "default", "Default namespace to create environments in")
 
@@ -297,6 +299,7 @@ func main() {
 		Notifier:         pgNotifierImpl,
 		StatusReporter:   statusReporterImpl,
 		DatabaseProvider: dbProviderImpl,
+		EnableGAMMA:      enableGAMMA,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PreviewGroup")
 		os.Exit(1)

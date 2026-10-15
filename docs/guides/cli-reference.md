@@ -23,6 +23,7 @@ The `diverge` CLI manages your local development environments and interacts with
 | `diverge list` | List all environments in the cluster |
 | `diverge logs [env-name]` | Stream logs from a preview environment |
 | `diverge mcp` | Run MCP server over stdio for AI agent integration |
+| `diverge mcp setup` | Configure MCP server (`diverge mcp`) for Cursor, Claude Code, and Windsurf (`--client all\|cursor\|claude\|windsurf`) |
 | `diverge open <name>` | Open the environment URL in browser (`--magic` for one-click `?_diverge_env=` cookie link) |
 | `diverge plugins` | Manage plugins |
 | `diverge preview create` | Create a preview group from current branch |
@@ -32,6 +33,7 @@ The `diverge` CLI manages your local development environments and interacts with
 | `diverge providers list` | List all registered providers |
 | `diverge route <service>` | Simulate request routing to a service through the topology |
 | `diverge status` | Show active preview environments and groups |
+| `diverge top` | Live terminal dashboard (`watch`) of environments, FinOps burn rate, hibernation state, and `AgentTask`s |
 | `diverge validate` | Validate `.diverge.yaml` against JSON Schema or print the embedded schema (`--print-schema`) |
 | `diverge version` | Print version info |
 
@@ -248,3 +250,45 @@ Open a preview `Environment` or `PreviewGroup` URL in your default browser (or p
 **Flags:**
 - `-m, --magic` — Append `?_diverge_env=<headerValue>` so `diverge-proxy` sets the `diverge_env` sticky routing cookie on first visit
 - `-p, --no-browser` — Print the resolved URL to stdout without launching a browser (ideal for CI logs, remote SSH sessions, or piping to `pbcopy`)
+
+### `diverge mcp setup`
+
+Automatically write or merge `diverge mcp` server configuration into AI coding assistant config files (`Cursor`, `Claude Code`, and `Windsurf Cascade`) using atomic file replacement that preserves existing MCP server entries.
+
+**Usage:** `diverge mcp setup [flags]`
+
+**Flags:**
+- `--client` — Target AI client: `all` (default: writes `.cursor/mcp.json`, `.mcp.json`, and `~/.codeium/windsurf/mcp_config.json`), `cursor`, `claude`, or `windsurf`
+- `--server-url` — Diverge API server URL to embed in the MCP config
+- `--allow-destructive` — Include `--allow-destructive` in the configured `diverge mcp` arguments
+- `--dir` — Target workspace directory (default: `.`)
+
+**Examples:**
+```bash
+# Configure Cursor, Claude Code, and Windsurf in one command
+diverge mcp setup
+
+# Configure only Cursor with a custom server URL
+diverge mcp setup --client cursor --server-url https://diverge.internal.example.com
+```
+
+### `diverge top`
+
+Live terminal dashboard (alias: `diverge watch`) displaying fleet FinOps hourly and monthly burn rates, active vs. hibernated (`💤 hibernated`) environment states, `PreviewGroup` service counts, TTL countdowns, and `AgentTask` LLM token/cost spend.
+
+**Usage:** `diverge top [flags]` (Alias: `diverge watch`)
+
+**Flags:**
+- `--interval` — Refresh interval (default: `2s`)
+- `--once` — Render a single snapshot to stdout and exit without clearing the screen (ideal for CI logs or scripts)
+- `-A, --all-namespaces` — Query `Environment`, `PreviewGroup`, and `AgentTask` resources across all namespaces
+
+**Examples:**
+```bash
+# Launch interactive live-refreshing dashboard
+diverge top
+
+# Print a single fleet FinOps & status snapshot across all namespaces
+diverge top --once -A
+```
+

@@ -256,6 +256,41 @@ $diverge_role$;
 	setupSQL += fmt.Sprintf("GRANT ALL ON ALL TABLES IN SCHEMA %s TO %s;\n", schemaIdent, roleIdent)
 	setupSQL += fmt.Sprintf("GRANT ALL ON ALL SEQUENCES IN SCHEMA %s TO %s;\n", schemaIdent, roleIdent)
 	setupSQL += fmt.Sprintf("ALTER DEFAULT PRIVILEGES IN SCHEMA %s GRANT ALL ON TABLES TO %s;\n", schemaIdent, roleIdent)
+	setupSQL += fmt.Sprintf("REVOKE CREATE ON SCHEMA public FROM %s;\n", roleIdent)
+	setupSQL += fmt.Sprintf("REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA public FROM %s;\n", roleIdent)
+	setupSQL += fmt.Sprintf("GRANT USAGE ON SCHEMA public TO %s;\n", roleIdent)
+	setupSQL += fmt.Sprintf("GRANT SELECT ON ALL TABLES IN SCHEMA public TO %s;\n", roleIdent)
+	// editorconfig-checker-disable
+	setupSQL += fmt.Sprintf(`DO $diverge_verify_public$
+DECLARE
+    writable_table text;
+BEGIN
+    IF has_schema_privilege('%[1]s', 'public', 'CREATE') THEN
+        RAISE EXCEPTION 'preview role %% still has effective CREATE privilege on schema public (inherited from PUBLIC or another role)', '%[1]s';
+    END IF;
+    SELECT format('%%I.%%I', schemaname, tablename) INTO writable_table
+    FROM pg_tables
+    WHERE schemaname = 'public'
+      AND (
+          has_table_privilege('%[1]s', format('%%I.%%I', schemaname, tablename), 'INSERT')
+          OR has_table_privilege('%[1]s', format('%%I.%%I', schemaname, tablename), 'UPDATE')
+          OR has_table_privilege('%[1]s', format('%%I.%%I', schemaname, tablename), 'DELETE')
+          OR has_table_privilege('%[1]s', format('%%I.%%I', schemaname, tablename), 'TRUNCATE')
+      )
+    LIMIT 1;
+    IF writable_table IS NOT NULL THEN
+        RAISE EXCEPTION 'preview role %% still has effective write privilege on public table %% (inherited from PUBLIC or another role)', '%[1]s', writable_table;
+    END IF;
+END
+$diverge_verify_public$;
+`, roleName)
+	// editorconfig-checker-enable
+
+	seedSQL, err := p.buildSeedSQL(ctx, env, schema, schemaIdent)
+	if err != nil {
+		return nil, err
+	}
+	setupSQL += seedSQL
 
 	dsn := buildWorkloadDSN(p.AdminDSN, roleName, password, schema)
 
@@ -297,6 +332,143 @@ $diverge_role$;
 
 	result.SetupSQLExecuted = true
 	return result, nil
+}
+
+func (p *SchemaDatabaseProvider) buildSeedSQL(ctx context.Context, env *v1alpha1.Environment, schema, schemaIdent string) (string, error) {
+	if env == nil {
+		return "", nil
+	}
+	seedSource := strings.TrimSpace(env.Spec.Database.SeedSource)
+	if seedSource == "" {
+		return "", nil
+	}
+
+	if seedSource == "public" || strings.HasPrefix(seedSource, "schema:") {
+		srcSchema := "public"
+		if strings.HasPrefix(seedSource, "schema:") {
+			srcSchema = strings.TrimSpace(strings.TrimPrefix(seedSource, "schema:"))
+		}
+		if srcSchema == "" || !validSchemaName.MatchString(srcSchema) {
+			return "", fmt.Errorf("invalid seedSource schema %q: %w", srcSchema, ErrInvalidSchemaName)
+		}
+		// editorconfig-checker-disable
+		return fmt.Sprintf(`
+DO $diverge_seed$
+DECLARE
+    row record;
+    col_list text;
+    incompatible_col text;
+    seq_rec record;
+    seq_name text;
+BEGIN
+    FOR row IN
+        SELECT p_tbl.table_name
+        FROM information_schema.tables p_tbl
+        JOIN information_schema.tables s_tbl
+          ON s_tbl.table_name = p_tbl.table_name
+        WHERE p_tbl.table_schema = '%[1]s' AND p_tbl.table_type = 'BASE TABLE'
+          AND s_tbl.table_schema = '%[2]s' AND s_tbl.table_type = 'BASE TABLE'
+    LOOP
+        SELECT p_col.column_name INTO incompatible_col
+        FROM information_schema.columns p_col
+        LEFT JOIN information_schema.columns s_col
+          ON s_col.table_schema = '%[2]s'
+         AND s_col.table_name = row.table_name
+         AND s_col.column_name = p_col.column_name
+        WHERE p_col.table_schema = '%[1]s'
+          AND p_col.table_name = row.table_name
+          AND COALESCE(p_col.is_generated, 'NEVER') = 'NEVER'
+          AND (
+              (s_col.column_name IS NOT NULL AND p_col.udt_name <> s_col.udt_name)
+              OR (s_col.column_name IS NULL AND p_col.is_nullable = 'NO' AND p_col.column_default IS NULL AND COALESCE(p_col.is_identity, 'NO') = 'NO')
+          )
+        LIMIT 1;
+
+        IF incompatible_col IS NOT NULL THEN
+            RAISE EXCEPTION 'incompatible column layout for column %% between preview table %%I.%%I and source table %%I.%%I',
+                incompatible_col, '%[1]s', row.table_name, '%[2]s', row.table_name;
+        END IF;
+
+        SELECT string_agg(quote_ident(p_col.column_name), ', ' ORDER BY p_col.ordinal_position) INTO col_list
+        FROM information_schema.columns p_col
+        JOIN information_schema.columns s_col
+          ON s_col.table_schema = '%[2]s'
+         AND s_col.table_name = row.table_name
+         AND s_col.column_name = p_col.column_name
+        WHERE p_col.table_schema = '%[1]s'
+          AND p_col.table_name = row.table_name
+          AND COALESCE(p_col.is_generated, 'NEVER') = 'NEVER'
+          AND p_col.udt_name = s_col.udt_name;
+
+        IF col_list IS NOT NULL AND col_list <> '' THEN
+            EXECUTE format('INSERT INTO %%I.%%I (%%s) OVERRIDING SYSTEM VALUE SELECT %%s FROM %%I.%%I ON CONFLICT DO NOTHING',
+                '%[1]s', row.table_name, col_list, col_list, '%[2]s', row.table_name);
+        END IF;
+
+        FOR seq_rec IN
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = '%[1]s'
+              AND table_name = row.table_name
+        LOOP
+            seq_name := pg_get_serial_sequence(format('%%I.%%I', '%[1]s', row.table_name), seq_rec.column_name);
+            IF seq_name IS NOT NULL THEN
+                EXECUTE format(
+                    'SELECT setval(%%L, GREATEST(COALESCE((SELECT MAX(%%I)::bigint FROM %%I.%%I), 1), 1), (SELECT COUNT(%%I) > 0 FROM %%I.%%I))',
+                    seq_name, seq_rec.column_name, '%[1]s', row.table_name, seq_rec.column_name, '%[1]s', row.table_name
+                );
+            END IF;
+        END LOOP;
+    END LOOP;
+END
+$diverge_seed$;
+`, schema, srcSchema), nil
+		// editorconfig-checker-enable
+	}
+
+	cmSpec := strings.TrimSpace(strings.TrimPrefix(seedSource, "configmap:"))
+	cmName := cmSpec
+	key := "seed.sql"
+	if idx := strings.IndexByte(cmSpec, '/'); idx >= 0 {
+		cmName = strings.TrimSpace(cmSpec[:idx])
+		if k := strings.TrimSpace(cmSpec[idx+1:]); k != "" {
+			key = k
+		}
+	}
+	if cmName == "" {
+		return "", fmt.Errorf("invalid seedSource %q: configmap name cannot be empty", seedSource)
+	}
+	if p.Client == nil {
+		return "", fmt.Errorf("kubernetes client is required to load seedSource ConfigMap %q", cmSpec)
+	}
+
+	ns := "default"
+	if env.Namespace != "" {
+		ns = env.Namespace
+	}
+	var cm corev1.ConfigMap
+	if err := p.Client.Get(ctx, types.NamespacedName{Name: cmName, Namespace: ns}, &cm); err != nil {
+		return "", fmt.Errorf("failed to get seedSource ConfigMap %s/%s: %w", ns, cmName, err)
+	}
+
+	sqlText, ok := cm.Data[key]
+	if !ok && key == "seed.sql" {
+		var sqlKeys []string
+		for k := range cm.Data {
+			if strings.HasSuffix(k, ".sql") {
+				sqlKeys = append(sqlKeys, k)
+			}
+		}
+		if len(sqlKeys) == 1 {
+			sqlText = cm.Data[sqlKeys[0]]
+			ok = true
+		}
+	}
+	if !ok || strings.TrimSpace(sqlText) == "" {
+		return "", fmt.Errorf("seedSource ConfigMap %s/%s does not contain non-empty SQL in key %q", ns, cmName, key)
+	}
+
+	return fmt.Sprintf("\n-- Seed SQL from ConfigMap %s\nSET LOCAL search_path TO %s, public;\n%s\n", cm.Name, schemaIdent, strings.TrimSpace(sqlText)), nil
 }
 
 // Teardown performs its designated operation.

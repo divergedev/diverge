@@ -65,14 +65,14 @@ diverge dev --service my-app
   <img src="docs/assets/delta-vs-duplicated.svg" alt="Delta Preview vs Traditional Full-Stack Duplication" width="100%">
 </p>
 
-### Turnkey CI/CD (`divergedev/diverge@v0.15.0`)
+### Turnkey CI/CD (`divergedev/diverge@v0.16.0`)
 
 Deploy a delta `PreviewGroup` for only the services modified in a Pull Request and pass `routing-header-json` directly into Playwright E2E tests:
 
 ```yaml
 - name: Deploy Diverge Delta Preview
   id: diverge
-  uses: divergedev/diverge@v0.15.0
+  uses: divergedev/diverge@v0.16.0
   with:
     kubeconfig: ${{ secrets.PREVIEW_KUBECONFIG }}
     image-registry: ghcr.io/acme
@@ -102,9 +102,9 @@ See [charts/diverge/values.yaml](charts/diverge/values.yaml) for configuration o
 *   **Scale-to-Zero**: Idle preview environments automatically scale to zero via KEDA HTTP Add-on (`HTTPScaledObject`) or annotation-based idle hibernation (`divergedev.com/hibernate-after`, `divergedev.com/last-traffic-at`). The interceptor wakes up pods on the first request, resulting in 90%+ resource savings for idle MRs.
 *   **Activator Proxy (`activator-proxy`)**: Smart routing that directs traffic to the pod when ready. Includes `X-Preview-Env` header injection, a shared informer for efficient pod state tracking, and an optional auto-refreshing HTML wake-up splash page (`--wake-splash` flag / `X-Diverge-Wake-Splash: true` header and `GET /-/wakeup-status` readiness endpoint).
 *   **Delta Deployment**: Only deploy what changed, falling back to a baseline for unmodified services.
-*   **Header-Based Routing & Gateway API**: Leverages Gateway API (`HTTPRoute` + `GRPCRoute`), Istio, Cilium, Linkerd, and the Diverge Proxy to route traffic seamlessly using HTTP/gRPC headers.
-*   **Configurable DB Modes & Atlas Migrations**: Options for `shared`, `schema`, `snapshot`, `neon`, `cnpg`, or `cockroach` databases, plus native [Atlas Operator](docs/guides/database-branching-atlas.md) (`AtlasMigration` / `AtlasSchema`) integration.
-*   **Schema-per-Environment**: Actual execution of SQL-based schema provisioning (via `SQLExecutor`), regex-validated naming, injection prevention, auto-generated `diverge-db-env-<env>` Secret (`DATABASE_URL` and `DIVERGE_PREVIEW_SCHEMA`), and automated migration Jobs.
+*   **Header-Based Routing & Gateway API**: Leverages Gateway API (`HTTPRoute` + `GRPCRoute` + cross-namespace `ReferenceGrant`), Istio (`ambient-mesh` / `waypoint`), Cilium, Linkerd, and the Diverge Proxy to route traffic seamlessly using HTTP/gRPC headers.
+*   **Configurable DB Modes & Atlas Migrations**: Options for `shared`, `schema`, `snapshot`, or `fresh` databases via in-cluster `schema` and CloudNativePG (`cnpg`) providers, plus native [Atlas Operator](docs/guides/database-branching-atlas.md) (`AtlasMigration` / `AtlasSchema`) integration.
+*   **Schema-per-Environment**: Actual execution of SQL-based schema provisioning (via `SQLExecutor`) with `public` schema write-protection, declarative `seedSource` seeding (`public`, `schema:<name>`, `configmap:<name>[/<key>]`), regex-validated naming, injection prevention, auto-generated `diverge-db-env-<env>` Secret (`DATABASE_URL` and `DIVERGE_PREVIEW_SCHEMA`), and automated migration Jobs.
 *   **MR-Triggered Lifecycle**: Environments spin up when a Merge Request opens and tear down upon merge/close.
 *   **Merge Gating**: GitLab/GitHub commit status checks (`diverge/preview`) block merges until environments are healthy.
 *   **Argo CD & Direct Deploy**: Argo CD GitOps (`Application` CRs) and No-ArgoCD mode (`DirectDeployer`) for Helm charts and Kustomize overlays.
@@ -127,10 +127,10 @@ See [charts/diverge/values.yaml](charts/diverge/values.yaml) for configuration o
 
 Diverge provides fully isolated preview environments for asynchronous workloads.
 *   **Subdomain vs Header Routing**: Use `mode: subdomain` for frontend-to-backend workflows without passing custom headers.
-*   **Available Providers**: Supported provisioners include Temporal, Kafka, Noop, and Webhook.
+*   **Available Providers**: Supported provisioners include Temporal, Kafka (with bounded topic `retention.ms` via `divergedev.com/kafka-retention-ms` or TTL), Noop, and Webhook.
 *   **Slim Builds**: Use `no_temporal` and `no_kafka` build tags for smaller binaries.
 
-See the [Async Routing Guide](docs/async-routing.md) for full configuration details and YAML examples.
+See the [Async Routing Guide](https://divergedev.com/guides/async-routing/) for full configuration details and YAML examples.
 
 ## Security
 
@@ -185,17 +185,18 @@ spec:
 ## CLI Commands
 
 The `diverge` CLI helps you manage environments efficiently:
-*   `diverge init` - Initialize a `.diverge.yaml` config
+*   `diverge init` - Initialize a `.diverge.yaml` config or local Kubernetes playground
 *   `diverge create` - Create a new environment
 *   `diverge curl` - Send HTTP requests to a preview environment and compare against baseline (`--compare-baseline`)
 *   `diverge list` - List active environments
 *   `diverge status` - Check the status of an environment
+*   `diverge top` - Live terminal dashboard (`watch`) of environments, FinOps burn rate, hibernation state, and `AgentTask`s
 *   `diverge open` - Open the preview URL in your browser (`--magic` for one-click `?_diverge_env=` cookie URL)
 *   `diverge logs` - Stream logs for a preview environment
 *   `diverge dev` - Local development mode with preview routing
 *   `diverge doctor` - Diagnose cluster, CRD, Gateway, and environment health
 *   `diverge env export` - Export environment variables (dotenv, JSON, shell)
-*   `diverge mcp` - Run MCP server over stdio for AI agent integration
+*   `diverge mcp` - Run MCP server over stdio (`diverge mcp setup` to auto-configure Cursor, Claude Code, and Windsurf)
 *   `diverge preview` - Create preview environments from CLI
 *   `diverge validate` - Validate your `.diverge.yaml`
 *   `diverge delete` - Delete an environment

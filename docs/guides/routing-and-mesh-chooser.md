@@ -67,10 +67,21 @@ proxy:
 | :--- | :--- | :--- |
 | `Environment` | `divergedev.com/hibernate-after` | Idle duration (e.g., `"30m"`) after which the environment scales its preview Deployment down to `0` replicas (`Phase: Hibernating`). |
 | `Environment` | `divergedev.com/last-traffic-at` | RFC 3339 timestamp of the last observed request (used with `divergedev.com/hibernate-after`). |
+| `Environment` | `divergedev.com/ambient-mesh` | When `"true"`, automatically labels the preview namespace (`spec.deploy.namespace: create`) with `istio.io/dataplane-mode: ambient`. |
+| `Environment` | `divergedev.com/waypoint` | Enrolls the preview namespace in the specified Istio Ambient Waypoint proxy (`istio.io/use-waypoint: <value>`). |
+| `Environment` | `divergedev.com/gateway-namespace` | Overrides the namespace of the target `Gateway` in `HTTPRoute` / `GRPCRoute` `parentRefs` when the Ingress Gateway runs in a dedicated namespace (e.g., `envoy-gateway-system` or `istio-ingress`). |
 | `AgentTask` | `divergedev.com/preview-enabled` | `"true"` / `"false"` — Controls automatic provisioning of a linked preview `Environment` (`agent-preview-<taskName>`). |
 | `AgentTask` | `divergedev.com/preview-service` | Target service name for the `AgentTask`'s linked preview environment. |
 | `AgentTask` | `divergedev.com/preview-image` | Container image for the linked preview environment (defaults to `nginx:alpine` on port `80`). |
 | `AgentTask` | `divergedev.com/preview-branch` | Branch override for the linked preview environment. |
 | `AgentTask` | `divergedev.com/preview-environment` | Output annotation written by the controller with the linked `Environment` name. |
 | `AgentTask` | `divergedev.com/preview-url` | Output annotation written by the controller with the live preview URL once ready. |
+
+---
+
+## 4. Cross-Namespace `ReferenceGrant` & GAMMA East-West Mesh Routing
+
+- **Automatic `ReferenceGrant` (`spec.deploy.namespace: create`)**: When an `Environment` deploys its preview workload into an isolated namespace (`env.PreviewNamespace()`) that differs from the route namespace, `GatewayRouter` automatically reconciles a `gateway.networking.k8s.io/v1beta1` `ReferenceGrant` (`diverge-<env>-grant`) in `env.PreviewNamespace()` granting route-namespace `HTTPRoute` and `GRPCRoute` access to each changed preview `Service` (`<env>-<service>`).
+- **GAMMA East-West Routing (`--enable-gamma`)**: Pass `--enable-gamma` to `diverge-controller` so `PreviewGroupReconciler` configures child `Environment`s' `spec.serviceConfig.serviceName` with the baseline service name; `GatewayRouter` creates the GAMMA mesh `HTTPRoute` from `spec.serviceConfig.serviceName` (while `EnvironmentReconciler` does not take `--enable-gamma` and uses `spec.serviceConfig.serviceName` when set directly on the `Environment`).
+
 

@@ -189,16 +189,22 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 	if isServiceName(parentRefName) {
 		parentRef["kind"] = "Service"
 		parentRef["group"] = ""
+	} else if gwNS := strings.TrimSpace(env.Annotations["divergedev.com/gateway-namespace"]); gwNS != "" && gwNS != ns {
+		parentRef["namespace"] = gwNS
+	}
+
+	backendNS := r.backendNamespace(env, ns)
+	backendRef := map[string]interface{}{
+		"name": fmt.Sprintf("%s-%s", env.Name, svc),
+		"port": backendPort,
+	}
+	if backendNS != "" && backendNS != ns {
+		backendRef["namespace"] = backendNS
 	}
 
 	rule := map[string]interface{}{
-		"matches": matches,
-		"backendRefs": []interface{}{
-			map[string]interface{}{
-				"name": fmt.Sprintf("%s-%s", env.Name, svc),
-				"port": backendPort,
-			},
-		},
+		"matches":     matches,
+		"backendRefs": []interface{}{backendRef},
 	}
 
 	var filters []interface{}
@@ -270,14 +276,17 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 				wsMatches = append(wsMatches, wsMatch)
 			}
 
+			wsBackendRef := map[string]interface{}{
+				"name": fmt.Sprintf("%s-%s", env.Name, svc),
+				"port": backendPort,
+			}
+			if backendNS != "" && backendNS != ns {
+				wsBackendRef["namespace"] = backendNS
+			}
+
 			wsRule := map[string]interface{}{
-				"matches": wsMatches,
-				"backendRefs": []interface{}{
-					map[string]interface{}{
-						"name": fmt.Sprintf("%s-%s", env.Name, svc),
-						"port": backendPort,
-					},
-				},
+				"matches":     wsMatches,
+				"backendRefs": []interface{}{wsBackendRef},
 				"timeouts": map[string]interface{}{
 					"request": timeout,
 				},
@@ -324,6 +333,12 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 		logger.V(1).Info(fmt.Sprintf("Updated %s", kind), "name", routeName, "service", svc)
 	}
 
+	if backendNS != "" && backendNS != ns {
+		if err := r.reconcileReferenceGrant(ctx, env, ns, backendNS); err != nil {
+			return err
+		}
+	}
+
 	oppositeKind := "GRPCRoute"
 	oppositeAPIVersion := "gateway.networking.k8s.io/v1"
 	if kind == "GRPCRoute" {
@@ -338,6 +353,79 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 	stale.SetNamespace(ns)
 	_ = r.Client.Delete(ctx, stale)
 
+	return nil
+}
+
+// reconcileReferenceGrant creates or updates a ReferenceGrant in backendNS
+// allowing HTTPRoute and GRPCRoute in ns to reference preview Services in backendNS.
+func (r *GatewayRouter) reconcileReferenceGrant(ctx context.Context, env *v1alpha1.Environment, ns, backendNS string) error {
+	logger := log.FromContext(ctx).WithName("gateway-router")
+	grantName := fmt.Sprintf("diverge-%s-grant", env.Name)
+	apiVersion := "gateway.networking.k8s.io/v1beta1"
+	kind := "ReferenceGrant"
+
+	toEntries := make([]interface{}, 0, len(env.Spec.Deploy.ChangedServices))
+	for _, svc := range env.Spec.Deploy.ChangedServices {
+		toEntries = append(toEntries, map[string]interface{}{
+			"group": "",
+			"kind":  "Service",
+			"name":  fmt.Sprintf("%s-%s", env.Name, svc),
+		})
+	}
+
+	spec := map[string]interface{}{
+		"from": []interface{}{
+			map[string]interface{}{
+				"group":     "gateway.networking.k8s.io",
+				"kind":      "HTTPRoute",
+				"namespace": ns,
+			},
+			map[string]interface{}{
+				"group":     "gateway.networking.k8s.io",
+				"kind":      "GRPCRoute",
+				"namespace": ns,
+			},
+		},
+		"to": toEntries,
+	}
+
+	existing := &unstructured.Unstructured{}
+	existing.SetAPIVersion(apiVersion)
+	existing.SetKind(kind)
+
+	err := r.Client.Get(ctx, client.ObjectKey{Name: grantName, Namespace: backendNS}, existing)
+	if err != nil {
+		if meta.IsNoMatchError(err) {
+			return fmt.Errorf("ReferenceGrant CRD (gateway.networking.k8s.io/v1beta1) is required for cross-namespace routing from %s to %s: %w", ns, backendNS, err)
+		}
+		if client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to get ReferenceGrant %s: %w", grantName, err)
+		}
+		u := &unstructured.Unstructured{}
+		u.SetAPIVersion(apiVersion)
+		u.SetKind(kind)
+		u.SetName(grantName)
+		u.SetNamespace(backendNS)
+		u.SetLabels(map[string]string{
+			"divergedev.com/environment": env.Name,
+			"divergedev.com/managed-by":  "diverge",
+		})
+		u.Object["spec"] = spec
+		if err := r.Client.Create(ctx, u); err != nil {
+			if meta.IsNoMatchError(err) {
+				return fmt.Errorf("ReferenceGrant CRD (gateway.networking.k8s.io/v1beta1) is required for cross-namespace routing from %s to %s: %w", ns, backendNS, err)
+			}
+			return fmt.Errorf("failed to create ReferenceGrant %s: %w", grantName, err)
+		}
+		logger.V(1).Info("Created ReferenceGrant", "name", grantName, "namespace", backendNS)
+		return nil
+	}
+
+	existing.Object["spec"] = spec
+	if err := r.Client.Update(ctx, existing); err != nil {
+		return fmt.Errorf("failed to update ReferenceGrant %s: %w", grantName, err)
+	}
+	logger.V(1).Info("Updated ReferenceGrant", "name", grantName, "namespace", backendNS)
 	return nil
 }
 
@@ -359,8 +447,8 @@ func isServiceName(name string) bool {
 	return !strings.Contains(lower, "gateway") && !strings.Contains(lower, "waypoint")
 }
 
-// Teardown deletes all HTTPRoute and GRPCRoute resources associated with the
-// environment by selecting on the divergedev.com/environment label.
+// Teardown deletes all HTTPRoute, GRPCRoute, and ReferenceGrant resources
+// associated with the environment by selecting on the divergedev.com/environment label.
 func (r *GatewayRouter) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
 	logger := log.FromContext(ctx).WithName("gateway-router")
 	ns := r.namespace(env)
@@ -402,20 +490,50 @@ func (r *GatewayRouter) Teardown(ctx context.Context, env *v1alpha1.Environment)
 		client.InNamespace(ns),
 		client.MatchingLabelsSelector{Selector: selector},
 	); err != nil {
-		if meta.IsNoMatchError(err) {
-			// GRPCRoute CRD not installed, skip cleanup
-			return nil
+		if !meta.IsNoMatchError(err) {
+			return fmt.Errorf("listing GRPCRoutes: %w", err)
 		}
-		return fmt.Errorf("listing GRPCRoutes: %w", err)
+	} else {
+		for i := range grpcRouteList.Items {
+			if err := r.Client.Delete(ctx, &grpcRouteList.Items[i]); err != nil {
+				if client.IgnoreNotFound(err) != nil {
+					return fmt.Errorf("failed to delete GRPCRoute %s: %w", grpcRouteList.Items[i].GetName(), err)
+				}
+			}
+			deleted++
+		}
 	}
 
-	for i := range grpcRouteList.Items {
-		if err := r.Client.Delete(ctx, &grpcRouteList.Items[i]); err != nil {
-			if client.IgnoreNotFound(err) != nil {
-				return fmt.Errorf("failed to delete GRPCRoute %s: %w", grpcRouteList.Items[i].GetName(), err)
-			}
+	// Delete ReferenceGrants in route namespace and preview namespace (if distinct)
+	grantNamespaces := []string{ns}
+	if env.Spec.Deploy.Namespace == "create" {
+		if previewNS := env.PreviewNamespace(); previewNS != "" && previewNS != ns {
+			grantNamespaces = append(grantNamespaces, previewNS)
 		}
-		deleted++
+	}
+	for _, grantNS := range grantNamespaces {
+		var grantList unstructured.UnstructuredList
+		grantList.SetAPIVersion("gateway.networking.k8s.io/v1beta1")
+		grantList.SetKind("ReferenceGrantList")
+
+		if err := r.Client.List(ctx, &grantList,
+			client.InNamespace(grantNS),
+			client.MatchingLabelsSelector{Selector: selector},
+		); err != nil {
+			if meta.IsNoMatchError(err) {
+				break
+			}
+			return fmt.Errorf("listing ReferenceGrants: %w", err)
+		}
+
+		for i := range grantList.Items {
+			if err := r.Client.Delete(ctx, &grantList.Items[i]); err != nil {
+				if client.IgnoreNotFound(err) != nil {
+					return fmt.Errorf("failed to delete ReferenceGrant %s: %w", grantList.Items[i].GetName(), err)
+				}
+			}
+			deleted++
+		}
 	}
 
 	logger.Info("Tore down routes",
@@ -443,4 +561,12 @@ func (r *GatewayRouter) namespace(env *v1alpha1.Environment) string {
 		return r.Namespace
 	}
 	return env.Namespace
+}
+
+// backendNamespace returns the namespace where the preview Service is deployed.
+func (r *GatewayRouter) backendNamespace(env *v1alpha1.Environment, routeNS string) string {
+	if env.Spec.Deploy.Namespace == "create" {
+		return env.PreviewNamespace()
+	}
+	return routeNS
 }
