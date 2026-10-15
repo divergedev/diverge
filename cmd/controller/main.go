@@ -270,6 +270,7 @@ func main() {
 
 	if err = (&controller.EnvironmentReconciler{
 		Client:           mgr.GetClient(),
+		APIReader:        mgr.GetAPIReader(),
 		Scheme:           mgr.GetScheme(),
 		Recorder:         events.NewRecorder(mgr.GetEventRecorder("diverge-controller")),
 		Router:           routerImpl,

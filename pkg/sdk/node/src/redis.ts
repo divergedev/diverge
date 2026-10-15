@@ -7,14 +7,7 @@ export function resolveRedisPrefix(env?: NodeJS.ProcessEnv): string {
     return explicitPrefix.endsWith(':') ? explicitPrefix : `${explicitPrefix}:`;
   }
 
-  const contextEnv = getEnvironment();
-  const processDefaultEnv = process.env.DIVERGE_ENV || '';
-  const hasExplicitContextEnv = contextEnv !== '' && contextEnv !== processDefaultEnv;
-  const activeEnv = (
-    hasExplicitContextEnv
-      ? contextEnv
-      : envMap.DIVERGE_ENV?.trim() || contextEnv
-  ).trim();
+  const activeEnv = (getEnvironment() || envMap.DIVERGE_ENV || '').trim();
 
   if (activeEnv) {
     return `preview:${activeEnv}:`;

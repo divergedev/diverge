@@ -469,15 +469,15 @@ func (r *EnvironmentReconciler) resolveAsyncProvisioner(route divergeiov1alpha1.
 	}
 	proto := strings.ToLower(strings.TrimSpace(route.Protocol))
 	if proto == "redis" || proto == "valkey" {
-		switch r.AsyncProvisioner.Name() {
-		case "noop", "kafka", "temporal":
-			deps := registry.Deps{
-				Client: r.Client,
-				Scheme: r.Scheme,
-			}
-			if prov, err := async.Providers.Create(proto, deps); err == nil && prov != nil {
-				return prov
-			}
+		if name := r.AsyncProvisioner.Name(); name == "redis" || name == "valkey" {
+			return r.AsyncProvisioner
+		}
+		deps := registry.Deps{
+			Client: r.Client,
+			Scheme: r.Scheme,
+		}
+		if prov, err := async.Providers.Create(proto, deps); err == nil && prov != nil {
+			return prov
 		}
 	}
 	return r.AsyncProvisioner

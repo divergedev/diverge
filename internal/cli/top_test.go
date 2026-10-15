@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -257,8 +258,14 @@ func TestTopBaselineDriftState(t *testing.T) {
 	tableCmd.SetOut(&tableOut)
 	tableCmd.SetArgs([]string{"top", "--once"})
 	require.NoError(t, tableCmd.Execute())
-	assert.Contains(t, tableOut.String(), "pr-99-drifted")
-	assert.Contains(t, tableOut.String(), "⚠️ drift")
+	var driftLine string
+	for _, line := range strings.Split(tableOut.String(), "\n") {
+		if strings.Contains(line, "pr-99-drifted") {
+			driftLine = line
+		}
+	}
+	require.NotEmpty(t, driftLine)
+	assert.Contains(t, driftLine, "⚠️ drift")
 
 	// JSON output
 	jsonCmd := NewRootCmd(app)

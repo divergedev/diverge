@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   getEnvironment,
   getTemporalHeaderMap,
@@ -243,10 +243,23 @@ describe('Temporal Header Propagation', () => {
 });
 
 describe('Redis / Valkey Key Prefix Resolution', () => {
+  const savedEnv: Record<string, string | undefined> = {};
+
   beforeEach(() => {
-    delete process.env.DIVERGE_ENV;
-    delete process.env.DIVERGE_REDIS_PREFIX;
-    delete process.env.REDIS_KEY_PREFIX;
+    for (const key of ['DIVERGE_ENV', 'DIVERGE_REDIS_PREFIX', 'REDIS_KEY_PREFIX']) {
+      savedEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+  });
+
+  afterEach(() => {
+    for (const [key, val] of Object.entries(savedEnv)) {
+      if (val === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = val;
+      }
+    }
   });
 
   it('returns empty prefix and unmodified key in baseline', async () => {

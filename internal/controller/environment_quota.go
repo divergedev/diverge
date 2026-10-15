@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -24,10 +25,20 @@ const (
 	AnnotationMaxCNPGClusters       = "divergedev.com/max-cnpg-clusters"
 	AnnotationMaxHourlyCostUSD      = "divergedev.com/max-hourly-cost-usd"
 	AnnotationQuotaExceedPolicy     = "divergedev.com/quota-exceed-policy"
+	AnnotationQuotaLastAdmitted     = "divergedev.com/quota-last-admitted"
 	QuotaPolicyHibernateOldest      = "hibernate-oldest"
 	QuotaPolicyReject               = "reject"
 	ConditionQuotaReady             = "QuotaReady"
 )
+
+var namespaceQuotaLocks sync.Map
+
+func lockNamespaceQuota(namespace string) func() {
+	val, _ := namespaceQuotaLocks.LoadOrStore(namespace, &sync.Mutex{})
+	mu := val.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
 
 func usesCNPGCluster(env *divergeiov1alpha1.Environment) bool {
 	if env == nil {
@@ -68,8 +79,16 @@ func (r *EnvironmentReconciler) reconcileNamespaceQuota(ctx context.Context, env
 		return ctrl.Result{}, false, nil
 	}
 
+	unlock := lockNamespaceQuota(env.Namespace)
+	defer unlock()
+
+	reader := client.Reader(r.Client)
+	if r.APIReader != nil {
+		reader = r.APIReader
+	}
+
 	ns := &corev1.Namespace{}
-	if err := r.Get(ctx, types.NamespacedName{Name: env.Namespace}, ns); err != nil {
+	if err := reader.Get(ctx, types.NamespacedName{Name: env.Namespace}, ns); err != nil {
 		if client.IgnoreNotFound(err) == nil {
 			return ctrl.Result{}, false, nil
 		}
@@ -120,7 +139,7 @@ func (r *EnvironmentReconciler) reconcileNamespaceQuota(ctx context.Context, env
 	}
 
 	var envList divergeiov1alpha1.EnvironmentList
-	if err := r.List(ctx, &envList, client.InNamespace(env.Namespace)); err != nil {
+	if err := reader.List(ctx, &envList, client.InNamespace(env.Namespace)); err != nil {
 		return ctrl.Result{}, false, fmt.Errorf("failed to list environments in namespace %s: %w", env.Namespace, err)
 	}
 
@@ -208,6 +227,7 @@ func (r *EnvironmentReconciler) reconcileNamespaceQuota(ctx context.Context, env
 		return false, ""
 	}
 
+	preemptedAny := false
 	for {
 		exceeded, reasonMsg := exceedsQuota(otherActive)
 		if !exceeded {
@@ -239,13 +259,29 @@ func (r *EnvironmentReconciler) reconcileNamespaceQuota(ctx context.Context, env
 		if err := r.Patch(ctx, victim, client.MergeFrom(victimBase)); err != nil {
 			return ctrl.Result{}, false, fmt.Errorf("failed to hibernate oldest environment %s for quota: %w", victim.Name, err)
 		}
+		// EstimateEnvironmentCost publishes the updated Prometheus cost gauge ($0 active compute while hibernated) as a side effect.
 		metrics.EstimateEnvironmentCost(victim, now, rateCard)
+		preemptedAny = true
 
 		if r.Recorder != nil && r.Recorder.EventRecorder != nil {
 			r.Recorder.Event(victim, "Normal", "QuotaPreempted",
 				fmt.Sprintf("Hibernated to free namespace quota for environment %s", env.Name))
 			r.Recorder.Event(env, "Normal", "QuotaPreempted",
 				fmt.Sprintf("Hibernated oldest environment %s to satisfy namespace quota", victim.Name))
+		}
+	}
+
+	existingQuotaCond := meta.FindStatusCondition(env.Status.Conditions, ConditionQuotaReady)
+	alreadyAdmitted := existingQuotaCond != nil && existingQuotaCond.Status == metav1.ConditionTrue && existingQuotaCond.Reason == "WithinQuota"
+	if !alreadyAdmitted || preemptedAny {
+		// Optimistic-concurrency claim on the Namespace object so concurrent controller replicas
+		// cannot both admit environments against the same Namespace ResourceVersion.
+		if ns.Annotations == nil {
+			ns.Annotations = make(map[string]string)
+		}
+		ns.Annotations[AnnotationQuotaLastAdmitted] = fmt.Sprintf("%s@%d", env.Name, now.UnixNano())
+		if err := r.Update(ctx, ns); err != nil {
+			return ctrl.Result{}, false, fmt.Errorf("failed to record namespace quota admission claim for %s: %w", env.Name, err)
 		}
 	}
 

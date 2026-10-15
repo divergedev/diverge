@@ -29,9 +29,13 @@ const (
 	ConditionBaselineDrift        = "BaselineDriftDetected"
 )
 
-func computeBaselineFingerprint(ctx context.Context, c client.Client, env *divergeiov1alpha1.Environment) (string, error) {
+func computeBaselineFingerprint(ctx context.Context, c client.Client, env *divergeiov1alpha1.Environment, secretReader ...client.Reader) (string, error) {
 	if env == nil || c == nil || env.Spec.Deploy.Mode == "full" {
 		return "", nil
+	}
+	secReader := client.Reader(c)
+	if len(secretReader) > 0 && secretReader[0] != nil {
+		secReader = secretReader[0]
 	}
 
 	targetSet := make(map[string]bool)
@@ -190,7 +194,7 @@ func computeBaselineFingerprint(ctx context.Context, c client.Client, env *diver
 	var foundSecrets []corev1.Secret
 	for nn := range secretKeys {
 		var sec corev1.Secret
-		if err := c.Get(ctx, nn, &sec); err != nil {
+		if err := secReader.Get(ctx, nn, &sec); err != nil {
 			if client.IgnoreNotFound(err) != nil {
 				return "", fmt.Errorf("failed to get secret %s: %w", nn, err)
 			}
@@ -296,7 +300,7 @@ func (r *EnvironmentReconciler) reconcileBaselineDrift(ctx context.Context, env 
 		return false, false, nil
 	}
 
-	fp, err := computeBaselineFingerprint(ctx, r.Client, env)
+	fp, err := computeBaselineFingerprint(ctx, r.Client, env, r.APIReader)
 	if err != nil || fp == "" {
 		return false, false, err
 	}
@@ -372,13 +376,16 @@ func (r *EnvironmentReconciler) reconcileBaselineDrift(ctx context.Context, env 
 		return false, true, nil
 	}
 
+	msg := fmt.Sprintf("Baseline configuration changed (%s -> %s); set divergedev.com/drift-policy=sync to auto-refresh", prevFP, fp)
+	existing := meta.FindStatusCondition(env.Status.Conditions, ConditionBaselineDrift)
+	alreadyReported := existing != nil && existing.Status == metav1.ConditionTrue && existing.Message == msg
 	meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 		Type:    ConditionBaselineDrift,
 		Status:  metav1.ConditionTrue,
 		Reason:  "BaselineUpdated",
-		Message: fmt.Sprintf("Baseline configuration changed (%s -> %s); set divergedev.com/drift-policy=sync to auto-refresh", prevFP, fp),
+		Message: msg,
 	})
-	if r.Recorder != nil && r.Recorder.EventRecorder != nil {
+	if !alreadyReported && r.Recorder != nil && r.Recorder.EventRecorder != nil {
 		r.Recorder.Event(env, "Warning", "BaselineDriftDetected",
 			fmt.Sprintf("Baseline workload or configuration changed (%s -> %s)", prevFP, fp))
 	}

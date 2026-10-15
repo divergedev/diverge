@@ -159,7 +159,8 @@ func (d *DirectDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) 
 		// Inject baseline fingerprint into workload pod template annotations so drift-policy=sync triggers rolling restart
 		if fp := strings.TrimSpace(env.Annotations["divergedev.com/baseline-fingerprint"]); fp != "" {
 			kind := obj.GetKind()
-			if kind == "Deployment" || kind == "StatefulSet" || kind == "DaemonSet" || kind == "Job" {
+			// Job pod templates are immutable; changing them breaks the apply.
+			if kind == "Deployment" || kind == "StatefulSet" || kind == "DaemonSet" {
 				annos, found, _ := unstructured.NestedStringMap(obj.Object, "spec", "template", "metadata", "annotations")
 				if !found || annos == nil {
 					annos = make(map[string]string)

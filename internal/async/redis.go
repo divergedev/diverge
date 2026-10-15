@@ -115,7 +115,7 @@ func (r *RedisProvisioner) Teardown(ctx context.Context, env *v1alpha1.Environme
 	}
 
 	prefix := FormatRedisKeyPrefix(route.Target, env.Name)
-	pattern := prefix + "*"
+	pattern := escapeRedisGlob(prefix) + "*"
 	cursor := "0"
 
 	for {
@@ -164,6 +164,18 @@ func (r *RedisProvisioner) Teardown(ctx context.Context, env *v1alpha1.Environme
 	}
 
 	return nil
+}
+
+func escapeRedisGlob(s string) string {
+	var b strings.Builder
+	for _, c := range s {
+		switch c {
+		case '*', '?', '[', ']', '\\':
+			b.WriteByte('\\')
+		}
+		b.WriteRune(c)
+	}
+	return b.String()
 }
 
 func sendRESPCommand(r *bufio.Reader, w *bufio.Writer, args ...string) (any, error) {
