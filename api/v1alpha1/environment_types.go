@@ -71,7 +71,7 @@ type EnvironmentDeploy struct {
 // AsyncRouteSpec defines an async routing target for event-driven services.
 type AsyncRouteSpec struct {
 	// Protocol is the async protocol type.
-	// +kubebuilder:validation:Enum=temporal;kafka
+	// +kubebuilder:validation:Enum=temporal;kafka;redis;valkey
 	Protocol string `json:"protocol" yaml:"protocol"`
 
 	// Target is the baseline resource name (e.g., task queue name or topic name).
@@ -95,6 +95,8 @@ func DefaultEnvVarForProtocol(protocol string) string {
 		return "TEMPORAL_TASK_QUEUE"
 	case "kafka":
 		return "KAFKA_CONSUMER_GROUP"
+	case "redis", "valkey":
+		return "DIVERGE_REDIS_PREFIX"
 	default:
 		return ""
 	}

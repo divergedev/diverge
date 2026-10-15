@@ -156,6 +156,19 @@ func (d *DirectDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) 
 			}
 		}
 
+		// Inject baseline fingerprint into workload pod template annotations so drift-policy=sync triggers rolling restart
+		if fp := strings.TrimSpace(env.Annotations["divergedev.com/baseline-fingerprint"]); fp != "" {
+			kind := obj.GetKind()
+			if kind == "Deployment" || kind == "StatefulSet" || kind == "DaemonSet" || kind == "Job" {
+				annos, found, _ := unstructured.NestedStringMap(obj.Object, "spec", "template", "metadata", "annotations")
+				if !found || annos == nil {
+					annos = make(map[string]string)
+				}
+				annos["divergedev.com/baseline-fingerprint"] = fp
+				_ = unstructured.SetNestedStringMap(obj.Object, annos, "spec", "template", "metadata", "annotations")
+			}
+		}
+
 		// Set OwnerReference for 'same' namespace mode only.
 		// CR2: Only set OwnerReferences when the object is in the same
 		// namespace as the Environment CR (required by K8s GC).

@@ -61,7 +61,8 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		if len(env.Spec.Routing.AsyncRoutes) > 0 && r.AsyncProvisioner != nil {
 			for _, route := range env.Spec.Routing.AsyncRoutes {
 				tCtxA, cancelA := context.WithTimeout(ctx, 15*time.Second)
-				if err := r.AsyncProvisioner.Teardown(tCtxA, env, route); err != nil {
+				prov := r.resolveAsyncProvisioner(route)
+				if err := prov.Teardown(tCtxA, env, route); err != nil {
 					errs = append(errs, fmt.Errorf("failed to teardown async route %s/%s: %w", route.Protocol, route.Target, err))
 					asyncTeardownsTotal.WithLabelValues(string(route.Protocol), "error").Inc()
 				} else {

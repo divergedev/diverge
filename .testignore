@@ -12,6 +12,7 @@ pkg/features/provider.go
 
 # --- Provider registration glue (auto-registration via init(), no logic) ---
 internal/async/kafka_register.go
+internal/async/redis_register.go
 internal/async/temporal_register.go
 internal/async/webhook_register.go
 internal/async/providers.go

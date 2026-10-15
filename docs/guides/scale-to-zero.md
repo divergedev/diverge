@@ -89,6 +89,42 @@ In addition to KEDA `HTTPScaledObject` scaling, `diverge-controller` supports an
 
 | Annotation | Example | Description |
 | :--- | :--- | :--- |
-| `divergedev.com/hibernate-after` | `"30m"` | Idle duration (parsed via `time.ParseDuration`) after which the environment's preview Deployment is scaled down to `0` replicas (`Phase: Hibernating`). |
+| `divergedev.com/hibernate-after` | `"30m"` | Idle duration (parsed via `time.ParseDuration`) after which the environment's preview Deployment is scaled down to `0` replicas (`divergedev.com/hibernated: "true"`). |
 | `divergedev.com/last-traffic-at` | `"2026-10-12T01:30:00Z"` | RFC 3339 timestamp of the most recent request (updated by proxies/gateways or annotations). Falls back to `status.createdAt` when unset. |
 
+---
+
+## 6. Namespace Quotas & FinOps LRU Auto-Hibernation
+
+Platform teams can enforce namespace-level concurrency and FinOps hourly spend limits by annotating the target Kubernetes `Namespace`. When a new preview `Environment` would exceed the namespace's active environment limit or hourly budget cap, `diverge-controller` automatically hibernates the oldest / least-recently-used (`divergedev.com/last-traffic-at`) active environment so CI pipelines never fail due to stale previews:
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: staging
+  annotations:
+    divergedev.com/max-active-environments: "10"
+    divergedev.com/max-cnpg-clusters: "3"
+    divergedev.com/max-hourly-cost-usd: "1.50"
+    divergedev.com/quota-exceed-policy: "hibernate-oldest" # or "reject"
+```
+
+| Namespace Annotation | Default | Description |
+| :--- | :--- | :--- |
+| `divergedev.com/max-active-environments` | *(unlimited)* | Maximum number of non-hibernated active `Environment`s allowed in the namespace simultaneously. |
+| `divergedev.com/max-cnpg-clusters` | *(unlimited)* | Maximum number of dedicated CloudNativePG (`cnpg` / `fresh` / `snapshot`) database clusters allowed in the namespace. |
+| `divergedev.com/max-hourly-cost-usd` | *(unlimited)* | Maximum combined estimated hourly compute + database spend (`$USD/hr`) across active `Environment`s in the namespace. |
+| `divergedev.com/quota-exceed-policy` | `"hibernate-oldest"` | `"hibernate-oldest"` (evicts the least-recently-used active `Environment` to `divergedev.com/hibernated: "true"`, emitting a `QuotaPreempted` event) or `"reject"` (sets `QuotaReady=False` with reason `NamespaceQuotaExceeded`). |
+
+---
+
+## 7. Baseline Drift Detection & Auto-Refresh
+
+In delta preview mode (`spec.deploy.mode: delta`), `diverge-controller` watches baseline `Deployment`s (`divergedev.com/role: baseline`) and referenced `ConfigMap`s / `Secret`s, computing a deterministic SHA-256 fingerprint (`divergedev.com/baseline-fingerprint`):
+
+| Environment Annotation | Values | Behavior |
+| :--- | :--- | :--- |
+| `divergedev.com/drift-policy` | `"warn"` (default) | Sets condition `BaselineDriftDetected=True` (`Reason: BaselineUpdated`), emits a `BaselineDriftDetected` Warning event, and surfaces `⚠️ drift` in `diverge top` while keeping the preview running. |
+| `divergedev.com/drift-policy` | `"sync"` | Automatically re-runs `Deployer.Deploy`, injects the updated `divergedev.com/baseline-fingerprint` into the preview pod template to trigger a clean rolling restart, and sets `BaselineDriftDetected=False` (`Reason: BaselineSynced`). |
+| `divergedev.com/drift-policy` | `"ignore"` | Disables baseline drift evaluation for the environment. |

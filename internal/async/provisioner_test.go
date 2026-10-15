@@ -172,6 +172,8 @@ func TestNoopProvisioner_CustomEnvVarMapping(t *testing.T) {
 func TestDefaultEnvVarForProtocol(t *testing.T) {
 	assert.Equal(t, "TEMPORAL_TASK_QUEUE", v1alpha1.DefaultEnvVarForProtocol("temporal"))
 	assert.Equal(t, "KAFKA_CONSUMER_GROUP", v1alpha1.DefaultEnvVarForProtocol("kafka"))
+	assert.Equal(t, "DIVERGE_REDIS_PREFIX", v1alpha1.DefaultEnvVarForProtocol("redis"))
+	assert.Equal(t, "DIVERGE_REDIS_PREFIX", v1alpha1.DefaultEnvVarForProtocol("valkey"))
 	assert.Equal(t, "", v1alpha1.DefaultEnvVarForProtocol("rabbitmq"))
 	assert.Equal(t, "", v1alpha1.DefaultEnvVarForProtocol(""))
 }

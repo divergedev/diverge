@@ -16,6 +16,7 @@ pip install diverge-sdk[requests]
 - **LLM Usage Metering**: `meter_llm_usage`, `LLMMeterError`, `LLMMeterResponse`, `resolve_sandbox_token` (zero extra dependencies).
 - **Kafka Propagation & Topic Resolution**: `inject_kafka_headers`, `extract_kafka_context`, `kafka_message_context`, `resolve_kafka_topic`.
 - **Temporal Propagation**: `get_temporal_headers`, `temporal_header_context`.
+- **Redis / Valkey Key Prefix Isolation**: `resolve_redis_prefix`, `resolve_redis_key`.
 
 ## Usage
 
@@ -61,4 +62,14 @@ headers = get_temporal_headers()
 with temporal_header_context(incoming_headers):
     pass
 ```
+
+### Redis / Valkey Key Prefix Isolation
+
+```python
+from diverge_sdk import resolve_redis_prefix, resolve_redis_key
+
+key = resolve_redis_key("session:user-123")
+# Returns "preview:pr-42:session:user-123" in preview environments, or "session:user-123" in baseline
+```
+
 

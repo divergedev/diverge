@@ -95,6 +95,15 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 		Message: "Namespace is ready",
 	})
 
+	// 5.5. Enforce namespace quotas and FinOps LRU auto-hibernation
+	if res, done, err := r.reconcileNamespaceQuota(ctx, env, statusBase); done || err != nil {
+		if err != nil {
+			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
+			return res, true, retErr
+		}
+		return res, true, nil
+	}
+
 	// 6. Ensure database
 	tCtxDB, cancelDB := context.WithTimeout(ctx, 15*time.Second)
 	defer cancelDB()
@@ -318,7 +327,8 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 					tCtxA, cancelA := context.WithTimeout(gCtx, 30*time.Second)
 					defer cancelA()
 					startA := time.Now()
-					result, err := r.AsyncProvisioner.Provision(tCtxA, envCopy, route)
+					prov := r.resolveAsyncProvisioner(route)
+					result, err := prov.Provision(tCtxA, envCopy, route)
 					durationA := time.Since(startA).Seconds()
 					if err == nil && result == nil {
 						err = async.ErrNilProvisionResult
@@ -451,6 +461,26 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 	}
 
 	return ctrl.Result{}, false, nil
+}
+
+func (r *EnvironmentReconciler) resolveAsyncProvisioner(route divergeiov1alpha1.AsyncRouteSpec) async.Provisioner {
+	if r.AsyncProvisioner == nil {
+		return nil
+	}
+	proto := strings.ToLower(strings.TrimSpace(route.Protocol))
+	if proto == "redis" || proto == "valkey" {
+		switch r.AsyncProvisioner.Name() {
+		case "noop", "kafka", "temporal":
+			deps := registry.Deps{
+				Client: r.Client,
+				Scheme: r.Scheme,
+			}
+			if prov, err := async.Providers.Create(proto, deps); err == nil && prov != nil {
+				return prov
+			}
+		}
+	}
+	return r.AsyncProvisioner
 }
 
 func (r *EnvironmentReconciler) getFeatureProvider(env *divergeiov1alpha1.Environment) (features.FeatureProvider, error) {

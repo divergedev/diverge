@@ -241,3 +241,46 @@ describe('Temporal Header Propagation', () => {
     expect(withTemporalHeaders(rawHeaders, () => getEnvironment())).toBe('agent-sbx-8');
   });
 });
+
+describe('Redis / Valkey Key Prefix Resolution', () => {
+  beforeEach(() => {
+    delete process.env.DIVERGE_ENV;
+    delete process.env.DIVERGE_REDIS_PREFIX;
+    delete process.env.REDIS_KEY_PREFIX;
+  });
+
+  it('returns empty prefix and unmodified key in baseline', async () => {
+    const { resolveRedisPrefix, resolveRedisKey } = await import('../src/index.js');
+    expect(resolveRedisPrefix()).toBe('');
+    expect(resolveRedisKey('session:user-123')).toBe('session:user-123');
+  });
+
+  it('derives preview:<env>: prefix from active context and prefixes keys idempotently', async () => {
+    const { resolveRedisPrefix, resolveRedisKey } = await import('../src/index.js');
+    setEnvironment('pr-42', () => {
+      expect(resolveRedisPrefix()).toBe('preview:pr-42:');
+      const prefixed = resolveRedisKey('session:user-123');
+      expect(prefixed).toBe('preview:pr-42:session:user-123');
+      expect(resolveRedisKey(prefixed)).toBe('preview:pr-42:session:user-123');
+    });
+  });
+
+  it('respects DIVERGE_REDIS_PREFIX and REDIS_KEY_PREFIX and ensures trailing colon', async () => {
+    const { resolveRedisPrefix, resolveRedisKey } = await import('../src/index.js');
+    expect(resolveRedisPrefix({ DIVERGE_REDIS_PREFIX: 'preview:pr-42:cache' })).toBe(
+      'preview:pr-42:cache:'
+    );
+    expect(
+      resolveRedisKey('user:1', { DIVERGE_REDIS_PREFIX: 'preview:pr-42:cache' })
+    ).toBe('preview:pr-42:cache:user:1');
+    expect(
+      resolveRedisKey('preview:pr-42:cache:user:1', {
+        DIVERGE_REDIS_PREFIX: 'preview:pr-42:cache:',
+      })
+    ).toBe('preview:pr-42:cache:user:1');
+    expect(resolveRedisPrefix({ REDIS_KEY_PREFIX: 'preview:pr-77:' })).toBe(
+      'preview:pr-77:'
+    );
+  });
+});
+

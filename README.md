@@ -32,7 +32,7 @@ Documentation: [https://divergedev.com](https://divergedev.com)
 - [Service Mesh & Gateway API Chooser](docs/guides/routing-and-mesh-chooser.md)
 - [Scale-to-Zero & Activator Proxy Guide](docs/guides/scale-to-zero.md)
 - [Feature Flags & OpenFeature Guide](docs/guides/feature-flags.md)
-- [Multi-User Dev & Conflict Detection (Pro)](docs/guides/multi-user-dev.md)
+- [Multi-User Dev & Conflict Detection](docs/guides/multi-user-dev.md)
 - [Hot Reload Guide](docs/guides/hot-reload.md)
 - [Observability Guide](docs/guides/observability.md)
 - [CLI Reference](docs/guides/cli-reference.md)
@@ -99,9 +99,9 @@ See [charts/diverge/values.yaml](charts/diverge/values.yaml) for configuration o
 *   **Autonomous Agent Sandboxes (`AgentTask`)**: Run AI coding agents inside isolated Kubernetes sandboxes (`gvisor` / `kata` / `agent-sandbox`) with attenuated **Macaroon capability tokens**, network policy egress lockdowns, automatic linked preview environments (`PreviewEnvironmentReady` condition, `divergedev.com/preview-url` annotation), and live LLM cost/token metering via `POST /api/v1/agenttask/meter`.
 *   **PreviewGroup Orchestration**: Manage multiple child environments and services under a single CR tied directly to an MR/PR. Automatic orphan cleanup and label-based ownership.
 *   **Provider Registry**: Pluggable, extensible architecture — add new routing, deployer, notifier, sandbox, or database providers with a single file. Zero changes to the controller.
-*   **Scale-to-Zero**: Idle preview environments automatically scale to zero via KEDA HTTP Add-on (`HTTPScaledObject`) or annotation-based idle hibernation (`divergedev.com/hibernate-after`, `divergedev.com/last-traffic-at`). The interceptor wakes up pods on the first request, resulting in 90%+ resource savings for idle MRs.
+*   **Scale-to-Zero & FinOps Namespace Quotas**: Idle preview environments automatically scale to zero via KEDA HTTP Add-on (`HTTPScaledObject`) or annotation-based idle hibernation (`divergedev.com/hibernate-after`, `divergedev.com/last-traffic-at`). Namespace-level FinOps quotas (`divergedev.com/max-active-environments`, `divergedev.com/max-cnpg-clusters`, `divergedev.com/max-hourly-cost-usd`, `divergedev.com/quota-exceed-policy: hibernate-oldest | reject`) automatically hibernate the oldest idle environment when concurrency or budget caps are reached.
 *   **Activator Proxy (`activator-proxy`)**: Smart routing that directs traffic to the pod when ready. Includes `X-Preview-Env` header injection, a shared informer for efficient pod state tracking, and an optional auto-refreshing HTML wake-up splash page (`--wake-splash` flag / `X-Diverge-Wake-Splash: true` header and `GET /-/wakeup-status` readiness endpoint).
-*   **Delta Deployment**: Only deploy what changed, falling back to a baseline for unmodified services.
+*   **Delta Deployment & Baseline Drift Detection**: Only deploy what changed, falling back to a baseline for unmodified services. Automatically computes a deterministic SHA-256 baseline fingerprint (`divergedev.com/baseline-fingerprint`) across baseline `Deployment`s, `ConfigMap`s, and `Secret`s, surfacing drift warnings (`BaselineDriftDetected=True`, `⚠️ drift` in `diverge top`) or auto-refreshing preview pods (`divergedev.com/drift-policy: sync`).
 *   **Header-Based Routing & Gateway API**: Leverages Gateway API (`HTTPRoute` + `GRPCRoute` + cross-namespace `ReferenceGrant`), Istio (`ambient-mesh` / `waypoint`), Cilium, Linkerd, and the Diverge Proxy to route traffic seamlessly using HTTP/gRPC headers.
 *   **Configurable DB Modes & Atlas Migrations**: Options for `shared`, `schema`, `snapshot`, or `fresh` databases via in-cluster `schema` and CloudNativePG (`cnpg`) providers, plus native [Atlas Operator](docs/guides/database-branching-atlas.md) (`AtlasMigration` / `AtlasSchema`) integration.
 *   **Schema-per-Environment**: Actual execution of SQL-based schema provisioning (via `SQLExecutor`) with `public` schema write-protection, declarative `seedSource` seeding (`public`, `schema:<name>`, `configmap:<name>[/<key>]`), regex-validated naming, injection prevention, auto-generated `diverge-db-env-<env>` Secret (`DATABASE_URL` and `DIVERGE_PREVIEW_SCHEMA`), and automated migration Jobs.
@@ -123,11 +123,11 @@ See [charts/diverge/values.yaml](charts/diverge/values.yaml) for configuration o
 *   **Changed-Service Detection**: `diverge diff` identifies which services are affected by your code changes using git diff + path-based service mapping. Outputs JSON for CI integration.
 *   **Prometheus Topology Discovery**: Auto-discovers service dependencies from Istio, Linkerd, or Cilium mesh metrics. Background cache with stale-while-revalidate for zero-latency CLI responses.
 
-### Async Routing
+### Async & Cache Routing
 
-Diverge provides fully isolated preview environments for asynchronous workloads.
+Diverge provides fully isolated preview environments for asynchronous queues and shared caches.
 *   **Subdomain vs Header Routing**: Use `mode: subdomain` for frontend-to-backend workflows without passing custom headers.
-*   **Available Providers**: Supported provisioners include Temporal, Kafka (with bounded topic `retention.ms` via `divergedev.com/kafka-retention-ms` or TTL), Noop, and Webhook.
+*   **Available Providers**: Supported provisioners include Temporal, Kafka (with bounded topic `retention.ms` via `divergedev.com/kafka-retention-ms` or TTL), Redis / Valkey (key-prefix isolation `preview:<env>:` with non-blocking RESP `SCAN` + `UNLINK` teardown on `--redis-addr` / `DIVERGE_REDIS_ADDR`), Noop, and Webhook.
 *   **Slim Builds**: Use `no_temporal` and `no_kafka` build tags for smaller binaries.
 
 See the [Async Routing Guide](https://divergedev.com/guides/async-routing/) for full configuration details and YAML examples.

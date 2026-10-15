@@ -9,6 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 )
@@ -38,5 +39,8 @@ func (r *EnvironmentReconciler) reconcileDeploy(ctx context.Context, env *diverg
 		Reason:  "ServicesDeployed",
 		Message: "Services deployed successfully",
 	})
+	if _, _, driftErr := r.reconcileBaselineDrift(ctx, env); driftErr != nil {
+		log.FromContext(ctx).Error(driftErr, "failed to evaluate baseline drift")
+	}
 	return ctrl.Result{}, false, nil
 }

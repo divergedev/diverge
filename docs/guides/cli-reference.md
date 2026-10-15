@@ -54,7 +54,7 @@ Route cluster traffic for a service to your local machine.
 - `--proxy-mode` — Proxy mode, either `path` or `host` (default: path)
 - `--server` — Diverge server address for the tunnel (default: auto-detect via port-forward)
 - `--token` — Bearer token for the Diverge server (default: `$DIVERGE_TOKEN`, then the kubeconfig credential)
-- `--on-conflict` — Conflict resolution policy: `warn` (default), `block`, or `allow` (Diverge Pro)
+- `--on-conflict` — Conflict resolution policy: `warn` (default), `block`, or `allow`
 - `--force` — Force start dev session, overriding any active collision
 
 The server authenticates tunnel connections by Kubernetes TokenReview, so the

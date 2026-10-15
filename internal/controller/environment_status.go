@@ -70,6 +70,9 @@ func derivePhase(conditions []metav1.Condition) divergeiov1alpha1.EnvironmentPha
 	}
 	allReady := true
 	for _, c := range conditions {
+		if c.Type == ConditionBaselineDrift {
+			continue
+		}
 		switch c.Status {
 		case metav1.ConditionFalse:
 			if c.Type == "MigrationReady" && c.Reason == "MigrationRunning" {

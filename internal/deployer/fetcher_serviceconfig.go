@@ -207,6 +207,14 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 		podSpec := deploy.Object["spec"].(map[string]interface{})["template"].(map[string]interface{})["spec"].(map[string]interface{})
 		podSpec["volumes"] = podVolumes
 	}
+	if fp := strings.TrimSpace(env.Annotations["divergedev.com/baseline-fingerprint"]); fp != "" {
+		annos, found, _ := unstructured.NestedStringMap(deploy.Object, "spec", "template", "metadata", "annotations")
+		if !found || annos == nil {
+			annos = make(map[string]string)
+		}
+		annos["divergedev.com/baseline-fingerprint"] = fp
+		_ = unstructured.SetNestedStringMap(deploy.Object, annos, "spec", "template", "metadata", "annotations")
+	}
 
 	// Service
 	svc := unstructured.Unstructured{

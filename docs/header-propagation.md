@@ -157,6 +157,33 @@ import (
 openfeature.AddHooks(divergeof.NewHook())
 ```
 
+### Redis & Valkey Key-Prefix Isolation (`Go`, `Node.js`, `Python`)
+
+When `spec.routing.asyncRoutes` includes a `redis` or `valkey` route (or when a request carries `x-diverge-env`), use the SDK helpers to automatically namespace cache keys (`preview:<env>:...`) and prevent shared cache collisions:
+
+```go
+// Go (github.com/divergedev/diverge/pkg/sdk)
+import "github.com/divergedev/diverge/pkg/sdk"
+
+cacheKey := sdk.ResolveRedisKey(ctx, "user:42:profile")
+// In preview pr-42 -> "preview:pr-42:user:42:profile"
+// In baseline      -> "user:42:profile"
+```
+
+```typescript
+// Node.js (@divergedev/sdk)
+import { resolveRedisKey } from '@divergedev/sdk';
+
+const cacheKey = resolveRedisKey('user:42:profile');
+```
+
+```python
+# Python (diverge-sdk)
+from diverge_sdk import resolve_redis_key
+
+cache_key = resolve_redis_key("user:42:profile")
+```
+
 ### Java/Spring Boot
 
 ```java

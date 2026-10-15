@@ -91,7 +91,7 @@ func main() {
 	flag.StringVar(&deployProvider, "deploy-provider", "noop", "Deployment provider (argocd|noop|direct|knative)")
 	flag.StringVar(&databaseProvider, "database-provider", "none", "Database provider (schema|cnpg|snapshot|fresh|none)")
 	flag.StringVar(&notifierProvider, "notifier-provider", "noop", "Notification provider (gitlab|github|noop)")
-	flag.StringVar(&asyncProvider, "async-provider", "noop", "Async provisioning provider (noop, webhook)")
+	flag.StringVar(&asyncProvider, "async-provider", "noop", "Async provisioning provider (noop, kafka, temporal, redis, valkey, webhook)")
 	flag.StringVar(&featureProvider, "feature-provider", "configmap", "Feature flag provider (configmap, noop)")
 	flag.BoolVar(&enableAgentSandbox, "enable-agent-sandbox", true, "Enable AgentTask controller and sandbox management")
 	flag.StringVar(&sandboxProvider, "sandbox-provider", "agent-sandbox", "Default sandbox provider (agent-sandbox, noop)")

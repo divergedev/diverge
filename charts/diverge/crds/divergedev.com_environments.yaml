@@ -299,6 +299,8 @@ spec:
                           enum:
                           - temporal
                           - kafka
+                          - redis
+                          - valkey
                           type: string
                         target:
                           description: Target is the baseline resource name (e.g.,
