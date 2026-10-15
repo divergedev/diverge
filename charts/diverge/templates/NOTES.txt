@@ -24,4 +24,5 @@ To verify the installation:
 {{- end }}
 
 💡 CRD Upgrades: Helm does not auto-upgrade CRDs. After upgrading the chart, run:
-   kubectl apply --server-side -f https://github.com/divergedev/diverge/releases/download/v{{ .Chart.AppVersion }}/crds.yaml
+   kubectl apply --server-side -f https://github.com/divergedev/diverge/releases/download/v{{ trimPrefix "v" .Chart.AppVersion }}/crds.yaml
+

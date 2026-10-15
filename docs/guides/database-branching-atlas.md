@@ -28,7 +28,7 @@ Because the preview role's `search_path` includes `public` as a fallback (`SET s
 ### Declarative Schema & Data Seeding (`spec.database.seedSource`)
 Use `spec.database.seedSource` in `schema` mode to populate the isolated preview schema automatically during provisioning:
 - **`public` or `schema:<source_schema>`**: Clones table structures (`CREATE TABLE IF NOT EXISTS ... (LIKE <source>.<table> INCLUDING ALL)`), copies rows across compatible writable non-generated columns, and advances copied identity/serial sequences (`pg_get_serial_sequence` + `setval`).
-- **`configmap:<name>[/<key>]`**: Reads custom seed SQL from the specified ConfigMap in the environment's namespace (default key: `seed.sql`) and executes it inside a transaction scoped to `SET LOCAL search_path TO <preview_schema>`.
+- **`configmap:<name>[/<key>]`**: Reads custom seed SQL from the specified ConfigMap in the environment's namespace (default key: `seed.sql`) and executes it inside a transaction scoped to `SET LOCAL search_path TO <preview_schema>, public`.
 
 When `spec.database.connectionRef` is omitted, `diverge-controller` automatically provisions an owned Kubernetes `Secret` named `diverge-db-env-<env>-<hash8>` containing:
 - `DATABASE_URL`: Scoped connection string (`postgres://diverge_preview_<schema>:.../postgres?sslmode=disable&search_path=preview_<env>,public`).

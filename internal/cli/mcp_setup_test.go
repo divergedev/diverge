@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,6 +16,7 @@ func TestMCPSetupDefaultAllClients(t *testing.T) {
 	tmpDir := t.TempDir()
 	homeDir := t.TempDir()
 	t.Setenv("HOME", homeDir)
+	t.Setenv("USERPROFILE", homeDir)
 
 	app := &App{}
 	rootCmd := NewRootCmd(app)
@@ -76,7 +78,9 @@ func TestMCPSetupPreservesExistingServers(t *testing.T) {
 
 	info, err := os.Stat(cursorPath)
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	if runtime.GOOS != "windows" {
+		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	}
 
 	raw, err := os.ReadFile(cursorPath)
 	require.NoError(t, err)
@@ -95,6 +99,7 @@ func TestMCPSetupWindsurfAndDestructiveAndInvalidClient(t *testing.T) {
 	tmpDir := t.TempDir()
 	homeDir := t.TempDir()
 	t.Setenv("HOME", homeDir)
+	t.Setenv("USERPROFILE", homeDir)
 
 	app := &App{}
 	rootCmd := NewRootCmd(app)
