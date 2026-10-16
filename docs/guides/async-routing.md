@@ -17,6 +17,15 @@ Diverge automatically provisions and injects specific environment variables into
 - `KAFKA_CONSUMER_GROUP`: The preview consumer group.
 - `KAFKA_BROKERS`: The Kafka brokers string.
 
+### Redis / Valkey
+When no custom `envVarMapping` is set on the route, Diverge injects:
+- `DIVERGE_REDIS_PREFIX`: The preview key prefix (`preview:<env>:` for the `default` or empty target, or `preview:<env>:<target>:` for a named target).
+- `REDIS_KEY_PREFIX`: Alias for `DIVERGE_REDIS_PREFIX`.
+- `REDIS_NAMESPACE`: The prefix without the trailing colon (`preview:<env>` or `preview:<env>:<target>`).
+- `REDIS_ADDR`: The resolved Redis / Valkey `host:port` (injected when an address is configured on the controller or environment).
+
+If custom `envVarMapping` entries are specified on the route, `{{ .ResolvedTarget }}` expands to the resolved key prefix (`preview:<env>:` or `preview:<env>:<target>:`).
+
 These variables are merged into your pod environment. There are blocked environment variables that cannot be overridden by async routing: `KUBERNETES_SERVICE_HOST`, `KUBERNETES_SERVICE_PORT`, `HOME`, `PATH`, and `KUBECONFIG`.
 
 ## SDK Integration
@@ -27,7 +36,7 @@ The `pkg/sdk` module provides helpers to extract and propagate the preview envir
 Use `sdk.GetEnv(ctx)` to retrieve the current environment from a context.
 
 ### Header Customization
-By default, the SDK looks for the `x-preview-env` header. You can customize this by setting the `DIVERGE_HEADER_KEY` environment variable.
+By default, the SDK looks for the `x-diverge-env` header. You can customize this by setting the `DIVERGE_HEADER_KEY` environment variable.
 
 ### Kafka Headers
 To inject the preview environment context into outgoing Kafka messages, use:
@@ -40,3 +49,10 @@ Temporal contexts can be propagated to workflows using the Temporal propagator:
 ```go
 func NewContextPropagator() *ContextPropagator
 ```
+
+### Redis / Valkey Key Resolution
+To resolve preview-isolated Redis / Valkey keys (`preview:<env>:<key>` in preview environments, or unmodified `<key>` in baseline), use:
+```go
+key := sdk.ResolveRedisKey(ctx, "cart:user-42")
+```
+(Equivalent helpers are available in Node.js via `resolveRedisKey` in `@divergedev/sdk` and Python via `resolve_redis_key` in `diverge-sdk`.)
