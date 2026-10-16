@@ -5,6 +5,10 @@ export const BINARY_HEADER_KEY = 'x-diverge-context-bin';
 
 const storage = new AsyncLocalStorage<string>();
 
+export function getContextEnvironment(): string | undefined {
+  return storage.getStore();
+}
+
 export function getEnvironment(): string {
   const env = storage.getStore();
   if (env) {

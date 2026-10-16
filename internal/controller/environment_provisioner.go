@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -97,11 +98,11 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 
 	// 5.5. Enforce namespace quotas and FinOps LRU auto-hibernation
 	if res, done, err := r.reconcileNamespaceQuota(ctx, env, statusBase); done || err != nil {
-		if err != nil {
-			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
-			return res, true, retErr
+		if done {
+			return res, true, err
 		}
-		return res, true, nil
+		res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
+		return res, true, retErr
 	}
 
 	// 6. Ensure database
@@ -359,7 +360,13 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 
 			// Merge env vars sequentially to detect collisions deterministically
 			for _, rr := range results {
-				for k, v := range rr.envVars {
+				keys := make([]string, 0, len(rr.envVars))
+				for k := range rr.envVars {
+					keys = append(keys, k)
+				}
+				sort.Strings(keys)
+				for _, k := range keys {
+					v := rr.envVars[k]
 					if existing, ok := asyncEnvVars[k]; ok && existing != v {
 						err := fmt.Errorf("env var collision for %q", k)
 						meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
@@ -468,15 +475,24 @@ func (r *EnvironmentReconciler) resolveAsyncProvisioner(route divergeiov1alpha1.
 		return nil
 	}
 	proto := strings.ToLower(strings.TrimSpace(route.Protocol))
+	name := strings.ToLower(strings.TrimSpace(r.AsyncProvisioner.Name()))
+	if name == "webhook" || !async.Providers.Has(name) {
+		return r.AsyncProvisioner
+	}
+	if name == proto || ((proto == "redis" || proto == "valkey") && (name == "redis" || name == "valkey")) {
+		return r.AsyncProvisioner
+	}
+	deps := registry.Deps{
+		Client: r.Client,
+		Scheme: r.Scheme,
+	}
 	if proto == "redis" || proto == "valkey" {
-		if name := r.AsyncProvisioner.Name(); name == "redis" || name == "valkey" {
-			return r.AsyncProvisioner
-		}
-		deps := registry.Deps{
-			Client: r.Client,
-			Scheme: r.Scheme,
-		}
 		if prov, err := async.Providers.Create(proto, deps); err == nil && prov != nil {
+			return prov
+		}
+	}
+	if name == "redis" || name == "valkey" {
+		if prov, err := async.Providers.Create("noop", deps); err == nil && prov != nil {
 			return prov
 		}
 	}

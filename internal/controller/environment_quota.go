@@ -9,9 +9,12 @@ import (
 	"sync"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -89,7 +92,7 @@ func (r *EnvironmentReconciler) reconcileNamespaceQuota(ctx context.Context, env
 
 	ns := &corev1.Namespace{}
 	if err := reader.Get(ctx, types.NamespacedName{Name: env.Namespace}, ns); err != nil {
-		if client.IgnoreNotFound(err) == nil {
+		if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
 			return ctrl.Result{}, false, nil
 		}
 		return ctrl.Result{}, false, fmt.Errorf("failed to get namespace %s for quota check: %w", env.Namespace, err)
@@ -227,13 +230,14 @@ func (r *EnvironmentReconciler) reconcileNamespaceQuota(ctx context.Context, env
 		return false, ""
 	}
 
-	preemptedAny := false
+	remainingActive := otherActive
+	var victims []*divergeiov1alpha1.Environment
 	for {
-		exceeded, reasonMsg := exceedsQuota(otherActive)
+		exceeded, reasonMsg := exceedsQuota(remainingActive)
 		if !exceeded {
 			break
 		}
-		if policy == QuotaPolicyReject || len(otherActive) == 0 {
+		if policy == QuotaPolicyReject || len(remainingActive) == 0 {
 			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 				Type:    ConditionQuotaReady,
 				Status:  metav1.ConditionFalse,
@@ -248,40 +252,33 @@ func (r *EnvironmentReconciler) reconcileNamespaceQuota(ctx context.Context, env
 			return res, true, retErr
 		}
 
-		victim := otherActive[0]
-		otherActive = otherActive[1:]
-
-		victimBase := victim.DeepCopy()
-		if victim.Annotations == nil {
-			victim.Annotations = make(map[string]string)
-		}
-		victim.Annotations[metrics.AnnotationHibernated] = "true"
-		if err := r.Patch(ctx, victim, client.MergeFrom(victimBase)); err != nil {
-			return ctrl.Result{}, false, fmt.Errorf("failed to hibernate oldest environment %s for quota: %w", victim.Name, err)
-		}
-		// EstimateEnvironmentCost publishes the updated Prometheus cost gauge ($0 active compute while hibernated) as a side effect.
-		metrics.EstimateEnvironmentCost(victim, now, rateCard)
-		preemptedAny = true
-
-		if r.Recorder != nil && r.Recorder.EventRecorder != nil {
-			r.Recorder.Event(victim, "Normal", "QuotaPreempted",
-				fmt.Sprintf("Hibernated to free namespace quota for environment %s", env.Name))
-			r.Recorder.Event(env, "Normal", "QuotaPreempted",
-				fmt.Sprintf("Hibernated oldest environment %s to satisfy namespace quota", victim.Name))
-		}
+		victims = append(victims, remainingActive[0])
+		remainingActive = remainingActive[1:]
 	}
 
 	existingQuotaCond := meta.FindStatusCondition(env.Status.Conditions, ConditionQuotaReady)
 	alreadyAdmitted := existingQuotaCond != nil && existingQuotaCond.Status == metav1.ConditionTrue && existingQuotaCond.Reason == "WithinQuota"
-	if !alreadyAdmitted || preemptedAny {
+	if !alreadyAdmitted || len(victims) > 0 {
 		// Optimistic-concurrency claim on the Namespace object so concurrent controller replicas
 		// cannot both admit environments against the same Namespace ResourceVersion.
 		if ns.Annotations == nil {
 			ns.Annotations = make(map[string]string)
 		}
 		ns.Annotations[AnnotationQuotaLastAdmitted] = fmt.Sprintf("%s@%d", env.Name, now.UnixNano())
-		if err := r.Update(ctx, ns); err != nil {
+		if err := r.Update(ctx, ns); err != nil && !apierrors.IsForbidden(err) {
 			return ctrl.Result{}, false, fmt.Errorf("failed to record namespace quota admission claim for %s: %w", env.Name, err)
+		}
+	}
+
+	for _, victim := range victims {
+		if err := r.hibernateEnvironment(ctx, victim, now, rateCard); err != nil {
+			return ctrl.Result{}, false, fmt.Errorf("failed to hibernate oldest environment %s for quota: %w", victim.Name, err)
+		}
+		if r.Recorder != nil && r.Recorder.EventRecorder != nil {
+			r.Recorder.Event(victim, "Normal", "QuotaPreempted",
+				fmt.Sprintf("Hibernated to free namespace quota for environment %s", env.Name))
+			r.Recorder.Event(env, "Normal", "QuotaPreempted",
+				fmt.Sprintf("Hibernated oldest environment %s to satisfy namespace quota", victim.Name))
 		}
 	}
 
@@ -292,4 +289,86 @@ func (r *EnvironmentReconciler) reconcileNamespaceQuota(ctx context.Context, env
 		Message: "Namespace FinOps and concurrency quotas satisfied",
 	})
 	return ctrl.Result{}, false, nil
+}
+
+func (r *EnvironmentReconciler) hibernateEnvironment(ctx context.Context, targetEnv *divergeiov1alpha1.Environment, now time.Time, rateCard metrics.CostRateCard) error {
+	if targetEnv == nil {
+		return nil
+	}
+	if r.Client != nil {
+		patchTarget := targetEnv.DeepCopy()
+		base := patchTarget.DeepCopy()
+		if patchTarget.Annotations == nil {
+			patchTarget.Annotations = make(map[string]string)
+		}
+		patchTarget.Annotations[metrics.AnnotationHibernated] = "true"
+		if err := r.Patch(ctx, patchTarget, client.MergeFrom(base)); err != nil {
+			return err
+		}
+		targetEnv.ResourceVersion = patchTarget.ResourceVersion
+	}
+	if targetEnv.Annotations == nil {
+		targetEnv.Annotations = make(map[string]string)
+	}
+	targetEnv.Annotations[metrics.AnnotationHibernated] = "true"
+
+	if r.Client != nil {
+		namespaces := []string{targetEnv.Namespace}
+		if targetEnv.Spec.Deploy.Namespace == "create" {
+			if pns := targetEnv.PreviewNamespace(); pns != "" && pns != targetEnv.Namespace {
+				namespaces = append(namespaces, pns)
+			}
+		}
+
+		zero := int32(0)
+		for _, targetNS := range namespaces {
+			var depList appsv1.DeploymentList
+			if err := r.List(ctx, &depList,
+				client.InNamespace(targetNS),
+				client.MatchingLabels{"divergedev.com/environment": targetEnv.Name},
+			); err != nil {
+				if !runtime.IsNotRegisteredError(err) {
+					return fmt.Errorf("failed to list deployments for hibernation of %s in %s: %w", targetEnv.Name, targetNS, err)
+				}
+			} else {
+				for i := range depList.Items {
+					dep := &depList.Items[i]
+					if dep.Spec.Replicas != nil && *dep.Spec.Replicas == 0 {
+						continue
+					}
+					depBase := dep.DeepCopy()
+					dep.Spec.Replicas = &zero
+					if err := r.Patch(ctx, dep, client.MergeFrom(depBase)); err != nil && !apierrors.IsNotFound(err) {
+						return fmt.Errorf("failed to scale deployment %s/%s to zero: %w", dep.Namespace, dep.Name, err)
+					}
+				}
+			}
+
+			var stsList appsv1.StatefulSetList
+			if err := r.List(ctx, &stsList,
+				client.InNamespace(targetNS),
+				client.MatchingLabels{"divergedev.com/environment": targetEnv.Name},
+			); err != nil {
+				if !runtime.IsNotRegisteredError(err) {
+					return fmt.Errorf("failed to list statefulsets for hibernation of %s in %s: %w", targetEnv.Name, targetNS, err)
+				}
+			} else {
+				for i := range stsList.Items {
+					sts := &stsList.Items[i]
+					if sts.Spec.Replicas != nil && *sts.Spec.Replicas == 0 {
+						continue
+					}
+					stsBase := sts.DeepCopy()
+					sts.Spec.Replicas = &zero
+					if err := r.Patch(ctx, sts, client.MergeFrom(stsBase)); err != nil && !apierrors.IsNotFound(err) {
+						return fmt.Errorf("failed to scale statefulset %s/%s to zero: %w", sts.Namespace, sts.Name, err)
+					}
+				}
+			}
+		}
+	}
+
+	// EstimateEnvironmentCost publishes the updated Prometheus cost gauge ($0 active compute while hibernated) as a side effect.
+	metrics.EstimateEnvironmentCost(targetEnv, now, rateCard)
+	return nil
 }

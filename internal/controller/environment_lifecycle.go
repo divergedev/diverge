@@ -46,13 +46,11 @@ func (r *EnvironmentReconciler) reconcileLifecycle(ctx context.Context, env *div
 		requeueAfter = time.Until(expiryTime)
 	}
 
-	if metrics.ShouldHibernateIdleEnvironment(env, time.Time{}, time.Now(), 0) && env.Annotations[metrics.AnnotationHibernated] != "true" {
-		if env.Annotations == nil {
-			env.Annotations = make(map[string]string)
-		}
-		env.Annotations[metrics.AnnotationHibernated] = "true"
-		metrics.EstimateEnvironmentCost(env, time.Now(), metrics.DefaultCostRateCard())
-		if r.Recorder != nil {
+	now := time.Now()
+	if metrics.ShouldHibernateIdleEnvironment(env, time.Time{}, now, 0) && env.Annotations[metrics.AnnotationHibernated] != "true" {
+		if err := r.hibernateEnvironment(ctx, env, now, metrics.DefaultCostRateCard()); err != nil {
+			logger.Error(err, "failed to hibernate idle environment")
+		} else if r.Recorder != nil {
 			r.Recorder.Event(env, "Normal", "Hibernated", "Environment idle threshold exceeded; marked for scale-to-zero hibernation")
 		}
 	}

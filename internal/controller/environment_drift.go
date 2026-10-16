@@ -89,27 +89,32 @@ func computeBaselineFingerprint(ctx context.Context, c client.Client, env *diver
 	cmKeys := make(map[types.NamespacedName]bool)
 	secretKeys := make(map[types.NamespacedName]bool)
 
-	for _, dep := range matchedDeployments {
-		for _, container := range dep.Spec.Template.Spec.Containers {
+	collectContainerRefs := func(ns string, containers []corev1.Container) {
+		for _, container := range containers {
 			for _, ef := range container.EnvFrom {
 				if ef.ConfigMapRef != nil && strings.TrimSpace(ef.ConfigMapRef.Name) != "" {
-					cmKeys[types.NamespacedName{Namespace: dep.Namespace, Name: strings.TrimSpace(ef.ConfigMapRef.Name)}] = true
+					cmKeys[types.NamespacedName{Namespace: ns, Name: strings.TrimSpace(ef.ConfigMapRef.Name)}] = true
 				}
 				if ef.SecretRef != nil && strings.TrimSpace(ef.SecretRef.Name) != "" {
-					secretKeys[types.NamespacedName{Namespace: dep.Namespace, Name: strings.TrimSpace(ef.SecretRef.Name)}] = true
+					secretKeys[types.NamespacedName{Namespace: ns, Name: strings.TrimSpace(ef.SecretRef.Name)}] = true
 				}
 			}
 			for _, e := range container.Env {
 				if e.ValueFrom != nil {
 					if e.ValueFrom.ConfigMapKeyRef != nil && strings.TrimSpace(e.ValueFrom.ConfigMapKeyRef.Name) != "" {
-						cmKeys[types.NamespacedName{Namespace: dep.Namespace, Name: strings.TrimSpace(e.ValueFrom.ConfigMapKeyRef.Name)}] = true
+						cmKeys[types.NamespacedName{Namespace: ns, Name: strings.TrimSpace(e.ValueFrom.ConfigMapKeyRef.Name)}] = true
 					}
 					if e.ValueFrom.SecretKeyRef != nil && strings.TrimSpace(e.ValueFrom.SecretKeyRef.Name) != "" {
-						secretKeys[types.NamespacedName{Namespace: dep.Namespace, Name: strings.TrimSpace(e.ValueFrom.SecretKeyRef.Name)}] = true
+						secretKeys[types.NamespacedName{Namespace: ns, Name: strings.TrimSpace(e.ValueFrom.SecretKeyRef.Name)}] = true
 					}
 				}
 			}
 		}
+	}
+
+	for _, dep := range matchedDeployments {
+		collectContainerRefs(dep.Namespace, dep.Spec.Template.Spec.InitContainers)
+		collectContainerRefs(dep.Namespace, dep.Spec.Template.Spec.Containers)
 		for _, vol := range dep.Spec.Template.Spec.Volumes {
 			if vol.ConfigMap != nil && strings.TrimSpace(vol.ConfigMap.Name) != "" {
 				cmKeys[types.NamespacedName{Namespace: dep.Namespace, Name: strings.TrimSpace(vol.ConfigMap.Name)}] = true
@@ -117,25 +122,35 @@ func computeBaselineFingerprint(ctx context.Context, c client.Client, env *diver
 			if vol.Secret != nil && strings.TrimSpace(vol.Secret.SecretName) != "" {
 				secretKeys[types.NamespacedName{Namespace: dep.Namespace, Name: strings.TrimSpace(vol.Secret.SecretName)}] = true
 			}
+			if vol.Projected != nil {
+				for _, src := range vol.Projected.Sources {
+					if src.ConfigMap != nil && strings.TrimSpace(src.ConfigMap.Name) != "" {
+						cmKeys[types.NamespacedName{Namespace: dep.Namespace, Name: strings.TrimSpace(src.ConfigMap.Name)}] = true
+					}
+					if src.Secret != nil && strings.TrimSpace(src.Secret.Name) != "" {
+						secretKeys[types.NamespacedName{Namespace: dep.Namespace, Name: strings.TrimSpace(src.Secret.Name)}] = true
+					}
+				}
+			}
 		}
 	}
 
 	for _, ref := range env.Spec.EnvFrom {
-		if strings.TrimSpace(ref.Name) != "" {
-			ns := env.Namespace
-			if strings.TrimSpace(ref.Namespace) != "" {
-				ns = strings.TrimSpace(ref.Namespace)
-			}
-			secretKeys[types.NamespacedName{Namespace: ns, Name: strings.TrimSpace(ref.Name)}] = true
+		refNS := strings.TrimSpace(ref.Namespace)
+		if refNS != "" && refNS != env.Namespace {
+			continue
+		}
+		if name := strings.TrimSpace(ref.Name); name != "" {
+			secretKeys[types.NamespacedName{Namespace: env.Namespace, Name: name}] = true
 		}
 	}
 	for _, ref := range env.Spec.Deploy.EnvFrom {
-		if strings.TrimSpace(ref.Name) != "" {
-			ns := env.Namespace
-			if strings.TrimSpace(ref.Namespace) != "" {
-				ns = strings.TrimSpace(ref.Namespace)
-			}
-			secretKeys[types.NamespacedName{Namespace: ns, Name: strings.TrimSpace(ref.Name)}] = true
+		refNS := strings.TrimSpace(ref.Namespace)
+		if refNS != "" && refNS != env.Namespace {
+			continue
+		}
+		if name := strings.TrimSpace(ref.Name); name != "" {
+			secretKeys[types.NamespacedName{Namespace: env.Namespace, Name: name}] = true
 		}
 	}
 
@@ -214,6 +229,41 @@ func computeBaselineFingerprint(ctx context.Context, c client.Client, env *diver
 
 	h := sha256.New()
 
+	hashContainer := func(prefix string, container corev1.Container) {
+		_, _ = fmt.Fprintf(h, "%s:%s|image:%s|cmd:%s|args:%s\n",
+			prefix,
+			container.Name,
+			container.Image,
+			strings.Join(container.Command, "\x00"),
+			strings.Join(container.Args, "\x00"),
+		)
+		for _, port := range container.Ports {
+			_, _ = fmt.Fprintf(h, "port:%s:%d/%s\n", port.Name, port.ContainerPort, port.Protocol)
+		}
+		for _, e := range container.Env {
+			valFrom := ""
+			if e.ValueFrom != nil {
+				if e.ValueFrom.ConfigMapKeyRef != nil {
+					valFrom = fmt.Sprintf("cm:%s:%s", e.ValueFrom.ConfigMapKeyRef.Name, e.ValueFrom.ConfigMapKeyRef.Key)
+				} else if e.ValueFrom.SecretKeyRef != nil {
+					valFrom = fmt.Sprintf("sec:%s:%s", e.ValueFrom.SecretKeyRef.Name, e.ValueFrom.SecretKeyRef.Key)
+				}
+			}
+			_, _ = fmt.Fprintf(h, "env:%s=%s(%s)\n", e.Name, e.Value, valFrom)
+		}
+		for _, ef := range container.EnvFrom {
+			cmName := ""
+			if ef.ConfigMapRef != nil {
+				cmName = ef.ConfigMapRef.Name
+			}
+			secName := ""
+			if ef.SecretRef != nil {
+				secName = ef.SecretRef.Name
+			}
+			_, _ = fmt.Fprintf(h, "envFrom:prefix=%s|cm=%s|sec=%s\n", ef.Prefix, cmName, secName)
+		}
+	}
+
 	for _, dep := range matchedDeployments {
 		_, _ = fmt.Fprintf(h, "deploy:%s/%s\n", dep.Namespace, dep.Name)
 
@@ -228,38 +278,11 @@ func computeBaselineFingerprint(ctx context.Context, c client.Client, env *diver
 			}
 		}
 
+		for _, ic := range dep.Spec.Template.Spec.InitContainers {
+			hashContainer("init-container", ic)
+		}
 		for _, container := range dep.Spec.Template.Spec.Containers {
-			_, _ = fmt.Fprintf(h, "container:%s|image:%s|cmd:%s|args:%s\n",
-				container.Name,
-				container.Image,
-				strings.Join(container.Command, "\x00"),
-				strings.Join(container.Args, "\x00"),
-			)
-			for _, port := range container.Ports {
-				_, _ = fmt.Fprintf(h, "port:%s:%d/%s\n", port.Name, port.ContainerPort, port.Protocol)
-			}
-			for _, e := range container.Env {
-				valFrom := ""
-				if e.ValueFrom != nil {
-					if e.ValueFrom.ConfigMapKeyRef != nil {
-						valFrom = fmt.Sprintf("cm:%s:%s", e.ValueFrom.ConfigMapKeyRef.Name, e.ValueFrom.ConfigMapKeyRef.Key)
-					} else if e.ValueFrom.SecretKeyRef != nil {
-						valFrom = fmt.Sprintf("sec:%s:%s", e.ValueFrom.SecretKeyRef.Name, e.ValueFrom.SecretKeyRef.Key)
-					}
-				}
-				_, _ = fmt.Fprintf(h, "env:%s=%s(%s)\n", e.Name, e.Value, valFrom)
-			}
-			for _, ef := range container.EnvFrom {
-				cmName := ""
-				if ef.ConfigMapRef != nil {
-					cmName = ef.ConfigMapRef.Name
-				}
-				secName := ""
-				if ef.SecretRef != nil {
-					secName = ef.SecretRef.Name
-				}
-				_, _ = fmt.Fprintf(h, "envFrom:prefix=%s|cm=%s|sec=%s\n", ef.Prefix, cmName, secName)
-			}
+			hashContainer("container", container)
 		}
 	}
 
@@ -273,17 +296,35 @@ func computeBaselineFingerprint(ctx context.Context, c client.Client, env *diver
 		for _, k := range keys {
 			_, _ = fmt.Fprintf(h, "data:%s=%s\n", k, cm.Data[k])
 		}
+		if len(cm.BinaryData) > 0 {
+			bkeys := make([]string, 0, len(cm.BinaryData))
+			for k := range cm.BinaryData {
+				bkeys = append(bkeys, k)
+			}
+			sort.Strings(bkeys)
+			for _, k := range bkeys {
+				valSum := sha256.Sum256(cm.BinaryData[k])
+				_, _ = fmt.Fprintf(h, "bdata:%s=%s\n", k, hex.EncodeToString(valSum[:]))
+			}
+		}
 	}
 
 	for _, sec := range foundSecrets {
-		_, _ = fmt.Fprintf(h, "secret:%s/%s\n", sec.Namespace, sec.Name)
-		keys := make([]string, 0, len(sec.Data))
-		for k := range sec.Data {
+		_, _ = fmt.Fprintf(h, "secret:%s/%s|type:%s\n", sec.Namespace, sec.Name, sec.Type)
+		merged := make(map[string][]byte, len(sec.Data)+len(sec.StringData))
+		for k, v := range sec.Data {
+			merged[k] = v
+		}
+		for k, v := range sec.StringData {
+			merged[k] = []byte(v)
+		}
+		keys := make([]string, 0, len(merged))
+		for k := range merged {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			valSum := sha256.Sum256(sec.Data[k])
+			valSum := sha256.Sum256(merged[k])
 			_, _ = fmt.Fprintf(h, "data:%s=%s\n", k, hex.EncodeToString(valSum[:]))
 		}
 	}
@@ -353,15 +394,21 @@ func (r *EnvironmentReconciler) reconcileBaselineDrift(ctx context.Context, env 
 	// Case 3: Drift detected
 	policy := strings.ToLower(strings.TrimSpace(env.Annotations[AnnotationDriftPolicy]))
 	if policy == DriftPolicySync {
-		if err := persistAnnotation(AnnotationBaselineFingerprint, fp); err != nil {
-			return true, false, fmt.Errorf("failed to update baseline fingerprint during sync: %w", err)
+		if env.Annotations == nil {
+			env.Annotations = make(map[string]string)
 		}
+		env.Annotations[AnnotationBaselineFingerprint] = fp
 		if r.Deployer != nil {
 			tCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
 			if err := r.Deployer.Deploy(tCtx, env); err != nil {
+				env.Annotations[AnnotationBaselineFingerprint] = prevFP
 				return true, false, err
 			}
+		}
+		env.Annotations[AnnotationBaselineFingerprint] = prevFP
+		if err := persistAnnotation(AnnotationBaselineFingerprint, fp); err != nil {
+			return true, false, fmt.Errorf("failed to update baseline fingerprint during sync: %w", err)
 		}
 		meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 			Type:    ConditionBaselineDrift,
@@ -392,12 +439,30 @@ func (r *EnvironmentReconciler) reconcileBaselineDrift(ctx context.Context, env 
 	return true, false, nil
 }
 
+func shouldEnqueueEnvironmentForDrift(env *divergeiov1alpha1.Environment) bool {
+	if env == nil || !env.DeletionTimestamp.IsZero() {
+		return false
+	}
+	if env.Spec.Deploy.Mode == "full" {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(env.Annotations[AnnotationDriftPolicy]), DriftPolicyIgnore) {
+		return false
+	}
+	if env.Status.Phase == divergeiov1alpha1.PhaseFailed ||
+		env.Status.Phase == divergeiov1alpha1.PhaseTerminating ||
+		env.Status.Phase == divergeiov1alpha1.EnvironmentPhase("Expired") {
+		return false
+	}
+	return true
+}
+
 func (r *EnvironmentReconciler) mapBaselineDeploymentToEnvironments(ctx context.Context, obj client.Object) []ctrl.Request {
 	if obj == nil {
 		return nil
 	}
 	labels := obj.GetLabels()
-	if labels["divergedev.com/role"] == "preview" || labels["divergedev.com/environment"] != "" {
+	if labels["divergedev.com/role"] == "preview" || labels["divergedev.com/environment"] != "" || labels["divergedev.com/managed-by"] == "diverge" {
 		return nil
 	}
 
@@ -407,8 +472,9 @@ func (r *EnvironmentReconciler) mapBaselineDeploymentToEnvironments(ctx context.
 	}
 
 	var reqs []ctrl.Request
-	for _, env := range envList.Items {
-		if !env.DeletionTimestamp.IsZero() {
+	for i := range envList.Items {
+		env := &envList.Items[i]
+		if !shouldEnqueueEnvironmentForDrift(env) {
 			continue
 		}
 		reqs = append(reqs, ctrl.Request{
@@ -425,12 +491,15 @@ func (r *EnvironmentReconciler) mapConfigMapToEnvironments(ctx context.Context, 
 	if obj == nil {
 		return nil
 	}
+	name := obj.GetName()
+	if name == "kube-root-ca.crt" {
+		return nil
+	}
 	labels := obj.GetLabels()
 	if labels["divergedev.com/manifests"] != "true" {
 		if labels["divergedev.com/managed-by"] == "diverge" || labels["divergedev.com/environment"] != "" {
 			return nil
 		}
-		name := obj.GetName()
 		if strings.HasPrefix(name, "diverge-banner-") || strings.HasPrefix(name, "diverge-features-") || strings.HasPrefix(name, "diverge-dev-") {
 			return nil
 		}
@@ -442,8 +511,9 @@ func (r *EnvironmentReconciler) mapConfigMapToEnvironments(ctx context.Context, 
 	}
 
 	var reqs []ctrl.Request
-	for _, env := range envList.Items {
-		if !env.DeletionTimestamp.IsZero() {
+	for i := range envList.Items {
+		env := &envList.Items[i]
+		if !shouldEnqueueEnvironmentForDrift(env) {
 			continue
 		}
 		reqs = append(reqs, ctrl.Request{

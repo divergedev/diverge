@@ -295,5 +295,16 @@ describe('Redis / Valkey Key Prefix Resolution', () => {
       'preview:pr-77:'
     );
   });
+
+  it('prioritizes AsyncLocalStorage over passed env map and passed env map over process.env.DIVERGE_ENV', async () => {
+    const { resolveRedisPrefix } = await import('../src/index.js');
+    process.env.DIVERGE_ENV = 'pr-1';
+
+    expect(resolveRedisPrefix({ DIVERGE_ENV: 'pr-42' })).toBe('preview:pr-42:');
+    expect(resolveRedisPrefix({})).toBe('');
+    expect(
+      setEnvironment('pr-99', () => resolveRedisPrefix({ DIVERGE_ENV: 'pr-42' }))
+    ).toBe('preview:pr-99:');
+  });
 });
 

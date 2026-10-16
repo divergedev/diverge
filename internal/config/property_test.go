@@ -174,7 +174,7 @@ func TestConfigSchema_ValidConfigsPassBothSchemaAndParse_PBT(t *testing.T) {
 		featureProvider := hegel.Draw(ht, hegel.SampledFrom([]string{"configmap", "flipt", "flagsmith", "unleash", "noop", "none"}))
 		devConflict := hegel.Draw(ht, hegel.SampledFrom([]string{"warn", "block", "allow"}))
 		notifProvider := hegel.Draw(ht, hegel.SampledFrom([]string{"github", "gitlab"}))
-		asyncProtocol := hegel.Draw(ht, hegel.SampledFrom([]string{"temporal", "kafka"}))
+		asyncProtocol := hegel.Draw(ht, hegel.SampledFrom([]string{"temporal", "kafka", "redis", "valkey"}))
 		includePrometheus := hegel.Draw(ht, hegel.Booleans())
 
 		enabled := true

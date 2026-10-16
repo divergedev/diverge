@@ -1,4 +1,4 @@
-import { getEnvironment } from './context.js';
+import { getContextEnvironment } from './context.js';
 
 export function resolveRedisPrefix(env?: NodeJS.ProcessEnv): string {
   const envMap = env ?? process.env;
@@ -7,7 +7,7 @@ export function resolveRedisPrefix(env?: NodeJS.ProcessEnv): string {
     return explicitPrefix.endsWith(':') ? explicitPrefix : `${explicitPrefix}:`;
   }
 
-  const activeEnv = (getEnvironment() || envMap.DIVERGE_ENV || '').trim();
+  const activeEnv = (getContextEnvironment()?.trim() || envMap.DIVERGE_ENV || '').trim();
 
   if (activeEnv) {
     return `preview:${activeEnv}:`;

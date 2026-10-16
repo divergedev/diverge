@@ -26,7 +26,8 @@ func ResolveRedisPrefix(ctx context.Context) string {
 	var env string
 	if ctx != nil {
 		env = strings.TrimSpace(EnvironmentFromContext(ctx))
-	} else {
+	}
+	if env == "" {
 		env = strings.TrimSpace(os.Getenv("DIVERGE_ENV"))
 	}
 	if env != "" {

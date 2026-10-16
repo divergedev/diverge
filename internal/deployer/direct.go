@@ -170,6 +170,13 @@ func (d *DirectDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) 
 			}
 		}
 
+		if strings.EqualFold(strings.TrimSpace(env.Annotations["divergedev.com/hibernated"]), "true") {
+			kind := obj.GetKind()
+			if kind == "Deployment" || kind == "StatefulSet" {
+				_ = unstructured.SetNestedField(obj.Object, int64(0), "spec", "replicas")
+			}
+		}
+
 		// Set OwnerReference for 'same' namespace mode only.
 		// CR2: Only set OwnerReferences when the object is in the same
 		// namespace as the Environment CR (required by K8s GC).

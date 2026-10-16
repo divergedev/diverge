@@ -1,4 +1,4 @@
-import { DEFAULT_HEADER_KEY, getEnvironment, getHeaderKey, setEnvironment } from './context.js';
+import { DEFAULT_HEADER_KEY, getContextEnvironment, getEnvironment, getHeaderKey, setEnvironment } from './context.js';
 
 export type KafkaHeaders = Record<
   string,
@@ -134,14 +134,7 @@ export function resolveKafkaTopic(baseTopic: string, env?: NodeJS.ProcessEnv): s
     return mappedTopic;
   }
 
-  const contextEnv = getEnvironment();
-  const processDefaultEnv = process.env.DIVERGE_ENV || '';
-  const hasExplicitContextEnv = contextEnv !== '' && contextEnv !== processDefaultEnv;
-  const activeEnv = (
-    hasExplicitContextEnv
-      ? contextEnv
-      : envMap.DIVERGE_ENV?.trim() || contextEnv
-  ).trim();
+  const activeEnv = (getContextEnvironment()?.trim() || envMap.DIVERGE_ENV || '').trim();
 
   if (activeEnv) {
     return `${baseTopic}.preview.${activeEnv}`;

@@ -114,13 +114,16 @@ func TestRedisProvisioner_Teardown_EmptyAddrNoop(t *testing.T) {
 }
 
 type fakeRESPServer struct {
-	listener     net.Listener
-	mu           sync.Mutex
-	commands     [][]string
-	rejectUnlink bool
-	expectPass   string
-	unlinkedKeys []string
-	deletedKeys  []string
+	listener          net.Listener
+	mu                sync.Mutex
+	commands          [][]string
+	rejectUnlink      bool
+	unlinkNoPerm      bool
+	crossSlotMultiKey bool
+	expectUser        string
+	expectPass        string
+	unlinkedKeys      []string
+	deletedKeys       []string
 }
 
 func newFakeRESPServer(t *testing.T, rejectUnlink bool, expectPass string) *fakeRESPServer {
@@ -182,7 +185,13 @@ func (s *fakeRESPServer) handleConn(conn net.Conn) {
 
 		switch strings.ToUpper(cmd[0]) {
 		case "AUTH":
-			if s.expectPass != "" && (len(cmd) < 2 || cmd[1] != s.expectPass) {
+			if s.expectUser != "" {
+				if len(cmd) < 3 || cmd[1] != s.expectUser || cmd[2] != s.expectPass {
+					_, _ = writer.WriteString("-WRONGPASS invalid username-password pair\r\n")
+				} else {
+					_, _ = writer.WriteString("+OK\r\n")
+				}
+			} else if s.expectPass != "" && (len(cmd) < 2 || cmd[1] != s.expectPass) {
 				_, _ = writer.WriteString("-ERR invalid password\r\n")
 			} else {
 				_, _ = writer.WriteString("+OK\r\n")
@@ -209,6 +218,10 @@ func (s *fakeRESPServer) handleConn(conn net.Conn) {
 		case "UNLINK":
 			if s.rejectUnlink {
 				_, _ = writer.WriteString("-ERR unknown command 'UNLINK'\r\n")
+			} else if s.unlinkNoPerm {
+				_, _ = writer.WriteString("-NOPERM this user has no permissions to run the 'unlink' command\r\n")
+			} else if s.crossSlotMultiKey && len(cmd) > 2 {
+				_, _ = writer.WriteString("-CROSSSLOT Keys in request don't hash to the same slot\r\n")
 			} else {
 				s.mu.Lock()
 				s.unlinkedKeys = append(s.unlinkedKeys, cmd[1:]...)
@@ -216,10 +229,14 @@ func (s *fakeRESPServer) handleConn(conn net.Conn) {
 				_, _ = writer.WriteString(":" + strconv.Itoa(len(cmd)-1) + "\r\n")
 			}
 		case "DEL":
-			s.mu.Lock()
-			s.deletedKeys = append(s.deletedKeys, cmd[1:]...)
-			s.mu.Unlock()
-			_, _ = writer.WriteString(":" + strconv.Itoa(len(cmd)-1) + "\r\n")
+			if s.crossSlotMultiKey && len(cmd) > 2 {
+				_, _ = writer.WriteString("-CROSSSLOT Keys in request don't hash to the same slot\r\n")
+			} else {
+				s.mu.Lock()
+				s.deletedKeys = append(s.deletedKeys, cmd[1:]...)
+				s.mu.Unlock()
+				_, _ = writer.WriteString(":" + strconv.Itoa(len(cmd)-1) + "\r\n")
+			}
 		default:
 			_, _ = writer.WriteString("+OK\r\n")
 		}
@@ -292,4 +309,136 @@ func TestRedisProvisioner_Teardown_FallbackToDel(t *testing.T) {
 		"preview:pr-42:cache:user:2",
 		"preview:pr-42:cache:session:9",
 	}, srv.deletedKeys)
+}
+
+func TestRedisProvisioner_Teardown_ACLUsernameAuth(t *testing.T) {
+	srv := newFakeRESPServer(t, false, "acl-secret")
+	srv.expectUser = "diverge-operator"
+
+	p := &RedisProvisioner{
+		Addr:     srv.listener.Addr().String(),
+		Username: "diverge-operator",
+		Password: "acl-secret",
+		Provider: "redis",
+	}
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "pr-42"},
+	}
+	route := v1alpha1.AsyncRouteSpec{
+		Protocol: "redis",
+		Target:   "cache",
+	}
+
+	err := p.Teardown(context.Background(), env, route)
+	require.NoError(t, err)
+
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+
+	require.NotEmpty(t, srv.commands)
+	assert.Equal(t, []string{"AUTH", "diverge-operator", "acl-secret"}, srv.commands[0])
+}
+
+func TestRedisProvisioner_Teardown_CrossSlotFallbackToSingleUnlink(t *testing.T) {
+	srv := newFakeRESPServer(t, false, "")
+	srv.crossSlotMultiKey = true
+
+	p := &RedisProvisioner{
+		Addr:     srv.listener.Addr().String(),
+		Provider: "redis",
+	}
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "pr-42"},
+	}
+	route := v1alpha1.AsyncRouteSpec{
+		Protocol: "redis",
+		Target:   "cache",
+	}
+
+	err := p.Teardown(context.Background(), env, route)
+	require.NoError(t, err)
+
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+
+	assert.Equal(t, []string{
+		"preview:pr-42:cache:user:1",
+		"preview:pr-42:cache:user:2",
+		"preview:pr-42:cache:session:9",
+	}, srv.unlinkedKeys)
+}
+
+func TestRedisProvisioner_Teardown_NoPermFallbackToDel(t *testing.T) {
+	srv := newFakeRESPServer(t, false, "")
+	srv.unlinkNoPerm = true
+
+	p := &RedisProvisioner{
+		Addr:     srv.listener.Addr().String(),
+		Provider: "valkey",
+	}
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "pr-42"},
+	}
+	route := v1alpha1.AsyncRouteSpec{
+		Protocol: "valkey",
+		Target:   "cache",
+	}
+
+	err := p.Teardown(context.Background(), env, route)
+	require.NoError(t, err)
+
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+
+	assert.Empty(t, srv.unlinkedKeys)
+	assert.Equal(t, []string{
+		"preview:pr-42:cache:user:1",
+		"preview:pr-42:cache:user:2",
+		"preview:pr-42:cache:session:9",
+	}, srv.deletedKeys)
+}
+
+func TestReadRESPValue_RejectsOversizedBulkString(t *testing.T) {
+	r := bufio.NewReader(strings.NewReader("$999999999\r\npayload\r\n"))
+	val, err := readRESPValue(r)
+	require.Error(t, err)
+	assert.Nil(t, val)
+	assert.Contains(t, err.Error(), "invalid RESP bulk string length")
+}
+
+func TestRedisProvisioner_AnnotationAddrOverride(t *testing.T) {
+	srv := newFakeRESPServer(t, false, "")
+	overrideAddr := srv.listener.Addr().String()
+
+	p := &RedisProvisioner{
+		Addr:     "127.0.0.1:1", // unreachable default address
+		Provider: "redis",
+	}
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "pr-42",
+			Annotations: map[string]string{
+				AnnotationRedisAddr: overrideAddr,
+				AnnotationRedisDB:   "3",
+			},
+		},
+	}
+	route := v1alpha1.AsyncRouteSpec{
+		Protocol: "redis",
+		Target:   "cache",
+	}
+
+	res, err := p.Provision(context.Background(), env, route)
+	require.NoError(t, err)
+	assert.Equal(t, overrideAddr, res.EnvVars["REDIS_ADDR"])
+
+	err = p.Teardown(context.Background(), env, route)
+	require.NoError(t, err)
+
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+
+	require.NotEmpty(t, srv.commands)
+	assert.Equal(t, []string{"SELECT", "3"}, srv.commands[0])
+	assert.Len(t, srv.unlinkedKeys, 3)
 }

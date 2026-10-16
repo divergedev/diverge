@@ -318,4 +318,149 @@ func TestBaselineDrift_WatchMappers(t *testing.T) {
 	}
 	cmReqs := r.mapConfigMapToEnvironments(ctx, sharedCM)
 	assert.Len(t, cmReqs, 2)
+
+	// kube-root-ca.crt ConfigMap should be ignored
+	caCM := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kube-root-ca.crt",
+			Namespace: "default",
+		},
+	}
+	assert.Nil(t, r.mapConfigMapToEnvironments(ctx, caCM))
+
+	// Deployment with divergedev.com/managed-by=diverge should be ignored
+	managedDep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "managed-dep",
+			Namespace: "default",
+			Labels:    map[string]string{"divergedev.com/managed-by": "diverge"},
+		},
+	}
+	assert.Nil(t, r.mapBaselineDeploymentToEnvironments(ctx, managedDep))
+}
+
+func TestBaselineDrift_ExtendedFingerprintAndWatchFilters(t *testing.T) {
+	ctx := context.Background()
+	scheme := buildDriftTestScheme(t)
+
+	projCM := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "proj-cm", Namespace: "default"},
+		BinaryData: map[string][]byte{"cert.der": {0x01, 0x02}},
+	}
+	initSec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "init-sec", Namespace: "default"},
+		Type:       corev1.SecretTypeOpaque,
+		StringData: map[string]string{"TOKEN": "v1"},
+	}
+
+	baselineDep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "payments-api",
+			Namespace: "default",
+			Labels: map[string]string{
+				"divergedev.com/role":    "baseline",
+				"divergedev.com/service": "payments-api",
+			},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					InitContainers: []corev1.Container{
+						{
+							Name:  "init-migrations",
+							Image: "migrate:v1",
+							EnvFrom: []corev1.EnvFromSource{
+								{
+									SecretRef: &corev1.SecretEnvSource{
+										LocalObjectReference: corev1.LocalObjectReference{Name: "init-sec"},
+									},
+								},
+							},
+						},
+					},
+					Containers: []corev1.Container{
+						{
+							Name:  "payments-api",
+							Image: "payments:v1",
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "projected-vol",
+							VolumeSource: corev1.VolumeSource{
+								Projected: &corev1.ProjectedVolumeSource{
+									Sources: []corev1.VolumeProjection{
+										{
+											ConfigMap: &corev1.ConfigMapProjection{
+												LocalObjectReference: corev1.LocalObjectReference{Name: "proj-cm"},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	envActive := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "pr-active", Namespace: "default"},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Deploy: divergeiov1alpha1.EnvironmentDeploy{
+				Mode:            "delta",
+				ChangedServices: []string{"payments-api"},
+			},
+		},
+		Status: divergeiov1alpha1.EnvironmentStatus{Phase: divergeiov1alpha1.PhaseRunning},
+	}
+	envFull := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "pr-full", Namespace: "default"},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Deploy: divergeiov1alpha1.EnvironmentDeploy{Mode: "full"},
+		},
+	}
+	envIgnore := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "pr-ignore",
+			Namespace:   "default",
+			Annotations: map[string]string{AnnotationDriftPolicy: DriftPolicyIgnore},
+		},
+	}
+	envFailed := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "pr-failed", Namespace: "default"},
+		Status:     divergeiov1alpha1.EnvironmentStatus{Phase: divergeiov1alpha1.PhaseFailed},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(projCM, initSec, baselineDep, envActive, envFull, envIgnore, envFailed).
+		Build()
+
+	r := &EnvironmentReconciler{Client: fakeClient, Scheme: scheme}
+
+	fp1, err := computeBaselineFingerprint(ctx, fakeClient, envActive)
+	require.NoError(t, err)
+	require.NotEmpty(t, fp1)
+
+	// Changing BinaryData in projected ConfigMap changes fingerprint
+	projCM.BinaryData["cert.der"] = []byte{0x03, 0x04}
+	require.NoError(t, fakeClient.Update(ctx, projCM))
+	fp2, err := computeBaselineFingerprint(ctx, fakeClient, envActive)
+	require.NoError(t, err)
+	assert.NotEqual(t, fp1, fp2)
+
+	// Changing InitContainer secret StringData changes fingerprint
+	initSec.StringData["TOKEN"] = "v2"
+	require.NoError(t, fakeClient.Update(ctx, initSec))
+	fp3, err := computeBaselineFingerprint(ctx, fakeClient, envActive)
+	require.NoError(t, err)
+	assert.NotEqual(t, fp2, fp3)
+
+	// Watch mappers skip full, ignore, and failed environments
+	reqs := r.mapBaselineDeploymentToEnvironments(ctx, baselineDep)
+	assert.Equal(t, []ctrl.Request{
+		{NamespacedName: types.NamespacedName{Namespace: "default", Name: "pr-active"}},
+	}, reqs)
 }

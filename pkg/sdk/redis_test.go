@@ -51,4 +51,13 @@ func TestResolveRedisPrefix_And_Key(t *testing.T) {
 		assert.Equal(t, "preview:pr-77:", ResolveRedisPrefix(nil))                      //nolint:staticcheck
 		assert.Equal(t, "preview:pr-77:rate-limit", ResolveRedisKey(nil, "rate-limit")) //nolint:staticcheck
 	})
+
+	t.Run("DIVERGE_ENV fallback when context has no environment", func(t *testing.T) {
+		t.Setenv("DIVERGE_REDIS_PREFIX", "")
+		t.Setenv("REDIS_KEY_PREFIX", "")
+		t.Setenv("DIVERGE_ENV", "pr-88")
+
+		assert.Equal(t, "preview:pr-88:", ResolveRedisPrefix(context.Background()))
+		assert.Equal(t, "preview:pr-88:cart:1", ResolveRedisKey(context.Background(), "cart:1"))
+	})
 }

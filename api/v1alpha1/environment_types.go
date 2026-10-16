@@ -84,6 +84,7 @@ type AsyncRouteSpec struct {
 	// If empty, sensible defaults are used based on protocol:
 	// - temporal: TEMPORAL_TASK_QUEUE
 	// - kafka: KAFKA_CONSUMER_GROUP
+	// - redis / valkey: DIVERGE_REDIS_PREFIX
 	// +optional
 	EnvVarMapping map[string]string `json:"envVarMapping,omitempty" yaml:"envVarMapping,omitempty"`
 }
