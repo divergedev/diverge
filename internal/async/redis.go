@@ -65,17 +65,7 @@ func (r *RedisProvisioner) resolveDB(env *v1alpha1.Environment) (int, error) {
 	if r.DB < 0 {
 		return 0, fmt.Errorf("invalid redis DB %d: must be >= 0", r.DB)
 	}
-	if r.DB > 0 {
-		return r.DB, nil
-	}
-	if raw := strings.TrimSpace(os.Getenv("DIVERGE_REDIS_DB")); raw != "" {
-		db, err := strconv.Atoi(raw)
-		if err != nil || db < 0 {
-			return 0, fmt.Errorf("invalid DIVERGE_REDIS_DB %q", raw)
-		}
-		return db, nil
-	}
-	return 0, nil
+	return r.DB, nil
 }
 
 // FormatRedisKeyPrefix returns the deterministic key prefix for an environment and route target.

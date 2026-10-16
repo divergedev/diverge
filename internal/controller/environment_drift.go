@@ -29,6 +29,18 @@ const (
 	ConditionBaselineDrift        = "BaselineDriftDetected"
 )
 
+func baselineNamespaceForEnvironment(env *divergeiov1alpha1.Environment) string {
+	if env == nil {
+		return ""
+	}
+	if env.Spec.ServiceConfig != nil {
+		if namespace := strings.TrimSpace(env.Spec.ServiceConfig.Namespace); namespace != "" {
+			return namespace
+		}
+	}
+	return env.Namespace
+}
+
 func computeBaselineFingerprint(ctx context.Context, c client.Client, env *divergeiov1alpha1.Environment, secretReader ...client.Reader) (string, error) {
 	if env == nil || c == nil || env.Spec.Deploy.Mode == "full" {
 		return "", nil
@@ -55,10 +67,7 @@ func computeBaselineFingerprint(ctx context.Context, c client.Client, env *diver
 	}
 	sort.Strings(targetServices)
 
-	baselineNS := env.Namespace
-	if env.Spec.ServiceConfig != nil && strings.TrimSpace(env.Spec.ServiceConfig.Namespace) != "" {
-		baselineNS = strings.TrimSpace(env.Spec.ServiceConfig.Namespace)
-	}
+	baselineNS := baselineNamespaceForEnvironment(env)
 
 	var deployList appsv1.DeploymentList
 	if err := c.List(ctx, &deployList, client.InNamespace(baselineNS)); err != nil {
@@ -467,13 +476,16 @@ func (r *EnvironmentReconciler) mapBaselineDeploymentToEnvironments(ctx context.
 	}
 
 	var envList divergeiov1alpha1.EnvironmentList
-	if err := r.List(ctx, &envList, client.InNamespace(obj.GetNamespace())); err != nil {
+	if err := r.List(ctx, &envList); err != nil {
 		return nil
 	}
 
 	var reqs []ctrl.Request
 	for i := range envList.Items {
 		env := &envList.Items[i]
+		if baselineNamespaceForEnvironment(env) != obj.GetNamespace() {
+			continue
+		}
 		if !shouldEnqueueEnvironmentForDrift(env) {
 			continue
 		}
@@ -506,13 +518,16 @@ func (r *EnvironmentReconciler) mapConfigMapToEnvironments(ctx context.Context, 
 	}
 
 	var envList divergeiov1alpha1.EnvironmentList
-	if err := r.List(ctx, &envList, client.InNamespace(obj.GetNamespace())); err != nil {
+	if err := r.List(ctx, &envList); err != nil {
 		return nil
 	}
 
 	var reqs []ctrl.Request
 	for i := range envList.Items {
 		env := &envList.Items[i]
+		if baselineNamespaceForEnvironment(env) != obj.GetNamespace() {
+			continue
+		}
 		if !shouldEnqueueEnvironmentForDrift(env) {
 			continue
 		}

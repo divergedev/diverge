@@ -2,6 +2,7 @@ package async
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -14,6 +15,16 @@ var (
 	redisUsernameFlag string
 	redisDB           int
 )
+
+func redisDBWasExplicitlySet() bool {
+	set := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "redis-db" {
+			set = true
+		}
+	})
+	return set
+}
 
 func init() {
 	flag.StringVar(&redisAddr, "redis-addr", "", "Redis/Valkey address (host:port) for async key-prefix eviction on teardown")
@@ -32,11 +43,13 @@ func init() {
 					username = strings.TrimSpace(os.Getenv("DIVERGE_REDIS_USERNAME"))
 				}
 				db := redisDB
-				if db == 0 {
+				if !redisDBWasExplicitlySet() {
 					if envDB := strings.TrimSpace(os.Getenv("DIVERGE_REDIS_DB")); envDB != "" {
-						if parsed, err := strconv.Atoi(envDB); err == nil && parsed >= 0 {
-							db = parsed
+						parsed, err := strconv.Atoi(envDB)
+						if err != nil || parsed < 0 {
+							return nil, fmt.Errorf("invalid DIVERGE_REDIS_DB %q", envDB)
 						}
+						db = parsed
 					}
 				}
 				return &RedisProvisioner{

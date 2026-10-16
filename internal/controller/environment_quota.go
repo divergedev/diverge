@@ -296,23 +296,6 @@ func (r *EnvironmentReconciler) hibernateEnvironment(ctx context.Context, target
 		return nil
 	}
 	if r.Client != nil {
-		patchTarget := targetEnv.DeepCopy()
-		base := patchTarget.DeepCopy()
-		if patchTarget.Annotations == nil {
-			patchTarget.Annotations = make(map[string]string)
-		}
-		patchTarget.Annotations[metrics.AnnotationHibernated] = "true"
-		if err := r.Patch(ctx, patchTarget, client.MergeFrom(base)); err != nil {
-			return err
-		}
-		targetEnv.ResourceVersion = patchTarget.ResourceVersion
-	}
-	if targetEnv.Annotations == nil {
-		targetEnv.Annotations = make(map[string]string)
-	}
-	targetEnv.Annotations[metrics.AnnotationHibernated] = "true"
-
-	if r.Client != nil {
 		namespaces := []string{targetEnv.Namespace}
 		if targetEnv.Spec.Deploy.Namespace == "create" {
 			if pns := targetEnv.PreviewNamespace(); pns != "" && pns != targetEnv.Namespace {
@@ -366,7 +349,22 @@ func (r *EnvironmentReconciler) hibernateEnvironment(ctx context.Context, target
 				}
 			}
 		}
+
+		patchTarget := targetEnv.DeepCopy()
+		base := patchTarget.DeepCopy()
+		if patchTarget.Annotations == nil {
+			patchTarget.Annotations = make(map[string]string)
+		}
+		patchTarget.Annotations[metrics.AnnotationHibernated] = "true"
+		if err := r.Patch(ctx, patchTarget, client.MergeFrom(base)); err != nil {
+			return err
+		}
+		targetEnv.ResourceVersion = patchTarget.ResourceVersion
 	}
+	if targetEnv.Annotations == nil {
+		targetEnv.Annotations = make(map[string]string)
+	}
+	targetEnv.Annotations[metrics.AnnotationHibernated] = "true"
 
 	// EstimateEnvironmentCost publishes the updated Prometheus cost gauge ($0 active compute while hibernated) as a side effect.
 	metrics.EstimateEnvironmentCost(targetEnv, now, rateCard)

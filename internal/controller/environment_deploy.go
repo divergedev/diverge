@@ -25,6 +25,15 @@ func (r *EnvironmentReconciler) reconcileDeploy(ctx context.Context, env *diverg
 		_, synced, driftErr := r.reconcileBaselineDrift(ctx, env)
 		if driftErr != nil {
 			log.FromContext(ctx).Error(driftErr, "failed to evaluate baseline drift")
+			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+				Type:    "ServicesReady",
+				Status:  metav1.ConditionFalse,
+				Reason:  "DeployFailed",
+				Message: driftErr.Error(),
+			})
+			r.notifyFailed(ctx, env, driftErr.Error())
+			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, driftErr, 0)
+			return res, true, retErr
 		}
 		alreadyDeployedByDriftSync = synced
 	}
