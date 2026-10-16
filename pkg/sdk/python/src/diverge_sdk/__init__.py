@@ -17,6 +17,10 @@ from .temporal import (
     get_temporal_headers,
     temporal_header_context,
 )
+from .redis import (
+    resolve_redis_key,
+    resolve_redis_prefix,
+)
 
 __all__ = [
     "get_environment",
@@ -39,6 +43,8 @@ __all__ = [
     "resolve_kafka_topic",
     "get_temporal_headers",
     "temporal_header_context",
+    "resolve_redis_prefix",
+    "resolve_redis_key",
 ]
 
 try:

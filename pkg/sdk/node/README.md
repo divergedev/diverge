@@ -14,6 +14,7 @@ npm install @divergedev/sdk
 - **LLM Usage Metering**: `meterLLMUsage`, `LLMMeterError`, `resolveSandboxToken` for reporting model token and cost usage from agent sandboxes to the Diverge control plane.
 - **Kafka Propagation & Topic Resolution**: `injectKafkaHeaders`, `withKafkaMessage`, `resolveKafkaTopic`.
 - **Temporal Workflow & Activity Propagation**: `getTemporalHeaderMap`, `injectTemporalHeaders`, `withTemporalHeaders`.
+- **Redis / Valkey Key Prefix Isolation**: `resolveRedisPrefix`, `resolveRedisKey`.
 
 ## Usage
 
@@ -68,3 +69,13 @@ withTemporalHeaders(headers, () => {
   // Active preview environment restored
 });
 ```
+
+### Redis / Valkey Key Prefix Isolation
+
+```ts
+import { resolveRedisPrefix, resolveRedisKey } from '@divergedev/sdk';
+
+const key = resolveRedisKey('session:user-123');
+// Returns 'preview:pr-42:session:user-123' in preview environments, or 'session:user-123' in baseline
+```
+

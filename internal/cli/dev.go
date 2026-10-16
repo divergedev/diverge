@@ -25,7 +25,6 @@ import (
 	"github.com/divergedev/diverge/internal/git"
 	"github.com/divergedev/diverge/internal/proxy"
 	"github.com/divergedev/diverge/pkg/devsession"
-	"github.com/divergedev/diverge/pkg/license"
 )
 
 // ErrCollision indicates that a preview group with the same name already exists but belongs to a different owner.
@@ -275,7 +274,7 @@ dev:
 		ns = "default"
 	}
 
-	// 5b. Multi-User Dev Session Conflict Detection (Pro Tier)
+	// 5b. Multi-User Dev Session Conflict Detection
 	conflictPolicy := devsession.ConflictPolicyWarn
 	if p.Force {
 		conflictPolicy = devsession.ConflictPolicyAllow
@@ -285,13 +284,6 @@ dev:
 		if cfg.Defaults.Dev != nil && cfg.Defaults.Dev.OnConflict != "" {
 			conflictPolicy = devsession.ConflictPolicy(cfg.Defaults.Dev.OnConflict)
 		}
-	}
-
-	licInfo, _ := license.CheckFeature("", nil, license.FeatureConflictDetection)
-	if licInfo.IsTrial {
-		slog.Debug("multi-user conflict detection active (community trial mode)")
-	} else if licInfo.IsGrace {
-		slog.Warn("Diverge Pro license is within 7-day grace period", "graceUntil", licInfo.GraceUntil)
 	}
 
 	sessionMgr := devOpts.SessionManager

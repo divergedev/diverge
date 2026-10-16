@@ -700,7 +700,7 @@
         "type": "object",
         "properties": {
           "asyncRoutes": {
-            "description": "Async routing targets (Temporal task queues, Kafka topics) for event-driven services.",
+            "description": "Async routing targets (Temporal task queues, Kafka topics, Redis/Valkey key prefixes) for event-driven services.",
             "type": "array",
             "items": {
               "type": "object",
@@ -717,11 +717,13 @@
                   "type": "string",
                   "enum": [
                     "temporal",
-                    "kafka"
+                    "kafka",
+                    "redis",
+                    "valkey"
                   ]
                 },
                 "target": {
-                  "description": "Baseline resource name (e.g., Temporal task queue or Kafka topic).",
+                  "description": "Baseline resource name (e.g., Temporal task queue, Kafka topic, or Redis/Valkey key prefix target).",
                   "type": "string"
                 }
               },

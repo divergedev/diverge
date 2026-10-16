@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -14,9 +15,13 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/async"
@@ -36,6 +41,7 @@ const environmentFinalizer = "divergedev.com/environment-protection"
 // EnvironmentReconciler reconciles a Environment object
 type EnvironmentReconciler struct {
 	client.Client
+	APIReader        client.Reader
 	Scheme           *runtime.Scheme
 	Recorder         *events.Recorder
 	Router           routing.Router
@@ -202,10 +208,23 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *EnvironmentReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if r.APIReader == nil && mgr != nil {
+		r.APIReader = mgr.GetAPIReader()
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&divergeiov1alpha1.Environment{}).
 		Owns(&batchv1.Job{}).
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
+		Watches(&appsv1.Deployment{}, handler.EnqueueRequestsFromMapFunc(r.mapBaselineDeploymentToEnvironments),
+			builder.WithPredicates(predicate.Or(predicate.GenerationChangedPredicate{}, predicate.AnnotationChangedPredicate{}))).
+		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.mapConfigMapToEnvironments),
+			builder.WithPredicates(predicate.Funcs{
+				UpdateFunc: func(e event.UpdateEvent) bool {
+					o, ok1 := e.ObjectOld.(*corev1.ConfigMap)
+					n, ok2 := e.ObjectNew.(*corev1.ConfigMap)
+					return !ok1 || !ok2 || !reflect.DeepEqual(o.Data, n.Data) || !reflect.DeepEqual(o.BinaryData, n.BinaryData)
+				},
+			})).
 		Complete(r)
 }

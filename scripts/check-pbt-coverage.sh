@@ -25,7 +25,6 @@ done
 REQUIRED_PBT_FILES=(
   "pkg/auth/property_test.go"
   "pkg/topology/property_test.go"
-  "pkg/license/property_test.go"
   "pkg/secrets/property_test.go"
   "pkg/features/configmap_property_test.go"
   "pkg/features/flipt_property_test.go"

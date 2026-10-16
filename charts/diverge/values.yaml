@@ -75,6 +75,16 @@ database:
   setupJob:
     image: "postgres:17-alpine@sha256:7456ef82e5f5bc43d997f4781bbd7c0d6389bff397564649a356e206ba473aee"
 
+# Async routing and Redis/Valkey key-prefix isolation
+async:
+  provider: "noop"  # noop | kafka | temporal | redis | valkey | webhook
+  redis:
+    addr: ""
+    db: 0
+    username: ""
+    passwordSecretName: ""
+    passwordSecretKey: "password"
+
 serviceAccount:
   create: true
   name: diverge-controller

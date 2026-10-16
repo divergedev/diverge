@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -208,4 +209,74 @@ func TestTopJSONAndYAMLOutput(t *testing.T) {
 	badCmd := NewRootCmd(app)
 	badCmd.SetArgs([]string{"top", "--once", "-i", "50ms"})
 	require.Error(t, badCmd.Execute())
+}
+
+func TestTopBaselineDriftState(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, divergeiov1alpha1.AddToScheme(scheme))
+
+	driftedEnv := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-99-drifted",
+			Namespace: "default",
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Source: divergeiov1alpha1.EnvironmentSource{
+				Provider: "github",
+				Branch:   "feat/drift-check",
+				MR:       99,
+			},
+		},
+		Status: divergeiov1alpha1.EnvironmentStatus{
+			Phase: divergeiov1alpha1.PhaseRunning,
+			URL:   "https://pr-99.preview.example.com",
+			Conditions: []metav1.Condition{
+				{
+					Type:    "BaselineDriftDetected",
+					Status:  metav1.ConditionTrue,
+					Reason:  "BaselineUpdated",
+					Message: "Baseline configuration changed",
+				},
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(driftedEnv).
+		Build()
+
+	app := &App{
+		Namespace: "default",
+		NoColor:   true,
+		Client:    fakeClient,
+	}
+
+	// Table output
+	tableCmd := NewRootCmd(app)
+	var tableOut bytes.Buffer
+	tableCmd.SetOut(&tableOut)
+	tableCmd.SetArgs([]string{"top", "--once"})
+	require.NoError(t, tableCmd.Execute())
+	var driftLine string
+	for _, line := range strings.Split(tableOut.String(), "\n") {
+		if strings.Contains(line, "pr-99-drifted") {
+			driftLine = line
+		}
+	}
+	require.NotEmpty(t, driftLine)
+	assert.Contains(t, driftLine, "⚠️ drift")
+
+	// JSON output
+	jsonCmd := NewRootCmd(app)
+	var jsonOut bytes.Buffer
+	jsonCmd.SetOut(&jsonOut)
+	jsonCmd.SetArgs([]string{"top", "--once", "-o", "json"})
+	require.NoError(t, jsonCmd.Execute())
+
+	var snap TopSnapshot
+	require.NoError(t, json.Unmarshal(jsonOut.Bytes(), &snap))
+	require.Len(t, snap.Environments, 1)
+	assert.True(t, snap.Environments[0].Drifted)
+	assert.Equal(t, "⚠️ drift", snap.Environments[0].State)
 }

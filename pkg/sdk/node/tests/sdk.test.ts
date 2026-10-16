@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   getEnvironment,
   getTemporalHeaderMap,
@@ -241,3 +241,70 @@ describe('Temporal Header Propagation', () => {
     expect(withTemporalHeaders(rawHeaders, () => getEnvironment())).toBe('agent-sbx-8');
   });
 });
+
+describe('Redis / Valkey Key Prefix Resolution', () => {
+  const savedEnv: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    for (const key of ['DIVERGE_ENV', 'DIVERGE_REDIS_PREFIX', 'REDIS_KEY_PREFIX']) {
+      savedEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+  });
+
+  afterEach(() => {
+    for (const [key, val] of Object.entries(savedEnv)) {
+      if (val === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = val;
+      }
+    }
+  });
+
+  it('returns empty prefix and unmodified key in baseline', async () => {
+    const { resolveRedisPrefix, resolveRedisKey } = await import('../src/index.js');
+    expect(resolveRedisPrefix()).toBe('');
+    expect(resolveRedisKey('session:user-123')).toBe('session:user-123');
+  });
+
+  it('derives preview:<env>: prefix from active context and prefixes keys idempotently', async () => {
+    const { resolveRedisPrefix, resolveRedisKey } = await import('../src/index.js');
+    setEnvironment('pr-42', () => {
+      expect(resolveRedisPrefix()).toBe('preview:pr-42:');
+      const prefixed = resolveRedisKey('session:user-123');
+      expect(prefixed).toBe('preview:pr-42:session:user-123');
+      expect(resolveRedisKey(prefixed)).toBe('preview:pr-42:session:user-123');
+    });
+  });
+
+  it('respects DIVERGE_REDIS_PREFIX and REDIS_KEY_PREFIX and ensures trailing colon', async () => {
+    const { resolveRedisPrefix, resolveRedisKey } = await import('../src/index.js');
+    expect(resolveRedisPrefix({ DIVERGE_REDIS_PREFIX: 'preview:pr-42:cache' })).toBe(
+      'preview:pr-42:cache:'
+    );
+    expect(
+      resolveRedisKey('user:1', { DIVERGE_REDIS_PREFIX: 'preview:pr-42:cache' })
+    ).toBe('preview:pr-42:cache:user:1');
+    expect(
+      resolveRedisKey('preview:pr-42:cache:user:1', {
+        DIVERGE_REDIS_PREFIX: 'preview:pr-42:cache:',
+      })
+    ).toBe('preview:pr-42:cache:user:1');
+    expect(resolveRedisPrefix({ REDIS_KEY_PREFIX: 'preview:pr-77:' })).toBe(
+      'preview:pr-77:'
+    );
+  });
+
+  it('prioritizes AsyncLocalStorage over passed env map and passed env map over process.env.DIVERGE_ENV', async () => {
+    const { resolveRedisPrefix } = await import('../src/index.js');
+    process.env.DIVERGE_ENV = 'pr-1';
+
+    expect(resolveRedisPrefix({ DIVERGE_ENV: 'pr-42' })).toBe('preview:pr-42:');
+    expect(resolveRedisPrefix({})).toBe('');
+    expect(
+      setEnvironment('pr-99', () => resolveRedisPrefix({ DIVERGE_ENV: 'pr-42' }))
+    ).toBe('preview:pr-99:');
+  });
+});
+

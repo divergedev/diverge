@@ -29,6 +29,9 @@ spec:
         {{- if .Values.database }}
         - --database-provider={{ .Values.database.provider | default "noop" }}
         {{- end }}
+        {{- if .Values.async }}
+        - --async-provider={{ .Values.async.provider | default "noop" }}
+        {{- end }}
         {{- if .Values.deploy }}
         - --deploy-provider={{ .Values.deploy.provider | default "noop" }}
         {{- if eq (.Values.deploy.provider | default "noop") "direct" }}
@@ -78,6 +81,27 @@ spec:
             secretKeyRef:
               name: {{ .Values.database.passwordSecretName }}
               key: {{ .Values.database.passwordSecretKey | default "password" }}
+        {{- end }}
+        {{- end }}
+        {{- if and .Values.async .Values.async.redis }}
+        {{- if .Values.async.redis.addr }}
+        - name: DIVERGE_REDIS_ADDR
+          value: {{ .Values.async.redis.addr | quote }}
+        {{- end }}
+        {{- if .Values.async.redis.db }}
+        - name: DIVERGE_REDIS_DB
+          value: {{ .Values.async.redis.db | quote }}
+        {{- end }}
+        {{- if .Values.async.redis.username }}
+        - name: DIVERGE_REDIS_USERNAME
+          value: {{ .Values.async.redis.username | quote }}
+        {{- end }}
+        {{- if .Values.async.redis.passwordSecretName }}
+        - name: DIVERGE_REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.async.redis.passwordSecretName }}
+              key: {{ .Values.async.redis.passwordSecretKey | default "password" }}
         {{- end }}
         {{- end }}
         {{- if .Values.observability.otel.enabled }}

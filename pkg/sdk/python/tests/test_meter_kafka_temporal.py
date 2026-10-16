@@ -262,3 +262,48 @@ def test_temporal_header_context(monkeypatch):
         assert get_environment() == "sbx-temporal-1"
 
     assert get_environment() == ""
+
+
+def test_resolve_redis_prefix_and_key(monkeypatch):
+    from diverge_sdk import resolve_redis_key, resolve_redis_prefix
+
+    _current_env.set("")
+    monkeypatch.delenv("DIVERGE_ENV", raising=False)
+    monkeypatch.delenv("DIVERGE_REDIS_PREFIX", raising=False)
+    monkeypatch.delenv("REDIS_KEY_PREFIX", raising=False)
+
+    assert resolve_redis_prefix() == ""
+    assert resolve_redis_key("session:user-123") == "session:user-123"
+
+    token = set_environment("pr-42")
+    try:
+        assert resolve_redis_prefix() == "preview:pr-42:"
+        prefixed = resolve_redis_key("session:user-123")
+        assert prefixed == "preview:pr-42:session:user-123"
+        assert resolve_redis_key(prefixed) == "preview:pr-42:session:user-123"
+    finally:
+        reset_environment(token)
+
+    assert (
+        resolve_redis_prefix(environ={"DIVERGE_REDIS_PREFIX": "preview:pr-42:cache"})
+        == "preview:pr-42:cache:"
+    )
+    assert (
+        resolve_redis_key(
+            "user:1",
+            environ={"DIVERGE_REDIS_PREFIX": "preview:pr-42:cache"},
+        )
+        == "preview:pr-42:cache:user:1"
+    )
+    assert (
+        resolve_redis_key(
+            "preview:pr-42:cache:user:1",
+            environ={"DIVERGE_REDIS_PREFIX": "preview:pr-42:cache:"},
+        )
+        == "preview:pr-42:cache:user:1"
+    )
+    assert (
+        resolve_redis_prefix(environ={"REDIS_KEY_PREFIX": "preview:pr-77:"})
+        == "preview:pr-77:"
+    )
+

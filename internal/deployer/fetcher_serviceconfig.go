@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -77,6 +78,7 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 
 	// If DatabaseEnvKey is set and differs from DATABASE_URL, add explicit mapping
 	if dbSecretName != "" && cfg.DatabaseEnvKey != "" && !seen[cfg.DatabaseEnvKey] {
+		seen[cfg.DatabaseEnvKey] = true
 		containerEnv = append(containerEnv, map[string]interface{}{
 			"name": cfg.DatabaseEnvKey,
 			"valueFrom": map[string]interface{}{
@@ -121,14 +123,44 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 	}
 
 	// Inject any feature environment variables from status
-	for k, v := range env.Status.FeatureEnvVars {
-		if !seen[k] {
-			seen[k] = true
-			containerEnv = append(containerEnv, map[string]interface{}{
-				"name":  k,
-				"value": v,
-			})
+	if len(env.Status.FeatureEnvVars) > 0 {
+		featKeys := make([]string, 0, len(env.Status.FeatureEnvVars))
+		for k := range env.Status.FeatureEnvVars {
+			featKeys = append(featKeys, k)
 		}
+		sort.Strings(featKeys)
+		for _, k := range featKeys {
+			if !seen[k] {
+				seen[k] = true
+				containerEnv = append(containerEnv, map[string]interface{}{
+					"name":  k,
+					"value": env.Status.FeatureEnvVars[k],
+				})
+			}
+		}
+	}
+
+	// Inject any async routing environment variables from status
+	if len(env.Status.AsyncEnvVars) > 0 {
+		asyncKeys := make([]string, 0, len(env.Status.AsyncEnvVars))
+		for k := range env.Status.AsyncEnvVars {
+			asyncKeys = append(asyncKeys, k)
+		}
+		sort.Strings(asyncKeys)
+		for _, k := range asyncKeys {
+			if !seen[k] {
+				seen[k] = true
+				containerEnv = append(containerEnv, map[string]interface{}{
+					"name":  k,
+					"value": env.Status.AsyncEnvVars[k],
+				})
+			}
+		}
+	}
+
+	replicas := int64(1)
+	if strings.EqualFold(strings.TrimSpace(env.Annotations["divergedev.com/hibernated"]), "true") {
+		replicas = 0
 	}
 
 	// Deployment
@@ -148,7 +180,7 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 				},
 			},
 			"spec": map[string]interface{}{
-				"replicas": int64(1),
+				"replicas": replicas,
 				"selector": map[string]interface{}{
 					"matchLabels": map[string]interface{}{
 						"app":                       previewName,
@@ -206,6 +238,14 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 	if len(podVolumes) > 0 {
 		podSpec := deploy.Object["spec"].(map[string]interface{})["template"].(map[string]interface{})["spec"].(map[string]interface{})
 		podSpec["volumes"] = podVolumes
+	}
+	if fp := strings.TrimSpace(env.Annotations["divergedev.com/baseline-fingerprint"]); fp != "" {
+		annos, found, _ := unstructured.NestedStringMap(deploy.Object, "spec", "template", "metadata", "annotations")
+		if !found || annos == nil {
+			annos = make(map[string]string)
+		}
+		annos["divergedev.com/baseline-fingerprint"] = fp
+		_ = unstructured.SetNestedStringMap(deploy.Object, annos, "spec", "template", "metadata", "annotations")
 	}
 
 	// Service

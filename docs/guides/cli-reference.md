@@ -33,7 +33,7 @@ The `diverge` CLI manages your local development environments and interacts with
 | `diverge providers list` | List all registered providers |
 | `diverge route <service>` | Simulate request routing to a service through the topology |
 | `diverge status` | Show active preview environments and groups |
-| `diverge top` | Live terminal dashboard (`watch`) of environments, FinOps burn rate, hibernation state, and `AgentTask`s |
+| `diverge top` | Live terminal dashboard (`watch`) of environments, FinOps burn rate, hibernation/drift state, and `AgentTask`s (`-o table\|json\|yaml`) |
 | `diverge validate` | Validate `.diverge.yaml` against JSON Schema or print the embedded schema (`--print-schema`) |
 | `diverge version` | Print version info |
 
@@ -54,7 +54,7 @@ Route cluster traffic for a service to your local machine.
 - `--proxy-mode` — Proxy mode, either `path` or `host` (default: path)
 - `--server` — Diverge server address for the tunnel (default: auto-detect via port-forward)
 - `--token` — Bearer token for the Diverge server (default: `$DIVERGE_TOKEN`, then the kubeconfig credential)
-- `--on-conflict` — Conflict resolution policy: `warn` (default), `block`, or `allow` (Diverge Pro)
+- `--on-conflict` — Conflict resolution policy: `warn` (default), `block`, or `allow`
 - `--force` — Force start dev session, overriding any active collision
 
 The server authenticates tunnel connections by Kubernetes TokenReview, so the
@@ -274,13 +274,14 @@ diverge mcp setup --client cursor --server-url https://diverge.internal.example.
 
 ### `diverge top`
 
-Live terminal dashboard (alias: `diverge watch`) displaying fleet FinOps hourly and monthly burn rates, active vs. hibernated (`💤 hibernated`) environment states, `PreviewGroup` service counts, TTL countdowns, and `AgentTask` LLM token/cost spend.
+Live terminal dashboard (alias: `diverge watch`) displaying fleet FinOps hourly and monthly burn rates, active vs. hibernated (`💤 hibernated`) and baseline-drifted (`⚠️ drift`) environment states, `PreviewGroup` service counts, TTL countdowns, and `AgentTask` LLM token/cost spend.
 
 **Usage:** `diverge top [flags]` (Alias: `diverge watch`)
 
 **Flags:**
 - `--interval` — Refresh interval (default: `2s`)
 - `--once` — Render a single snapshot to stdout and exit without clearing the screen (ideal for CI logs or scripts)
+- `-o, --output` — Output format: `table` (default), `json`, or `yaml` (structured formats imply `--once`)
 - `-A, --all-namespaces` — Query `Environment`, `PreviewGroup`, and `AgentTask` resources across all namespaces
 
 **Examples:**
@@ -290,5 +291,8 @@ diverge top
 
 # Print a single fleet FinOps & status snapshot across all namespaces
 diverge top --once -A
+
+# Export machine-readable fleet snapshot as JSON
+diverge top -o json -A
 ```
 

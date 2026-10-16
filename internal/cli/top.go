@@ -50,6 +50,7 @@ type TopEnvironmentRow struct {
 	TTL           string  `json:"ttl" yaml:"ttl"`
 	State         string  `json:"state" yaml:"state"`
 	Hibernated    bool    `json:"hibernated" yaml:"hibernated"`
+	Drifted       bool    `json:"drifted,omitempty" yaml:"drifted,omitempty"`
 	HourlyCostUSD float64 `json:"hourlyCostUSD" yaml:"hourlyCostUSD"`
 	URL           string  `json:"url" yaml:"url"`
 }
@@ -285,12 +286,16 @@ func collectTopSnapshot(ctx context.Context, c client.Client, namespace string) 
 	for i := range envList.Items {
 		env := &envList.Items[i]
 		hibernated := env.Annotations[topAnnotationHibernated] == "true"
+		drifted := meta.IsStatusConditionTrue(env.Status.Conditions, "BaselineDriftDetected")
 		state := "active"
 		if hibernated {
 			state = "💤 hibernated"
 			hibernatedEnvs++
 		} else {
 			activeEnvs++
+			if drifted {
+				state = "⚠️ drift"
+			}
 		}
 
 		hourlyCost := estimateEnvHourlyCost(env)
@@ -320,6 +325,7 @@ func collectTopSnapshot(ctx context.Context, c client.Client, namespace string) 
 			TTL:           ttl,
 			State:         state,
 			Hibernated:    hibernated,
+			Drifted:       drifted,
 			HourlyCostUSD: hourlyCost,
 			URL:           url,
 		})

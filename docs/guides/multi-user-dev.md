@@ -1,8 +1,8 @@
-# Multi-User Dev & Conflict Detection (Pro)
+# Multi-User Dev & Conflict Detection
 
 In teams sharing development or staging clusters, multiple engineers frequently develop microservices simultaneously. If two engineers run `diverge dev` on the same service concurrently (e.g. `order-api`), conflicting database migrations, shared cache mutations, or overlapping async message queues can cause collisions.
 
-Diverge Pro provides native **multi-user conflict detection** and distributed session tracking to give teams real-time visibility into who is working on what, prevent accidental collisions, and safely coordinate concurrent work.
+Diverge provides built-in **multi-user conflict detection** and distributed session tracking to give teams real-time visibility into who is working on what, prevent accidental collisions, and safely coordinate concurrent work.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -146,14 +146,3 @@ inventory    carol       chore/cleanup   carol-desktop          140s ago    Stal
 - **Automatic Teardown**: Exiting the CLI (or `Ctrl+C` / `SIGTERM`) safely deletes the session ConfigMap.
 - **Stale Expiry**: If a laptop goes to sleep, closes unexpectedly, or loses network connection, sessions with no heartbeat for **> 90 seconds** are marked `Stale` and automatically reclaimed by subsequent developers without blocking.
 
----
-
-## Licensing & Pro Tier
-
-Multi-user conflict detection is a **Diverge Pro** feature:
-- **Community Edition**: Runs in evaluation trial mode with full warning/blocking capability.
-- **Commercial Licenses**: Activated by setting the `DIVERGE_LICENSE_KEY` environment variable or `--license-key` flag:
-  ```bash
-  export DIVERGE_LICENSE_KEY="<your-license-key>"
-  ```
-- **Grace Period**: Expired licenses maintain active conflict protection for a 7-day grace period to prevent breaking developer workflows during renewals.
