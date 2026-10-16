@@ -20,12 +20,12 @@ You can install Diverge via our installation script or Go.
 
 **Install via Shell Script**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/v0.17.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/v0.15.0/install.sh | sh
 ```
 
 **Install via Go**
 ```bash
-go install github.com/divergedev/diverge/cmd/diverge@v0.17.0
+go install github.com/divergedev/diverge/cmd/diverge@v0.15.0
 ```
 
 ### Docker Images (for reference)
@@ -33,7 +33,7 @@ go install github.com/divergedev/diverge/cmd/diverge@v0.17.0
 The controller and proxy images are available at:
 ```bash
 # prefetch image via Docker
-docker pull ghcr.io/divergedev/diverge:v0.17.0
+docker pull ghcr.io/divergedev/diverge:v0.15.0
 ```
 
 > **Tip**: See the [Observability Guide](guides/observability.md) for monitoring your environments, and the [Hot Reload Guide](guides/hot-reload.md) for file-watching development workflows.
