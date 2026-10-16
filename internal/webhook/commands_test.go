@@ -83,11 +83,69 @@ func TestParseSlashCommand(t *testing.T) {
 			},
 		},
 		{
-			name:   "resume command",
+			name:   "resume command without args",
 			body:   "/diverge resume",
 			wantOK: true,
 			wantCmd: &SlashCommand{
 				Action: "resume",
+			},
+		},
+		{
+			name:   "resume command with budget bump",
+			body:   "/diverge resume +$5.00",
+			wantOK: true,
+			wantCmd: &SlashCommand{
+				Action:    "resume",
+				BudgetUSD: "5.00",
+			},
+		},
+		{
+			name:   "resume command with budget and tokens",
+			body:   "/diverge resume +$10 50000",
+			wantOK: true,
+			wantCmd: &SlashCommand{
+				Action:    "resume",
+				BudgetUSD: "10.00",
+				Tokens:    50000,
+			},
+		},
+		{
+			name:   "budget command alias for resume",
+			body:   "/diverge budget +$7.50",
+			wantOK: true,
+			wantCmd: &SlashCommand{
+				Action:    "resume",
+				BudgetUSD: "7.50",
+			},
+		},
+		{
+			name:   "guide command with text",
+			body:   "/diverge guide prioritize backward compatibility in auth.go",
+			wantOK: true,
+			wantCmd: &SlashCommand{
+				Action:   "guide",
+				Guidance: "prioritize backward compatibility in auth.go",
+			},
+		},
+		{
+			name:   "guide command without text rejected",
+			body:   "/diverge guide   ",
+			wantOK: false,
+		},
+		{
+			name:   "status command",
+			body:   "/diverge status",
+			wantOK: true,
+			wantCmd: &SlashCommand{
+				Action: "status",
+			},
+		},
+		{
+			name:   "help command",
+			body:   "/diverge help",
+			wantOK: true,
+			wantCmd: &SlashCommand{
+				Action: "help",
 			},
 		},
 		{
@@ -105,7 +163,10 @@ func TestParseSlashCommand(t *testing.T) {
 				require.NotNil(t, cmd)
 				assert.Equal(t, tc.wantCmd.Action, cmd.Action)
 				assert.Equal(t, tc.wantCmd.Objective, cmd.Objective)
+				assert.Equal(t, tc.wantCmd.Guidance, cmd.Guidance)
 				assert.Equal(t, tc.wantCmd.Duration, cmd.Duration)
+				assert.Equal(t, tc.wantCmd.BudgetUSD, cmd.BudgetUSD)
+				assert.Equal(t, tc.wantCmd.Tokens, cmd.Tokens)
 			}
 		})
 	}
@@ -245,3 +306,105 @@ func TestExecuteSlashCommand_RepoIsolation(t *testing.T) {
 }
 
 func prNumberStringToBranch(b string) string { return b }
+
+func TestExecuteSlashCommand_GuideAndBudget(t *testing.T) {
+	ctx := context.Background()
+	c := newTestClient()
+
+	repoURL := "https://github.com/divergedev/demo-orders-api"
+	branch := "feat/orders"
+	prNumber := 99
+
+	// 1. /diverge fix
+	fixCmd, ok := ParseSlashCommand("/diverge fix fix checkout timeout")
+	require.True(t, ok)
+	feedback, err := ExecuteSlashCommandWithFeedback(ctx, c, "default", fixCmd, repoURL, branch, prNumber)
+	require.NoError(t, err)
+	assert.Contains(t, feedback, "Agent task started")
+	assert.Contains(t, feedback, "fix checkout timeout")
+
+	// 2. /diverge guide
+	guideCmd, ok := ParseSlashCommand("/diverge guide Use exponential backoff for payment gateway retries")
+	require.True(t, ok)
+	feedback, err = ExecuteSlashCommandWithFeedback(ctx, c, "default", guideCmd, repoURL, branch, prNumber)
+	require.NoError(t, err)
+	assert.Contains(t, feedback, "Guidance dispatched")
+	assert.Contains(t, feedback, "Use exponential backoff")
+
+	var taskList v1alpha1.AgentTaskList
+	require.NoError(t, c.List(ctx, &taskList, client.InNamespace("default")))
+	require.Len(t, taskList.Items, 1)
+	assert.Equal(t, "Use exponential backoff for payment gateway retries", taskList.Items[0].Annotations["divergedev.com/guidance"])
+	assert.NotEmpty(t, taskList.Items[0].Annotations["divergedev.com/guidance-timestamp"])
+
+	// 3. /diverge pause
+	pauseCmd, _ := ParseSlashCommand("/diverge pause")
+	feedback, err = ExecuteSlashCommandWithFeedback(ctx, c, "default", pauseCmd, repoURL, branch, prNumber)
+	require.NoError(t, err)
+	assert.Contains(t, feedback, "Agent task paused")
+
+	// 4. /diverge resume with budget bump
+	resumeCmd, ok := ParseSlashCommand("/diverge resume +$15.50 50000")
+	require.True(t, ok)
+	assert.Equal(t, "15.50", resumeCmd.BudgetUSD)
+	assert.Equal(t, int64(50000), resumeCmd.Tokens)
+
+	feedback, err = ExecuteSlashCommandWithFeedback(ctx, c, "default", resumeCmd, repoURL, branch, prNumber)
+	require.NoError(t, err)
+	assert.Contains(t, feedback, "Agent task resumed")
+	assert.Contains(t, feedback, "$15.50")
+	assert.Contains(t, feedback, "50000")
+
+	var task v1alpha1.AgentTask
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: taskList.Items[0].Name, Namespace: "default"}, &task))
+	assert.False(t, task.Spec.Suspended)
+	assert.Equal(t, "15.50", task.Spec.BudgetUSD)
+	assert.Equal(t, "50000", task.Annotations["divergedev.com/budget-tokens"])
+
+	// Second resume with additional budget should be additive
+	resume2, _ := ParseSlashCommand("/diverge resume +$5.00")
+	feedback, err = ExecuteSlashCommandWithFeedback(ctx, c, "default", resume2, repoURL, branch, prNumber)
+	require.NoError(t, err)
+	assert.Contains(t, feedback, "$20.50")
+
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: taskList.Items[0].Name, Namespace: "default"}, &task))
+	assert.Equal(t, "20.50", task.Spec.BudgetUSD)
+}
+
+func TestExecuteSlashCommand_StatusAndHelp(t *testing.T) {
+	ctx := context.Background()
+	c := newTestClient()
+
+	repoURL := "https://github.com/divergedev/demo-orders-api"
+	branch := "feat/orders"
+	prNumber := 101
+
+	// Help command returns HelpMessage
+	helpCmd, ok := ParseSlashCommand("/diverge help")
+	require.True(t, ok)
+	feedback, err := ExecuteSlashCommandWithFeedback(ctx, c, "default", helpCmd, repoURL, branch, prNumber)
+	require.NoError(t, err)
+	assert.Equal(t, HelpMessage, feedback)
+
+	// Status when nothing is active
+	statusCmd, ok := ParseSlashCommand("/diverge status")
+	require.True(t, ok)
+	feedback, err = ExecuteSlashCommandWithFeedback(ctx, c, "default", statusCmd, repoURL, branch, prNumber)
+	require.NoError(t, err)
+	assert.Contains(t, feedback, "No active agent tasks or preview environments found")
+
+	// Create task and preview, then check status
+	fixCmd, _ := ParseSlashCommand("/diverge fix implement catalog filter")
+	_, err = ExecuteSlashCommandWithFeedback(ctx, c, "default", fixCmd, repoURL, branch, prNumber)
+	require.NoError(t, err)
+
+	previewCmd, _ := ParseSlashCommand("/diverge preview")
+	_, err = ExecuteSlashCommandWithFeedback(ctx, c, "default", previewCmd, repoURL, branch, prNumber)
+	require.NoError(t, err)
+
+	feedback, err = ExecuteSlashCommandWithFeedback(ctx, c, "default", statusCmd, repoURL, branch, prNumber)
+	require.NoError(t, err)
+	assert.Contains(t, feedback, "Autonomous Agent Tasks")
+	assert.Contains(t, feedback, "implement catalog filter")
+	assert.Contains(t, feedback, "Preview Environments")
+}

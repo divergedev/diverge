@@ -23,21 +23,46 @@ const (
 	prNumberAnnotationKey    = "divergedev.com/pr-number"
 )
 
+// HelpMessage is the user-facing markdown reference of supported /diverge slash commands.
+const HelpMessage = `### 🤖 Diverge Slash Commands Guide
+
+Use ` + "`/diverge <command>`" + ` in any PR or MR comment to manage preview environments and autonomous agent tasks:
+
+| Command | Description | Example |
+|---|---|---|
+| ` + "`/diverge fix <objective>`" + ` | Start autonomous code-test-review loop | ` + "`/diverge fix resolve nil pointer in payment handler`" + ` |
+| ` + "`/diverge guide <instruction>`" + ` | Steer running agent with runtime guidance | ` + "`/diverge guide prioritize backward compatibility in auth.go`" + ` |
+| ` + "`/diverge pause`" + ` | Suspend autonomous agent execution | ` + "`/diverge pause`" + ` |
+| ` + "`/diverge resume [+$amount] [tokens]`" + ` | Resume agent with optional budget bump | ` + "`/diverge resume +$5.00`" + ` |
+| ` + "`/diverge status`" + ` | Report active tasks and preview environments | ` + "`/diverge status`" + ` |
+| ` + "`/diverge preview`" + ` | Deploy preview environment for this branch | ` + "`/diverge preview`" + ` |
+| ` + "`/diverge extend-ttl [duration]`" + ` | Extend preview TTL (default 24h) | ` + "`/diverge extend-ttl 48h`" + ` |
+| ` + "`/diverge teardown`" + ` | Tear down preview environment & agent tasks | ` + "`/diverge teardown`" + ` |
+| ` + "`/diverge help`" + ` | Show this command reference | ` + "`/diverge help`" + ` |
+`
+
 // SlashCommand represents a parsed /diverge command from a PR or MR comment.
 type SlashCommand struct {
 	Action    string
 	Objective string
+	Guidance  string
 	Duration  time.Duration
+	BudgetUSD string
+	Tokens    int64
 }
 
 // ParseSlashCommand parses a PR/MR comment body for a /diverge slash command.
 // Supported commands:
 //   - /diverge fix <objective>
+//   - /diverge guide <instruction>
 //   - /diverge preview
 //   - /diverge teardown
 //   - /diverge extend-ttl [duration]
 //   - /diverge pause
-//   - /diverge resume
+//   - /diverge resume [+$amount] [tokens]
+//   - /diverge budget [+$amount] [tokens]
+//   - /diverge status
+//   - /diverge help
 func ParseSlashCommand(commentBody string) (*SlashCommand, bool) {
 	lines := strings.Split(commentBody, "\n")
 	for _, rawLine := range lines {
@@ -62,6 +87,14 @@ func ParseSlashCommand(commentBody string) (*SlashCommand, bool) {
 				Action:    "fix",
 				Objective: argStr,
 			}, true
+		case "guide":
+			if argStr == "" {
+				return nil, false
+			}
+			return &SlashCommand{
+				Action:   "guide",
+				Guidance: argStr,
+			}, true
 		case "preview":
 			return &SlashCommand{
 				Action: "preview",
@@ -69,6 +102,14 @@ func ParseSlashCommand(commentBody string) (*SlashCommand, bool) {
 		case "teardown":
 			return &SlashCommand{
 				Action: "teardown",
+			}, true
+		case "status":
+			return &SlashCommand{
+				Action: "status",
+			}, true
+		case "help":
+			return &SlashCommand{
+				Action: "help",
 			}, true
 		case "extend-ttl":
 			dur := defaultExtendTTLDuration
@@ -87,19 +128,59 @@ func ParseSlashCommand(commentBody string) (*SlashCommand, bool) {
 			return &SlashCommand{
 				Action: "pause",
 			}, true
-		case "resume":
+		case "resume", "budget":
+			budgetUSD, tokens, err := parseResumeArgs(fields)
+			if err != nil {
+				return nil, false
+			}
 			return &SlashCommand{
-				Action: "resume",
+				Action:    "resume",
+				BudgetUSD: budgetUSD,
+				Tokens:    tokens,
 			}, true
 		}
 	}
 	return nil, false
 }
 
+func parseResumeArgs(fields []string) (string, int64, error) {
+	if len(fields) <= 1 {
+		return "", 0, nil
+	}
+	var budgetUSD string
+	var tokens int64
+	for _, f := range fields[1:] {
+		fClean := strings.TrimSpace(f)
+		if strings.HasPrefix(fClean, "+$") || strings.HasPrefix(fClean, "$") || strings.HasPrefix(fClean, "+") || strings.Contains(fClean, ".") {
+			clean := strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(fClean, "+"), "$"), "+")
+			val, err := strconv.ParseFloat(clean, 64)
+			if err != nil || val <= 0 {
+				return "", 0, fmt.Errorf("invalid budget amount %q", f)
+			}
+			budgetUSD = fmt.Sprintf("%.2f", val)
+		} else if tok, err := strconv.ParseInt(fClean, 10, 64); err == nil && tok > 0 {
+			tokens = tok
+		} else {
+			if val, err := strconv.ParseFloat(fClean, 64); err == nil && val > 0 {
+				budgetUSD = fmt.Sprintf("%.2f", val)
+			} else {
+				return "", 0, fmt.Errorf("unrecognized resume argument %q", f)
+			}
+		}
+	}
+	return budgetUSD, tokens, nil
+}
+
 // ExecuteSlashCommand executes a parsed /diverge slash command against the Kubernetes cluster.
 func ExecuteSlashCommand(ctx context.Context, c client.Client, ns string, cmd *SlashCommand, repoURL, branch string, prNumber int) error {
+	_, err := ExecuteSlashCommandWithFeedback(ctx, c, ns, cmd, repoURL, branch, prNumber)
+	return err
+}
+
+// ExecuteSlashCommandWithFeedback executes a parsed /diverge slash command and returns a user-facing Markdown feedback message.
+func ExecuteSlashCommandWithFeedback(ctx context.Context, c client.Client, ns string, cmd *SlashCommand, repoURL, branch string, prNumber int) (string, error) {
 	if cmd == nil {
-		return fmt.Errorf("slash command must not be nil")
+		return "", fmt.Errorf("slash command must not be nil")
 	}
 	if ns == "" {
 		ns = "default"
@@ -111,6 +192,8 @@ func ExecuteSlashCommand(ctx context.Context, c client.Client, ns string, cmd *S
 	switch cmd.Action {
 	case "fix":
 		return executeFixCommand(ctx, c, ns, cmd, repoURL, branch, prNumber)
+	case "guide":
+		return executeGuideCommand(ctx, c, ns, cmd.Guidance, repoURL, prNumber)
 	case "preview":
 		return executePreviewCommand(ctx, c, ns, repoURL, branch, prNumber)
 	case "teardown":
@@ -118,17 +201,21 @@ func ExecuteSlashCommand(ctx context.Context, c client.Client, ns string, cmd *S
 	case "extend-ttl":
 		return executeExtendTTLCommand(ctx, c, ns, cmd.Duration, repoURL, prNumber)
 	case "pause":
-		return executeSuspendTaskCommand(ctx, c, ns, repoURL, prNumber, true)
+		return executeSuspendTaskCommand(ctx, c, ns, repoURL, prNumber, true, "", 0)
 	case "resume":
-		return executeSuspendTaskCommand(ctx, c, ns, repoURL, prNumber, false)
+		return executeSuspendTaskCommand(ctx, c, ns, repoURL, prNumber, false, cmd.BudgetUSD, cmd.Tokens)
+	case "status":
+		return executeStatusCommand(ctx, c, ns, repoURL, prNumber)
+	case "help":
+		return HelpMessage, nil
 	default:
-		return fmt.Errorf("unsupported slash command action %q", cmd.Action)
+		return "", fmt.Errorf("unsupported slash command action %q", cmd.Action)
 	}
 }
 
-func executeFixCommand(ctx context.Context, c client.Client, ns string, cmd *SlashCommand, repoURL, branch string, prNumber int) error {
+func executeFixCommand(ctx context.Context, c client.Client, ns string, cmd *SlashCommand, repoURL, branch string, prNumber int) (string, error) {
 	if strings.TrimSpace(cmd.Objective) == "" {
-		return fmt.Errorf("fix command requires a non-empty objective")
+		return "", fmt.Errorf("fix command requires a non-empty objective")
 	}
 	if repoURL == "" {
 		repoURL = "https://github.com/unknown/repository"
@@ -168,10 +255,61 @@ func executeFixCommand(ctx context.Context, c client.Client, ns string, cmd *Sla
 		}
 		return nil
 	})
-	return err
+	if err != nil {
+		return "", err
+	}
+
+	feedback := fmt.Sprintf("🚀 **Agent task started**: `%s`\n\n"+
+		"- **Objective**: %s\n"+
+		"- **Working Branch**: `%s`\n\n"+
+		"Follow execution progress via PR comments or stream logs with:\n"+
+		"```bash\ndiverge task logs %s -f\n```",
+		taskName, cmd.Objective, workingBranch, taskName)
+	return feedback, nil
 }
 
-func executePreviewCommand(ctx context.Context, c client.Client, ns, repoURL, branch string, prNumber int) error {
+func executeGuideCommand(ctx context.Context, c client.Client, ns, guidance, repoURL string, prNumber int) (string, error) {
+	if strings.TrimSpace(guidance) == "" {
+		return "", fmt.Errorf("guide command requires non-empty guidance text")
+	}
+
+	var taskList v1alpha1.AgentTaskList
+	if err := c.List(ctx, &taskList, client.InNamespace(ns)); err != nil {
+		return "", err
+	}
+
+	prStr := strconv.Itoa(prNumber)
+	var matchedTasks []*v1alpha1.AgentTask
+	for i := range taskList.Items {
+		task := &taskList.Items[i]
+		if matchesTaskPR(task, repoURL, prNumber, prStr) {
+			matchedTasks = append(matchedTasks, task)
+		}
+	}
+
+	if len(matchedTasks) == 0 {
+		return "⚠️ No active agent task found for this PR/MR. Use `/diverge fix <objective>` to start an autonomous task.", nil
+	}
+
+	nowStr := time.Now().UTC().Format(time.RFC3339)
+	for _, task := range matchedTasks {
+		if task.Annotations == nil {
+			task.Annotations = make(map[string]string)
+		}
+		task.Annotations["divergedev.com/guidance"] = guidance
+		task.Annotations["divergedev.com/guidance-timestamp"] = nowStr
+		if err := c.Update(ctx, task); err != nil {
+			return "", fmt.Errorf("update agent task guidance: %w", err)
+		}
+	}
+
+	if len(matchedTasks) == 1 {
+		return fmt.Sprintf("🧭 **Guidance dispatched** to agent task `%s`:\n\n> %s\n\nThe autonomous agent will incorporate this guidance in its next iteration.", matchedTasks[0].Name, guidance), nil
+	}
+	return fmt.Sprintf("🧭 **Guidance dispatched** to %d agent tasks:\n\n> %s\n\nActive tasks will incorporate this guidance in their next iteration.", len(matchedTasks), guidance), nil
+}
+
+func executePreviewCommand(ctx context.Context, c client.Client, ns, repoURL, branch string, prNumber int) (string, error) {
 	project := projectFromRepoURL(repoURL)
 	provider := providerFromRepoURL(repoURL)
 	prefix := "pr"
@@ -208,52 +346,59 @@ func executePreviewCommand(ctx context.Context, c client.Client, ns, repoURL, br
 		}
 		return nil
 	})
-	return err
+	if err != nil {
+		return "", err
+	}
+
+	feedback := fmt.Sprintf("🔄 **Preview environment requested**: `%s` (branch: `%s`)\n\nDiverge is provisioning your preview stack.", envName, branch)
+	return feedback, nil
 }
 
-func executeTeardownCommand(ctx context.Context, c client.Client, ns, repoURL string, prNumber int) error {
+func executeTeardownCommand(ctx context.Context, c client.Client, ns, repoURL string, prNumber int) (string, error) {
 	envs, err := findMatchingEnvironments(ctx, c, ns, repoURL, prNumber)
 	if err != nil {
-		return err
+		return "", err
 	}
 	for i := range envs {
 		if err := client.IgnoreNotFound(c.Delete(ctx, &envs[i])); err != nil {
-			return err
+			return "", err
 		}
 	}
 
 	pgs, err := findMatchingPreviewGroups(ctx, c, repoURL, prNumber)
 	if err != nil {
-		return err
+		return "", err
 	}
 	for i := range pgs {
 		if err := client.IgnoreNotFound(c.Delete(ctx, &pgs[i])); err != nil {
-			return err
+			return "", err
 		}
 	}
-	return nil
+
+	feedback := fmt.Sprintf("🧹 **Teardown requested**: Cleaned up %d preview environment(s) and %d preview group(s) for this PR/MR.", len(envs), len(pgs))
+	return feedback, nil
 }
 
-func executeExtendTTLCommand(ctx context.Context, c client.Client, ns string, dur time.Duration, repoURL string, prNumber int) error {
+func executeExtendTTLCommand(ctx context.Context, c client.Client, ns string, dur time.Duration, repoURL string, prNumber int) (string, error) {
 	if dur <= 0 {
 		dur = defaultExtendTTLDuration
 	}
 
 	envs, err := findMatchingEnvironments(ctx, c, ns, repoURL, prNumber)
 	if err != nil {
-		return err
+		return "", err
 	}
 	for i := range envs {
 		env := &envs[i]
 		env.Spec.Lifecycle.TTL = &metav1.Duration{Duration: dur}
 		if err := c.Update(ctx, env); err != nil {
-			return err
+			return "", err
 		}
 	}
 
 	pgs, err := findMatchingPreviewGroups(ctx, c, repoURL, prNumber)
 	if err != nil {
-		return err
+		return "", err
 	}
 	for i := range pgs {
 		pg := &pgs[i]
@@ -262,29 +407,151 @@ func executeExtendTTLCommand(ctx context.Context, c client.Client, ns string, du
 		}
 		pg.Spec.Lifecycle.TTL = &metav1.Duration{Duration: dur}
 		if err := c.Update(ctx, pg); err != nil {
-			return err
+			return "", err
 		}
 	}
-	return nil
+
+	feedback := fmt.Sprintf("⏳ **Preview TTL extended** by %s for %d environment(s).", dur, len(envs)+len(pgs))
+	return feedback, nil
 }
 
-func executeSuspendTaskCommand(ctx context.Context, c client.Client, ns, repoURL string, prNumber int, suspend bool) error {
+func executeSuspendTaskCommand(ctx context.Context, c client.Client, ns, repoURL string, prNumber int, suspend bool, budgetUSD string, tokens int64) (string, error) {
 	var taskList v1alpha1.AgentTaskList
 	if err := c.List(ctx, &taskList, client.InNamespace(ns)); err != nil {
-		return err
+		return "", err
 	}
 
 	prStr := strconv.Itoa(prNumber)
+	var matchedTasks []*v1alpha1.AgentTask
 	for i := range taskList.Items {
 		task := &taskList.Items[i]
 		if matchesTaskPR(task, repoURL, prNumber, prStr) {
-			task.Spec.Suspended = suspend
-			if err := c.Update(ctx, task); err != nil {
-				return err
-			}
+			matchedTasks = append(matchedTasks, task)
 		}
 	}
-	return nil
+
+	if len(matchedTasks) == 0 {
+		if suspend {
+			return "⚠️ No active agent task found to pause for this PR/MR.", nil
+		}
+		return "⚠️ No active agent task found to resume for this PR/MR.", nil
+	}
+
+	for _, task := range matchedTasks {
+		task.Spec.Suspended = suspend
+		if !suspend && budgetUSD != "" {
+			currBudget := 0.0
+			if task.Spec.BudgetUSD != "" {
+				clean := strings.TrimPrefix(strings.TrimSpace(task.Spec.BudgetUSD), "$")
+				if val, err := strconv.ParseFloat(clean, 64); err == nil {
+					currBudget = val
+				}
+			}
+			inc, _ := strconv.ParseFloat(budgetUSD, 64)
+			newBudget := currBudget + inc
+			task.Spec.BudgetUSD = fmt.Sprintf("%.2f", newBudget)
+		}
+		if !suspend && tokens > 0 {
+			if task.Annotations == nil {
+				task.Annotations = make(map[string]string)
+			}
+			currTokens := int64(0)
+			if tokStr := task.Annotations["divergedev.com/budget-tokens"]; tokStr != "" {
+				if parsed, err := strconv.ParseInt(tokStr, 10, 64); err == nil {
+					currTokens = parsed
+				}
+			}
+			task.Annotations["divergedev.com/budget-tokens"] = strconv.FormatInt(currTokens+tokens, 10)
+		}
+		if err := c.Update(ctx, task); err != nil {
+			return "", err
+		}
+	}
+
+	taskName := matchedTasks[0].Name
+	if suspend {
+		return fmt.Sprintf("⏸️ **Agent task paused**: `%s`\n\nExecution suspended. Resume anytime with `/diverge resume` or `/diverge resume +$5`.", taskName), nil
+	}
+
+	var extra []string
+	if budgetUSD != "" {
+		newBudget, _ := strconv.ParseFloat(strings.TrimPrefix(matchedTasks[0].Spec.BudgetUSD, "$"), 64)
+		extra = append(extra, fmt.Sprintf("**Budget**: `$%.2f` (+`$%s` added)", newBudget, budgetUSD))
+	}
+	if tokens > 0 {
+		extra = append(extra, fmt.Sprintf("**Tokens**: +%d added", tokens))
+	}
+	extraStr := ""
+	if len(extra) > 0 {
+		extraStr = "\n- " + strings.Join(extra, "\n- ")
+	}
+	return fmt.Sprintf("▶️ **Agent task resumed**: `%s`%s\n\nThe autonomous loop will continue execution.", taskName, extraStr), nil
+}
+
+func executeStatusCommand(ctx context.Context, c client.Client, ns, repoURL string, prNumber int) (string, error) {
+	var taskList v1alpha1.AgentTaskList
+	_ = c.List(ctx, &taskList, client.InNamespace(ns))
+
+	envs, _ := findMatchingEnvironments(ctx, c, ns, repoURL, prNumber)
+
+	prStr := strconv.Itoa(prNumber)
+	var matchedTasks []v1alpha1.AgentTask
+	for _, task := range taskList.Items {
+		if matchesTaskPR(&task, repoURL, prNumber, prStr) {
+			matchedTasks = append(matchedTasks, task)
+		}
+	}
+
+	if len(matchedTasks) == 0 && len(envs) == 0 {
+		return "ℹ️ No active agent tasks or preview environments found for this PR/MR.\n\nUse `/diverge fix <objective>` to start an agent task or `/diverge preview` to launch a preview environment.", nil
+	}
+
+	var b strings.Builder
+	b.WriteString("### 📊 Diverge Status\n\n")
+
+	if len(matchedTasks) > 0 {
+		b.WriteString("#### 🤖 Autonomous Agent Tasks\n\n")
+		b.WriteString("| Task | Phase | Objective | Branch | LLM Spend | Suspended |\n")
+		b.WriteString("|---|---|---|---|---|---|\n")
+		for _, t := range matchedTasks {
+			cost := t.Status.CostUSD
+			if cost == "" {
+				cost = "$0.00"
+			}
+			phase := string(t.Status.Phase)
+			if phase == "" {
+				phase = "Pending"
+			}
+			susp := "No"
+			if t.Spec.Suspended {
+				susp = "Yes (Paused)"
+			}
+			fmt.Fprintf(&b, "| `%s` | %s | %s | `%s` | %s (%d tokens) | %s |\n",
+				t.Name, phase, t.Spec.Objective, t.Spec.Repository.WorkingBranch, cost, t.Status.TokensConsumed, susp)
+		}
+		b.WriteString("\n")
+	}
+
+	if len(envs) > 0 {
+		b.WriteString("#### 🌐 Preview Environments\n\n")
+		b.WriteString("| Name | Status | Preview URL |\n")
+		b.WriteString("|---|---|---|\n")
+		for _, env := range envs {
+			urlCell := "Provisioning..."
+			if env.Status.URL != "" {
+				urlCell = fmt.Sprintf("[🔗 Open Preview](%s)", env.Status.URL)
+			}
+			phase := string(env.Status.Phase)
+			if phase == "" {
+				phase = "Pending"
+			}
+			fmt.Fprintf(&b, "| `%s` | %s | %s |\n", env.Name, phase, urlCell)
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString("💡 *Run `/diverge help` to view all available interactive slash commands.*")
+	return b.String(), nil
 }
 
 func matchesTaskPR(task *v1alpha1.AgentTask, repoURL string, prNumber int, prStr string) bool {

@@ -84,6 +84,23 @@ func (p *PodSandboxProvider) Provision(ctx context.Context, task *v1alpha1.Agent
 		runtimeClassName = ptr(rc)
 	}
 
+	containerEnv := []corev1.EnvVar{
+		{Name: "DIVERGE_TASK_NAME", Value: task.Name},
+		{Name: "DIVERGE_TASK_NAMESPACE", Value: task.Namespace},
+		{Name: "DIVERGE_OBJECTIVE", Value: task.Spec.Objective},
+		{Name: "DIVERGE_REPO_URL", Value: task.Spec.Repository.URL},
+		{Name: "DIVERGE_BASE_BRANCH", Value: baseBranch},
+		{Name: "DIVERGE_WORKING_BRANCH", Value: task.Spec.Repository.WorkingBranch},
+		{Name: "DIVERGE_BUDGET_USD", Value: task.Spec.BudgetUSD},
+		{Name: "DIVERGE_MAX_ITERATIONS", Value: strconv.Itoa(int(task.Spec.MaxIterations))},
+		{Name: "DIVERGE_TOKEN_FILE", Value: "/etc/diverge/token/token"},
+		{Name: "DIVERGE_MCP_URL", Value: "http://diverge-server.diverge-system.svc:8080/mcp"},
+		{Name: "DIVERGE_METER_URL", Value: "http://diverge-server.diverge-system.svc:8080/api/v1/agenttask/meter"},
+	}
+	if guidance := strings.TrimSpace(task.Annotations["divergedev.com/guidance"]); guidance != "" {
+		containerEnv = append(containerEnv, corev1.EnvVar{Name: "DIVERGE_GUIDANCE", Value: guidance})
+	}
+
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,
@@ -110,19 +127,7 @@ func (p *PodSandboxProvider) Provision(ctx context.Context, task *v1alpha1.Agent
 				{
 					Name:  "agent",
 					Image: image,
-					Env: []corev1.EnvVar{
-						{Name: "DIVERGE_TASK_NAME", Value: task.Name},
-						{Name: "DIVERGE_TASK_NAMESPACE", Value: task.Namespace},
-						{Name: "DIVERGE_OBJECTIVE", Value: task.Spec.Objective},
-						{Name: "DIVERGE_REPO_URL", Value: task.Spec.Repository.URL},
-						{Name: "DIVERGE_BASE_BRANCH", Value: baseBranch},
-						{Name: "DIVERGE_WORKING_BRANCH", Value: task.Spec.Repository.WorkingBranch},
-						{Name: "DIVERGE_BUDGET_USD", Value: task.Spec.BudgetUSD},
-						{Name: "DIVERGE_MAX_ITERATIONS", Value: strconv.Itoa(int(task.Spec.MaxIterations))},
-						{Name: "DIVERGE_TOKEN_FILE", Value: "/etc/diverge/token/token"},
-						{Name: "DIVERGE_MCP_URL", Value: "http://diverge-server.diverge-system.svc:8080/mcp"},
-						{Name: "DIVERGE_METER_URL", Value: "http://diverge-server.diverge-system.svc:8080/api/v1/agenttask/meter"},
-					},
+					Env:   containerEnv,
 					Resources: corev1.ResourceRequirements{
 						Requests: corev1.ResourceList{
 							corev1.ResourceCPU:    resource.MustParse("500m"),

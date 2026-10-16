@@ -276,6 +276,10 @@ func BuildSandboxClaimSpec(task *v1alpha1.AgentTask) map[string]interface{} {
 		map[string]interface{}{"name": "DIVERGE_TOKEN_FILE", "value": "/etc/diverge/token/token"},
 	}
 
+	if guidance := strings.TrimSpace(task.Annotations["divergedev.com/guidance"]); guidance != "" {
+		envVars = append(envVars, map[string]interface{}{"name": "DIVERGE_GUIDANCE", "value": guidance})
+	}
+
 	// Standalone pod template fallback with explicit resource bounds, ephemeral disk limits,
 	// NetworkPolicy isolation labels, and non-root security context.
 	spec["template"] = map[string]interface{}{

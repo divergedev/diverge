@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/stretchr/testify/assert"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -527,4 +528,59 @@ func TestGitLabWebhookNoteAuthorization(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGitLabWebhookNoteWithCommenterFeedback(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = divergeiov1alpha1.AddToScheme(scheme)
+	fakeK8s := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	commenter := &testMockCommenter{}
+	handler := &GitLabWebhookHandler{
+		Client:       fakeK8s,
+		Config:       WebhookConfig{SecretToken: "secret"},
+		Commenter:    commenter,
+		AllowedUsers: []string{"developer"},
+		DefaultNS:    "preview",
+	}
+
+	body := `{
+		"object_kind": "note",
+		"user": {"id": 1, "username": "developer"},
+		"object_attributes": {
+			"iid": 99,
+			"note": "/diverge status",
+			"noteable_type": "MergeRequest"
+		},
+		"merge_request": {
+			"iid": 99,
+			"source_branch": "feat/api"
+		},
+		"project": {
+			"path_with_namespace": "team/payments-api",
+			"git_http_url": "https://gitlab.com/team/payments-api.git"
+		}
+	}`
+
+	req, _ := http.NewRequest(http.MethodPost, "/", bytes.NewBufferString(body))
+	req.Header.Set("X-Gitlab-Token", "secret")
+	req.Header.Set("X-Gitlab-Event", "Note Hook")
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Expected 200, got %d", rr.Code)
+	}
+
+	if commenter.postedProject != "team/payments-api" {
+		t.Errorf("Expected project team/payments-api, got %s", commenter.postedProject)
+	}
+	if commenter.postedMRID != 99 {
+		t.Errorf("Expected MR ID 99, got %d", commenter.postedMRID)
+	}
+	if len(commenter.postedComments) != 1 {
+		t.Fatalf("Expected 1 feedback comment posted, got %d", len(commenter.postedComments))
+	}
+	assert.Contains(t, commenter.postedComments[0], "No active agent tasks or preview environments found")
 }
