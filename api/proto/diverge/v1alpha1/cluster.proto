@@ -8,7 +8,9 @@ service ClusterService {
   rpc GetClusterInfo(GetClusterInfoRequest) returns (GetClusterInfoResponse);
 }
 
-message GetClusterInfoRequest {}
+message GetClusterInfoRequest {
+  string namespace = 1;
+}
 
 message NamespaceQuotaInfo {
   int32 max_active_environments = 1;

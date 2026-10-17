@@ -290,13 +290,14 @@ assertions, response substring checks, and optional baseline parity comparisons.
 				if os.Getenv("GITHUB_ACTIONS") == "true" {
 					for _, c := range report.Checks {
 						if !c.Passed {
-							_, _ = fmt.Fprintf(out, "::error title=Diverge Verify (%s)::%s\n", c.Name, c.Message)
+							title := escapeGHAProperty(fmt.Sprintf("Diverge Verify (%s)", c.Name))
+							_, _ = fmt.Fprintf(out, "::error title=%s::%s\n", title, escapeGHAData(c.Message))
 						}
 					}
 				}
 			}
 
-			if opts.githubSummary || os.Getenv("GITHUB_STEP_SUMMARY") != "" {
+			if opts.githubSummary {
 				if summaryPath := strings.TrimSpace(os.Getenv("GITHUB_STEP_SUMMARY")); summaryPath != "" {
 					f, err := os.OpenFile(summaryPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 					if err != nil {
@@ -304,7 +305,7 @@ assertions, response substring checks, and optional baseline parity comparisons.
 					}
 					renderVerifyMarkdown(f, *report)
 					_ = f.Close()
-				} else if opts.githubSummary && !opts.outputJSON {
+				} else if !opts.outputJSON {
 					_, _ = fmt.Fprintln(out)
 					renderVerifyMarkdown(out, *report)
 				}
@@ -336,6 +337,16 @@ assertions, response substring checks, and optional baseline parity comparisons.
 	cmd.Flags().BoolVar(&opts.githubSummary, "github-summary", false, "Write a Markdown verification scorecard to $GITHUB_STEP_SUMMARY (or stdout if unset)")
 
 	return cmd
+}
+
+func escapeGHAData(s string) string {
+	r := strings.NewReplacer("%", "%25", "\r", "%0D", "\n", "%0A")
+	return r.Replace(s)
+}
+
+func escapeGHAProperty(s string) string {
+	r := strings.NewReplacer("%", "%25", "\r", "%0D", "\n", "%0A", ":", "%3A", ",", "%2C")
+	return r.Replace(s)
 }
 
 func renderVerifyTable(out io.Writer, report *VerifyReport, passedCount, failedCount int) {

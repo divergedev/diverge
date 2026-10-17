@@ -340,9 +340,9 @@ func TestPostEnvironmentReadyRichCommentAndCustomHeaderValue(t *testing.T) {
 	require.NoError(t, notifier.PostEnvironmentReady(context.Background(), env))
 	assert.Equal(t, 777, env.Status.CommentID)
 
-	// Custom HeaderValue rendered in Magic Preview Link and curl -H
+	// Custom HeaderValue rendered in Magic Preview Link and single-quoted curl -H
 	assert.Contains(t, postedBody, "https://preview.example.com?_diverge_env=custom-val-42")
-	assert.Contains(t, postedBody, `curl -H "x-custom-preview: custom-val-42" https://preview.example.com`)
+	assert.Contains(t, postedBody, "curl -H 'x-custom-preview: custom-val-42' https://preview.example.com")
 	assert.Contains(t, postedBody, "`x-custom-preview: custom-val-42`")
 
 	// Rich table summaries
@@ -362,6 +362,11 @@ func TestPostEnvironmentReadyRichCommentAndCustomHeaderValue(t *testing.T) {
 	// Copy-paste CLI commands
 	assert.Contains(t, postedBody, "diverge verify pr-42 --compare-baseline")
 	assert.Contains(t, postedBody, "diverge open pr-42 --magic")
+
+	// Malicious HeaderValue with shell metacharacters is safely escaped inside single quotes
+	env.Spec.Routing.HeaderValue = "$(touch /tmp/pwned)'\""
+	require.NoError(t, notifier.PostEnvironmentReady(context.Background(), env))
+	assert.Contains(t, postedBody, `curl -H 'x-custom-preview: $(touch /tmp/pwned)'\''"' https://preview.example.com`)
 }
 
 func TestGitHubNotifierUpdateEnvironmentStatusUpdatesInPlace(t *testing.T) {

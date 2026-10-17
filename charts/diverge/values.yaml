@@ -87,9 +87,12 @@ async:
   storage:
     endpoint: ""
     bucket: ""
+    region: ""
     secretName: ""
     accessKeyKey: "access-key"
     secretKeyKey: "secret-key"
+    gcsTokenSecretName: ""
+    gcsTokenSecretKey: "token"
 
 serviceAccount:
   create: true

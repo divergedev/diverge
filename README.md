@@ -56,7 +56,7 @@ Documentation: [https://divergedev.com](https://divergedev.com)
 You can quickly test Diverge locally with the CLI:
 
 ```bash
-diverge dev --service my-app
+diverge preview create --name pr-42 --branch feat/my-change --service my-app=ghcr.io/my-org/my-app:pr-42
 diverge verify pr-42 --compare-baseline
 diverge top --once
 ```

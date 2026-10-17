@@ -15,7 +15,7 @@ export default function EnvironmentList() {
   const [search, setSearch] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
   const { data, isLoading } = useListEnvironments({ namespace })
-  const { data: clusterInfo } = useGetClusterInfo()
+  const { data: clusterInfo } = useGetClusterInfo(namespace)
   useWatchEnvironments(namespace)
 
   const environments = data?.environments ?? []
@@ -35,8 +35,16 @@ export default function EnvironmentList() {
   const hasAnyQuota = hasCostQuota || hasActiveQuota || hasCnpgQuota
   const quotaPolicy = quota?.quotaExceedPolicy || 'hibernate-oldest'
   const cnpgCount = environments.filter((e) => {
-    const mode = (e.spec?.database?.mode || e.status?.databaseProvider || '').toLowerCase()
-    return mode === 'cnpg' || mode === 'fresh' || mode === 'snapshot'
+    const metadataAnnotations = (e as { metadata?: { annotations?: Record<string, string> } }).metadata?.annotations
+    return [
+      e.spec?.database?.mode,
+      e.annotations?.['divergedev.com/database-provider'],
+      metadataAnnotations?.['divergedev.com/database-provider'],
+      e.status?.databaseProvider,
+    ].some((val) => {
+      const normalized = (val ?? '').trim().toLowerCase()
+      return normalized === 'cnpg' || normalized === 'fresh' || normalized === 'snapshot'
+    })
   }).length
 
   return (

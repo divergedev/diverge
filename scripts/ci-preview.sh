@@ -99,9 +99,12 @@ extract_config_services() {
 
 run_verify() {
   local preview_name="$1"
+  local header_val="${INPUT_HEADER_VALUE:-$preview_name}"
   local -a verify_args=(
     verify "$preview_name"
     -n "$NAMESPACE"
+    --header-key "$INPUT_HEADER_KEY"
+    --header-value "$header_val"
     --path "${INPUT_VERIFY_PATH:-/}"
     --max-latency "${INPUT_VERIFY_MAX_LATENCY:-5s}"
   )
@@ -213,7 +216,7 @@ case "$INPUT_ACTION" in
 
     "$DIVERGE_BIN" "${CREATE_ARGS[@]}"
 
-    if [[ "$INPUT_WAIT" == "true" && "$INPUT_DRY_RUN" != "true" ]]; then
+    if [[ ( "$INPUT_WAIT" == "true" || "$INPUT_VERIFY" == "true" ) && "$INPUT_DRY_RUN" != "true" ]]; then
       if ! "$KUBECTL_BIN" wait -n "$INPUT_NAMESPACE" --for=condition=Ready "previewgroup/$PREVIEW_NAME" --timeout="$INPUT_WAIT_TIMEOUT"; then
         "$DIVERGE_BIN" doctor "$PREVIEW_NAME" -n "$NAMESPACE" || true
         exit 1

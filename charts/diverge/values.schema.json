@@ -197,9 +197,12 @@
           "properties": {
             "endpoint": { "type": "string" },
             "bucket": { "type": "string" },
+            "region": { "type": "string" },
             "secretName": { "type": "string" },
             "accessKeyKey": { "type": "string" },
-            "secretKeyKey": { "type": "string" }
+            "secretKeyKey": { "type": "string" },
+            "gcsTokenSecretName": { "type": "string" },
+            "gcsTokenSecretKey": { "type": "string" }
           }
         }
       }

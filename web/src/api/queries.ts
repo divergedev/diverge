@@ -51,10 +51,10 @@ export function useGetPreviewGroup(namespace: string, name: string) {
   })
 }
 
-export function useGetClusterInfo() {
+export function useGetClusterInfo(namespace?: string) {
   return useQuery({
-    queryKey: queryKeys.clusterInfo,
-    queryFn: () => clusterClient.getClusterInfo({}),
+    queryKey: [...queryKeys.clusterInfo, namespace ?? ''] as const,
+    queryFn: () => clusterClient.getClusterInfo({ namespace: namespace ?? '' }),
   })
 }
 

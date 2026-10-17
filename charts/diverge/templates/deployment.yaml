@@ -119,6 +119,10 @@ spec:
         - name: DIVERGE_STORAGE_BUCKET
           value: {{ .Values.async.storage.bucket | quote }}
         {{- end }}
+        {{- if .Values.async.storage.region }}
+        - name: DIVERGE_STORAGE_REGION
+          value: {{ .Values.async.storage.region | quote }}
+        {{- end }}
         {{- if .Values.async.storage.secretName }}
         - name: DIVERGE_STORAGE_ACCESS_KEY
           valueFrom:
@@ -130,6 +134,13 @@ spec:
             secretKeyRef:
               name: {{ .Values.async.storage.secretName }}
               key: {{ .Values.async.storage.secretKeyKey | default "secret-key" }}
+        {{- end }}
+        {{- if .Values.async.storage.gcsTokenSecretName }}
+        - name: DIVERGE_GCS_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.async.storage.gcsTokenSecretName }}
+              key: {{ .Values.async.storage.gcsTokenSecretKey | default "token" }}
         {{- end }}
         {{- end }}
         {{- if .Values.observability.otel.enabled }}

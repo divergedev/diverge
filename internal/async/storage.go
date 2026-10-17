@@ -382,6 +382,15 @@ type s3DeleteRequest struct {
 	Objects []s3ObjectIdentifier `xml:"Object"`
 }
 
+type s3DeleteResult struct {
+	XMLName xml.Name `xml:"DeleteResult"`
+	Errors  []struct {
+		Key     string `xml:"Key"`
+		Code    string `xml:"Code"`
+		Message string `xml:"Message"`
+	} `xml:"Error"`
+}
+
 func (s *StorageProvisioner) teardownS3(ctx context.Context, endpoint, bucket, prefix string) error {
 	baseEndpoint := strings.TrimRight(endpoint, "/")
 	client := s.httpClient()
@@ -486,6 +495,13 @@ func (s *StorageProvisioner) deleteS3Batch(ctx context.Context, client *http.Cli
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("s3 batch delete returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	if len(bytes.TrimSpace(body)) > 0 {
+		var delResult s3DeleteResult
+		if err := xml.Unmarshal(body, &delResult); err == nil && len(delResult.Errors) > 0 {
+			first := delResult.Errors[0]
+			return fmt.Errorf("s3 batch delete failed for %d object(s) (first key %q: %s - %s)", len(delResult.Errors), first.Key, first.Code, first.Message)
+		}
 	}
 	return nil
 }

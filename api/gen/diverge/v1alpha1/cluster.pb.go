@@ -23,6 +23,7 @@ const (
 
 type GetClusterInfoRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
+	Namespace     string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -55,6 +56,13 @@ func (x *GetClusterInfoRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use GetClusterInfoRequest.ProtoReflect.Descriptor instead.
 func (*GetClusterInfoRequest) Descriptor() ([]byte, []int) {
 	return file_diverge_v1alpha1_cluster_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *GetClusterInfoRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
 }
 
 type NamespaceQuotaInfo struct {
@@ -213,8 +221,9 @@ var File_diverge_v1alpha1_cluster_proto protoreflect.FileDescriptor
 
 const file_diverge_v1alpha1_cluster_proto_rawDesc = "" +
 	"\n" +
-	"\x1ediverge/v1alpha1/cluster.proto\x12\x10diverge.v1alpha1\"\x17\n" +
-	"\x15GetClusterInfoRequest\"\xd7\x01\n" +
+	"\x1ediverge/v1alpha1/cluster.proto\x12\x10diverge.v1alpha1\"5\n" +
+	"\x15GetClusterInfoRequest\x12\x1c\n" +
+	"\tnamespace\x18\x01 \x01(\tR\tnamespace\"\xd7\x01\n" +
 	"\x12NamespaceQuotaInfo\x126\n" +
 	"\x17max_active_environments\x18\x01 \x01(\x05R\x15maxActiveEnvironments\x12*\n" +
 	"\x11max_cnpg_clusters\x18\x02 \x01(\x05R\x0fmaxCnpgClusters\x12-\n" +

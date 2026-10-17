@@ -283,40 +283,20 @@ func validateSafeConfigOutputPath(outputPath string) error {
 	return nil
 }
 
-func detectRepoStack(baseDir string) (hasPostgres bool, asyncRoutes []divergeiov1alpha1.AsyncRouteSpec) {
-	scanDirs := []string{baseDir}
-
-	entries, err := os.ReadDir(baseDir)
-	if err == nil {
-		for _, entry := range entries {
-			if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
-				continue
-			}
-			childDir := filepath.Join(baseDir, entry.Name())
-			scanDirs = append(scanDirs, childDir)
-			if entry.Name() == "services" || entry.Name() == "apps" {
-				subEntries, subErr := os.ReadDir(childDir)
-				if subErr == nil {
-					for _, sub := range subEntries {
-						if sub.IsDir() && !strings.HasPrefix(sub.Name(), ".") {
-							scanDirs = append(scanDirs, filepath.Join(childDir, sub.Name()))
-						}
-					}
-				}
-			}
-		}
-	}
-
+func detectDirStack(dirs ...string) (hasPostgres bool, asyncRoutes []divergeiov1alpha1.AsyncRouteSpec) {
 	var combined strings.Builder
-	for _, dir := range scanDirs {
+	for _, dir := range dirs {
 		if info, err := os.Stat(filepath.Join(dir, "atlas.hcl")); err == nil && !info.IsDir() {
 			hasPostgres = true
 		}
 		if info, err := os.Stat(filepath.Join(dir, "migrations")); err == nil && info.IsDir() {
 			hasPostgres = true
 		}
-		if info, err := os.Stat(filepath.Join(dir, "prisma", "schema.prisma")); err == nil && !info.IsDir() {
-			hasPostgres = true
+		if prismaBytes, err := os.ReadFile(filepath.Join(dir, "prisma", "schema.prisma")); err == nil {
+			lowerPrisma := strings.ToLower(string(prismaBytes))
+			if strings.Contains(lowerPrisma, "postgresql") || strings.Contains(lowerPrisma, "postgres") {
+				hasPostgres = true
+			}
 		}
 
 		for _, fileName := range []string{
@@ -347,7 +327,7 @@ func detectRepoStack(baseDir string) (hasPostgres bool, asyncRoutes []divergeiov
 		return false
 	}
 
-	if hasAny("pgx", `"pg"`, "psycopg", "asyncpg", "sqlalchemy", "prisma", "drizzle-orm", "postgres") {
+	if hasAny("pgx", `"pg"`, "psycopg", "asyncpg", "postgres", "@neondatabase/serverless", "pg-promise") {
 		hasPostgres = true
 	}
 
@@ -387,6 +367,48 @@ func detectRepoStack(baseDir string) (hasPostgres bool, asyncRoutes []divergeiov
 	return hasPostgres, asyncRoutes
 }
 
+func detectRepoStack(baseDir string) (hasPostgres bool, asyncRoutes []divergeiov1alpha1.AsyncRouteSpec) {
+	scanDirs := []string{baseDir}
+
+	entries, err := os.ReadDir(baseDir)
+	if err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+				continue
+			}
+			childDir := filepath.Join(baseDir, entry.Name())
+			scanDirs = append(scanDirs, childDir)
+			if entry.Name() == "services" || entry.Name() == "apps" || entry.Name() == "charts" {
+				subEntries, subErr := os.ReadDir(childDir)
+				if subErr == nil {
+					for _, sub := range subEntries {
+						if sub.IsDir() && !strings.HasPrefix(sub.Name(), ".") {
+							scanDirs = append(scanDirs, filepath.Join(childDir, sub.Name()))
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return detectDirStack(scanDirs...)
+}
+
+func detectServiceAsyncRoutes(baseDir string, svc discoveredService) []divergeiov1alpha1.AsyncRouteSpec {
+	var svcDirs []string
+	for _, parent := range []string{"services", "apps", "charts"} {
+		candidate := filepath.Join(baseDir, parent, svc.Name)
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			svcDirs = append(svcDirs, candidate)
+		}
+	}
+	if len(svcDirs) == 0 {
+		return nil
+	}
+	_, routes := detectDirStack(svcDirs...)
+	return routes
+}
+
 func runInitConfig(outputPath string, force bool) error {
 	return runInitConfigWithWriter(outputPath, force, nil)
 }
@@ -408,6 +430,16 @@ func runInitConfigWithWriter(outputPath string, force bool, errOut io.Writer) er
 	svcs := discoverServices(baseDir)
 	hasPostgres, asyncRoutes := detectRepoStack(baseDir)
 
+	perServiceRoutes := make([][]divergeiov1alpha1.AsyncRouteSpec, len(svcs))
+	hasServiceSpecificRoutes := false
+	for i, svc := range svcs {
+		routes := detectServiceAsyncRoutes(baseDir, svc)
+		if len(routes) > 0 {
+			hasServiceSpecificRoutes = true
+			perServiceRoutes[i] = routes
+		}
+	}
+
 	servicesDoc := struct {
 		Services map[string]starterServiceYAML `yaml:"services"`
 	}{
@@ -424,7 +456,11 @@ func runInitConfigWithWriter(outputPath string, force bool, errOut io.Writer) er
 		if svc.HelmPath != "" {
 			entry.Helm = &starterHelmYAML{Path: svc.HelmPath}
 		}
-		if i == 0 && len(asyncRoutes) > 0 {
+		if hasServiceSpecificRoutes {
+			if len(perServiceRoutes[i]) > 0 {
+				entry.AsyncRoutes = perServiceRoutes[i]
+			}
+		} else if i == 0 && len(asyncRoutes) > 0 {
 			entry.AsyncRoutes = asyncRoutes
 		}
 		servicesDoc.Services[svc.Name] = entry
@@ -467,6 +503,11 @@ func runInitConfigWithWriter(outputPath string, force bool, errOut io.Writer) er
 		return fmt.Errorf("failed to write %s: %w", outputPath, err)
 	}
 
+	out := errOut
+	if out == nil {
+		out = os.Stderr
+	}
+
 	if hasPostgres || len(asyncRoutes) > 0 {
 		var features []string
 		if hasPostgres {
@@ -479,17 +520,10 @@ func runInitConfigWithWriter(outputPath string, force bool, errOut io.Writer) er
 			}
 			features = append(features, fmt.Sprintf("async=[%s]", strings.Join(protos, " ")))
 		}
-		summaryLine := fmt.Sprintf("Auto-detected stack features: %s\n", strings.Join(features, ", "))
-		fmt.Fprint(os.Stderr, summaryLine)
-		if errOut != nil && errOut != os.Stderr {
-			_, _ = fmt.Fprint(errOut, summaryLine)
-		}
+		_, _ = fmt.Fprintf(out, "Auto-detected stack features: %s\n", strings.Join(features, ", "))
 	}
 
-	fmt.Fprintf(os.Stderr, "\033[32m✅ Generated starter configuration at %s\033[0m\n", outputPath)
-	if errOut != nil && errOut != os.Stderr {
-		_, _ = fmt.Fprintf(errOut, "\033[32m✅ Generated starter configuration at %s\033[0m\n", outputPath)
-	}
+	_, _ = fmt.Fprintf(out, "\033[32m✅ Generated starter configuration at %s\033[0m\n", outputPath)
 	return nil
 }
 

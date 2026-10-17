@@ -418,6 +418,7 @@ func TestVerifyCmd_GitHubStepSummaryAndAnnotations(t *testing.T) {
 			"--kubeconfig", "/nonexistent/kubeconfig",
 			"--base-url", srv.URL,
 			"--skip-doctor",
+			"--github-summary",
 		})
 
 		require.NoError(t, root.Execute())
@@ -512,7 +513,7 @@ func TestVerifyCmd_GitHubStepSummaryAndAnnotations(t *testing.T) {
 
 		output := out.String()
 		assert.Contains(t, output, "::error title=Diverge Verify (workload-diagnostics)::1 issue(s) detected")
-		assert.Contains(t, output, "::error title=Diverge Verify (http-status:/fail)::expected 2xx/3xx, got 500")
+		assert.Contains(t, output, "::error title=Diverge Verify (http-status%3A/fail)::expected 2xx/3xx, got 500")
 
 		summaryBytes, err := os.ReadFile(tmpSummary)
 		require.NoError(t, err)

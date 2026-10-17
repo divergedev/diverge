@@ -423,3 +423,53 @@ func TestStorageProvisioner_Teardown_GCSPaginationAndDelete(t *testing.T) {
 		assert.Equal(t, "Bearer ya29.test-token", auth)
 	}
 }
+
+func TestStorageProvisioner_TeardownS3BatchDeletePartialError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/shared-assets" && r.URL.Query().Get("list-type") == "2":
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult>
+	<IsTruncated>false</IsTruncated>
+	<Contents><Key>previews/pr-42/uploads/a.txt</Key></Contents>
+</ListBucketResult>`))
+
+		case r.Method == http.MethodPost && r.URL.Path == "/shared-assets" && r.URL.RawQuery == "delete":
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<DeleteResult>
+	<Error>
+		<Key>previews/pr-42/uploads/a.txt</Key>
+		<Code>AccessDenied</Code>
+		<Message>Access Denied</Message>
+	</Error>
+</DeleteResult>`))
+
+		default:
+			t.Errorf("unexpected request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	defer srv.Close()
+
+	p := &StorageProvisioner{
+		Provider:   "s3",
+		Endpoint:   srv.URL,
+		Bucket:     "shared-assets",
+		HTTPClient: srv.Client(),
+	}
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-42",
+			Namespace: "default",
+		},
+	}
+	route := v1alpha1.AsyncRouteSpec{Protocol: "s3", Target: "uploads"}
+
+	err := p.Teardown(context.Background(), env, route)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "s3 batch delete failed for 1 object(s)")
+	assert.Contains(t, err.Error(), "AccessDenied")
+}

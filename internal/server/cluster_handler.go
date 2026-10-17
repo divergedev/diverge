@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -81,12 +82,52 @@ func (s *ClusterService) GetClusterInfo(ctx context.Context, req *connect.Reques
 		return nil, SanitizeK8sError(s.logger, err)
 	}
 
+	nsSet := make(map[string]struct{})
+	for i := range envList.Items {
+		if ns := strings.TrimSpace(envList.Items[i].Namespace); ns != "" {
+			nsSet[ns] = struct{}{}
+		}
+	}
+	for i := range pgList.Items {
+		if ns := strings.TrimSpace(pgList.Items[i].Namespace); ns != "" {
+			nsSet[ns] = struct{}{}
+		}
+	}
+	namespaces := make([]string, 0, len(nsSet))
+	for ns := range nsSet {
+		namespaces = append(namespaces, ns)
+	}
+	sort.Strings(namespaces)
+
+	reqNS := ""
+	if req != nil && req.Msg != nil {
+		reqNS = strings.TrimSpace(req.Msg.GetNamespace())
+	}
+	var quota *pb.NamespaceQuotaInfo
+	if reqNS != "" {
+		quota = s.getNamespaceQuota(ctx, reqNS, apiTimeout)
+	} else {
+		quota = s.getNamespaceQuota(ctx, "default", apiTimeout)
+		if quota == nil {
+			for _, nsName := range namespaces {
+				if nsName == "" || nsName == "default" {
+					continue
+				}
+				if q := s.getNamespaceQuota(ctx, nsName, apiTimeout); q != nil {
+					quota = q
+					break
+				}
+			}
+		}
+	}
+
 	resp := &pb.GetClusterInfoResponse{
 		ControllerVersion: s.version,
 		ControllerHealthy: true,
 		EnvironmentCount:  int32(len(envList.Items)),
 		PreviewGroupCount: int32(len(pgList.Items)),
-		NamespaceQuota:    s.getNamespaceQuota(ctx, "default", apiTimeout),
+		Namespaces:        namespaces,
+		NamespaceQuota:    quota,
 	}
 
 	return connect.NewResponse(resp), nil
