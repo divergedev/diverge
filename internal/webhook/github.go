@@ -28,6 +28,7 @@ type GitHubWebhookHandler struct {
 	Client        client.Client
 	Config        WebhookConfig
 	ConfigFetcher ConfigFetcher
+	Commenter     CommentPoster
 	HTTPClient    *http.Client
 	DefaultNS     string
 	Dedup         *DeliveryDedup
@@ -247,27 +248,36 @@ func (h *GitHubWebhookHandler) handleIssueComment(ctx context.Context, w http.Re
 		branch = "main"
 	}
 
-	var execErr error
+	var (
+		execErr  error
+		feedback string
+	)
 	if cmd.Action == "fix" {
-		execErr = h.handleFixCommand(ctx, &payload, cmd, repoURL, branch, prNumber)
+		feedback, execErr = h.handleFixCommand(ctx, &payload, cmd, repoURL, branch, prNumber)
 	} else {
-		execErr = ExecuteSlashCommand(ctx, h.Client, h.DefaultNS, cmd, repoURL, branch, prNumber)
+		feedback, execErr = ExecuteSlashCommandWithFeedback(ctx, h.Client, h.DefaultNS, cmd, repoURL, branch, prNumber)
 	}
 	if execErr != nil {
 		logger.Error(execErr, "Failed to execute slash command", "action", cmd.Action, "pr", prNumber)
+		h.postFeedbackComment(ctx, payload.Repository.FullName, prNumber, fmt.Sprintf("❌ **Diverge Command Error**\n\nFailed to execute `/diverge %s`: %v\n\nRun `/diverge help` for a list of available commands.", cmd.Action, execErr))
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
+	}
+
+	if feedback != "" {
+		h.postFeedbackComment(ctx, payload.Repository.FullName, prNumber, feedback)
 	}
 
 	w.WriteHeader(http.StatusOK)
 }
 
-func (h *GitHubWebhookHandler) handleFixCommand(ctx context.Context, payload *GitHubIssueCommentPayload, cmd *SlashCommand, repoURL, branch string, prNumber int) error {
-	if err := ExecuteSlashCommand(ctx, h.Client, h.DefaultNS, cmd, repoURL, branch, prNumber); err != nil {
-		return err
+func (h *GitHubWebhookHandler) handleFixCommand(ctx context.Context, payload *GitHubIssueCommentPayload, cmd *SlashCommand, repoURL, branch string, prNumber int) (string, error) {
+	feedback, err := ExecuteSlashCommandWithFeedback(ctx, h.Client, h.DefaultNS, cmd, repoURL, branch, prNumber)
+	if err != nil {
+		return "", err
 	}
 	if h.Client == nil {
-		return nil
+		return feedback, nil
 	}
 	ns := h.DefaultNS
 	if ns == "" {
@@ -280,7 +290,7 @@ func (h *GitHubWebhookHandler) handleFixCommand(ctx context.Context, payload *Gi
 	taskName := buildCommandTaskName(effectiveRepoURL, prNumber, cmd.Objective)
 	var task v1alpha1.AgentTask
 	if err := h.Client.Get(ctx, client.ObjectKey{Name: taskName, Namespace: ns}, &task); err != nil {
-		return err
+		return feedback, err
 	}
 	if task.Annotations == nil {
 		task.Annotations = make(map[string]string)
@@ -293,7 +303,20 @@ func (h *GitHubWebhookHandler) handleFixCommand(ctx context.Context, payload *Gi
 		task.Annotations["divergedev.com/pr-number"] = strconv.Itoa(prNumber)
 	}
 	SetTraceparentAnnotation(&task, TraceparentFromContext(ctx))
-	return h.Client.Update(ctx, &task)
+	if err := h.Client.Update(ctx, &task); err != nil {
+		return feedback, err
+	}
+	return feedback, nil
+}
+
+func (h *GitHubWebhookHandler) postFeedbackComment(ctx context.Context, project string, prNumber int, body string) {
+	if h.Commenter == nil || project == "" || prNumber <= 0 || strings.TrimSpace(body) == "" {
+		return
+	}
+	logger := log.FromContext(ctx).WithName("github-webhook")
+	if _, err := h.Commenter.PostComment(ctx, project, prNumber, body); err != nil {
+		logger.Error(err, "Failed to post feedback comment to GitHub PR", "project", project, "pr", prNumber)
+	}
 }
 
 func (h *GitHubWebhookHandler) fetchGitHubPRHeadRef(ctx context.Context, prAPIURL string) string {

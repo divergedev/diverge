@@ -128,6 +128,7 @@ func TestLoadConfigFromEnv_DefaultsAndCustomValues(t *testing.T) {
 			"DIVERGE_MODEL":                  "claude-3-5-sonnet",
 			"DIVERGE_TOKENS_PER_ITERATION":   "4000",
 			"DIVERGE_COST_PER_ITERATION_USD": "0.12",
+			"DIVERGE_GUIDANCE":               "Avoid touching database migrations",
 		}
 		cfg, err := LoadConfigFromEnv(func(k string) string { return env[k] })
 		if err != nil {
@@ -147,7 +148,8 @@ func TestLoadConfigFromEnv_DefaultsAndCustomValues(t *testing.T) {
 			cfg.VerifyCommand != "go test ./..." ||
 			cfg.Model != "claude-3-5-sonnet" ||
 			cfg.TokensPerIteration != 4000 ||
-			cfg.CostPerIterationUSD != 0.12 {
+			cfg.CostPerIterationUSD != 0.12 ||
+			cfg.Guidance != "Avoid touching database migrations" {
 			t.Fatalf("unexpected custom config: %+v", cfg)
 		}
 	})

@@ -227,11 +227,20 @@ When `spec.repository.url` is set on an `AgentTask`, `diverge-controller` automa
 
 ---
 
-## 9. PR / MR Slash Commands
+## 9. PR / MR Slash Commands & Bot Interaction
 
-You can trigger and control `AgentTask` workflows directly from GitHub PR or GitLab MR comments:
+You can interactively trigger, steer, inspect, and control `AgentTask` workflows directly from GitHub PR or GitLab MR comments:
 
-- `/diverge fix <objective>` — Spawns or updates an `AgentTask` for the PR/MR branch with the specified objective.
+- `/diverge guide <hint>` — Steers active agent execution with runtime guidance (injected as `DIVERGE_GUIDANCE` into the sandbox container).
+- `/diverge resume [+$budget] [tokens]` — Resumes a paused `AgentTask` with optional additive budget bumps (e.g. `/diverge resume +$10.00 50000`).
+- `/diverge budget [+$budget] [tokens]` — Adjusts budget caps directly without changing task suspension state.
 - `/diverge pause` — Pauses the active `AgentTask` associated with the PR/MR (`spec.suspended = true`).
-- `/diverge resume` — Resumes a paused `AgentTask` associated with the PR/MR (`spec.suspended = false`).
+- `/diverge status` — Posts an immediate Markdown status table summarizing all active agent tasks and linked preview environments.
+- `/diverge help` — Displays the interactive slash command reference table.
+- `/diverge fix <objective>` — Spawns or updates an `AgentTask` for the PR/MR branch with the specified objective.
+- `/diverge preview` — Provisions or updates the linked preview environment.
+- `/diverge teardown` — Tears down preview environments for the PR/MR.
+- `/diverge extend-ttl [duration]` — Extends the preview environment's TTL.
+
+All commands post interactive Markdown confirmation replies back to the PR or MR comment thread.
 

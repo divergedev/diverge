@@ -357,16 +357,19 @@ func main() {
 	webhookConfig := webhook.WebhookConfig{SecretToken: webhookSecretToken}
 
 	var glConfigFetcher webhook.ConfigFetcher
+	var glCommenter webhook.CommentPoster
 	if notifierProvider == "gitlab" && notifierToken != "" {
 		glConfigFetcher = &webhook.GitLabConfigFetcher{
 			Token:      notifierToken,
 			HTTPClient: &http.Client{Timeout: 15 * time.Second},
 		}
+		glCommenter = notifier.NewGitLabNotifier(firstNonEmpty(os.Getenv("DIVERGE_BASE_URL"), os.Getenv("GITLAB_API_URL")), notifierToken)
 	}
 	mgr.GetWebhookServer().Register("/gitlab-webhook", &webhook.GitLabWebhookHandler{
 		Client:        mgr.GetClient(),
 		Config:        webhookConfig,
 		ConfigFetcher: glConfigFetcher,
+		Commenter:     glCommenter,
 		DefaultNS:     defaultNamespace,
 	})
 
@@ -379,16 +382,19 @@ func main() {
 	}
 
 	var ghConfigFetcher webhook.ConfigFetcher
+	var ghCommenter webhook.CommentPoster
 	if notifierProvider == "github" && notifierToken != "" {
 		ghConfigFetcher = &webhook.GitHubConfigFetcher{
 			Token:      notifierToken,
 			HTTPClient: &http.Client{Timeout: 15 * time.Second},
 		}
+		ghCommenter = notifier.NewGitHubNotifier(firstNonEmpty(os.Getenv("DIVERGE_BASE_URL"), os.Getenv("GITHUB_API_URL")), notifierToken)
 	}
 	mgr.GetWebhookServer().Register("/github-webhook", &webhook.GitHubWebhookHandler{
 		Client:        mgr.GetClient(),
 		Config:        webhookConfig,
 		ConfigFetcher: ghConfigFetcher,
+		Commenter:     ghCommenter,
 		DefaultNS:     defaultNamespace,
 	})
 

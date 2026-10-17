@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/stretchr/testify/assert"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -527,4 +528,71 @@ func TestGitHubWebhookIssueCommentAuthorization(t *testing.T) {
 			}
 		})
 	}
+}
+
+type testMockCommenter struct {
+	postedComments []string
+	postedProject  string
+	postedMRID     int
+}
+
+func (m *testMockCommenter) PostComment(_ context.Context, project string, mrID int, body string) (int64, error) {
+	m.postedProject = project
+	m.postedMRID = mrID
+	m.postedComments = append(m.postedComments, body)
+	return int64(len(m.postedComments)), nil
+}
+
+func TestGitHubWebhookIssueCommentWithCommenterFeedback(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = divergeiov1alpha1.AddToScheme(scheme)
+	fakeK8s := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	commenter := &testMockCommenter{}
+	handler := &GitHubWebhookHandler{
+		Client:    fakeK8s,
+		Config:    WebhookConfig{SecretToken: "secret"},
+		Commenter: commenter,
+		DefaultNS: "preview",
+	}
+
+	body := `{
+		"action": "created",
+		"issue": {
+			"number": 88,
+			"pull_request": {"url": "https://api.github.com/repos/divergedev/demo-api/pulls/88"}
+		},
+		"comment": {
+			"body": "/diverge guide Avoid mutating shared pointers",
+			"author_association": "COLLABORATOR"
+		},
+		"repository": {
+			"full_name": "divergedev/demo-api",
+			"clone_url": "https://github.com/divergedev/demo-api.git",
+			"default_branch": "main"
+		}
+	}`
+	sig := generateSignature("secret", body)
+
+	req, _ := http.NewRequest(http.MethodPost, "/", bytes.NewBufferString(body))
+	req.Header.Set("X-Hub-Signature-256", sig)
+	req.Header.Set("X-GitHub-Event", "issue_comment")
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Expected 200, got %d", rr.Code)
+	}
+
+	if commenter.postedProject != "divergedev/demo-api" {
+		t.Errorf("Expected project divergedev/demo-api, got %s", commenter.postedProject)
+	}
+	if commenter.postedMRID != 88 {
+		t.Errorf("Expected MR/PR 88, got %d", commenter.postedMRID)
+	}
+	if len(commenter.postedComments) != 1 {
+		t.Fatalf("Expected 1 feedback comment posted, got %d", len(commenter.postedComments))
+	}
+	assert.Contains(t, commenter.postedComments[0], "No active agent task found")
 }

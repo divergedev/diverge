@@ -28,6 +28,7 @@ type GitLabWebhookHandler struct {
 	Client        client.Client
 	Config        WebhookConfig
 	ConfigFetcher ConfigFetcher
+	Commenter     CommentPoster
 	AllowedUsers  []string
 	DefaultNS     string
 	Dedup         *DeliveryDedup
@@ -245,27 +246,36 @@ func (h *GitLabWebhookHandler) handleNoteEvent(ctx context.Context, w http.Respo
 		branch = "main"
 	}
 
-	var execErr error
+	var (
+		execErr  error
+		feedback string
+	)
 	if cmd.Action == "fix" {
-		execErr = h.handleFixCommand(ctx, &payload, cmd, repoURL, branch, mrIID)
+		feedback, execErr = h.handleFixCommand(ctx, &payload, cmd, repoURL, branch, mrIID)
 	} else {
-		execErr = ExecuteSlashCommand(ctx, h.Client, h.DefaultNS, cmd, repoURL, branch, mrIID)
+		feedback, execErr = ExecuteSlashCommandWithFeedback(ctx, h.Client, h.DefaultNS, cmd, repoURL, branch, mrIID)
 	}
 	if execErr != nil {
 		logger.Error(execErr, "Failed to execute GitLab slash command", "action", cmd.Action, "mr", mrIID)
+		h.postFeedbackComment(ctx, payload.Project.PathWithNamespace, mrIID, fmt.Sprintf("❌ **Diverge Command Error**\n\nFailed to execute `/diverge %s`: %v\n\nRun `/diverge help` for a list of available commands.", cmd.Action, execErr))
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
+	}
+
+	if feedback != "" {
+		h.postFeedbackComment(ctx, payload.Project.PathWithNamespace, mrIID, feedback)
 	}
 
 	w.WriteHeader(http.StatusOK)
 }
 
-func (h *GitLabWebhookHandler) handleFixCommand(ctx context.Context, payload *GitLabNotePayload, cmd *SlashCommand, repoURL, branch string, mrIID int) error {
-	if err := ExecuteSlashCommand(ctx, h.Client, h.DefaultNS, cmd, repoURL, branch, mrIID); err != nil {
-		return err
+func (h *GitLabWebhookHandler) handleFixCommand(ctx context.Context, payload *GitLabNotePayload, cmd *SlashCommand, repoURL, branch string, mrIID int) (string, error) {
+	feedback, err := ExecuteSlashCommandWithFeedback(ctx, h.Client, h.DefaultNS, cmd, repoURL, branch, mrIID)
+	if err != nil {
+		return "", err
 	}
 	if h.Client == nil {
-		return nil
+		return feedback, nil
 	}
 	ns := h.DefaultNS
 	if ns == "" {
@@ -278,7 +288,7 @@ func (h *GitLabWebhookHandler) handleFixCommand(ctx context.Context, payload *Gi
 	taskName := buildCommandTaskName(effectiveRepoURL, mrIID, cmd.Objective)
 	var task v1alpha1.AgentTask
 	if err := h.Client.Get(ctx, client.ObjectKey{Name: taskName, Namespace: ns}, &task); err != nil {
-		return err
+		return feedback, err
 	}
 	if task.Annotations == nil {
 		task.Annotations = make(map[string]string)
@@ -293,7 +303,20 @@ func (h *GitLabWebhookHandler) handleFixCommand(ctx context.Context, payload *Gi
 		task.Annotations["divergedev.com/pr-number"] = mrStr
 	}
 	SetTraceparentAnnotation(&task, TraceparentFromContext(ctx))
-	return h.Client.Update(ctx, &task)
+	if err := h.Client.Update(ctx, &task); err != nil {
+		return feedback, err
+	}
+	return feedback, nil
+}
+
+func (h *GitLabWebhookHandler) postFeedbackComment(ctx context.Context, project string, mrIID int, body string) {
+	if h.Commenter == nil || project == "" || mrIID <= 0 || strings.TrimSpace(body) == "" {
+		return
+	}
+	logger := log.FromContext(ctx).WithName("gitlab-webhook")
+	if _, err := h.Commenter.PostComment(ctx, project, mrIID, body); err != nil {
+		logger.Error(err, "Failed to post feedback comment to GitLab MR", "project", project, "mr", mrIID)
+	}
 }
 
 func (h *GitLabWebhookHandler) reconcileEnvironment(ctx context.Context, payload *GitLabMRPayload) error {

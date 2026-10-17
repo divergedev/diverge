@@ -5,6 +5,7 @@
 # --- Type-only / interface files (no logic to test) ---
 internal/argocd/types.go
 internal/events/recorder.go
+internal/webhook/commenter.go
 pkg/auth/auth.go
 pkg/auth/models.go
 pkg/database/provider.go

@@ -267,7 +267,12 @@ func FormatAgentTaskComment(task *v1alpha1.AgentTask, phaseBadge, reason string)
 	if strings.TrimSpace(task.Status.PRURL) != "" {
 		fmt.Fprintf(&b, "| **Pull Request** | %s |\n", sanitizeMarkdown(task.Status.PRURL))
 	}
-	b.WriteString("\n💡 *Commands: `/diverge pause`, `/diverge resume`, or `/diverge fix <new objective>`*")
+	if task.Annotations != nil {
+		if guidance := strings.TrimSpace(task.Annotations["divergedev.com/guidance"]); guidance != "" {
+			fmt.Fprintf(&b, "| **Guidance** | %s |\n", sanitizeMarkdown(guidance))
+		}
+	}
+	b.WriteString("\n💡 *Commands: `/diverge guide <hint>`, `/diverge resume [+$budget]`, `/diverge pause`, `/diverge status`, or `/diverge help`*")
 	return b.String()
 }
 

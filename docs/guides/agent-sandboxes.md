@@ -214,21 +214,49 @@ When `spec.repository.url` is set on an `AgentTask` (and `divergedev.com/preview
 
 ---
 
-## 7. Triggering & Controlling `AgentTask` from PR / MR Comments
+## 7. Bidirectional SCM Bot Interaction & PR / MR Slash Commands
 
-Collaborators (`OWNER`, `MEMBER`, or `COLLABORATOR`) can spawn and control `AgentTask` resources directly from GitHub Pull Request and GitLab Merge Request comments:
+Diverge provides an interactive bidirectional bot for GitHub Pull Requests and GitLab Merge Requests. Collaborators (`OWNER`, `MEMBER`, or `COLLABORATOR` on GitHub; authorized users in GitLab) can trigger, steer, inspect, and fund `AgentTask` resources directly from comments using `/diverge` slash commands:
 
-- `/diverge fix <objective>` — Creates or updates an `AgentTask` scoped to the PR/MR branch with the given objective.
-- `/diverge pause` — Suspends active `AgentTask` execution for the PR/MR (`spec.suspended = true`).
-- `/diverge resume` — Resumes a paused `AgentTask` for the PR/MR (`spec.suspended = false`).
+### Available Slash Commands
+
+| Command | Syntax | Operational Behavior |
+| :--- | :--- | :--- |
+| **Guide** | `/diverge guide <hint>` | Steers active agent execution with runtime guidance (e.g. `/diverge guide Focus on checkout handler, do not touch database migrations`). Injected as `DIVERGE_GUIDANCE` into the agent sandbox container. |
+| **Resume & Fund** | `/diverge resume [+$budget] [tokens]` | Un-suspends a paused `AgentTask` (`spec.suspended = false`) with optional additive budget bumps (e.g. `/diverge resume +$15.00 50000`). |
+| **Budget** | `/diverge budget [+$budget] [tokens]` | Adjusts budget and token caps directly without altering task suspension state. |
+| **Pause** | `/diverge pause` | Suspends active `AgentTask` execution (`spec.suspended = true`), halts compute, and preserves accumulated work. |
+| **Status** | `/diverge status` | Posts an immediate Markdown status table summarizing all active agent tasks, phases, working branches, LLM costs, and linked preview environment URLs. |
+| **Help** | `/diverge help` | Posts a quick-reference guide of all available interactive slash commands. |
+| **Fix** | `/diverge fix <objective>` | Spawns or updates an autonomous `AgentTask` scoped to the PR/MR branch with the specified objective. |
+| **Preview** | `/diverge preview` | Explicitly provisions or updates the linked preview environment for the PR/MR. |
+| **Teardown** | `/diverge teardown` | Tears down preview environments and restores resources. |
+| **Extend TTL** | `/diverge extend-ttl [duration]` | Extends preview environment lifetime (e.g. `/diverge extend-ttl 4h`). |
+
+### Interactive Bot Feedback Comments (`CommentPoster`)
+
+Whenever a collaborator posts a `/diverge` slash command, the webhook handler (`GitHubWebhookHandler` or `GitLabWebhookHandler`) processes the command and immediately posts a formatted Markdown comment reply to the PR/MR:
+- **Success Acknowledgment**: Confirms the command execution, updated budgets, applied guidance, or rendered status table.
+- **Actionable Errors**: Informs the user when no active task matches the PR/MR, syntax is invalid, or permissions are insufficient.
+- **Fail-Safe Delivery**: Feedback comments are delivered asynchronously using the configured SCM notifier credentials (`DIVERGE_NOTIFIER_TOKEN`, `GITHUB_TOKEN`, `DIVERGE_GITLAB_TOKEN`, or `GITLAB_TOKEN`). If credentials are not configured, command execution continues uninterrupted.
+
+### Runtime Guidance Injection (`DIVERGE_GUIDANCE`)
+
+When `/diverge guide <hint>` is executed:
+1. The webhook handler stamps `divergedev.com/guidance: "<hint>"` and `divergedev.com/guidance-timestamp: "<ISO8601>"` annotations onto the matching `AgentTask`.
+2. Both `PodSandboxProvider` and `AgentSandboxProvider` inject `DIVERGE_GUIDANCE` into the sandbox container environment variables.
+3. The reference agent runner (`cmd/agent-runner`) reads `DIVERGE_GUIDANCE` from the environment and injects it into agent sub-processes (`DIVERGE_AGENT_CMD`).
+4. The SCM status comment automatically adds a **Guidance** row to the PR/MR status table so reviewers can see current steering directives.
 
 ### Automatic PR / MR Status Comments (`SCMTaskNotifier`)
 
 When `notifierProvider` (`github` or `gitlab`) is configured on `diverge-controller` (along with the corresponding SCM credentials via `DIVERGE_NOTIFIER_TOKEN`, `GITHUB_TOKEN`, `DIVERGE_GITLAB_TOKEN`, or `GITLAB_TOKEN`), `AgentTaskReconciler` automatically initializes an `SCMTaskNotifier` (`internal/notifier/task_notifier.go`) that posts and idempotently updates a sticky comment (`<!-- diverge-agent-task -->`) on the associated Pull Request or Merge Request whenever the `AgentTask` transitions across `Provisioning`, `Active`, `Paused`, `Completed`, or `Failed` phases. `/diverge fix` webhook handlers automatically attach `divergedev.com/provider`, `divergedev.com/project`, and `divergedev.com/pr-number` (or `divergedev.com/mr-iid`) annotations onto created `AgentTask` resources. The comment includes:
 - Current phase badge (`🚀 Running` for `Provisioning` and `Active`, `⏸️ Paused`, `✅ Completed`, `❌ Failed`)
 - Task objective and working branch
+- Active runtime guidance (when `/diverge guide` has been set)
 - One-click **Magic Link** (`?_diverge_env=`) to open the agent's linked preview environment and an **Exit Preview** (`?_diverge_env=clear`) link
 - Live cumulative LLM token and USD spend (`status.tokensConsumed` / `status.costUSD`)
+- Quick-reference footer with interactive slash commands
 
 ---
 

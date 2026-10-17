@@ -57,6 +57,7 @@ type Config struct {
 	WorkspaceDir        string
 	AgentCommand        string
 	VerifyCommand       string
+	Guidance            string
 	Model               string
 	TokensPerIteration  int64
 	CostPerIterationUSD float64
@@ -175,6 +176,7 @@ func LoadConfigFromEnv(getenv func(string) string) (*Config, error) {
 		WorkspaceDir:        workspaceDir,
 		AgentCommand:        strings.TrimSpace(getenv("DIVERGE_AGENT_CMD")),
 		VerifyCommand:       strings.TrimSpace(getenv("DIVERGE_VERIFY_CMD")),
+		Guidance:            strings.TrimSpace(getenv("DIVERGE_GUIDANCE")),
 		Model:               model,
 		TokensPerIteration:  tokensPerIteration,
 		CostPerIterationUSD: costPerIterationUSD,
@@ -424,6 +426,9 @@ func (r *Runner) Run(ctx context.Context) (*RunResult, error) {
 			}
 			if lastFailure != "" {
 				agentEnv = append(agentEnv, fmt.Sprintf("DIVERGE_LAST_FAILURE=%s", lastFailure))
+			}
+			if r.Config.Guidance != "" {
+				agentEnv = append(agentEnv, fmt.Sprintf("DIVERGE_GUIDANCE=%s", r.Config.Guidance))
 			}
 			if _, err := exec.Run(ctx, r.Config.WorkspaceDir, agentEnv, "sh", "-c", r.Config.AgentCommand); err != nil {
 				return failedResult(), fmt.Errorf("agent command failed on iteration %d: %w", iter, err)

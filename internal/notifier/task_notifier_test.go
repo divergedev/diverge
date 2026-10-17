@@ -96,7 +96,14 @@ func TestFormatAgentTaskComment(t *testing.T) {
 		assert.Contains(t, comment, "https://preview.example.com?_diverge_env=clear")
 		assert.Contains(t, comment, "| **LLM Usage** | 18450 tokens / $0.14 |")
 		assert.NotContains(t, comment, "| **Failure Reason** |")
-		assert.Contains(t, comment, "💡 *Commands: `/diverge pause`, `/diverge resume`, or `/diverge fix <new objective>`*")
+		assert.Contains(t, comment, "💡 *Commands: `/diverge guide <hint>`, `/diverge resume [+$budget]`, `/diverge pause`, `/diverge status`, or `/diverge help`*")
+	})
+
+	t.Run("Running comment includes guidance when annotation present", func(t *testing.T) {
+		guidedTask := task.DeepCopy()
+		guidedTask.Annotations["divergedev.com/guidance"] = "Focus on the checkout handler in pkg/payment"
+		comment := FormatAgentTaskComment(guidedTask, "🚀 Running", "")
+		assert.Contains(t, comment, "| **Guidance** | Focus on the checkout handler in pkg/payment |")
 	})
 
 	t.Run("Failed comment includes failure reason", func(t *testing.T) {
