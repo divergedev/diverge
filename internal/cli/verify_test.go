@@ -332,3 +332,60 @@ func TestVerifyCmd_BodyContainsAndJSONOutput(t *testing.T) {
 	assert.True(t, report.Checks[2].Passed)
 	assert.Equal(t, "MATCH", report.Checks[2].Status)
 }
+
+func TestVerifyCmd_DefaultExpectStatusAllows2xxAnd3xx(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(srv.Close)
+
+	app := &App{}
+	root := NewRootCmd(app)
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{
+		"verify", "pr-42", "/readyz",
+		"--kubeconfig", "/nonexistent/kubeconfig",
+		"--base-url", srv.URL,
+		"--skip-doctor",
+	})
+
+	require.NoError(t, root.Execute())
+	assert.Contains(t, out.String(), "HTTP 204")
+	assert.Contains(t, out.String(), "expected 2xx/3xx, got 204")
+	assert.Contains(t, out.String(), "Verification PASSED (1/1 checks)")
+}
+
+func TestVerifyCmd_FailsWhenClusterUnavailableWithoutSkipDoctor(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	t.Cleanup(srv.Close)
+
+	app := &App{}
+	root := NewRootCmd(app)
+	var out, errBuf bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&errBuf)
+	root.SetArgs([]string{
+		"verify", "pr-42", "/healthz",
+		"--kubeconfig", "/nonexistent/kubeconfig",
+		"--base-url", srv.URL,
+		"--json",
+	})
+
+	err := root.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "verification failed for environment pr-42")
+
+	var report VerifyReport
+	require.NoError(t, json.Unmarshal(out.Bytes(), &report))
+	assert.False(t, report.Passed)
+	require.Len(t, report.Checks, 2)
+	assert.Equal(t, "workload-diagnostics", report.Checks[0].Name)
+	assert.False(t, report.Checks[0].Passed)
+	assert.Equal(t, "ERROR", report.Checks[0].Status)
+	assert.Contains(t, report.Checks[0].Message, "cluster unavailable")
+}

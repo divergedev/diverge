@@ -61,14 +61,58 @@ func (s *StorageProvisioner) resolveBucket(env *v1alpha1.Environment, route v1al
 	return ""
 }
 
-// FormatStorageKeyPrefix returns the deterministic object key prefix for an environment and route target.
-func FormatStorageKeyPrefix(target, envName string) string {
+// FormatStorageKeyPrefix returns the deterministic object key prefix for an environment, route target, and optional namespace.
+func FormatStorageKeyPrefix(target, envName string, namespace ...string) string {
 	trimmedTarget := strings.Trim(strings.TrimSpace(target), "/")
 	trimmedEnv := strings.Trim(strings.TrimSpace(envName), "/")
+	var ns string
+	if len(namespace) > 0 {
+		ns = strings.Trim(strings.TrimSpace(namespace[0]), "/")
+	}
+	if ns != "" {
+		if trimmedTarget == "" || trimmedTarget == "default" {
+			return fmt.Sprintf("previews/%s/%s/", ns, trimmedEnv)
+		}
+		return fmt.Sprintf("previews/%s/%s/%s/", ns, trimmedEnv, trimmedTarget)
+	}
 	if trimmedTarget == "" || trimmedTarget == "default" {
 		return fmt.Sprintf("previews/%s/", trimmedEnv)
 	}
 	return fmt.Sprintf("previews/%s/%s/", trimmedEnv, trimmedTarget)
+}
+
+func isStorageProtocol(protocol string) bool {
+	switch strings.ToLower(strings.TrimSpace(protocol)) {
+	case "s3", "gcs", "minio":
+		return true
+	default:
+		return false
+	}
+}
+
+func sanitizeStorageTargetEnvSuffix(target string) string {
+	trimmed := strings.Trim(strings.TrimSpace(target), "/")
+	if trimmed == "" || strings.EqualFold(trimmed, "default") {
+		return "DEFAULT"
+	}
+	upper := strings.ToUpper(trimmed)
+	var b strings.Builder
+	lastUnderscore := false
+	for i := 0; i < len(upper); i++ {
+		ch := upper[i]
+		if (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') {
+			b.WriteByte(ch)
+			lastUnderscore = false
+		} else if !lastUnderscore {
+			b.WriteByte('_')
+			lastUnderscore = true
+		}
+	}
+	res := strings.Trim(b.String(), "_")
+	if res == "" {
+		return "DEFAULT"
+	}
+	return res
 }
 
 // Provision computes the preview object storage key prefix and injects environment variables.
@@ -77,21 +121,57 @@ func (s *StorageProvisioner) Provision(_ context.Context, env *v1alpha1.Environm
 		return nil, fmt.Errorf("environment with non-empty name is required")
 	}
 
-	prefix := FormatStorageKeyPrefix(route.Target, env.Name)
+	ns := strings.Trim(strings.TrimSpace(env.Namespace), "/")
+	if ns == "" {
+		ns = "default"
+	}
+	prefix := FormatStorageKeyPrefix(route.Target, env.Name, ns)
 	bucket := s.resolveBucket(env, route)
 	endpoint := s.resolveEndpoint(env)
 
 	envVars := make(map[string]string)
 	if len(route.EnvVarMapping) == 0 {
-		envVars["DIVERGE_STORAGE_PREFIX"] = prefix
-		envVars["S3_KEY_PREFIX"] = prefix
-		envVars["AWS_S3_PREFIX"] = prefix
-		envVars["GCS_KEY_PREFIX"] = prefix
-		if bucket != "" {
-			envVars["DIVERGE_STORAGE_BUCKET"] = bucket
+		trimmedTarget := strings.Trim(strings.TrimSpace(route.Target), "/")
+		suffix := sanitizeStorageTargetEnvSuffix(route.Target)
+
+		defaultStorageRouteCount := 0
+		sameSuffixCount := 0
+		for _, r := range env.Spec.Routing.AsyncRoutes {
+			if isStorageProtocol(r.Protocol) && len(r.EnvVarMapping) == 0 {
+				defaultStorageRouteCount++
+				if sanitizeStorageTargetEnvSuffix(r.Target) == suffix {
+					sameSuffixCount++
+				}
+			}
 		}
-		if endpoint != "" {
-			envVars["DIVERGE_STORAGE_ENDPOINT"] = endpoint
+		if defaultStorageRouteCount > 1 && sameSuffixCount > 1 {
+			return nil, fmt.Errorf("multiple storage async routes with target %q require explicit envVarMapping", route.Target)
+		}
+
+		isNamedTarget := trimmedTarget != "" && !strings.EqualFold(trimmedTarget, "default")
+		if defaultStorageRouteCount <= 1 || !isNamedTarget {
+			envVars["DIVERGE_STORAGE_PREFIX"] = prefix
+			envVars["S3_KEY_PREFIX"] = prefix
+			envVars["AWS_S3_PREFIX"] = prefix
+			envVars["GCS_KEY_PREFIX"] = prefix
+			if bucket != "" {
+				envVars["DIVERGE_STORAGE_BUCKET"] = bucket
+			}
+			if endpoint != "" {
+				envVars["DIVERGE_STORAGE_ENDPOINT"] = endpoint
+			}
+		}
+		if isNamedTarget {
+			envVars["DIVERGE_STORAGE_PREFIX_"+suffix] = prefix
+			envVars["S3_KEY_PREFIX_"+suffix] = prefix
+			envVars["AWS_S3_PREFIX_"+suffix] = prefix
+			envVars["GCS_KEY_PREFIX_"+suffix] = prefix
+			if bucket != "" {
+				envVars["DIVERGE_STORAGE_BUCKET_"+suffix] = bucket
+			}
+			if endpoint != "" {
+				envVars["DIVERGE_STORAGE_ENDPOINT_"+suffix] = endpoint
+			}
 		}
 	} else {
 		for envVar, tmpl := range route.EnvVarMapping {

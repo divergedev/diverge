@@ -17,7 +17,8 @@ var storagePrefixEnvVars = []string{
 // Priority:
 //  1. DIVERGE_STORAGE_PREFIX, S3_KEY_PREFIX, AWS_S3_PREFIX, or GCS_KEY_PREFIX environment variable
 //     (trimmed of leading "/" and normalized with a trailing "/").
-//  2. Active environment from context (or DIVERGE_ENV fallback), formatted as "previews/<env>/".
+//  2. Active environment from context (or DIVERGE_ENV fallback), formatted as "previews/<ns>/<env>/"
+//     when DIVERGE_NAMESPACE or POD_NAMESPACE is set, or "previews/<env>/" otherwise.
 //  3. Empty string "" when running in baseline/production without an active preview environment.
 func ResolveStoragePrefix(ctx context.Context) string {
 	for _, envKey := range storagePrefixEnvVars {
@@ -37,6 +38,13 @@ func ResolveStoragePrefix(ctx context.Context) string {
 		env = strings.Trim(strings.TrimSpace(os.Getenv("DIVERGE_ENV")), "/")
 	}
 	if env != "" {
+		ns := strings.Trim(strings.TrimSpace(os.Getenv("DIVERGE_NAMESPACE")), "/")
+		if ns == "" {
+			ns = strings.Trim(strings.TrimSpace(os.Getenv("POD_NAMESPACE")), "/")
+		}
+		if ns != "" {
+			return "previews/" + ns + "/" + env + "/"
+		}
 		return "previews/" + env + "/"
 	}
 	return ""

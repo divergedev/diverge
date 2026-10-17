@@ -17,6 +17,8 @@ func clearStorageEnv(t *testing.T) {
 	t.Setenv("AWS_S3_PREFIX", "")
 	t.Setenv("GCS_KEY_PREFIX", "")
 	t.Setenv("DIVERGE_ENV", "")
+	t.Setenv("DIVERGE_NAMESPACE", "")
+	t.Setenv("POD_NAMESPACE", "")
 }
 
 func TestResolveStoragePrefix_And_Key(t *testing.T) {
@@ -69,12 +71,16 @@ func TestResolveStoragePrefix_And_Key(t *testing.T) {
 		assert.Equal(t, "previews/pr-77/gcs/blob.bin", ResolveStorageKey(nil, "blob.bin")) //nolint:staticcheck
 	})
 
-	t.Run("DIVERGE_ENV fallback when context has no environment", func(t *testing.T) {
+	t.Run("DIVERGE_ENV and DIVERGE_NAMESPACE fallback when context has no environment", func(t *testing.T) {
 		clearStorageEnv(t)
 		t.Setenv("DIVERGE_ENV", "pr-88")
 
 		assert.Equal(t, "previews/pr-88/", ResolveStoragePrefix(context.Background()))
 		assert.Equal(t, "previews/pr-88/report.csv", ResolveStorageKey(context.Background(), "report.csv"))
+
+		t.Setenv("DIVERGE_NAMESPACE", "staging")
+		assert.Equal(t, "previews/staging/pr-88/", ResolveStoragePrefix(context.Background()))
+		assert.Equal(t, "previews/staging/pr-88/report.csv", ResolveStorageKey(context.Background(), "report.csv"))
 	})
 }
 

@@ -243,7 +243,10 @@ DECLARE
     fk_row record;
     fk_def text;
     view_row record;
+    raw_view_def text;
     view_def text;
+    v_idx integer;
+    v_len integer;
 BEGIN
     EXECUTE format('CREATE SCHEMA IF NOT EXISTS %%I', '%[1]s');
     FOR row IN
@@ -278,10 +281,15 @@ BEGIN
         SELECT
             c.conname AS constraint_name,
             rel.relname AS table_name,
+            confnsp.nspname AS ref_schema,
+            confrel.relname AS ref_table,
+            c.condeferrable AS is_deferrable,
             pg_get_constraintdef(c.oid, true) AS constraint_def
         FROM pg_constraint c
         JOIN pg_class rel ON rel.oid = c.conrelid
         JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+        JOIN pg_class confrel ON confrel.oid = c.confrelid
+        JOIN pg_namespace confnsp ON confnsp.oid = confrel.relnamespace
         WHERE nsp.nspname = 'public' AND c.contype = 'f'
     LOOP
         IF NOT EXISTS (
@@ -293,31 +301,142 @@ BEGIN
               AND existing_rel.relname = fk_row.table_name
               AND existing_c.conname = fk_row.constraint_name
         ) THEN
-            fk_def := regexp_replace(
-                fk_row.constraint_def,
-                'REFERENCES\s+(?:public\.)?("?[a-zA-Z0-9_]+"?)',
-                format('REFERENCES %%I.\1', '%[1]s'),
-                'gi'
-            );
+            IF fk_row.ref_schema = 'public' THEN
+                fk_def := replace(
+                    fk_row.constraint_def,
+                    ' REFERENCES public.' || quote_ident(fk_row.ref_table) || '(',
+                    format(' REFERENCES %%I.%%I(', '%[1]s', fk_row.ref_table)
+                );
+                IF fk_def = fk_row.constraint_def THEN
+                    fk_def := replace(
+                        fk_row.constraint_def,
+                        ' REFERENCES ' || quote_ident(fk_row.ref_table) || '(',
+                        format(' REFERENCES %%I.%%I(', '%[1]s', fk_row.ref_table)
+                    );
+                END IF;
+            ELSE
+                fk_def := fk_row.constraint_def;
+            END IF;
+            IF NOT fk_row.is_deferrable AND position('DEFERRABLE' IN upper(fk_def)) = 0 THEN
+                fk_def := fk_def || ' DEFERRABLE INITIALLY IMMEDIATE';
+            END IF;
             EXECUTE format('ALTER TABLE %%I.%%I ADD CONSTRAINT %%I %%s',
                 '%[1]s', fk_row.table_name, fk_row.constraint_name, fk_def);
         END IF;
     END LOOP;
 
-    -- Clone VIEW definitions from public schema into the preview schema
+    -- Clone VIEW definitions from public schema into the preview schema in dependency order
     FOR view_row IN
+        WITH RECURSIVE public_views AS (
+            SELECT c.oid, c.relname AS table_name, pg_get_viewdef(c.oid, true) AS view_definition
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' AND c.relkind = 'v'
+        ),
+        view_deps AS (
+            SELECT DISTINCT
+                v.oid AS view_oid,
+                dep_v.oid AS ref_view_oid
+            FROM public_views v
+            JOIN pg_rewrite r ON r.ev_class = v.oid
+            JOIN pg_depend d ON d.objid = r.oid
+            JOIN public_views dep_v ON dep_v.oid = d.refobjid
+            WHERE d.classid = 'pg_rewrite'::regclass
+              AND d.refclassid = 'pg_class'::regclass
+              AND dep_v.oid <> v.oid
+        ),
+        view_levels AS (
+            SELECT pv.oid, pv.table_name, pv.view_definition, 0 AS depth, ARRAY[pv.oid] AS path
+            FROM public_views pv
+            WHERE NOT EXISTS (SELECT 1 FROM view_deps vd WHERE vd.view_oid = pv.oid)
+            UNION ALL
+            SELECT pv.oid, pv.table_name, pv.view_definition, vl.depth + 1, vl.path || pv.oid
+            FROM view_levels vl
+            JOIN view_deps vd ON vd.ref_view_oid = vl.oid
+            JOIN public_views pv ON pv.oid = vd.view_oid
+            WHERE NOT (pv.oid = ANY(vl.path))
+        ),
+        ordered_views AS (
+            SELECT pv.table_name, pv.view_definition, COALESCE(MAX(vl.depth), 0) AS level
+            FROM public_views pv
+            LEFT JOIN view_levels vl ON vl.oid = pv.oid
+            GROUP BY pv.oid, pv.table_name, pv.view_definition
+        )
         SELECT table_name, view_definition
-        FROM information_schema.views
-        WHERE table_schema = 'public'
-        ORDER BY table_name
+        FROM ordered_views
+        ORDER BY level ASC, table_name ASC
     LOOP
         IF view_row.view_definition IS NOT NULL AND btrim(view_row.view_definition) <> '' THEN
-            view_def := regexp_replace(
-                btrim(rtrim(btrim(view_row.view_definition), ';')),
-                '\mpublic\.',
-                format('%%I.', '%[1]s'),
-                'gi'
-            );
+            raw_view_def := btrim(rtrim(btrim(view_row.view_definition), ';'));
+            view_def := '';
+            v_idx := 1;
+            v_len := char_length(raw_view_def);
+            WHILE v_idx <= v_len LOOP
+                IF substr(raw_view_def, v_idx, 1) = '''' THEN
+                    view_def := view_def || '''';
+                    v_idx := v_idx + 1;
+                    WHILE v_idx <= v_len LOOP
+                        IF substr(raw_view_def, v_idx, 2) = '''''' THEN
+                            view_def := view_def || '''''';
+                            v_idx := v_idx + 2;
+                        ELSIF substr(raw_view_def, v_idx, 1) = '''' THEN
+                            view_def := view_def || '''';
+                            v_idx := v_idx + 1;
+                            EXIT;
+                        ELSE
+                            view_def := view_def || substr(raw_view_def, v_idx, 1);
+                            v_idx := v_idx + 1;
+                        END IF;
+                    END LOOP;
+                ELSIF substr(raw_view_def, v_idx, 2) = '--' THEN
+                    WHILE v_idx <= v_len LOOP
+                        view_def := view_def || substr(raw_view_def, v_idx, 1);
+                        IF substr(raw_view_def, v_idx, 1) = chr(10) THEN
+                            v_idx := v_idx + 1;
+                            EXIT;
+                        END IF;
+                        v_idx := v_idx + 1;
+                    END LOOP;
+                ELSIF substr(raw_view_def, v_idx, 2) = '/*' THEN
+                    view_def := view_def || '/*';
+                    v_idx := v_idx + 2;
+                    WHILE v_idx <= v_len LOOP
+                        IF substr(raw_view_def, v_idx, 2) = '*/' THEN
+                            view_def := view_def || '*/';
+                            v_idx := v_idx + 2;
+                            EXIT;
+                        END IF;
+                        view_def := view_def || substr(raw_view_def, v_idx, 1);
+                        v_idx := v_idx + 1;
+                    END LOOP;
+                ELSIF lower(substr(raw_view_def, v_idx, 9)) = '"public".' THEN
+                    view_def := view_def || format('%%I.', '%[1]s');
+                    v_idx := v_idx + 9;
+                ELSIF substr(raw_view_def, v_idx, 1) = '"' THEN
+                    view_def := view_def || '"';
+                    v_idx := v_idx + 1;
+                    WHILE v_idx <= v_len LOOP
+                        IF substr(raw_view_def, v_idx, 2) = '""' THEN
+                            view_def := view_def || '""';
+                            v_idx := v_idx + 2;
+                        ELSIF substr(raw_view_def, v_idx, 1) = '"' THEN
+                            view_def := view_def || '"';
+                            v_idx := v_idx + 1;
+                            EXIT;
+                        ELSE
+                            view_def := view_def || substr(raw_view_def, v_idx, 1);
+                            v_idx := v_idx + 1;
+                        END IF;
+                    END LOOP;
+                ELSIF lower(substr(raw_view_def, v_idx, 7)) = 'public.'
+                  AND (v_idx = 1 OR substr(raw_view_def, v_idx - 1, 1) !~ '[a-zA-Z0-9_$."]') THEN
+                    view_def := view_def || format('%%I.', '%[1]s');
+                    v_idx := v_idx + 7;
+                ELSE
+                    view_def := view_def || substr(raw_view_def, v_idx, 1);
+                    v_idx := v_idx + 1;
+                END IF;
+            END LOOP;
             EXECUTE format('CREATE OR REPLACE VIEW %%I.%%I AS %%s',
                 '%[1]s', view_row.table_name, view_def);
         END IF;
@@ -456,14 +575,54 @@ DECLARE
     seq_rec record;
     seq_name text;
 BEGIN
+    SET CONSTRAINTS ALL DEFERRED;
     FOR row IN
-        SELECT p_tbl.table_name
-        FROM information_schema.tables p_tbl
-        JOIN information_schema.tables s_tbl
-          ON s_tbl.table_name = p_tbl.table_name
-        WHERE p_tbl.table_schema = '%[1]s' AND p_tbl.table_type = 'BASE TABLE'
-          AND s_tbl.table_schema = '%[2]s' AND s_tbl.table_type = 'BASE TABLE'
-        ORDER BY (SELECT count(*) FROM pg_constraint c JOIN pg_class r ON r.oid = c.conrelid JOIN pg_namespace n ON n.oid = r.relnamespace WHERE n.nspname = '%[1]s' AND r.relname = p_tbl.table_name AND c.contype = 'f') ASC, p_tbl.table_name ASC
+        WITH RECURSIVE seed_tables AS (
+            SELECT p_tbl.table_name
+            FROM information_schema.tables p_tbl
+            JOIN information_schema.tables s_tbl
+              ON s_tbl.table_name = p_tbl.table_name
+            WHERE p_tbl.table_schema = '%[1]s' AND p_tbl.table_type = 'BASE TABLE'
+              AND s_tbl.table_schema = '%[2]s' AND s_tbl.table_type = 'BASE TABLE'
+        ),
+        fk_deps AS (
+            SELECT DISTINCT
+                child_rel.relname AS child_table,
+                parent_rel.relname AS parent_table
+            FROM pg_constraint c
+            JOIN pg_class child_rel ON child_rel.oid = c.conrelid
+            JOIN pg_namespace child_nsp ON child_nsp.oid = child_rel.relnamespace
+            JOIN pg_class parent_rel ON parent_rel.oid = c.confrelid
+            JOIN pg_namespace parent_nsp ON parent_nsp.oid = parent_rel.relnamespace
+            WHERE child_nsp.nspname = '%[1]s'
+              AND parent_nsp.nspname = '%[1]s'
+              AND c.contype = 'f'
+              AND child_rel.relname <> parent_rel.relname
+        ),
+        dep_levels AS (
+            SELECT st.table_name, 0 AS depth, ARRAY[st.table_name::text] AS path
+            FROM seed_tables st
+            WHERE NOT EXISTS (
+                SELECT 1 FROM fk_deps d
+                JOIN seed_tables parent_st ON parent_st.table_name = d.parent_table
+                WHERE d.child_table = st.table_name
+            )
+            UNION ALL
+            SELECT st.table_name, dl.depth + 1, dl.path || st.table_name::text
+            FROM dep_levels dl
+            JOIN fk_deps d ON d.parent_table = dl.table_name
+            JOIN seed_tables st ON st.table_name = d.child_table
+            WHERE NOT (st.table_name::text = ANY(dl.path))
+        ),
+        ordered_seed_tables AS (
+            SELECT st.table_name, COALESCE(MAX(dl.depth), 999999) AS level
+            FROM seed_tables st
+            LEFT JOIN dep_levels dl ON dl.table_name = st.table_name
+            GROUP BY st.table_name
+        )
+        SELECT table_name
+        FROM ordered_seed_tables
+        ORDER BY level ASC, table_name ASC
     LOOP
         SELECT p_col.column_name INTO incompatible_col
         FROM information_schema.columns p_col

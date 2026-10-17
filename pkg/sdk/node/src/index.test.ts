@@ -9,6 +9,8 @@ describe('S3 / GCS / MinIO Object Storage Key Prefix Resolution', () => {
   const savedEnv: Record<string, string | undefined> = {};
   const envKeys = [
     'DIVERGE_ENV',
+    'DIVERGE_NAMESPACE',
+    'POD_NAMESPACE',
     'DIVERGE_STORAGE_PREFIX',
     'S3_KEY_PREFIX',
     'AWS_S3_PREFIX',
@@ -78,10 +80,13 @@ describe('S3 / GCS / MinIO Object Storage Key Prefix Resolution', () => {
     );
   });
 
-  it('prioritizes AsyncLocalStorage over passed DIVERGE_ENV', () => {
+  it('prioritizes AsyncLocalStorage over passed DIVERGE_ENV and includes namespace when set', () => {
     process.env.DIVERGE_ENV = 'pr-1';
 
     expect(resolveStoragePrefix({ DIVERGE_ENV: 'pr-42' })).toBe('previews/pr-42/');
+    expect(
+      resolveStoragePrefix({ DIVERGE_ENV: 'pr-42', DIVERGE_NAMESPACE: 'staging' })
+    ).toBe('previews/staging/pr-42/');
     expect(resolveStoragePrefix({})).toBe('');
     expect(
       setEnvironment('pr-99', () => resolveStoragePrefix({ DIVERGE_ENV: 'pr-42' }))

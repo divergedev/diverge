@@ -11,6 +11,8 @@ def test_resolve_storage_prefix_and_key(monkeypatch):
     _current_env.set("")
     for env_key in (
         "DIVERGE_ENV",
+        "DIVERGE_NAMESPACE",
+        "POD_NAMESPACE",
         "DIVERGE_STORAGE_PREFIX",
         "S3_KEY_PREFIX",
         "AWS_S3_PREFIX",
@@ -74,4 +76,10 @@ def test_resolve_storage_prefix_and_key(monkeypatch):
     assert (
         resolve_storage_prefix(environ={"DIVERGE_ENV": "pr-88"})
         == "previews/pr-88/"
+    )
+    assert (
+        resolve_storage_prefix(
+            environ={"DIVERGE_ENV": "pr-88", "DIVERGE_NAMESPACE": "staging"}
+        )
+        == "previews/staging/pr-88/"
     )

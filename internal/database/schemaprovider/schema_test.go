@@ -414,18 +414,29 @@ func TestSchemaDatabaseProvider_Provision_ClonesForeignKeysAndViews(t *testing.T
 	require.NoError(t, err)
 	assert.True(t, res.Ready)
 
-	// Verify foreign key constraint cloning
+	// Verify foreign key constraint cloning uses catalog identity (confnsp/confrel) and quote_ident
 	assert.Contains(t, res.SetupSQL, "pg_get_constraintdef(c.oid, true)")
-	assert.Contains(t, res.SetupSQL, "WHERE nsp.nspname = 'public' AND c.contype = 'f'")
+	assert.Contains(t, res.SetupSQL, "confnsp.nspname AS ref_schema")
+	assert.Contains(t, res.SetupSQL, "confrel.relname AS ref_table")
+	assert.Contains(t, res.SetupSQL, "IF fk_row.ref_schema = 'public' THEN")
+	assert.Contains(t, res.SetupSQL, "quote_ident(fk_row.ref_table)")
+	assert.Contains(t, res.SetupSQL, "format(' REFERENCES %I.%I(', 'preview_fk_view_env', fk_row.ref_table)")
+	assert.Contains(t, res.SetupSQL, "DEFERRABLE INITIALLY IMMEDIATE")
 	assert.Contains(t, res.SetupSQL, "ALTER TABLE %I.%I ADD CONSTRAINT %I %s")
-	assert.Contains(t, res.SetupSQL, "REFERENCES %I.\\1")
 
-	// Verify view cloning
-	assert.Contains(t, res.SetupSQL, "FROM information_schema.views")
+	// Verify view cloning orders by dependency depth via pg_depend/pg_rewrite and uses SQL-literal-safe scanner
+	assert.Contains(t, res.SetupSQL, "WITH RECURSIVE public_views AS")
+	assert.Contains(t, res.SetupSQL, "JOIN pg_rewrite r ON r.ev_class = v.oid")
+	assert.Contains(t, res.SetupSQL, "JOIN pg_depend d ON d.objid = r.oid")
+	assert.Contains(t, res.SetupSQL, "ORDER BY level ASC, table_name ASC")
 	assert.Contains(t, res.SetupSQL, "CREATE OR REPLACE VIEW %I.%I AS %s")
 
-	// Verify seed SQL orders tables by outgoing FK count
-	assert.Contains(t, res.SetupSQL, "ORDER BY (SELECT count(*) FROM pg_constraint c JOIN pg_class r ON r.oid = c.conrelid JOIN pg_namespace n ON n.oid = r.relnamespace WHERE n.nspname = 'preview_fk_view_env' AND r.relname = p_tbl.table_name AND c.contype = 'f') ASC, p_tbl.table_name ASC")
+	// Verify seed SQL defers constraints and orders tables by recursive FK dependency depth
+	assert.Contains(t, res.SetupSQL, "SET CONSTRAINTS ALL DEFERRED;")
+	assert.Contains(t, res.SetupSQL, "WITH RECURSIVE seed_tables AS")
+	assert.Contains(t, res.SetupSQL, "fk_deps AS")
+	assert.Contains(t, res.SetupSQL, "dep_levels AS")
+	assert.Contains(t, res.SetupSQL, "ordered_seed_tables AS")
 }
 
 func TestSchemaDatabaseProvider_SharedDBPoolReuseAndClose(t *testing.T) {

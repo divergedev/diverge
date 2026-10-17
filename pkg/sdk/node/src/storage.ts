@@ -24,6 +24,12 @@ export function resolveStoragePrefix(env?: NodeJS.ProcessEnv): string {
     .replace(/^\/+|\/+$/g, '');
 
   if (activeEnv) {
+    const ns = (envMap.DIVERGE_NAMESPACE || envMap.POD_NAMESPACE || '')
+      .trim()
+      .replace(/^\/+|\/+$/g, '');
+    if (ns) {
+      return `previews/${ns}/${activeEnv}/`;
+    }
     return `previews/${activeEnv}/`;
   }
 

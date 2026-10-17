@@ -1237,10 +1237,43 @@ func TestGatewayRouter_Reconcile_ParentRefDisambiguation_ProdIngressGateway(t *t
 		assert.Equal(t, "prod-ingress", parent["name"])
 		assert.Nil(t, parent["kind"], "Gateway parentRef should not have kind=Service")
 	})
+
+	t.Run("propagates non-NotFound error during Gateway lookup", func(t *testing.T) {
+		c := fake.NewClientBuilder().WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if obj.GetObjectKind().GroupVersionKind().Kind == "Gateway" {
+					return errors.New("apiserver unavailable")
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).Build()
+		r := &GatewayRouter{Client: c, Namespace: "default"}
+
+		env := &v1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-env", Namespace: "default"},
+			Spec: v1alpha1.EnvironmentSpec{
+				Deploy: v1alpha1.EnvironmentDeploy{ChangedServices: []string{"web"}},
+				ServiceConfig: &v1alpha1.ServicePreviewConfig{
+					ParentRef: "prod-ingress",
+				},
+			},
+		}
+
+		err := r.Reconcile(context.Background(), env)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to look up Gateway default/prod-ingress")
+		assert.Contains(t, err.Error(), "apiserver unavailable")
+	})
 }
 
 func TestGatewayRouter_Reconcile_ExternalDNSAndCertManagerAnnotations(t *testing.T) {
-	c := fake.NewClientBuilder().Build()
+	gw := &unstructured.Unstructured{}
+	gw.SetAPIVersion("gateway.networking.k8s.io/v1")
+	gw.SetKind("Gateway")
+	gw.SetName("diverge-gateway")
+	gw.SetNamespace("default")
+
+	c := fake.NewClientBuilder().WithObjects(gw).Build()
 	r := &GatewayRouter{Client: c, Namespace: "default"}
 
 	env := &v1alpha1.Environment{
@@ -1274,13 +1307,51 @@ func TestGatewayRouter_Reconcile_ExternalDNSAndCertManagerAnnotations(t *testing
 	ann := u.GetAnnotations()
 	require.NotNil(t, ann)
 	assert.Equal(t, "pr-42.preview.example.com", ann["external-dns.alpha.kubernetes.io/hostname"])
-	assert.Equal(t, "letsencrypt-prod", ann["cert-manager.io/cluster-issuer"])
 	assert.Equal(t, "60", ann["external-dns.alpha.kubernetes.io/ttl"])
+	assert.NotContains(t, ann, "cert-manager.io/cluster-issuer", "cert-manager annotations must not be placed on HTTPRoute")
+	assert.NotContains(t, ann, "cert-manager.io/issuer", "cert-manager annotations must not be placed on HTTPRoute")
 
-	// Update existing route with custom external-dns-hostname override
+	// Verify Gateway received the cert-manager cluster-issuer annotation for gateway-shim
+	updatedGW := &unstructured.Unstructured{}
+	updatedGW.SetAPIVersion("gateway.networking.k8s.io/v1")
+	updatedGW.SetKind("Gateway")
+	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "diverge-gateway", Namespace: "default"}, updatedGW))
+	assert.Equal(t, "letsencrypt-prod", updatedGW.GetAnnotations()["cert-manager.io/cluster-issuer"])
+
+	// Verify cert-manager Certificate resource was reconciled for the preview hostname
+	cert := &unstructured.Unstructured{}
+	cert.SetAPIVersion("cert-manager.io/v1")
+	cert.SetKind("Certificate")
+	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "pr-42-tls", Namespace: "default"}, cert))
+	dnsNames, _, _ := unstructured.NestedSlice(cert.Object, "spec", "dnsNames")
+	assert.Equal(t, []interface{}{"pr-42.preview.example.com"}, dnsNames)
+	issuerName, _, _ := unstructured.NestedString(cert.Object, "spec", "issuerRef", "name")
+	issuerKind, _, _ := unstructured.NestedString(cert.Object, "spec", "issuerRef", "kind")
+	assert.Equal(t, "letsencrypt-prod", issuerName)
+	assert.Equal(t, "ClusterIssuer", issuerKind)
+
+	// Update existing route with custom external-dns-hostname override and verify both spec.hostnames and annotation
 	env.Annotations[AnnotationExternalDNSHostname] = "custom.preview.example.com"
 	require.NoError(t, r.Reconcile(context.Background(), env))
 
 	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "pr-42-web", Namespace: "default"}, u))
 	assert.Equal(t, "custom.preview.example.com", u.GetAnnotations()["external-dns.alpha.kubernetes.io/hostname"])
+	routeHostnames, _, _ := unstructured.NestedSlice(u.Object, "spec", "hostnames")
+	assert.Equal(t, []interface{}{"pr-42.preview.example.com", "custom.preview.example.com"}, routeHostnames)
+
+	// Add an unrelated user annotation on the HTTPRoute, then remove external-dns annotations from env
+	existingAnn := u.GetAnnotations()
+	existingAnn["example.com/custom"] = "keep"
+	u.SetAnnotations(existingAnn)
+	require.NoError(t, c.Update(context.Background(), u))
+
+	delete(env.Annotations, AnnotationExternalDNSHostname)
+	delete(env.Annotations, AnnotationExternalDNS)
+	delete(env.Annotations, "external-dns.alpha.kubernetes.io/ttl")
+	require.NoError(t, r.Reconcile(context.Background(), env))
+
+	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "pr-42-web", Namespace: "default"}, u))
+	assert.NotContains(t, u.GetAnnotations(), "external-dns.alpha.kubernetes.io/hostname", "stale external-dns hostname annotation should be removed")
+	assert.NotContains(t, u.GetAnnotations(), "external-dns.alpha.kubernetes.io/ttl", "stale external-dns ttl annotation should be removed")
+	assert.Equal(t, "keep", u.GetAnnotations()["example.com/custom"], "unrelated user annotations should be preserved")
 }

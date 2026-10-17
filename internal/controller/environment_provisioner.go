@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -109,6 +110,9 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 	tCtxDB, cancelDB := context.WithTimeout(ctx, 15*time.Second)
 	defer cancelDB()
 	dbProv, resolvedDBName, err := r.resolveDatabaseProvider(env, false)
+	if dbProv != nil && dbProv != r.DatabaseProvider {
+		defer closeDatabaseProvider(dbProv)
+	}
 	var dbStatus *pkgdb.DatabaseResult
 	if err == nil && dbProv != nil {
 		if env.Status.DatabaseProvider == "" && resolvedDBName != "" {
@@ -601,6 +605,19 @@ func isDefaultOrNoopDBProvider(p pkgdb.DatabaseProvider) bool {
 		return inst.Inner == nil || inst.Mode == "" || inst.Mode == "none" || inst.Mode == "noop" || isDefaultOrNoopDBProvider(inst.Inner)
 	}
 	return false
+}
+
+func closeDatabaseProvider(p pkgdb.DatabaseProvider) {
+	if p == nil {
+		return
+	}
+	if closer, ok := p.(io.Closer); ok {
+		_ = closer.Close()
+		return
+	}
+	if inst, ok := p.(*internaldb.InstrumentedDatabaseProvider); ok && inst.Inner != nil {
+		closeDatabaseProvider(inst.Inner)
+	}
 }
 
 func (r *EnvironmentReconciler) ensureBannerConfigMap(ctx context.Context, env *divergeiov1alpha1.Environment) error {

@@ -69,6 +69,7 @@ assertions, response substring checks, and optional baseline parity comparisons.
 	# Verify against an explicit URL in CI and emit JSON report
 	diverge verify pr-42 /api/status --base-url https://preview.example.com --body-contains '"ok":true' --json`,
 		Args:              cobra.RangeArgs(1, 2),
+		SilenceUsage:      true,
 		ValidArgsFunction: completeEnvironmentNames(app),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			envName := args[0]
@@ -103,7 +104,15 @@ assertions, response substring checks, and optional baseline parity comparisons.
 				if err == nil && c != nil {
 					diagnoser := doctor.NewDiagnoser(c)
 					docReport, docErr := diagnoser.Diagnose(cmd.Context(), ns, envName)
-					if docErr == nil && docReport != nil {
+					if docErr != nil || docReport == nil {
+						msg := "diagnostics returned no report"
+						if docErr != nil {
+							msg = docErr.Error()
+						}
+						report.Checks = append(report.Checks, VerifyCheckResult{
+							Name: "workload-diagnostics", Passed: false, Status: "ERROR", Message: msg,
+						})
+					} else {
 						report.Doctor = docReport
 						docStatus := "HEALTHY"
 						docMsg := "All preview pods, migrations, and routes healthy"
@@ -120,6 +129,13 @@ assertions, response substring checks, and optional baseline parity comparisons.
 					}
 				} else if err != nil && opts.baseURL == "" && !isFullURL {
 					return fmt.Errorf("failed to connect to cluster: %w", err)
+				} else if err != nil {
+					report.Checks = append(report.Checks, VerifyCheckResult{
+						Name:    "workload-diagnostics",
+						Passed:  false,
+						Status:  "ERROR",
+						Message: fmt.Sprintf("cluster unavailable (use --skip-doctor to skip): %v", err),
+					})
 				}
 			}
 
@@ -282,7 +298,7 @@ assertions, response substring checks, and optional baseline parity comparisons.
 	cmd.Flags().StringVarP(&opts.method, "method", "X", "GET", "HTTP request method")
 	cmd.Flags().StringVarP(&opts.data, "data", "d", "", "HTTP request body")
 	cmd.Flags().StringArrayVarP(&opts.headers, "header", "H", nil, "Additional HTTP header in 'Key: Value' format")
-	cmd.Flags().IntVar(&opts.expectStatus, "expect-status", 200, "Expected HTTP status code (0 allows any 2xx/3xx status < 400)")
+	cmd.Flags().IntVar(&opts.expectStatus, "expect-status", 0, "Expected HTTP status code (default 0 allows any 2xx/3xx status < 400)")
 	cmd.Flags().DurationVar(&opts.maxLatency, "max-latency", 0, "Maximum acceptable preview response latency (e.g. 500ms)")
 	cmd.Flags().StringVar(&opts.bodyContains, "body-contains", "", "Substring that must appear in the preview HTTP response body")
 	cmd.Flags().BoolVar(&opts.compareBaseline, "compare-baseline", false, "Also probe baseline (without preview routing headers) and verify status parity")
