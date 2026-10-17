@@ -43,20 +43,37 @@ describe('EnvironmentList', () => {
           ],
         }),
       ),
+      http.post('*/diverge.v1alpha1.ClusterService/GetClusterInfo', () =>
+        HttpResponse.json({
+          controllerVersion: 'v0.18.0',
+          environmentCount: 2,
+          previewGroupCount: 0,
+          controllerHealthy: true,
+          namespaceQuota: {
+            maxActiveEnvironments: 5,
+            maxCnpgClusters: 2,
+            maxHourlyCostUsd: 0.25,
+            quotaExceedPolicy: 'hibernate-oldest',
+          },
+        }),
+      ),
     )
 
     render(<EnvironmentList />)
 
     expect(await screen.findByText('pr-active')).toBeInTheDocument()
 
-    // Active env ($0.025 + $0.005 = $0.030/hr) + Hibernated env ($0.000/hr) = $0.030/hr
+    // Active env ($0.012 + $0.010 = $0.022/hr) + Hibernated env ($0.000/hr) = $0.022/hr
     expect(screen.getByText('Estimated Hourly Spend')).toBeInTheDocument()
-    expect(screen.getAllByText('$0.030/hr').length).toBeGreaterThanOrEqual(2)
-    expect(screen.getByText('~$21.90/mo projected run-rate')).toBeInTheDocument()
+    expect(screen.getAllByText('$0.022/hr').length).toBeGreaterThanOrEqual(2)
+    expect(screen.getByText('~$16.06/mo projected run-rate')).toBeInTheDocument()
+    expect(await screen.findByText('$0.022 / $0.250/hr budget')).toBeInTheDocument()
 
-    // Compute state summary
+    // Compute state summary + quota utilization
     expect(screen.getByText('Compute State')).toBeInTheDocument()
     expect(screen.getByText('1 Active · 1 Hibernated')).toBeInTheDocument()
+    expect(screen.getByText('1 / 5 max active')).toBeInTheDocument()
+    expect(screen.getByText('hibernate-oldest')).toBeInTheDocument()
 
     // Table headers and rows
     expect(screen.getByText('Est. Cost')).toBeInTheDocument()

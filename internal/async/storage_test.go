@@ -2,6 +2,11 @@ package async
 
 import (
 	"context"
+	"encoding/xml"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -42,6 +47,9 @@ func TestFormatStorageKeyPrefix(t *testing.T) {
 	assert.Equal(t, "previews/staging/pr-42/", FormatStorageKeyPrefix("", "pr-42", "staging"))
 	assert.Equal(t, "previews/staging/pr-42/", FormatStorageKeyPrefix("default", "pr-42", "staging"))
 	assert.Equal(t, "previews/staging/pr-42/uploads/", FormatStorageKeyPrefix("uploads", "pr-42", "/staging/"))
+
+	assert.Equal(t, "previews/default/pr-42/uploads/", FormatNamespacedStorageKeyPrefix("", "uploads", "pr-42"))
+	assert.Equal(t, "previews/staging/pr-42/uploads/", FormatNamespacedStorageKeyPrefix("staging", "uploads", "pr-42"))
 }
 
 func TestStorageProvisioner_Provision_ProtocolsAndDefaults(t *testing.T) {
@@ -233,7 +241,11 @@ func TestStorageProvisioner_Provision_CustomEnvVarMapping(t *testing.T) {
 	assert.False(t, hasDefault)
 }
 
-func TestStorageProvisioner_ValidationAndTeardown(t *testing.T) {
+func TestStorageProvisioner_ValidationAndTeardown_NoopWhenUnconfigured(t *testing.T) {
+	t.Setenv("DIVERGE_STORAGE_ENDPOINT", "")
+	t.Setenv("DIVERGE_STORAGE_BUCKET", "")
+	t.Setenv("DIVERGE_GCS_TOKEN", "")
+
 	p := &StorageProvisioner{Provider: "s3"}
 	route := v1alpha1.AsyncRouteSpec{Protocol: "s3", Target: "uploads"}
 
@@ -247,5 +259,217 @@ func TestStorageProvisioner_ValidationAndTeardown(t *testing.T) {
 	require.Error(t, p.Teardown(context.Background(), &v1alpha1.Environment{}, route))
 
 	validEnv := &v1alpha1.Environment{ObjectMeta: metav1.ObjectMeta{Name: "pr-42"}}
+	// No endpoint configured -> graceful no-op
 	require.NoError(t, p.Teardown(context.Background(), validEnv, route))
+
+	// Endpoint configured but bucket is empty (target "default" and no default bucket) -> graceful no-op
+	pNoBucket := &StorageProvisioner{Provider: "s3", Endpoint: "http://127.0.0.1:1"}
+	require.NoError(t, pNoBucket.Teardown(context.Background(), validEnv, v1alpha1.AsyncRouteSpec{Protocol: "s3", Target: "default"}))
+}
+
+func TestStorageProvisioner_Teardown_S3BatchDeleteWithSigV4(t *testing.T) {
+	var (
+		mu          sync.Mutex
+		deletedKeys []string
+		authHeaders []string
+		md5Headers  []string
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		authHeaders = append(authHeaders, r.Header.Get("Authorization"))
+		mu.Unlock()
+
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/shared-assets" && r.URL.Query().Get("list-type") == "2":
+			assert.Equal(t, "previews/staging/pr-42/uploads/", r.URL.Query().Get("prefix"))
+			if r.URL.Query().Get("continuation-token") == "" {
+				w.Header().Set("Content-Type", "application/xml")
+				_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult>
+	<IsTruncated>true</IsTruncated>
+	<NextContinuationToken>page-2</NextContinuationToken>
+	<Contents><Key>previews/staging/pr-42/uploads/a.png</Key></Contents>
+	<Contents><Key>previews/staging/pr-42/uploads/b.png</Key></Contents>
+</ListBucketResult>`))
+				return
+			}
+			assert.Equal(t, "page-2", r.URL.Query().Get("continuation-token"))
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult>
+	<IsTruncated>false</IsTruncated>
+	<Contents><Key>previews/staging/pr-42/uploads/c.png</Key></Contents>
+</ListBucketResult>`))
+
+		case r.Method == http.MethodPost && r.URL.Path == "/shared-assets" && r.URL.RawQuery == "delete":
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			var delReq s3DeleteRequest
+			require.NoError(t, xml.Unmarshal(body, &delReq))
+			assert.True(t, delReq.Quiet)
+
+			mu.Lock()
+			md5Headers = append(md5Headers, r.Header.Get("Content-MD5"))
+			for _, obj := range delReq.Objects {
+				deletedKeys = append(deletedKeys, obj.Key)
+			}
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+
+		default:
+			t.Errorf("unexpected request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	defer srv.Close()
+
+	p := &StorageProvisioner{
+		Provider:   "minio",
+		Endpoint:   srv.URL,
+		Bucket:     "shared-assets",
+		AccessKey:  "minioadmin",
+		SecretKey:  "miniosecret",
+		Region:     "us-east-1",
+		HTTPClient: srv.Client(),
+	}
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-42",
+			Namespace: "staging",
+		},
+	}
+	route := v1alpha1.AsyncRouteSpec{Protocol: "minio", Target: "uploads"}
+
+	require.NoError(t, p.Teardown(context.Background(), env, route))
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []string{
+		"previews/staging/pr-42/uploads/a.png",
+		"previews/staging/pr-42/uploads/b.png",
+		"previews/staging/pr-42/uploads/c.png",
+	}, deletedKeys)
+	assert.Len(t, md5Headers, 2)
+	for _, h := range md5Headers {
+		assert.NotEmpty(t, h, "batch POST ?delete must include Content-MD5 header")
+	}
+	for _, auth := range authHeaders {
+		assert.Contains(t, auth, "AWS4-HMAC-SHA256 Credential=minioadmin/")
+	}
+}
+
+func TestStorageProvisioner_Teardown_GCSPaginationAndDelete(t *testing.T) {
+	var (
+		mu          sync.Mutex
+		deletedObjs []string
+		authHeaders []string
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		authHeaders = append(authHeaders, r.Header.Get("Authorization"))
+		mu.Unlock()
+
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/storage/v1/b/my-gcs-bucket/o":
+			assert.Equal(t, "previews/default/pr-99/avatars/", r.URL.Query().Get("prefix"))
+			if r.URL.Query().Get("pageToken") == "" {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"items":[{"name":"previews/default/pr-99/avatars/1.jpg"}],"nextPageToken":"tok-2"}`))
+				return
+			}
+			assert.Equal(t, "tok-2", r.URL.Query().Get("pageToken"))
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"items":[{"name":"previews/default/pr-99/avatars/2.jpg"}]}`))
+
+		case r.Method == http.MethodDelete:
+			mu.Lock()
+			deletedObjs = append(deletedObjs, r.URL.EscapedPath())
+			mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+
+		default:
+			t.Errorf("unexpected GCS request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	defer srv.Close()
+
+	p := &StorageProvisioner{
+		Provider:   "gcs",
+		Endpoint:   srv.URL,
+		Bucket:     "my-gcs-bucket",
+		GCSToken:   "ya29.test-token",
+		HTTPClient: srv.Client(),
+	}
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-99",
+			Namespace: "default",
+		},
+	}
+	route := v1alpha1.AsyncRouteSpec{Protocol: "gcs", Target: "avatars"}
+
+	require.NoError(t, p.Teardown(context.Background(), env, route))
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []string{
+		"/storage/v1/b/my-gcs-bucket/o/previews%2Fdefault%2Fpr-99%2Favatars%2F1.jpg",
+		"/storage/v1/b/my-gcs-bucket/o/previews%2Fdefault%2Fpr-99%2Favatars%2F2.jpg",
+	}, deletedObjs)
+	for _, auth := range authHeaders {
+		assert.Equal(t, "Bearer ya29.test-token", auth)
+	}
+}
+
+func TestStorageProvisioner_TeardownS3BatchDeletePartialError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/shared-assets" && r.URL.Query().Get("list-type") == "2":
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult>
+	<IsTruncated>false</IsTruncated>
+	<Contents><Key>previews/pr-42/uploads/a.txt</Key></Contents>
+</ListBucketResult>`))
+
+		case r.Method == http.MethodPost && r.URL.Path == "/shared-assets" && r.URL.RawQuery == "delete":
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<DeleteResult>
+	<Error>
+		<Key>previews/pr-42/uploads/a.txt</Key>
+		<Code>AccessDenied</Code>
+		<Message>Access Denied</Message>
+	</Error>
+</DeleteResult>`))
+
+		default:
+			t.Errorf("unexpected request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	defer srv.Close()
+
+	p := &StorageProvisioner{
+		Provider:   "s3",
+		Endpoint:   srv.URL,
+		Bucket:     "shared-assets",
+		HTTPClient: srv.Client(),
+	}
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-42",
+			Namespace: "default",
+		},
+	}
+	route := v1alpha1.AsyncRouteSpec{Protocol: "s3", Target: "uploads"}
+
+	err := p.Teardown(context.Background(), env, route)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "s3 batch delete failed for 1 object(s)")
+	assert.Contains(t, err.Error(), "AccessDenied")
 }

@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/async"
 	internaldb "github.com/divergedev/diverge/internal/database"
 	"github.com/divergedev/diverge/internal/database/cnpg"
 	"github.com/divergedev/diverge/pkg/database"
@@ -582,4 +583,69 @@ func TestGetDatabaseProvider_DynamicResolution(t *testing.T) {
 	_, _, err = r.resolveDatabaseProvider(envInvalid, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported database provider annotation")
+}
+
+func TestResolveAsyncProvisioner_MultiProtocol(t *testing.T) {
+	redisDefault := &async.RedisProvisioner{Addr: "redis.default.svc:6379", Provider: "redis"}
+	r := &EnvironmentReconciler{
+		AsyncProvisioner: redisDefault,
+	}
+
+	// Matching redis / valkey protocol reuses configured RedisProvisioner
+	provRedis := r.resolveAsyncProvisioner(divergeiov1alpha1.AsyncRouteSpec{Protocol: "redis", Target: "cache"})
+	assert.Same(t, redisDefault, provRedis)
+
+	provValkey := r.resolveAsyncProvisioner(divergeiov1alpha1.AsyncRouteSpec{Protocol: "valkey", Target: "cache"})
+	assert.Same(t, redisDefault, provValkey)
+
+	// S3 / GCS / MinIO route on the same Environment resolves to StorageProvisioner
+	provS3 := r.resolveAsyncProvisioner(divergeiov1alpha1.AsyncRouteSpec{Protocol: "s3", Target: "uploads"})
+	require.NotNil(t, provS3)
+	assert.Equal(t, "s3", provS3.Name())
+	assert.IsType(t, &async.StorageProvisioner{}, provS3)
+
+	provGCS := r.resolveAsyncProvisioner(divergeiov1alpha1.AsyncRouteSpec{Protocol: "gcs", Target: "avatars"})
+	require.NotNil(t, provGCS)
+	assert.Equal(t, "gcs", provGCS.Name())
+	assert.IsType(t, &async.StorageProvisioner{}, provGCS)
+
+	// Temporal route when default provider is redis resolves to TemporalProvisioner
+	provTemporal := r.resolveAsyncProvisioner(divergeiov1alpha1.AsyncRouteSpec{Protocol: "temporal", Target: "payments"})
+	require.NotNil(t, provTemporal)
+	assert.Equal(t, "temporal", provTemporal.Name())
+	assert.IsType(t, &async.TemporalProvisioner{}, provTemporal)
+
+	// Unregistered protocol when default provider is key-prefix falls back to noop
+	provUnknown := r.resolveAsyncProvisioner(divergeiov1alpha1.AsyncRouteSpec{Protocol: "sqs", Target: "queue"})
+	require.NotNil(t, provUnknown)
+	assert.Equal(t, "noop", provUnknown.Name())
+
+	// Combined redis + s3 + temporal routes on the same Environment provision without collision
+	env := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-multi",
+			Namespace: "default",
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Routing: divergeiov1alpha1.EnvironmentRouting{
+				AsyncRoutes: []divergeiov1alpha1.AsyncRouteSpec{
+					{Protocol: "redis", Target: "cache"},
+					{Protocol: "s3", Target: "uploads"},
+					{Protocol: "temporal", Target: "workflows"},
+				},
+			},
+		},
+	}
+
+	resRedis, err := provRedis.Provision(context.Background(), env, env.Spec.Routing.AsyncRoutes[0])
+	require.NoError(t, err)
+	assert.Equal(t, "preview:pr-multi:cache:", resRedis.EnvVars["DIVERGE_REDIS_PREFIX"])
+
+	resS3, err := provS3.Provision(context.Background(), env, env.Spec.Routing.AsyncRoutes[1])
+	require.NoError(t, err)
+	assert.Equal(t, "previews/default/pr-multi/uploads/", resS3.EnvVars["DIVERGE_STORAGE_PREFIX"])
+
+	resTemporal, err := provTemporal.Provision(context.Background(), env, env.Spec.Routing.AsyncRoutes[2])
+	require.NoError(t, err)
+	assert.Equal(t, "workflows-pr-multi", resTemporal.EnvVars["TEMPORAL_TASK_QUEUE"])
 }

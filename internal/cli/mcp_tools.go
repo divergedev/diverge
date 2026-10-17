@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -381,6 +382,243 @@ func registerDoctor(registry mcpruntime.Registry, client divergev1alpha1connect.
 	})
 }
 
+var verifySchema = json.RawMessage(`{
+	"type": "object",
+	"properties": {
+		"name": {"type": "string", "description": "Name of the preview environment to verify"},
+		"namespace": {"type": "string", "description": "Kubernetes namespace of the environment (default: default)"},
+		"path": {"type": "string", "description": "HTTP path or URL to probe (default: /)"},
+		"expect_status": {"type": "integer", "description": "Expected HTTP status code (default: any 2xx/3xx)"},
+		"max_latency_ms": {"type": "integer", "description": "Maximum acceptable response latency in milliseconds"},
+		"compare_baseline": {"type": "boolean", "description": "Whether to also probe the baseline without routing headers and verify status parity"}
+	},
+	"required": ["name"]
+}`)
+
+func probeVerifyURL(ctx context.Context, client *http.Client, targetURL, headerKey, headerValue string) (int, time.Duration, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	if headerKey != "" && headerValue != "" {
+		req.Header.Set(headerKey, headerValue)
+		req.Header.Set("baggage", "diverge.env="+headerValue)
+	}
+	start := time.Now()
+	resp, err := client.Do(req)
+	dur := time.Since(start)
+	if err != nil {
+		return 0, dur, err
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode, dur, nil
+}
+
+// registerVerify registers the diverge_verify MCP tool handler.
+func registerVerify(registry mcpruntime.Registry, client divergev1alpha1connect.EnvironmentServiceClient, diagnoser ...*doctor.Diagnoser) {
+	var diag *doctor.Diagnoser
+	if len(diagnoser) > 0 {
+		diag = diagnoser[0]
+	}
+
+	registry.Register(mcpruntime.ToolDefinition{
+		Name:        "diverge_verify",
+		Description: "Run structured verification checks (workload diagnostics, HTTP status, latency SLO, and optional baseline parity) against a preview environment.",
+		InputSchema: verifySchema,
+	}, func(ctx context.Context, req mcpruntime.ToolRequest) (*mcpruntime.CallToolResult, error) {
+		var params struct {
+			Name            string `json:"name"`
+			Namespace       string `json:"namespace"`
+			Path            string `json:"path"`
+			ExpectStatus    int    `json:"expect_status"`
+			MaxLatencyMs    int64  `json:"max_latency_ms"`
+			CompareBaseline bool   `json:"compare_baseline"`
+		}
+		if err := json.Unmarshal(req.Arguments, &params); err != nil {
+			return nil, fmt.Errorf("invalid arguments: %w", err)
+		}
+		params.Name = strings.TrimSpace(params.Name)
+		if params.Name == "" {
+			return errorToolResult(fmt.Errorf("name is required")), nil
+		}
+		params.Namespace = strings.TrimSpace(params.Namespace)
+		if params.Namespace == "" {
+			params.Namespace = "default"
+		}
+		params.Path = strings.TrimSpace(params.Path)
+		if params.Path == "" {
+			params.Path = "/"
+		}
+
+		resp, err := client.GetEnvironment(ctx, connect.NewRequest(&divergev1alpha1.GetEnvironmentRequest{
+			Name:      params.Name,
+			Namespace: params.Namespace,
+		}))
+		if err != nil {
+			return errorToolResult(err), nil
+		}
+		env := resp.Msg.GetEnvironment()
+		if env == nil {
+			return errorToolResult(fmt.Errorf("environment %s/%s not found", params.Namespace, params.Name)), nil
+		}
+
+		checks := make([]VerifyCheckResult, 0, 4)
+
+		if diag != nil {
+			report, diagErr := diag.Diagnose(ctx, params.Namespace, params.Name)
+			if diagErr != nil {
+				checks = append(checks, VerifyCheckResult{
+					Name:    "workload-diagnostics",
+					Passed:  false,
+					Status:  "ERROR",
+					Message: diagErr.Error(),
+				})
+			} else {
+				docStatus := "HEALTHY"
+				docMsg := "All preview pods, migrations, and routes healthy"
+				if !report.Healthy {
+					docStatus = "UNHEALTHY"
+					docMsg = fmt.Sprintf("%d issue(s) detected", len(report.Issues))
+				}
+				checks = append(checks, VerifyCheckResult{
+					Name:    "workload-diagnostics",
+					Passed:  report.Healthy,
+					Status:  docStatus,
+					Message: docMsg,
+				})
+			}
+		} else {
+			phase := env.GetStatus().GetPhase()
+			if phase == "" {
+				phase = "Unknown"
+			}
+			healthy := phase != "Failed" && phase != "Error" && phase != "Terminating"
+			checks = append(checks, VerifyCheckResult{
+				Name:    "workload-diagnostics",
+				Passed:  healthy,
+				Status:  phase,
+				Message: fmt.Sprintf("Environment phase is %s", phase),
+			})
+		}
+
+		baseURL := strings.TrimSpace(env.GetStatus().GetUrl())
+		if baseURL == "" {
+			baseURL = strings.TrimSpace(env.GetSpec().GetRouting().GetExternalUrl())
+		}
+		headerKey := strings.TrimSpace(env.GetSpec().GetRouting().GetHeaderKey())
+		if headerKey == "" {
+			headerKey = "x-diverge-env"
+		}
+		headerValue := strings.TrimSpace(env.GetSpec().GetRouting().GetHeaderValue())
+		if headerValue == "" {
+			headerValue = params.Name
+		}
+
+		targetURL, urlErr := buildCurlTargetURL(baseURL, params.Path)
+		if urlErr != nil {
+			checks = append(checks, VerifyCheckResult{
+				Name:    "http-status:" + params.Path,
+				Passed:  false,
+				Status:  "ERROR",
+				Message: urlErr.Error(),
+			})
+		} else {
+			if err := validateTargetURL(targetURL); err != nil {
+				return errorToolResult(err), nil
+			}
+			httpClient := &http.Client{Timeout: 15 * time.Second}
+			statusCode, dur, probeErr := probeVerifyURL(ctx, httpClient, targetURL, headerKey, headerValue)
+			if probeErr != nil {
+				checks = append(checks, VerifyCheckResult{
+					Name:    "http-status:" + params.Path,
+					Passed:  false,
+					Status:  "ERROR",
+					Message: probeErr.Error(),
+				})
+			} else {
+				var statusPassed bool
+				var statusMsg string
+				if params.ExpectStatus > 0 {
+					statusPassed = statusCode == params.ExpectStatus
+					statusMsg = fmt.Sprintf("expected HTTP %d, got %d (%s)", params.ExpectStatus, statusCode, targetURL)
+				} else {
+					statusPassed = statusCode >= 200 && statusCode < 400
+					statusMsg = fmt.Sprintf("expected 2xx/3xx, got %d (%s)", statusCode, targetURL)
+				}
+				checks = append(checks, VerifyCheckResult{
+					Name:       "http-status:" + params.Path,
+					Passed:     statusPassed,
+					Status:     fmt.Sprintf("HTTP %d", statusCode),
+					DurationMs: dur.Milliseconds(),
+					Message:    statusMsg,
+				})
+
+				if params.MaxLatencyMs > 0 {
+					checks = append(checks, VerifyCheckResult{
+						Name:       "latency-slo:" + params.Path,
+						Passed:     dur.Milliseconds() <= params.MaxLatencyMs,
+						Status:     dur.Round(time.Millisecond).String(),
+						DurationMs: dur.Milliseconds(),
+						Message:    fmt.Sprintf("threshold <= %dms", params.MaxLatencyMs),
+					})
+				}
+
+				if params.CompareBaseline {
+					baseCode, baseDur, baseErr := probeVerifyURL(ctx, httpClient, targetURL, "", "")
+					if baseErr != nil {
+						checks = append(checks, VerifyCheckResult{
+							Name:    "baseline-parity:" + params.Path,
+							Passed:  false,
+							Status:  "ERROR",
+							Message: fmt.Sprintf("baseline request failed: %v", baseErr),
+						})
+					} else {
+						parity := baseCode == statusCode
+						parityStatus := "PARITY"
+						if !parity {
+							parityStatus = "DIFF"
+						}
+						checks = append(checks, VerifyCheckResult{
+							Name:       "baseline-parity:" + params.Path,
+							Passed:     parity,
+							Status:     parityStatus,
+							DurationMs: baseDur.Milliseconds(),
+							Message:    fmt.Sprintf("baseline HTTP %d (%s) vs preview HTTP %d (%s)", baseCode, baseDur.Round(time.Millisecond), statusCode, dur.Round(time.Millisecond)),
+						})
+					}
+				}
+			}
+		}
+
+		passed := len(checks) > 0
+		for _, chk := range checks {
+			if !chk.Passed {
+				passed = false
+				break
+			}
+		}
+
+		outURL := targetURL
+		if outURL == "" {
+			outURL = baseURL
+		}
+		data, _ := json.Marshal(map[string]any{
+			"environment": params.Name,
+			"namespace":   params.Namespace,
+			"url":         outURL,
+			"targetUrl":   outURL,
+			"header":      fmt.Sprintf("%s: %s", headerKey, headerValue),
+			"passed":      passed,
+			"checks":      checks,
+		})
+
+		return &mcpruntime.CallToolResult{
+			Content: json.RawMessage(data),
+			IsError: !passed,
+		}, nil
+	})
+}
+
 func customTools() []mcpruntime.ToolDefinition {
 	return []mcpruntime.ToolDefinition{
 		{
@@ -404,6 +642,11 @@ func customTools() []mcpruntime.ToolDefinition {
 			InputSchema: doctorSchema,
 		},
 		{
+			Name:        "diverge_verify",
+			Description: "Run structured verification checks (workload diagnostics, HTTP status, latency SLO, and optional baseline parity) against a preview environment.",
+			InputSchema: verifySchema,
+		},
+		{
 			Name:        "diverge_visual_test",
 			Description: "Run pixel-by-pixel visual regression comparison between baseline and preview screenshots (single file pair or directory batch). Highlights visual drift and optionally writes diff PNG artifacts.",
 			InputSchema: visualTestSchema,
@@ -416,5 +659,6 @@ func registerCustomTools(registry mcpruntime.Registry, envClient divergev1alpha1
 	registerFetchErrors(registry, envClient)
 	registerLoadtest(registry)
 	registerDoctor(registry, envClient, diagnoser...)
+	registerVerify(registry, envClient, diagnoser...)
 	registerVisualTest(registry)
 }

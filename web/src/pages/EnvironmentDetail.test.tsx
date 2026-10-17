@@ -207,7 +207,7 @@ describe('EnvironmentDetail', () => {
     renderPage()
 
     expect(await screen.findByText('Estimated Cost')).toBeInTheDocument()
-    expect(screen.getByText('$0.025/hr')).toBeInTheDocument()
+    expect(screen.getByText('$0.012/hr')).toBeInTheDocument()
     expect(screen.getByText('Hibernation')).toBeInTheDocument()
     expect(screen.getByText('Active')).toBeInTheDocument()
 
@@ -265,6 +265,76 @@ describe('EnvironmentDetail', () => {
       expect(screen.getByRole('button', { name: 'Wake environment' })).toBeInTheDocument()
       expect(screen.getByText('Hibernated (0 replicas)')).toBeInTheDocument()
       expect(screen.getByText('$0.000/hr')).toBeInTheDocument()
+    })
+  })
+
+  it('renders drift warning banner and Isolation & Data Prefixes card when drifted and isolated', async () => {
+    let updatedAnnotations: Record<string, string> = {
+      'divergedev.com/baseline-fingerprint': 'sha256:abc123def456',
+      'divergedev.com/drift-policy': 'warn',
+    }
+
+    server.use(
+      http.post('*/diverge.v1alpha1.EnvironmentService/GetEnvironment', () =>
+        HttpResponse.json({
+          environment: {
+            ...mockEnv.environment,
+            annotations: updatedAnnotations,
+            spec: {
+              ...mockEnv.environment.spec,
+              database: { mode: 'schema' },
+              routing: {
+                asyncRoutes: [{ protocol: 'redis', target: 'cache' }],
+              },
+            },
+            status: {
+              ...mockEnv.environment.status,
+              databaseProvider: 'schema',
+              asyncEnvVars: {
+                DIVERGE_REDIS_PREFIX: 'diverge:test-env:',
+              },
+              conditions: [
+                { type: 'Ready', status: 'True' },
+                {
+                  type: 'BaselineDriftDetected',
+                  status: 'True',
+                  message: 'Baseline configuration changed (sha256:old -> sha256:new)',
+                },
+              ],
+            },
+          },
+        }),
+      ),
+      http.post('*/diverge.v1alpha1.EnvironmentService/ListHookJobs', () =>
+        HttpResponse.json({ jobs: [] }),
+      ),
+      http.post('*/diverge.v1alpha1.EnvironmentService/UpdateEnvironment', async ({ request }) => {
+        const body = (await request.json()) as {
+          environment?: { annotations?: Record<string, string> }
+        }
+        updatedAnnotations = body.environment?.annotations ?? {}
+        return HttpResponse.json({
+          environment: {
+            ...mockEnv.environment,
+            annotations: updatedAnnotations,
+          },
+        })
+      }),
+    )
+
+    renderPage()
+
+    expect(await screen.findByText(/Baseline Drift Detected:/i)).toBeInTheDocument()
+    expect(screen.getByText('sha256:abc123def456')).toBeInTheDocument()
+    expect(screen.getByText('Isolation & Data Prefixes')).toBeInTheDocument()
+    expect(screen.getByText('DIVERGE_REDIS_PREFIX')).toBeInTheDocument()
+    expect(screen.getByText('diverge:test-env:')).toBeInTheDocument()
+
+    const syncBtn = screen.getByRole('button', { name: 'Sync with Baseline' })
+    fireEvent.click(syncBtn)
+
+    await waitFor(() => {
+      expect(updatedAnnotations['divergedev.com/drift-policy']).toBe('sync')
     })
   })
 })

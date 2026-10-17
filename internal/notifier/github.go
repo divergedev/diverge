@@ -197,9 +197,12 @@ func (g *GitHubNotifier) PostEnvironmentTeardown(ctx context.Context, env *v1alp
 	return g.postOrUpdateComment(ctx, env, msg)
 }
 
-// UpdateEnvironmentStatus is a no-op for GitHub; status is conveyed via comments.
+// UpdateEnvironmentStatus re-renders and updates the existing pull request comment with current status.
 func (g *GitHubNotifier) UpdateEnvironmentStatus(ctx context.Context, env *v1alpha1.Environment) error {
-	return nil
+	if env == nil || (env.Status.Phase != v1alpha1.PhaseRunning && env.Status.URL == "") {
+		return nil
+	}
+	return g.PostEnvironmentReady(ctx, env)
 }
 
 // escapeProjectPath splits an "owner/repo" project string, validates both

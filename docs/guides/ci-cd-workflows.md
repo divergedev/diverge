@@ -34,7 +34,7 @@ services:
 
 ### Turnkey Composite Action (Recommended)
 
-Use the official `divergedev/diverge@v0.15.0` GitHub Action to validate `.diverge.yaml`, run `diverge diff`, deploy a delta `PreviewGroup`, and expose routing headers to Playwright or Cypress:
+Use the official `divergedev/diverge@v0.18.0` GitHub Action to validate `.diverge.yaml`, run `diverge diff`, deploy a delta `PreviewGroup`, verify readiness and latency SLOs (`verify: "true"`), and expose routing headers to Playwright or Cypress:
 
 ```yaml
 name: Preview Environment
@@ -54,13 +54,16 @@ jobs:
 
       - name: Deploy Diverge Delta Preview
         id: diverge
-        uses: divergedev/diverge@v0.15.0
+        uses: divergedev/diverge@v0.18.0
         with:
           action: deploy
           kubeconfig: ${{ secrets.PREVIEW_KUBECONFIG }}
           image-registry: ghcr.io/acme
           base-url: https://staging.example.com
           wait: "true"
+          verify: "true"
+          verify-path: "/healthz"
+          verify-max-latency: "2s"
 
       - name: Run Playwright E2E Against Preview
         if: steps.diverge.outputs.skipped != 'true'
@@ -74,7 +77,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: divergedev/diverge@v0.15.0
+      - uses: divergedev/diverge@v0.18.0
         with:
           action: teardown
           kubeconfig: ${{ secrets.PREVIEW_KUBECONFIG }}
@@ -84,14 +87,18 @@ jobs:
 
 | Input | Default | Description |
 | :--- | :--- | :--- |
-| `action` | `deploy` | `validate`, `diff`, `deploy`, or `teardown` |
+| `action` | `deploy` | `validate`, `diff`, `deploy`, `verify`, or `teardown` |
 | `kubeconfig` | `""` | Raw or base64-encoded kubeconfig for target cluster |
 | `image-registry` | `""` | Registry prefix for changed services (e.g. `ghcr.io/acme`) |
 | `image-tag` | `""` | Image tag for changed services (when omitted, defaults to resolved `preview-name`, e.g. `pr-<number>` or branch slug) |
 | `header-key` | `x-diverge-env` | HTTP routing header key |
 | `ttl` | `4h` | Preview environment TTL |
 | `base-url` | `""` | Optional gateway base URL to emit `preview-url` (`?_diverge_env=`) |
-| `wait` | `false` | Wait for `PreviewGroup` `Ready` condition |
+| `wait` | `false` | Wait for `PreviewGroup` `Ready` condition (automatically runs `diverge doctor` on timeout) |
+| `verify` | `false` | Run `diverge verify` after deploy and write scorecard to `$GITHUB_STEP_SUMMARY` |
+| `verify-path` | `/` | HTTP path to probe during `verify` |
+| `verify-compare-baseline` | `false` | Compare preview HTTP status against baseline during `verify` |
+| `verify-max-latency` | `5s` | Maximum allowed HTTP latency during `verify` |
 
 | Output | Example | Description |
 | :--- | :--- | :--- |
@@ -127,6 +134,7 @@ If you prefer calling the `diverge` CLI directly without the composite action:
             --mr "${{ github.event.number }}" \
             --ttl 4h \
             "${SVC_ARGS[@]}"
+          diverge verify "pr-${{ github.event.number }}" --path /healthz --max-latency 2s --github-summary
 ```
 
 ---
@@ -139,7 +147,7 @@ Include the official component (`templates/preview/template.yml`). It automatica
 
 ```yaml
 include:
-  - component: $CI_SERVER_FQDN/divergedev/diverge/preview@v0.15.0
+  - component: $CI_SERVER_FQDN/divergedev/diverge/preview@v0.18.0
     inputs:
       diverge_registry: "$CI_REGISTRY_IMAGE"
       diverge_base_url: "https://staging.example.com"

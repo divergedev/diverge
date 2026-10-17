@@ -430,3 +430,124 @@ func TestInitConfig_ArbitraryServiceNamesProduceValidConfig_PBT(t *testing.T) {
 		require.Contains(ht, cfg.Services, svcName)
 	})
 }
+
+func TestInitCmd_ConfigScaffolding_StackAutoDetection(t *testing.T) {
+	tmpDir := t.TempDir()
+	pkgJSON := `{
+	"name": "checkout-service",
+	"dependencies": {
+		"pg": "^8.11.3",
+		"ioredis": "^5.3.2",
+		"@aws-sdk/client-s3": "^3.500.0"
+	}
+}`
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "package.json"), []byte(pkgJSON), 0o644))
+
+	outFile := filepath.Join(tmpDir, ".diverge.yaml")
+	app := &App{}
+	cmd := newInitCmd(app)
+	var errBuf bytes.Buffer
+	cmd.SetErr(&errBuf)
+	cmd.SetArgs([]string{"--config", "--output", outFile})
+
+	require.NoError(t, cmd.Execute())
+	assert.Contains(t, errBuf.String(), "Auto-detected stack features: database=schema, async=[redis s3]")
+
+	raw, err := os.ReadFile(outFile)
+	require.NoError(t, err)
+	content := string(raw)
+	assert.Contains(t, content, "mode: schema")
+	assert.Contains(t, content, "seed_source: public")
+	assert.Contains(t, content, "protocol: redis")
+	assert.Contains(t, content, "protocol: s3")
+
+	cfg, err := config.Parse(raw)
+	require.NoError(t, err)
+	require.NoError(t, cfg.Validate())
+	assert.Equal(t, "schema", cfg.Defaults.Database.Mode)
+	assert.Equal(t, "public", cfg.Defaults.Database.SeedSource)
+
+	svc, ok := cfg.Services["api"]
+	require.True(t, ok)
+	require.Len(t, svc.AsyncRoutes, 2)
+	assert.Equal(t, "redis", svc.AsyncRoutes[0].Protocol)
+	assert.Equal(t, "cache", svc.AsyncRoutes[0].Target)
+	assert.Equal(t, "s3", svc.AsyncRoutes[1].Protocol)
+	assert.Equal(t, "uploads", svc.AsyncRoutes[1].Target)
+}
+
+func TestInitCmd_ConfigScaffolding_MultiServiceAsyncRoutesScopedPerService(t *testing.T) {
+	tmpDir := t.TempDir()
+	apiDir := filepath.Join(tmpDir, "services", "api")
+	paymentsDir := filepath.Join(tmpDir, "services", "payments")
+	require.NoError(t, os.MkdirAll(apiDir, 0o755))
+	require.NoError(t, os.MkdirAll(paymentsDir, 0o755))
+
+	require.NoError(t, os.WriteFile(filepath.Join(apiDir, "package.json"), []byte(`{"name":"api","dependencies":{"express":"^4.18.0"}}`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(paymentsDir, "package.json"), []byte(`{"name":"payments","dependencies":{"ioredis":"^5.3.2"}}`), 0o644))
+
+	outFile := filepath.Join(tmpDir, ".diverge.yaml")
+	require.NoError(t, runInitConfig(outFile, false))
+
+	raw, err := os.ReadFile(outFile)
+	require.NoError(t, err)
+	cfg, err := config.Parse(raw)
+	require.NoError(t, err)
+	require.NoError(t, cfg.Validate())
+
+	apiSvc, ok := cfg.Services["api"]
+	require.True(t, ok)
+	assert.Empty(t, apiSvc.AsyncRoutes, "api service should not inherit payments' redis route")
+
+	paymentsSvc, ok := cfg.Services["payments"]
+	require.True(t, ok)
+	require.Len(t, paymentsSvc.AsyncRoutes, 1)
+	assert.Equal(t, "redis", paymentsSvc.AsyncRoutes[0].Protocol)
+	assert.Equal(t, "cache", paymentsSvc.AsyncRoutes[0].Target)
+}
+
+func TestInitCmd_ConfigScaffolding_PrismaProviderPostgresDetection(t *testing.T) {
+	t.Run("sqlite prisma schema does not enable postgres schema mode", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		prismaDir := filepath.Join(tmpDir, "prisma")
+		require.NoError(t, os.MkdirAll(prismaDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(prismaDir, "schema.prisma"), []byte(`
+datasource db {
+	provider = "sqlite"
+	url      = "file:./dev.db"
+}
+`), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "package.json"), []byte(`{"dependencies":{"prisma":"^5.0.0","drizzle-orm":"^0.30.0"}}`), 0o644))
+
+		outFile := filepath.Join(tmpDir, ".diverge.yaml")
+		require.NoError(t, runInitConfig(outFile, false))
+
+		raw, err := os.ReadFile(outFile)
+		require.NoError(t, err)
+		cfg, err := config.Parse(raw)
+		require.NoError(t, err)
+		assert.Empty(t, cfg.Defaults.Database.Mode)
+	})
+
+	t.Run("postgresql prisma schema enables postgres schema mode", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		prismaDir := filepath.Join(tmpDir, "prisma")
+		require.NoError(t, os.MkdirAll(prismaDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(prismaDir, "schema.prisma"), []byte(`
+datasource db {
+	provider = "postgresql"
+	url      = env("DATABASE_URL")
+}
+`), 0o644))
+
+		outFile := filepath.Join(tmpDir, ".diverge.yaml")
+		require.NoError(t, runInitConfig(outFile, false))
+
+		raw, err := os.ReadFile(outFile)
+		require.NoError(t, err)
+		cfg, err := config.Parse(raw)
+		require.NoError(t, err)
+		assert.Equal(t, "schema", cfg.Defaults.Database.Mode)
+		assert.Equal(t, "public", cfg.Defaults.Database.SeedSource)
+	})
+}

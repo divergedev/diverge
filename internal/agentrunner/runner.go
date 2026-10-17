@@ -360,10 +360,10 @@ func (r *Runner) CheckPreviewHealth(ctx context.Context) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode >= http.StatusInternalServerError {
-		return fmt.Errorf("preview health check returned HTTP %d", resp.StatusCode)
+	if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+		return nil
 	}
-	return nil
+	return fmt.Errorf("preview health check returned HTTP %d", resp.StatusCode)
 }
 
 // Run executes the end-to-end autonomous agent workflow: token resolution, repo clone,
@@ -422,6 +422,8 @@ func (r *Runner) Run(ctx context.Context) (*RunResult, error) {
 				fmt.Sprintf("DIVERGE_ITERATION=%d", iter),
 				fmt.Sprintf("DIVERGE_OBJECTIVE=%s", r.Config.Objective),
 				fmt.Sprintf("DIVERGE_PREVIEW_URL=%s", r.Config.PreviewURL),
+				fmt.Sprintf("DIVERGE_PREVIEW_HEADER_KEY=%s", r.Config.PreviewHeaderKey),
+				fmt.Sprintf("DIVERGE_PREVIEW_HEADER_VALUE=%s", r.Config.PreviewHeaderValue),
 				fmt.Sprintf("DIVERGE_MCP_URL=%s", r.Config.MCPURL),
 			}
 			if lastFailure != "" {
@@ -442,7 +444,12 @@ func (r *Runner) Run(ctx context.Context) (*RunResult, error) {
 		}
 
 		if r.Config.VerifyCommand != "" {
-			if verifyOut, err := exec.Run(ctx, r.Config.WorkspaceDir, nil, "sh", "-c", r.Config.VerifyCommand); err != nil {
+			verifyEnv := []string{
+				fmt.Sprintf("DIVERGE_PREVIEW_URL=%s", r.Config.PreviewURL),
+				fmt.Sprintf("DIVERGE_PREVIEW_HEADER_KEY=%s", r.Config.PreviewHeaderKey),
+				fmt.Sprintf("DIVERGE_PREVIEW_HEADER_VALUE=%s", r.Config.PreviewHeaderValue),
+			}
+			if verifyOut, err := exec.Run(ctx, r.Config.WorkspaceDir, verifyEnv, "sh", "-c", r.Config.VerifyCommand); err != nil {
 				lastFailure = strings.TrimSpace(verifyOut)
 				if lastFailure == "" {
 					lastFailure = err.Error()

@@ -8,7 +8,16 @@ service ClusterService {
   rpc GetClusterInfo(GetClusterInfoRequest) returns (GetClusterInfoResponse);
 }
 
-message GetClusterInfoRequest {}
+message GetClusterInfoRequest {
+  string namespace = 1;
+}
+
+message NamespaceQuotaInfo {
+  int32 max_active_environments = 1;
+  int32 max_cnpg_clusters = 2;
+  double max_hourly_cost_usd = 3;
+  string quota_exceed_policy = 4;
+}
 
 message GetClusterInfoResponse {
   int32 environment_count = 1;
@@ -16,4 +25,5 @@ message GetClusterInfoResponse {
   string controller_version = 3;
   repeated string namespaces = 4;
   bool controller_healthy = 5;
+  NamespaceQuotaInfo namespace_quota = 6;
 }

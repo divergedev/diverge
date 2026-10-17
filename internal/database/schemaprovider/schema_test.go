@@ -391,6 +391,8 @@ func TestSchemaDatabaseProvider_Provision_SeedSource_ConfigMap(t *testing.T) {
 	assert.Contains(t, res.SetupSQL, "-- Seed SQL from ConfigMap preview-seed")
 	assert.Contains(t, res.SetupSQL, `SET LOCAL search_path TO "preview_test_env", public;`)
 	assert.Contains(t, res.SetupSQL, "INSERT INTO users (id, email) VALUES (1, 'dev@example.com') ON CONFLICT DO NOTHING;")
+	assert.Contains(t, res.SetupSQL, "DO $diverge_refresh_matviews$")
+	assert.Contains(t, res.SetupSQL, "REFRESH MATERIALIZED VIEW %I.%I")
 	assert.Contains(t, mockExec.lastSQL, "INSERT INTO users (id, email) VALUES (1, 'dev@example.com') ON CONFLICT DO NOTHING;")
 }
 
@@ -424,23 +426,63 @@ func TestSchemaDatabaseProvider_Provision_ClonesForeignKeysAndViews(t *testing.T
 	assert.Contains(t, res.SetupSQL, "DEFERRABLE INITIALLY IMMEDIATE")
 	assert.Contains(t, res.SetupSQL, "ALTER TABLE %I.%I ADD CONSTRAINT %I %s")
 
-	// Verify view cloning sets preview search_path before pg_get_viewdef and orders by dependency depth
+	// Verify sequence default remapping handles public-qualified and unqualified nextval(...), while preserving external schema sequences
+	assert.Contains(t, res.SetupSQL, `AND column_default ~* 'nextval\(''(?:public\.|"public"\.|[^''.]+'')'`)
+	assert.Contains(t, res.SetupSQL, `regexp_replace(col_row.column_default, 'nextval\(''(?:public\.|"public"\.)?([^''.]+)''', format('nextval(''%I.\1''', 'preview_fk_view_env'))`)
+
+	// Verify view and materialized view cloning sets preview search_path before pg_get_viewdef and orders by dependency depth
 	searchPathIdx := strings.Index(mockExec.lastSQL, "PERFORM set_config('search_path', quote_ident('preview_fk_view_env') || ', public', true);")
 	viewLoopIdx := strings.Index(mockExec.lastSQL, "FOR view_row IN")
 	assert.Greater(t, searchPathIdx, 0, "executed DO block must set preview search_path before cloning views")
 	assert.Less(t, searchPathIdx, viewLoopIdx, "set_config('search_path', ...) must run before FOR view_row IN")
 	assert.Contains(t, res.SetupSQL, "WITH RECURSIVE public_views AS")
+	assert.Contains(t, res.SetupSQL, "WHERE n.nspname = 'public' AND c.relkind IN ('v', 'm')")
 	assert.Contains(t, res.SetupSQL, "JOIN pg_rewrite r ON r.ev_class = v.oid")
 	assert.Contains(t, res.SetupSQL, "JOIN pg_depend d ON d.objid = r.oid")
 	assert.Contains(t, res.SetupSQL, "ORDER BY level ASC, table_name ASC")
+	assert.Contains(t, res.SetupSQL, "IF view_row.view_kind = 'm' THEN")
+	assert.Contains(t, res.SetupSQL, "DROP MATERIALIZED VIEW IF EXISTS %I.%I CASCADE")
+	assert.Contains(t, res.SetupSQL, "CREATE MATERIALIZED VIEW %I.%I AS %s")
 	assert.Contains(t, res.SetupSQL, "CREATE OR REPLACE VIEW %I.%I AS %s")
 
-	// Verify seed SQL defers constraints and orders tables by recursive FK dependency depth
+	// Verify seed SQL defers constraints, orders tables by recursive FK dependency depth, and refreshes materialized views post-seed
 	assert.Contains(t, res.SetupSQL, "SET CONSTRAINTS ALL DEFERRED;")
 	assert.Contains(t, res.SetupSQL, "WITH RECURSIVE seed_tables AS")
 	assert.Contains(t, res.SetupSQL, "fk_deps AS")
 	assert.Contains(t, res.SetupSQL, "dep_levels AS")
 	assert.Contains(t, res.SetupSQL, "ordered_seed_tables AS")
+	assert.Contains(t, res.SetupSQL, "DO $diverge_refresh_matviews$")
+	assert.Contains(t, res.SetupSQL, "REFRESH MATERIALIZED VIEW %I.%I")
+}
+
+func TestSchemaDatabaseProvider_Sanitize_LongNamesNoCollision(t *testing.T) {
+	sharedPrefix := strings.Repeat("feature_long_branch_name_", 2) + "abcde" // 55 chars
+	require.Len(t, sharedPrefix, 55)
+
+	nameA := sharedPrefix + "_variant_alpha_1" // 71 chars
+	nameB := sharedPrefix + "_variant_bravo_2" // 71 chars
+
+	sanitizedA, err := sanitizeEnvName(nameA)
+	require.NoError(t, err)
+	sanitizedB, err := sanitizeEnvName(nameB)
+	require.NoError(t, err)
+
+	assert.LessOrEqual(t, len(sanitizedA), 55)
+	assert.LessOrEqual(t, len(sanitizedB), 55)
+	assert.Contains(t, sanitizedA, "__", "truncated name must use __ separator before digest")
+	assert.NotEqual(t, sanitizedA, sanitizedB, "long environment names sharing a 55-char prefix must not collide")
+
+	// A literal 55-char name forged to look like sanitizedA has consecutive underscores collapsed,
+	// so it can never collide with the truncated name sanitizedA.
+	forgedSanitized, err := sanitizeEnvName(sanitizedA)
+	require.NoError(t, err)
+	assert.NotContains(t, forgedSanitized, "__")
+	assert.NotEqual(t, sanitizedA, forgedSanitized, "truncated name must be disjoint from non-truncated names")
+
+	// Deterministic across calls
+	sanitizedA2, err := sanitizeEnvName(nameA)
+	require.NoError(t, err)
+	assert.Equal(t, sanitizedA, sanitizedA2)
 }
 
 func TestSchemaDatabaseProvider_SharedDBPoolReuseAndClose(t *testing.T) {

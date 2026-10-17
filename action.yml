@@ -7,7 +7,7 @@ branding:
 
 inputs:
   action:
-    description: "Action to execute: validate, diff, deploy, or teardown"
+    description: "Action to perform: validate, diff, deploy, verify, or teardown"
     required: false
     default: "deploy"
   version:
@@ -78,6 +78,22 @@ inputs:
     description: "Timeout when waiting for PreviewGroup readiness"
     required: false
     default: "180s"
+  verify:
+    description: "Run diverge verify after deploy (true/false)"
+    required: false
+    default: "false"
+  verify-path:
+    description: "HTTP path to probe during verify"
+    required: false
+    default: "/"
+  verify-compare-baseline:
+    description: "Compare preview response against baseline during verify (true/false)"
+    required: false
+    default: "false"
+  verify-max-latency:
+    description: "Maximum allowed HTTP latency during verify (e.g. 2s)"
+    required: false
+    default: "5s"
   dry-run:
     description: "Render PreviewGroup manifest without applying to Kubernetes"
     required: false
@@ -141,5 +157,9 @@ runs:
         INPUT_BASE_URL: ${{ inputs.base-url }}
         INPUT_WAIT: ${{ inputs.wait }}
         INPUT_WAIT_TIMEOUT: ${{ inputs.wait-timeout }}
+        INPUT_VERIFY: ${{ inputs.verify }}
+        INPUT_VERIFY_PATH: ${{ inputs.verify-path }}
+        INPUT_VERIFY_COMPARE_BASELINE: ${{ inputs.verify-compare-baseline }}
+        INPUT_VERIFY_MAX_LATENCY: ${{ inputs.verify-max-latency }}
         INPUT_DRY_RUN: ${{ inputs.dry-run }}
       run: "${{ github.action_path }}/scripts/ci-preview.sh"

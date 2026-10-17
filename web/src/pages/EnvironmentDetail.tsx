@@ -71,15 +71,26 @@ export default function EnvironmentDetail() {
     return <div className="text-center py-16"><h2 className="text-xl font-semibold">Environment not found</h2></div>
   }
 
+  const annotations = env.annotations ?? (env as { metadata?: { annotations?: Record<string, string> } }).metadata?.annotations ?? {}
   const featureFlagCount = Object.keys(env.spec?.features?.overrides ?? {}).length
   const hibernated = isEnvironmentHibernated(env)
   const magicUrl = buildMagicPreviewUrl(env)
   const estimatedCost = formatHourlyCostUSD(estimateEnvironmentHourlyCostUSD(env))
   const hibernationLabel = hibernated
     ? 'Hibernated (0 replicas)'
-    : env.annotations?.['divergedev.com/hibernate-after']
-      ? `Auto after ${env.annotations['divergedev.com/hibernate-after']}`
+    : annotations['divergedev.com/hibernate-after']
+      ? `Auto after ${annotations['divergedev.com/hibernate-after']}`
       : 'Active'
+  const isDrifted = Boolean(env.status?.conditions?.some(c => c.type === 'BaselineDriftDetected' && c.status === 'True'))
+  const driftCondition = env.status?.conditions?.find(c => c.type === 'BaselineDriftDetected')
+  const driftPolicy = annotations['divergedev.com/drift-policy'] || 'warn'
+  const baselineFingerprint = annotations['divergedev.com/baseline-fingerprint'] || ''
+  const dbMode = env.spec?.database?.mode && env.spec.database.mode !== 'none' ? env.spec.database.mode : ''
+  const dbProvider = env.status?.databaseProvider || ''
+  const asyncRoutes = env.spec?.routing?.asyncRoutes ?? []
+  const asyncEnvVars = env.status?.asyncEnvVars ?? {}
+  const asyncEnvEntries = Object.entries(asyncEnvVars)
+  const showIsolationCard = Boolean(dbMode || dbProvider || asyncEnvEntries.length > 0 || asyncRoutes.length > 0)
 
   const handleCopyMagicLink = async () => {
     if (!magicUrl) return
@@ -102,7 +113,7 @@ export default function EnvironmentDetail() {
           resourceVersion: env.resourceVersion,
           labels: env.labels,
           annotations: {
-            ...(env.annotations ?? {}),
+            ...annotations,
             'divergedev.com/hibernated': nextHibernated ? 'true' : 'false',
           },
           spec: env.spec,
@@ -112,6 +123,29 @@ export default function EnvironmentDetail() {
       setSuccessMessage(nextHibernated ? 'Environment hibernated (scaled to 0 replicas)' : 'Environment waking up')
     } catch (err) {
       setMutationError(err instanceof Error ? err.message : 'Failed to update hibernation state')
+    }
+  }
+
+  const handleSyncBaseline = async () => {
+    setMutationError(null)
+    try {
+      await updateEnv.mutateAsync({
+        environment: {
+          name: env.name,
+          namespace: env.namespace,
+          resourceVersion: env.resourceVersion,
+          labels: env.labels,
+          annotations: {
+            ...annotations,
+            'divergedev.com/drift-policy': 'sync',
+          },
+          spec: env.spec,
+        },
+        updateMask: { paths: ['annotations'] },
+      })
+      setSuccessMessage('Baseline drift policy set to sync')
+    } catch (err) {
+      setMutationError(err instanceof Error ? err.message : 'Failed to sync with baseline')
     }
   }
 
@@ -139,7 +173,14 @@ export default function EnvironmentDetail() {
     }
   }
 
-  const conditionPhase = (status: string): string => {
+  const conditionPhase = (type: string, status: string): string => {
+    if (type === 'BaselineDriftDetected') {
+      switch (status) {
+        case 'False': return 'Ready'
+        case 'True': return 'Pending'
+        default: return 'Pending'
+      }
+    }
     switch (status) {
       case 'True': return 'Ready'
       case 'False': return 'Error'
@@ -161,6 +202,21 @@ export default function EnvironmentDetail() {
         <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-400 px-4 py-3 rounded-md flex items-center gap-2 text-sm animate-in fade-in slide-in-from-top-2" role="status">
           <CheckCircle className="h-4 w-4 flex-shrink-0" />
           {successMessage}
+        </div>
+      )}
+
+      {isDrifted && (
+        <div className="bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-400 px-4 py-3 rounded-md flex items-center justify-between gap-4 text-sm">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 flex-shrink-0" />
+            <span>
+              <strong>Baseline Drift Detected:</strong>{' '}
+              {driftCondition?.message || 'Baseline workload, ConfigMap, or Secret changed since this preview was deployed.'}
+            </span>
+          </div>
+          <Button variant="outline" size="sm" onClick={handleSyncBaseline} disabled={updateEnv.isPending}>
+            Sync with Baseline
+          </Button>
         </div>
       )}
 
@@ -279,6 +335,18 @@ export default function EnvironmentDetail() {
                   <span className="text-muted-foreground">Hibernation</span>
                   <span className="font-medium">{hibernationLabel}</span>
                 </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Baseline Drift Policy</span>
+                  <span className="font-mono font-medium">{driftPolicy}</span>
+                </div>
+                {baselineFingerprint && (
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-muted-foreground">Baseline Fingerprint</span>
+                    <span className="font-mono text-xs truncate max-w-[180px]" title={baselineFingerprint}>
+                      {baselineFingerprint}
+                    </span>
+                  </div>
+                )}
               </CardContent>
             </Card>
             <Card>
@@ -295,7 +363,7 @@ export default function EnvironmentDetail() {
                     {env.status.conditions.map((c: { type: string; status: string }, i: number) => (
                       <div key={i} className="flex items-center justify-between text-sm">
                         <span>{c.type}</span>
-                        <StatusBadge phase={conditionPhase(c.status)} />
+                        <StatusBadge phase={conditionPhase(c.type, c.status)} />
                       </div>
                     ))}
                   </div>
@@ -303,6 +371,47 @@ export default function EnvironmentDetail() {
               </CardContent>
             </Card>
           </div>
+          {showIsolationCard && (
+            <Card className="mt-4">
+              <CardHeader><CardTitle className="text-base">Isolation &amp; Data Prefixes</CardTitle></CardHeader>
+              <CardContent className="space-y-3 text-sm">
+                {(dbMode || dbProvider) && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Database Isolation</span>
+                    <span className="font-mono font-medium">
+                      {dbMode || dbProvider}
+                      {dbProvider && dbMode && dbProvider !== dbMode ? ` (${dbProvider})` : ''}
+                    </span>
+                  </div>
+                )}
+                {asyncRoutes.length > 0 && (
+                  <div className="space-y-1">
+                    <span className="text-muted-foreground text-xs uppercase tracking-wider">Async Routes</span>
+                    <div className="flex flex-wrap gap-2">
+                      {asyncRoutes.map((route, idx) => (
+                        <span key={idx} className="inline-flex items-center rounded bg-muted px-2 py-0.5 font-mono text-xs">
+                          {route.protocol}: {route.target}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {asyncEnvEntries.length > 0 && (
+                  <div className="space-y-1">
+                    <span className="text-muted-foreground text-xs uppercase tracking-wider">Injected Prefix Variables</span>
+                    <div className="space-y-1">
+                      {asyncEnvEntries.map(([key, val]) => (
+                        <div key={key} className="flex items-center justify-between bg-muted/50 px-2.5 py-1 rounded font-mono text-xs">
+                          <span>{key}</span>
+                          <span className="text-muted-foreground">{val}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
 
         <TabsContent value="hooks">

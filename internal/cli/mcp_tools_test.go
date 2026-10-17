@@ -566,3 +566,113 @@ func TestRegisterFetchErrors_ServerCanceledWhileContextActive(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, data["error"], "server cancelled call")
 }
+
+func TestRegisterVerify_SuccessAndBaselineParity(t *testing.T) {
+	var seenHeaders []string
+	previewSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenHeaders = append(seenHeaders, r.Header.Get("x-custom-env"))
+		assert.Equal(t, "/api/health", r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer previewSrv.Close()
+
+	client := &mockEnvClient{
+		getEnvResponse: &divergev1alpha1.GetEnvironmentResponse{
+			Environment: &divergev1alpha1.Environment{
+				Name:      "pr-42",
+				Namespace: "default",
+				Spec: &divergev1alpha1.EnvironmentSpec{
+					Routing: &divergev1alpha1.EnvironmentRouting{
+						HeaderKey:   "x-custom-env",
+						HeaderValue: "custom-42",
+					},
+				},
+				Status: &divergev1alpha1.EnvironmentStatus{
+					Phase: "Running",
+					Url:   previewSrv.URL,
+				},
+			},
+		},
+	}
+
+	registry := mcpruntime.NewToolRegistry()
+	registerCustomTools(registry, client)
+
+	var foundInCustomTools bool
+	for _, def := range customTools() {
+		if def.Name == "diverge_verify" {
+			foundInCustomTools = true
+			break
+		}
+	}
+	assert.True(t, foundInCustomTools, "diverge_verify must be listed in customTools()")
+
+	handler, ok := registry.Lookup("diverge_verify")
+	require.True(t, ok)
+
+	args, _ := json.Marshal(map[string]any{
+		"name":             "pr-42",
+		"namespace":        "default",
+		"path":             "/api/health",
+		"expect_status":    200,
+		"max_latency_ms":   5000,
+		"compare_baseline": true,
+	})
+	res, err := handler(context.Background(), mcpruntime.ToolRequest{
+		ToolName:  "diverge_verify",
+		Arguments: args,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.False(t, res.IsError)
+
+	var report map[string]any
+	require.NoError(t, json.Unmarshal(res.Content, &report))
+	assert.Equal(t, true, report["passed"])
+	assert.Equal(t, previewSrv.URL+"/api/health", report["url"])
+	assert.Equal(t, "x-custom-env: custom-42", report["header"])
+
+	checks, ok := report["checks"].([]any)
+	require.True(t, ok)
+	assert.Len(t, checks, 4) // workload-diagnostics, http-status, latency-slo, baseline-parity
+	assert.Equal(t, []string{"custom-42", ""}, seenHeaders)
+}
+
+func TestRegisterVerify_FailsOn404Status(t *testing.T) {
+	previewSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer previewSrv.Close()
+
+	client := &mockEnvClient{
+		getEnvResponse: &divergev1alpha1.GetEnvironmentResponse{
+			Environment: &divergev1alpha1.Environment{
+				Name:      "pr-404",
+				Namespace: "default",
+				Status: &divergev1alpha1.EnvironmentStatus{
+					Phase: "Running",
+					Url:   previewSrv.URL,
+				},
+			},
+		},
+	}
+
+	registry := mcpruntime.NewToolRegistry()
+	registerVerify(registry, client)
+
+	handler, ok := registry.Lookup("diverge_verify")
+	require.True(t, ok)
+
+	res, err := handler(context.Background(), mcpruntime.ToolRequest{
+		ToolName:  "diverge_verify",
+		Arguments: []byte(`{"name": "pr-404"}`),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.True(t, res.IsError)
+
+	var report map[string]any
+	require.NoError(t, json.Unmarshal(res.Content, &report))
+	assert.Equal(t, false, report["passed"])
+}

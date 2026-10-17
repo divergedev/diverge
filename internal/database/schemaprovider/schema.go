@@ -217,11 +217,16 @@ var ErrInvalidSchemaName = fmt.Errorf("invalid schema name: must match ^[a-z0-9]
 
 func sanitizeEnvName(name string) (string, error) {
 	s := strings.ToLower(strings.ReplaceAll(name, "-", "_"))
-	if len(s) > 55 {
-		s = s[:55]
-	}
 	if s == "" || !validSchemaName.MatchString(s) {
 		return "", ErrInvalidSchemaName
+	}
+	for strings.Contains(s, "__") {
+		s = strings.ReplaceAll(s, "__", "_")
+	}
+	s = strings.TrimRight(s, "_")
+	if len(s) > 55 {
+		sum := sha256.Sum256([]byte(strings.ToLower(name)))
+		s = strings.TrimRight(s[:45], "_") + "__" + hex.EncodeToString(sum[:4])
 	}
 	return s, nil
 }
@@ -264,16 +269,17 @@ BEGIN
         EXECUTE format('CREATE SEQUENCE IF NOT EXISTS %%I.%%I', '%[1]s', seq_row.sequence_name);
     END LOOP;
 
-    -- Re-map column defaults to use preview schema sequences
+    -- Re-map column defaults to use preview schema sequences (only public or unqualified sequences)
     FOR col_row IN
         SELECT table_name, column_name, column_default
         FROM information_schema.columns
         WHERE table_schema = '%[1]s'
-        AND column_default LIKE 'nextval(''%%public.%%'
+        AND column_default ~* 'nextval\(''(?:public\.|"public"\.|[^''.]+'')'
+        AND column_default NOT LIKE 'nextval(''%[1]s.%%'
     LOOP
         EXECUTE format('ALTER TABLE %%I.%%I ALTER COLUMN %%I SET DEFAULT %%s',
             '%[1]s', col_row.table_name, col_row.column_name,
-            replace(col_row.column_default, '''public.', '''%[1]s.'));
+            regexp_replace(col_row.column_default, 'nextval\(''(?:public\.|"public"\.)?([^''.]+)''', format('nextval(''%%I.\1''', '%[1]s')));
     END LOOP;
 
     -- Clone FOREIGN KEY constraints from public schema tables, rewriting intra-schema references to the preview schema
@@ -325,16 +331,16 @@ BEGIN
         END IF;
     END LOOP;
 
-    -- Clone VIEW definitions from public schema into the preview schema in dependency order.
+    -- Clone VIEW and MATERIALIZED VIEW definitions from public schema into the preview schema in dependency order.
     -- Set search_path to the preview schema first so cloned preview tables shadow their
     -- public counterparts and pg_get_viewdef emits explicit public.<name> qualifiers.
     PERFORM set_config('search_path', quote_ident('%[1]s') || ', public', true);
     FOR view_row IN
         WITH RECURSIVE public_views AS (
-            SELECT c.oid, c.relname AS table_name, pg_get_viewdef(c.oid, true) AS view_definition
+            SELECT c.oid, c.relname AS table_name, c.relkind AS view_kind, pg_get_viewdef(c.oid, true) AS view_definition
             FROM pg_class c
             JOIN pg_namespace n ON n.oid = c.relnamespace
-            WHERE n.nspname = 'public' AND c.relkind = 'v'
+            WHERE n.nspname = 'public' AND c.relkind IN ('v', 'm')
         ),
         view_deps AS (
             SELECT DISTINCT
@@ -349,23 +355,23 @@ BEGIN
               AND dep_v.oid <> v.oid
         ),
         view_levels AS (
-            SELECT pv.oid, pv.table_name, pv.view_definition, 0 AS depth, ARRAY[pv.oid] AS path
+            SELECT pv.oid, pv.table_name, pv.view_kind, pv.view_definition, 0 AS depth, ARRAY[pv.oid] AS path
             FROM public_views pv
             WHERE NOT EXISTS (SELECT 1 FROM view_deps vd WHERE vd.view_oid = pv.oid)
             UNION ALL
-            SELECT pv.oid, pv.table_name, pv.view_definition, vl.depth + 1, vl.path || pv.oid
+            SELECT pv.oid, pv.table_name, pv.view_kind, pv.view_definition, vl.depth + 1, vl.path || pv.oid
             FROM view_levels vl
             JOIN view_deps vd ON vd.ref_view_oid = vl.oid
             JOIN public_views pv ON pv.oid = vd.view_oid
             WHERE NOT (pv.oid = ANY(vl.path))
         ),
         ordered_views AS (
-            SELECT pv.table_name, pv.view_definition, COALESCE(MAX(vl.depth), 0) AS level
+            SELECT pv.table_name, pv.view_kind, pv.view_definition, COALESCE(MAX(vl.depth), 0) AS level
             FROM public_views pv
             LEFT JOIN view_levels vl ON vl.oid = pv.oid
-            GROUP BY pv.oid, pv.table_name, pv.view_definition
+            GROUP BY pv.oid, pv.table_name, pv.view_kind, pv.view_definition
         )
-        SELECT table_name, view_definition
+        SELECT table_name, view_kind, view_definition
         FROM ordered_views
         ORDER BY level ASC, table_name ASC
     LOOP
@@ -440,8 +446,15 @@ BEGIN
                     v_idx := v_idx + 1;
                 END IF;
             END LOOP;
-            EXECUTE format('CREATE OR REPLACE VIEW %%I.%%I AS %%s',
-                '%[1]s', view_row.table_name, view_def);
+            IF view_row.view_kind = 'm' THEN
+                EXECUTE format('DROP MATERIALIZED VIEW IF EXISTS %%I.%%I CASCADE',
+                    '%[1]s', view_row.table_name);
+                EXECUTE format('CREATE MATERIALIZED VIEW %%I.%%I AS %%s',
+                    '%[1]s', view_row.table_name, view_def);
+            ELSE
+                EXECUTE format('CREATE OR REPLACE VIEW %%I.%%I AS %%s',
+                    '%[1]s', view_row.table_name, view_def);
+            END IF;
         END IF;
     END LOOP;
 END
@@ -550,6 +563,62 @@ $diverge_verify_public$;
 	result.SetupSQLExecuted = true
 	return result, nil
 }
+
+// editorconfig-checker-disable
+func refreshMaterializedViewsSQL(schema string) string {
+	return fmt.Sprintf(`
+DO $diverge_refresh_matviews$
+DECLARE
+    mv_row record;
+BEGIN
+    FOR mv_row IN
+        WITH RECURSIVE preview_matviews AS (
+            SELECT c.oid, c.relname AS matview_name
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = '%[1]s' AND c.relkind = 'm'
+        ),
+        mv_deps AS (
+            SELECT DISTINCT
+                m.oid AS mv_oid,
+                dep_m.oid AS ref_mv_oid
+            FROM preview_matviews m
+            JOIN pg_rewrite r ON r.ev_class = m.oid
+            JOIN pg_depend d ON d.objid = r.oid
+            JOIN preview_matviews dep_m ON dep_m.oid = d.refobjid
+            WHERE d.classid = 'pg_rewrite'::regclass
+              AND d.refclassid = 'pg_class'::regclass
+              AND dep_m.oid <> m.oid
+        ),
+        mv_levels AS (
+            SELECT pm.oid, pm.matview_name, 0 AS depth, ARRAY[pm.oid] AS path
+            FROM preview_matviews pm
+            WHERE NOT EXISTS (SELECT 1 FROM mv_deps md WHERE md.mv_oid = pm.oid)
+            UNION ALL
+            SELECT pm.oid, pm.matview_name, ml.depth + 1, ml.path || pm.oid
+            FROM mv_levels ml
+            JOIN mv_deps md ON md.ref_mv_oid = ml.oid
+            JOIN preview_matviews pm ON pm.oid = md.mv_oid
+            WHERE NOT (pm.oid = ANY(ml.path))
+        ),
+        ordered_matviews AS (
+            SELECT pm.matview_name, COALESCE(MAX(ml.depth), 0) AS level
+            FROM preview_matviews pm
+            LEFT JOIN mv_levels ml ON ml.oid = pm.oid
+            GROUP BY pm.oid, pm.matview_name
+        )
+        SELECT matview_name
+        FROM ordered_matviews
+        ORDER BY level ASC, matview_name ASC
+    LOOP
+        EXECUTE format('REFRESH MATERIALIZED VIEW %%I.%%I', '%[1]s', mv_row.matview_name);
+    END LOOP;
+END
+$diverge_refresh_matviews$;
+`, schema)
+}
+
+// editorconfig-checker-enable
 
 func (p *SchemaDatabaseProvider) buildSeedSQL(ctx context.Context, env *v1alpha1.Environment, schema, schemaIdent string) (string, error) {
 	if env == nil {
@@ -680,7 +749,7 @@ BEGIN
     END LOOP;
 END
 $diverge_seed$;
-`, schema, srcSchema), nil
+`, schema, srcSchema) + refreshMaterializedViewsSQL(schema), nil
 		// editorconfig-checker-enable
 	}
 
@@ -726,7 +795,7 @@ $diverge_seed$;
 		return "", fmt.Errorf("seedSource ConfigMap %s/%s does not contain non-empty SQL in key %q", ns, cmName, key)
 	}
 
-	return fmt.Sprintf("\n-- Seed SQL from ConfigMap %s\nSET LOCAL search_path TO %s, public;\n%s\n", cm.Name, schemaIdent, strings.TrimSpace(sqlText)), nil
+	return fmt.Sprintf("\n-- Seed SQL from ConfigMap %s\nSET LOCAL search_path TO %s, public;\n%s\n", cm.Name, schemaIdent, strings.TrimSpace(sqlText)) + refreshMaterializedViewsSQL(schema), nil
 }
 
 // Teardown performs its designated operation.

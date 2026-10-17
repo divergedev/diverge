@@ -47,16 +47,16 @@ describe('finops utilities', () => {
   })
 
   describe('estimateEnvironmentHourlyCostUSD', () => {
-    it('returns default pod cost ($0.025) when no resources or database are specified', () => {
+    it('returns default pod cost ($0.012) when no resources or database are specified', () => {
       const cost = estimateEnvironmentHourlyCostUSD({
         name: 'pr-1',
         status: { phase: 'Ready' },
       })
-      expect(cost).toBeCloseTo(0.025, 6)
-      expect(formatHourlyCostUSD(cost)).toBe('$0.025/hr')
+      expect(cost).toBeCloseTo(0.012, 6)
+      expect(formatHourlyCostUSD(cost)).toBe('$0.012/hr')
     })
 
-    it('adds schema database cost (+$0.005 = $0.030)', () => {
+    it('adds schema database cost (+$0.010 = $0.022)', () => {
       const cost = estimateEnvironmentHourlyCostUSD({
         name: 'pr-2',
         spec: {
@@ -64,24 +64,24 @@ describe('finops utilities', () => {
         },
         status: { phase: 'Ready' },
       })
-      expect(cost).toBeCloseTo(0.03, 6)
-      expect(formatHourlyCostUSD(cost)).toBe('$0.030/hr')
+      expect(cost).toBeCloseTo(0.022, 6)
+      expect(formatHourlyCostUSD(cost)).toBe('$0.022/hr')
     })
 
-    it('adds cnpg/neon and snapshot/fresh database costs accurately', () => {
+    it('adds cnpg/neon and snapshot/fresh database costs accurately (+$0.080 = $0.092)', () => {
       const cnpgCost = estimateEnvironmentHourlyCostUSD({
         name: 'pr-cnpg',
         spec: { database: { mode: 'cnpg' } },
         status: { phase: 'Ready' },
       })
-      expect(cnpgCost).toBeCloseTo(0.075, 6)
+      expect(cnpgCost).toBeCloseTo(0.092, 6)
 
       const snapshotCost = estimateEnvironmentHourlyCostUSD({
         name: 'pr-snap',
         spec: { database: { mode: 'snapshot' } },
         status: { phase: 'Ready' },
       })
-      expect(snapshotCost).toBeCloseTo(0.045, 6)
+      expect(snapshotCost).toBeCloseTo(0.092, 6)
     })
 
     it('computes explicit CPU (500m) and memory (1Gi) requests with replicas', () => {
@@ -132,7 +132,7 @@ describe('finops utilities', () => {
         spec: { database: { mode: 'schema' } },
         status: { phase: 'Ready' },
       })
-      expect(hibernatedWithSchemaDb).toBeCloseTo(0.005, 6)
+      expect(hibernatedWithSchemaDb).toBeCloseTo(0.01, 6)
     })
 
     it('returns 0 when phase is Failed or Terminating', () => {

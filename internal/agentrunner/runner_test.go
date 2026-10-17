@@ -514,3 +514,134 @@ func TestRunner_Run_HaltsOnModelDisallowed(t *testing.T) {
 		t.Fatalf("expected only 2 git setup calls before model halt, got %d: %+v", len(calls), calls)
 	}
 }
+
+func TestRunner_CheckPreviewHealth_StatusCodes(t *testing.T) {
+	cases := []struct {
+		name       string
+		statusCode int
+		wantErr    bool
+	}{
+		{name: "200 OK passes", statusCode: http.StatusOK, wantErr: false},
+		{name: "302 Found passes", statusCode: http.StatusFound, wantErr: false},
+		{name: "401 Unauthorized fails", statusCode: http.StatusUnauthorized, wantErr: true},
+		{name: "403 Forbidden fails", statusCode: http.StatusForbidden, wantErr: true},
+		{name: "404 Not Found fails", statusCode: http.StatusNotFound, wantErr: true},
+		{name: "500 Internal Server Error fails", statusCode: http.StatusInternalServerError, wantErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotHeader string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotHeader = r.Header.Get("x-diverge-env")
+				if tc.statusCode == http.StatusFound {
+					w.Header().Set("Location", "/login")
+				}
+				w.WriteHeader(tc.statusCode)
+			}))
+			defer srv.Close()
+
+			client := srv.Client()
+			client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			}
+
+			runner := &Runner{
+				Config: &Config{
+					PreviewURL:         srv.URL,
+					PreviewHeaderKey:   "x-diverge-env",
+					PreviewHeaderValue: "pr-99",
+				},
+				HTTPClient: client,
+			}
+
+			err := runner.CheckPreviewHealth(context.Background())
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected error for HTTP %d, got nil", tc.statusCode)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected error for HTTP %d: %v", tc.statusCode, err)
+			}
+			if gotHeader != "pr-99" {
+				t.Errorf("got header %q, want %q", gotHeader, "pr-99")
+			}
+		})
+	}
+}
+
+func TestRunner_Run_VerifyCommandReceivesPreviewHeaderEnv(t *testing.T) {
+	t.Setenv("DIVERGE_MACAROON_TOKEN", "inline-macaroon-token")
+
+	meterSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(MeterResponse{
+			Allowed:         true,
+			TotalTokensUsed: 2500,
+			TotalCostUSD:    0.05,
+		})
+	}))
+	defer meterSrv.Close()
+
+	previewSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer previewSrv.Close()
+
+	mockExec := &mockCommandExecutor{}
+	cfg := &Config{
+		TaskName:            "verify-env-test",
+		TaskNamespace:       "default",
+		Objective:           "Verify env vars",
+		RepoURL:             "https://github.com/divergedev/shop.git",
+		BaseBranch:          "main",
+		WorkingBranch:       "agent/verify-env-test",
+		MaxIterations:       1,
+		MeterURL:            meterSrv.URL,
+		PreviewURL:          previewSrv.URL,
+		PreviewHeaderKey:    "x-custom-env",
+		PreviewHeaderValue:  "pr-verify-1",
+		WorkspaceDir:        "/workspace/shop",
+		VerifyCommand:       "./scripts/verify.sh",
+		Model:               "claude-3-7-sonnet",
+		TokensPerIteration:  2500,
+		CostPerIterationUSD: 0.05,
+	}
+
+	runner := &Runner{
+		Config:     cfg,
+		Exec:       mockExec,
+		HTTPClient: meterSrv.Client(),
+		Logger:     &bytes.Buffer{},
+	}
+
+	res, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.Succeeded {
+		t.Fatalf("expected succeeded result, got %+v", res)
+	}
+
+	calls := mockExec.Calls()
+	var verifyCall *recordedCommand
+	for i := range calls {
+		if calls[i].Name == "sh" && len(calls[i].Args) == 2 && calls[i].Args[1] == "./scripts/verify.sh" {
+			verifyCall = &calls[i]
+			break
+		}
+	}
+	if verifyCall == nil {
+		t.Fatalf("expected verify command call, got calls: %+v", calls)
+	}
+
+	envJoined := strings.Join(verifyCall.Env, "\n")
+	for _, expected := range []string{
+		"DIVERGE_PREVIEW_URL=" + previewSrv.URL,
+		"DIVERGE_PREVIEW_HEADER_KEY=x-custom-env",
+		"DIVERGE_PREVIEW_HEADER_VALUE=pr-verify-1",
+	} {
+		if !strings.Contains(envJoined, expected) {
+			t.Errorf("verify command env %v missing %q", verifyCall.Env, expected)
+		}
+	}
+}

@@ -33,7 +33,41 @@ func sanitizeMarkdown(s string) string {
 	return s
 }
 
-var funcMap = template.FuncMap{"sanitize": sanitizeMarkdown}
+var safeShellArg = regexp.MustCompile(`^[A-Za-z0-9._:/@-]+$`)
+
+func shellEscape(s string) string {
+	s = strings.ReplaceAll(s, "`", "")
+	s = strings.ReplaceAll(s, "\r", "")
+	s = strings.ReplaceAll(s, "\n", "")
+	return strings.ReplaceAll(s, "'", `'\''`)
+}
+
+func shellDoubleQuoteEscape(s string) string {
+	s = strings.ReplaceAll(s, "`", "")
+	s = strings.ReplaceAll(s, "\r", "")
+	s = strings.ReplaceAll(s, "\n", "")
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	s = strings.ReplaceAll(s, `$`, `\$`)
+	return s
+}
+
+func shellArg(s string) string {
+	s = strings.ReplaceAll(s, "`", "")
+	s = strings.ReplaceAll(s, "\r", "")
+	s = strings.ReplaceAll(s, "\n", "")
+	if safeShellArg.MatchString(s) {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+var funcMap = template.FuncMap{
+	"sanitize":               sanitizeMarkdown,
+	"shellEscape":            shellEscape,
+	"shellDoubleQuoteEscape": shellDoubleQuoteEscape,
+	"shellArg":               shellArg,
+}
 
 var (
 	createdTemplate  = template.Must(template.New("created").Funcs(funcMap).Parse(createdTmplStr))
@@ -67,13 +101,29 @@ const readyTmplStr = `## 🟢 Diverge Preview Environment — Ready!
 | **Environment** | ` + "`{{.Name | sanitize}}`" + ` |
 | **Branch** | ` + "`{{.Branch | sanitize}}`" + ` |
 | **Deploy Mode** | {{.Mode | sanitize}} ({{.NumServices}} services deployed) |
+{{- if .DatabaseSummary}}
+| **Database** | {{.DatabaseSummary}} |
+{{- end}}
+{{- if .AsyncSummary}}
+| **Async / Storage** | {{.AsyncSummary}} |
+{{- end}}
+{{- if .CostSummary}}
+| **Est. Cost** | {{.CostSummary}} |
+{{- end}}
 | **Deployed In** | {{.Duration}} |
+{{- if .DriftWarning}}
+
+> [!WARNING]
+> **Baseline Drift Detected:** {{.DriftWarning}} (run ` + "`kubectl annotate env {{.Name | sanitize}} divergedev.com/drift-policy=sync --overwrite`" + ` to auto-refresh)
+{{- end}}
 
 ### Services
 {{range .Services}}- ✅ {{. | sanitize}}
 {{end}}
 {{if .BaseURL}}### Quick Access
-` + "```\n" + `curl -H "{{.HeaderKey | sanitize}}: {{if .HeaderValue}}{{.HeaderValue | sanitize}}{{else}}{{.Name | sanitize}}{{end}}" {{.BaseURL}}
+` + "```\n" + `curl -H {{if .HeaderValue}}'{{.HeaderKey | sanitize}}: {{.HeaderValue | shellEscape}}'{{else}}"{{.HeaderKey | sanitize}}: {{.Name | shellDoubleQuoteEscape}}"{{end}} {{.BaseURL | shellArg}}
+diverge verify {{.Name | shellArg}} --compare-baseline
+diverge open {{.Name | shellArg}} --magic
 ` + "```\n" + `
 > 💡 **Tip:** Open via 1-click [Magic Link]({{.BaseURL}}?_diverge_env={{if .HeaderValue}}{{.HeaderValue | sanitize}}{{else}}{{.Name | sanitize}}{{end}}) ([Exit Preview]({{.BaseURL}}?_diverge_env=clear)), use the Diverge browser extension, or add the header ` + "`{{.HeaderKey | sanitize}}: {{if .HeaderValue}}{{.HeaderValue | sanitize}}{{else}}{{.Name | sanitize}}{{end}}`" + ` to route traffic to this preview.
 {{end}}
@@ -102,21 +152,25 @@ Environment ` + "`{{.Name | sanitize}}`" + ` has been cleaned up.
 
 // TemplateData holds the values passed to notification message templates.
 type TemplateData struct {
-	Name        string
-	Branch      string
-	Mode        string
-	RoutingMode string
-	Services    []string
-	TTL         string
-	URL         string
-	NumServices int
-	Duration    string
-	BaseURL     string
-	ExpiryTime  string
-	Reason      string
-	HeaderKey   string // routing header key (defaults to x-diverge-env)
-	HeaderValue string // optional routing header value (defaults to Name)
-	Conditions  []ConditionData
+	Name            string
+	Branch          string
+	Mode            string
+	RoutingMode     string
+	Services        []string
+	TTL             string
+	URL             string
+	NumServices     int
+	Duration        string
+	BaseURL         string
+	ExpiryTime      string
+	Reason          string
+	HeaderKey       string // routing header key (defaults to x-diverge-env)
+	HeaderValue     string // optional routing header value (defaults to Name)
+	DatabaseSummary string
+	AsyncSummary    string
+	CostSummary     string
+	DriftWarning    string
+	Conditions      []ConditionData
 }
 
 // ConditionData represents a single status condition for template rendering.

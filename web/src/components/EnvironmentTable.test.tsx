@@ -15,4 +15,14 @@ describe('EnvironmentTable', () => {
     render(<EnvironmentTable environments={[env]} isLoading={false} />)
     expect(screen.getByText('test-env')).toBeInTheDocument()
   })
+
+  it('Renders Drifted badge when BaselineDriftDetected condition is True', () => {
+    const driftedEnv = createMockEnvironment({ name: 'drifted-env' })
+    driftedEnv.status?.conditions.push({
+      type: 'BaselineDriftDetected',
+      status: 'True',
+    } as never)
+    render(<EnvironmentTable environments={[driftedEnv]} isLoading={false} />)
+    expect(screen.getByText('Drifted')).toBeInTheDocument()
+  })
 })

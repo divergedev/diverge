@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
+
+	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 )
 
 const (
@@ -30,6 +33,7 @@ type initOptions struct {
 	configOnly       bool
 	outputPath       string
 	force            bool
+	errOut           io.Writer
 }
 
 var (
@@ -56,6 +60,7 @@ func newInitCmd(app *App) *cobra.Command {
 			if app != nil && opts.kubeContext == "" {
 				opts.kubeContext = strings.TrimSpace(app.Context)
 			}
+			opts.errOut = cmd.ErrOrStderr()
 			return runInit(cmd.Context(), opts)
 		},
 	}
@@ -89,9 +94,10 @@ type starterImageYAML struct {
 }
 
 type starterServiceYAML struct {
-	Paths []string         `yaml:"paths"`
-	Image starterImageYAML `yaml:"image"`
-	Helm  *starterHelmYAML `yaml:"helm,omitempty"`
+	Paths       []string                           `yaml:"paths"`
+	Image       starterImageYAML                   `yaml:"image"`
+	Helm        *starterHelmYAML                   `yaml:"helm,omitempty"`
+	AsyncRoutes []divergeiov1alpha1.AsyncRouteSpec `yaml:"asyncRoutes,omitempty"`
 }
 
 func discoverServices(baseDir string) []discoveredService {
@@ -277,7 +283,137 @@ func validateSafeConfigOutputPath(outputPath string) error {
 	return nil
 }
 
+func detectDirStack(dirs ...string) (hasPostgres bool, asyncRoutes []divergeiov1alpha1.AsyncRouteSpec) {
+	var combined strings.Builder
+	for _, dir := range dirs {
+		if info, err := os.Stat(filepath.Join(dir, "atlas.hcl")); err == nil && !info.IsDir() {
+			hasPostgres = true
+		}
+		if info, err := os.Stat(filepath.Join(dir, "migrations")); err == nil && info.IsDir() {
+			hasPostgres = true
+		}
+		if prismaBytes, err := os.ReadFile(filepath.Join(dir, "prisma", "schema.prisma")); err == nil {
+			lowerPrisma := strings.ToLower(string(prismaBytes))
+			if strings.Contains(lowerPrisma, "postgresql") || strings.Contains(lowerPrisma, "postgres") {
+				hasPostgres = true
+			}
+		}
+
+		for _, fileName := range []string{
+			"package.json",
+			"go.mod",
+			"pyproject.toml",
+			"requirements.txt",
+			"atlas.hcl",
+			"docker-compose.yml",
+			"compose.yaml",
+		} {
+			data, err := os.ReadFile(filepath.Join(dir, fileName))
+			if err != nil {
+				continue
+			}
+			combined.Write(data)
+			combined.WriteByte('\n')
+		}
+	}
+
+	content := combined.String()
+	hasAny := func(tokens ...string) bool {
+		for _, tok := range tokens {
+			if strings.Contains(content, tok) {
+				return true
+			}
+		}
+		return false
+	}
+
+	if hasAny("pgx", `"pg"`, "psycopg", "asyncpg", "postgres", "@neondatabase/serverless", "pg-promise") {
+		hasPostgres = true
+	}
+
+	if hasAny("ioredis", `"redis"`, "go-redis", "valkey") {
+		asyncRoutes = append(asyncRoutes, divergeiov1alpha1.AsyncRouteSpec{
+			Protocol: "redis",
+			Target:   "cache",
+		})
+	}
+
+	if hasAny("@aws-sdk/client-s3", "aws-sdk-go-v2/service/s3", "boto3", "minio") {
+		asyncRoutes = append(asyncRoutes, divergeiov1alpha1.AsyncRouteSpec{
+			Protocol: "s3",
+			Target:   "uploads",
+		})
+	} else if hasAny("@google-cloud/storage", "cloud.google.com/go/storage") {
+		asyncRoutes = append(asyncRoutes, divergeiov1alpha1.AsyncRouteSpec{
+			Protocol: "gcs",
+			Target:   "uploads",
+		})
+	}
+
+	if hasAny("kafkajs", "franz-go", "sarama", "confluent-kafka", "aiokafka") {
+		asyncRoutes = append(asyncRoutes, divergeiov1alpha1.AsyncRouteSpec{
+			Protocol: "kafka",
+			Target:   "events",
+		})
+	}
+
+	if hasAny("@temporalio/", "go.temporal.io/sdk", "temporalio") {
+		asyncRoutes = append(asyncRoutes, divergeiov1alpha1.AsyncRouteSpec{
+			Protocol: "temporal",
+			Target:   "default-task-queue",
+		})
+	}
+
+	return hasPostgres, asyncRoutes
+}
+
+func detectRepoStack(baseDir string) (hasPostgres bool, asyncRoutes []divergeiov1alpha1.AsyncRouteSpec) {
+	scanDirs := []string{baseDir}
+
+	entries, err := os.ReadDir(baseDir)
+	if err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+				continue
+			}
+			childDir := filepath.Join(baseDir, entry.Name())
+			scanDirs = append(scanDirs, childDir)
+			if entry.Name() == "services" || entry.Name() == "apps" || entry.Name() == "charts" {
+				subEntries, subErr := os.ReadDir(childDir)
+				if subErr == nil {
+					for _, sub := range subEntries {
+						if sub.IsDir() && !strings.HasPrefix(sub.Name(), ".") {
+							scanDirs = append(scanDirs, filepath.Join(childDir, sub.Name()))
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return detectDirStack(scanDirs...)
+}
+
+func detectServiceAsyncRoutes(baseDir string, svc discoveredService) []divergeiov1alpha1.AsyncRouteSpec {
+	var svcDirs []string
+	for _, parent := range []string{"services", "apps", "charts"} {
+		candidate := filepath.Join(baseDir, parent, svc.Name)
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			svcDirs = append(svcDirs, candidate)
+		}
+	}
+	if len(svcDirs) == 0 {
+		return nil
+	}
+	_, routes := detectDirStack(svcDirs...)
+	return routes
+}
+
 func runInitConfig(outputPath string, force bool) error {
+	return runInitConfigWithWriter(outputPath, force, nil)
+}
+
+func runInitConfigWithWriter(outputPath string, force bool, errOut io.Writer) error {
 	if outputPath == "" {
 		outputPath = ".diverge.yaml"
 	}
@@ -292,13 +428,24 @@ func runInitConfig(outputPath string, force bool) error {
 
 	baseDir := filepath.Dir(outputPath)
 	svcs := discoverServices(baseDir)
+	hasPostgres, asyncRoutes := detectRepoStack(baseDir)
+
+	perServiceRoutes := make([][]divergeiov1alpha1.AsyncRouteSpec, len(svcs))
+	hasServiceSpecificRoutes := false
+	for i, svc := range svcs {
+		routes := detectServiceAsyncRoutes(baseDir, svc)
+		if len(routes) > 0 {
+			hasServiceSpecificRoutes = true
+			perServiceRoutes[i] = routes
+		}
+	}
 
 	servicesDoc := struct {
 		Services map[string]starterServiceYAML `yaml:"services"`
 	}{
 		Services: make(map[string]starterServiceYAML, len(svcs)),
 	}
-	for _, svc := range svcs {
+	for i, svc := range svcs {
 		entry := starterServiceYAML{
 			Paths: svc.Paths,
 			Image: starterImageYAML{
@@ -308,6 +455,13 @@ func runInitConfig(outputPath string, force bool) error {
 		}
 		if svc.HelmPath != "" {
 			entry.Helm = &starterHelmYAML{Path: svc.HelmPath}
+		}
+		if hasServiceSpecificRoutes {
+			if len(perServiceRoutes[i]) > 0 {
+				entry.AsyncRoutes = perServiceRoutes[i]
+			}
+		} else if i == 0 && len(asyncRoutes) > 0 {
+			entry.AsyncRoutes = asyncRoutes
 		}
 		servicesDoc.Services[svc.Name] = entry
 	}
@@ -333,6 +487,11 @@ func runInitConfig(outputPath string, force bool) error {
 	sb.WriteString("    mode: header\n")
 	sb.WriteString("    baseline_namespace: default\n")
 	sb.WriteString("    header_key: x-diverge-env\n")
+	if hasPostgres {
+		sb.WriteString("  database:\n")
+		sb.WriteString("    mode: schema\n")
+		sb.WriteString("    seed_source: public\n")
+	}
 	sb.WriteString("  lifecycle:\n")
 	sb.WriteString("    ttl: 72h\n")
 	sb.WriteString("    cleanup_on_merge: true\n")
@@ -344,7 +503,27 @@ func runInitConfig(outputPath string, force bool) error {
 		return fmt.Errorf("failed to write %s: %w", outputPath, err)
 	}
 
-	fmt.Fprintf(os.Stderr, "\033[32m✅ Generated starter configuration at %s\033[0m\n", outputPath)
+	out := errOut
+	if out == nil {
+		out = os.Stderr
+	}
+
+	if hasPostgres || len(asyncRoutes) > 0 {
+		var features []string
+		if hasPostgres {
+			features = append(features, "database=schema")
+		}
+		if len(asyncRoutes) > 0 {
+			protos := make([]string, 0, len(asyncRoutes))
+			for _, r := range asyncRoutes {
+				protos = append(protos, r.Protocol)
+			}
+			features = append(features, fmt.Sprintf("async=[%s]", strings.Join(protos, " ")))
+		}
+		_, _ = fmt.Fprintf(out, "Auto-detected stack features: %s\n", strings.Join(features, ", "))
+	}
+
+	_, _ = fmt.Fprintf(out, "\033[32m✅ Generated starter configuration at %s\033[0m\n", outputPath)
 	return nil
 }
 
@@ -367,7 +546,7 @@ func resolveClusterProvider(raw string) (string, error) {
 
 func runInit(ctx context.Context, opts *initOptions) error {
 	if opts.configOnly {
-		return runInitConfig(opts.outputPath, opts.force)
+		return runInitConfigWithWriter(opts.outputPath, opts.force, opts.errOut)
 	}
 
 	provider, err := resolveClusterProvider(opts.provider)

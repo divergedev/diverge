@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -25,12 +26,13 @@ type VerifyCheckResult struct {
 
 // VerifyReport aggregates all verification checks and optional cluster diagnostics.
 type VerifyReport struct {
-	Environment string              `json:"environment"`
-	Namespace   string              `json:"namespace,omitempty"`
-	TargetURL   string              `json:"targetUrl,omitempty"`
-	Passed      bool                `json:"passed"`
-	Checks      []VerifyCheckResult `json:"checks"`
-	Doctor      *doctor.Report      `json:"doctor,omitempty"`
+	Environment   string              `json:"environment"`
+	Namespace     string              `json:"namespace,omitempty"`
+	TargetURL     string              `json:"targetUrl,omitempty"`
+	RoutingHeader string              `json:"routingHeader,omitempty"`
+	Passed        bool                `json:"passed"`
+	Checks        []VerifyCheckResult `json:"checks"`
+	Doctor        *doctor.Report      `json:"doctor,omitempty"`
 }
 
 type verifyOptions struct {
@@ -49,6 +51,7 @@ type verifyOptions struct {
 	skipDoctor       bool
 	timeout          time.Duration
 	outputJSON       bool
+	githubSummary    bool
 }
 
 func newVerifyCmd(app *App) *cobra.Command {
@@ -155,6 +158,9 @@ assertions, response substring checks, and optional baseline parity comparisons.
 				return err
 			}
 			report.TargetURL = baseURL
+			if headerKey != "" && headerValue != "" {
+				report.RoutingHeader = fmt.Sprintf("%s: %s", headerKey, headerValue)
+			}
 
 			method := strings.ToUpper(strings.TrimSpace(opts.method))
 			if method == "" {
@@ -281,6 +287,28 @@ assertions, response substring checks, and optional baseline parity comparisons.
 				}
 			} else {
 				renderVerifyTable(out, report, passedCount, failedCount)
+				if os.Getenv("GITHUB_ACTIONS") == "true" {
+					for _, c := range report.Checks {
+						if !c.Passed {
+							title := escapeGHAProperty(fmt.Sprintf("Diverge Verify (%s)", c.Name))
+							_, _ = fmt.Fprintf(out, "::error title=%s::%s\n", title, escapeGHAData(c.Message))
+						}
+					}
+				}
+			}
+
+			if opts.githubSummary {
+				if summaryPath := strings.TrimSpace(os.Getenv("GITHUB_STEP_SUMMARY")); summaryPath != "" {
+					f, err := os.OpenFile(summaryPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+					if err != nil {
+						return fmt.Errorf("failed to write GITHUB_STEP_SUMMARY: %w", err)
+					}
+					renderVerifyMarkdown(f, *report)
+					_ = f.Close()
+				} else if !opts.outputJSON {
+					_, _ = fmt.Fprintln(out)
+					renderVerifyMarkdown(out, *report)
+				}
 			}
 
 			if !report.Passed {
@@ -306,8 +334,19 @@ assertions, response substring checks, and optional baseline parity comparisons.
 	cmd.Flags().BoolVar(&opts.skipDoctor, "skip-doctor", false, "Skip Kubernetes workload health diagnostics (doctor)")
 	cmd.Flags().DurationVar(&opts.timeout, "timeout", 15*time.Second, "Per-request HTTP timeout")
 	cmd.Flags().BoolVar(&opts.outputJSON, "json", false, "Output verification report as JSON")
+	cmd.Flags().BoolVar(&opts.githubSummary, "github-summary", false, "Write a Markdown verification scorecard to $GITHUB_STEP_SUMMARY (or stdout if unset)")
 
 	return cmd
+}
+
+func escapeGHAData(s string) string {
+	r := strings.NewReplacer("%", "%25", "\r", "%0D", "\n", "%0A")
+	return r.Replace(s)
+}
+
+func escapeGHAProperty(s string) string {
+	r := strings.NewReplacer("%", "%25", "\r", "%0D", "\n", "%0A", ":", "%3A", ",", "%2C")
+	return r.Replace(s)
 }
 
 func renderVerifyTable(out io.Writer, report *VerifyReport, passedCount, failedCount int) {
@@ -326,5 +365,58 @@ func renderVerifyTable(out io.Writer, report *VerifyReport, passedCount, failedC
 		_, _ = fmt.Fprintf(out, "Verification PASSED (%d/%d checks)\n", passedCount, len(report.Checks))
 	} else {
 		_, _ = fmt.Fprintf(out, "Verification FAILED (%d/%d checks failed)\n", failedCount, len(report.Checks))
+	}
+}
+
+func renderVerifyMarkdown(w io.Writer, report VerifyReport) {
+	if report.Passed {
+		_, _ = fmt.Fprintf(w, "### ✅ Diverge Verification Passed: %s\n\n", report.Environment)
+	} else {
+		_, _ = fmt.Fprintf(w, "### ❌ Diverge Verification Failed: %s\n\n", report.Environment)
+	}
+
+	urlStr := report.TargetURL
+	if urlStr == "" {
+		urlStr = "-"
+	}
+	headerStr := report.RoutingHeader
+	if headerStr == "" {
+		headerStr = fmt.Sprintf("x-diverge-env: %s", report.Environment)
+	}
+	nsStr := report.Namespace
+	if nsStr == "" {
+		nsStr = "default"
+	}
+	_, _ = fmt.Fprintf(w, "**URL:** %s | **Header:** `%s` | **Namespace:** `%s`\n\n", urlStr, headerStr, nsStr)
+
+	_, _ = fmt.Fprintln(w, "| Check | Status | Latency | Result | Details |")
+	_, _ = fmt.Fprintln(w, "| :--- | :--- | :--- | :--- | :--- |")
+	for _, c := range report.Checks {
+		latency := "-"
+		if c.DurationMs > 0 {
+			latency = fmt.Sprintf("%dms", c.DurationMs)
+		} else if strings.HasPrefix(c.Name, "http-status:") || strings.HasPrefix(c.Name, "latency-slo:") || strings.HasPrefix(c.Name, "baseline-parity:") {
+			latency = "0ms"
+		}
+		result := "✅ PASS"
+		if !c.Passed {
+			result = "❌ FAIL"
+		}
+		details := strings.ReplaceAll(c.Message, "|", "\\|")
+		_, _ = fmt.Fprintf(w, "| %s | %s | %s | %s | %s |\n", c.Name, c.Status, latency, result, details)
+	}
+
+	if report.Doctor != nil && len(report.Doctor.Issues) > 0 {
+		_, _ = fmt.Fprintln(w, "\n#### 🩺 Doctor Diagnostics")
+		for _, issue := range report.Doctor.Issues {
+			msg := issue.Summary
+			if issue.Details != "" {
+				msg = fmt.Sprintf("%s (%s)", issue.Summary, issue.Details)
+			}
+			_, _ = fmt.Fprintf(w, "- [%s] %s: %s\n", issue.Code, issue.Component, msg)
+			if issue.Remediation != "" {
+				_, _ = fmt.Fprintf(w, "  - 💡 Remediation: %s\n", issue.Remediation)
+			}
+		}
 	}
 }

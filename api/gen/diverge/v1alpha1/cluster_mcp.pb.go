@@ -15,7 +15,7 @@ type ClusterServiceMCPHandler interface {
 const ClusterService_GetClusterInfoName = "ClusterService_GetClusterInfo"
 const ClusterService_GetClusterInfoDescription = ""
 
-var ClusterService_GetClusterInfoSchema = []byte("{\"type\":\"object\",\"additionalProperties\":false}")
+var ClusterService_GetClusterInfoSchema = []byte("{\"type\":\"object\",\"properties\":{\"namespace\":{\"type\":\"string\"}},\"additionalProperties\":false}")
 
 func RegisterClusterServiceMCP(registry mcpruntime.Registry, handler ClusterServiceMCPHandler, opts ...mcpruntime.Option) {
 	if tr, ok := registry.(*mcpruntime.ToolRegistry); ok {
