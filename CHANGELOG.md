@@ -1,5 +1,47 @@
 # Changelog
 
+## [v0.18.0] - 2026-10-17
+
+### 🚀 Highlights & New Features
+
+#### 🗄️ PostgreSQL Schema Foreign-Key, Sequence & View Cloning
+- **Topological FK & View Cloning (`internal/database/schema.go`) (#320)**: Upgraded `schema` database seeding (`seedSource: public` or `schema:<name>`) to clone foreign-key constraints (`pg_constraint`), synchronize `SERIAL` / `IDENTITY` sequence values (`setval`), and recreate non-materialized views (`pg_views`) with schema-qualified references rewrite in topological order.
+
+#### 🪣 S3 / GCS / MinIO Object Storage Key-Prefix Isolation
+- **Object Storage Async Provisioner (`internal/routing/storage_async.go`) (#320)**: Added `s3`, `gcs`, and `minio` protocols to `AsyncRouteSpec`, provisioning deterministic per-preview object storage prefixes (`DIVERGE_STORAGE_PREFIX=preview/<env>/`) and optional S3-compatible prefix cleanup on teardown.
+- **Cross-Language SDK Helpers (#320)**: Added `ResolveStorageKey` (Go `pkg/sdk/http`), `resolveStorageKey` (Node.js `@divergedev/sdk`), and `resolve_storage_key` (Python `diverge-sdk`).
+
+#### 🌐 Gateway API `parentRef` Auto-Discovery & Wildcard TLS / ExternalDNS Polish
+- **Gateway Auto-Discovery & Annotations (`internal/routing/gateway.go`, `charts/diverge/`) (#320)**: Auto-discovers `Gateway` resources when `parentRef` is omitted (`divergedev.com/default-gateway` or single namespace `Gateway`), propagates `external-dns.alpha.kubernetes.io/hostname` and `divergedev.com/tls-secret` annotations onto `HTTPRoute`s and `GRPCRoute`s, and adds `gateway.tls` + `gateway.externalDns` Helm values.
+
+#### ✅ `diverge verify` Verification Suite, GitHub Step Summary & Stack Auto-Detection
+- **`diverge verify` CLI & GitHub Actions Integration (`internal/cli/verify.go`, `action.yml`, `scripts/ci-preview.sh`) (#320)**: Unified preview verification CLI combining `doctor` workload checks, routed HTTP readiness probes, `--max-latency` SLO assertions, `--body-contains` checks, `--compare-baseline` parity checks, `--github-summary` (`$GITHUB_STEP_SUMMARY` Markdown scorecards), and `::error` workflow annotations.
+- **Auto-Doctor on CI Timeout & Stack Auto-Detection (`scripts/ci-preview.sh`, `internal/cli/init.go`)**: Automatically runs `diverge doctor` when `kubectl wait` times out in CI, and auto-detects PostgreSQL, Redis/Valkey, S3/GCS/MinIO, Kafka, and Temporal dependencies during `diverge init --config`.
+
+---
+
+## [v0.17.0] - 2026-10-17
+
+### 🚀 Highlights & New Features
+
+#### 💬 Bidirectional SCM Bot Interaction & Runtime Steering
+- **Interactive Agent Steering & PR/MR Feedback (#319)**: Added bidirectional GitHub PR and GitLab MR comment steering, runtime guidance injection for running `AgentTask` sandboxes, and interactive status updates.
+
+#### 🛡️ Baseline Drift Detection, Redis/Valkey Isolation & FinOps Namespace Quotas
+- **Baseline Drift Detection (`internal/controller/drift.go`) (#317)**: Computes deterministic SHA-256 fingerprints across baseline `Deployment`s, `ConfigMap`s, and `Secret`s (`BaselineDriftDetected` condition and `divergedev.com/drift-policy: warn | sync`).
+- **Redis / Valkey Key-Prefix Isolation (`internal/routing/redis_async.go`) (#317)**: Added `redis` and `valkey` `AsyncRouteSpec` provisioners (`DIVERGE_REDIS_PREFIX=preview:<env>:`) with non-blocking RESP `SCAN` + `UNLINK` teardown and SDK `ResolveRedisKey` helpers.
+- **Namespace FinOps Quotas (`internal/controller/quotas.go`) (#317)**: Enforces `divergedev.com/max-active-environments`, `divergedev.com/max-cnpg-clusters`, and `divergedev.com/max-hourly-cost-usd` with `hibernate-oldest` and `reject` policies.
+- **100% Pure Apache-2.0 Open-Source Unification (#317)**: Removed all commercial license gates across CLI, controller, and server features.
+
+---
+
+## [v0.16.0] - 2026-10-16
+
+### 🚀 Highlights & New Features
+- **Cross-Namespace Gateway `ReferenceGrant`s, Schema Seeding, `diverge mcp setup`, & `diverge top` (#314, #315, #316)**: Added automatic Gateway API `ReferenceGrant` reconciliation, CloudNativePG (`cnpg`) database branching, `diverge top` terminal dashboard, and one-command `diverge mcp setup`.
+
+---
+
 ## [v0.15.0] - 2026-10-12
 
 ### 🚀 Highlights & New Features

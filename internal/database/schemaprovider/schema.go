@@ -217,11 +217,12 @@ var ErrInvalidSchemaName = fmt.Errorf("invalid schema name: must match ^[a-z0-9]
 
 func sanitizeEnvName(name string) (string, error) {
 	s := strings.ToLower(strings.ReplaceAll(name, "-", "_"))
-	if len(s) > 55 {
-		s = s[:55]
-	}
 	if s == "" || !validSchemaName.MatchString(s) {
 		return "", ErrInvalidSchemaName
+	}
+	if len(s) > 55 {
+		sum := sha256.Sum256([]byte(s))
+		s = strings.TrimRight(s[:46], "_") + "_" + hex.EncodeToString(sum[:4])
 	}
 	return s, nil
 }
@@ -269,11 +270,12 @@ BEGIN
         SELECT table_name, column_name, column_default
         FROM information_schema.columns
         WHERE table_schema = '%[1]s'
-        AND column_default LIKE 'nextval(''%%public.%%'
+        AND column_default LIKE 'nextval(%%'
+        AND column_default NOT LIKE 'nextval(''%[1]s.%%'
     LOOP
         EXECUTE format('ALTER TABLE %%I.%%I ALTER COLUMN %%I SET DEFAULT %%s',
             '%[1]s', col_row.table_name, col_row.column_name,
-            replace(col_row.column_default, '''public.', '''%[1]s.'));
+            regexp_replace(col_row.column_default, 'nextval\(''(?:public\.|"public"\.)?([^'']+)''', format('nextval(''%%I.\1''', '%[1]s')));
     END LOOP;
 
     -- Clone FOREIGN KEY constraints from public schema tables, rewriting intra-schema references to the preview schema
@@ -325,16 +327,16 @@ BEGIN
         END IF;
     END LOOP;
 
-    -- Clone VIEW definitions from public schema into the preview schema in dependency order.
+    -- Clone VIEW and MATERIALIZED VIEW definitions from public schema into the preview schema in dependency order.
     -- Set search_path to the preview schema first so cloned preview tables shadow their
     -- public counterparts and pg_get_viewdef emits explicit public.<name> qualifiers.
     PERFORM set_config('search_path', quote_ident('%[1]s') || ', public', true);
     FOR view_row IN
         WITH RECURSIVE public_views AS (
-            SELECT c.oid, c.relname AS table_name, pg_get_viewdef(c.oid, true) AS view_definition
+            SELECT c.oid, c.relname AS table_name, c.relkind AS view_kind, pg_get_viewdef(c.oid, true) AS view_definition
             FROM pg_class c
             JOIN pg_namespace n ON n.oid = c.relnamespace
-            WHERE n.nspname = 'public' AND c.relkind = 'v'
+            WHERE n.nspname = 'public' AND c.relkind IN ('v', 'm')
         ),
         view_deps AS (
             SELECT DISTINCT
@@ -349,23 +351,23 @@ BEGIN
               AND dep_v.oid <> v.oid
         ),
         view_levels AS (
-            SELECT pv.oid, pv.table_name, pv.view_definition, 0 AS depth, ARRAY[pv.oid] AS path
+            SELECT pv.oid, pv.table_name, pv.view_kind, pv.view_definition, 0 AS depth, ARRAY[pv.oid] AS path
             FROM public_views pv
             WHERE NOT EXISTS (SELECT 1 FROM view_deps vd WHERE vd.view_oid = pv.oid)
             UNION ALL
-            SELECT pv.oid, pv.table_name, pv.view_definition, vl.depth + 1, vl.path || pv.oid
+            SELECT pv.oid, pv.table_name, pv.view_kind, pv.view_definition, vl.depth + 1, vl.path || pv.oid
             FROM view_levels vl
             JOIN view_deps vd ON vd.ref_view_oid = vl.oid
             JOIN public_views pv ON pv.oid = vd.view_oid
             WHERE NOT (pv.oid = ANY(vl.path))
         ),
         ordered_views AS (
-            SELECT pv.table_name, pv.view_definition, COALESCE(MAX(vl.depth), 0) AS level
+            SELECT pv.table_name, pv.view_kind, pv.view_definition, COALESCE(MAX(vl.depth), 0) AS level
             FROM public_views pv
             LEFT JOIN view_levels vl ON vl.oid = pv.oid
-            GROUP BY pv.oid, pv.table_name, pv.view_definition
+            GROUP BY pv.oid, pv.table_name, pv.view_kind, pv.view_definition
         )
-        SELECT table_name, view_definition
+        SELECT table_name, view_kind, view_definition
         FROM ordered_views
         ORDER BY level ASC, table_name ASC
     LOOP
@@ -440,8 +442,13 @@ BEGIN
                     v_idx := v_idx + 1;
                 END IF;
             END LOOP;
-            EXECUTE format('CREATE OR REPLACE VIEW %%I.%%I AS %%s',
-                '%[1]s', view_row.table_name, view_def);
+            IF view_row.view_kind = 'm' THEN
+                EXECUTE format('CREATE MATERIALIZED VIEW IF NOT EXISTS %%I.%%I AS %%s',
+                    '%[1]s', view_row.table_name, view_def);
+            ELSE
+                EXECUTE format('CREATE OR REPLACE VIEW %%I.%%I AS %%s',
+                    '%[1]s', view_row.table_name, view_def);
+            END IF;
         END IF;
     END LOOP;
 END

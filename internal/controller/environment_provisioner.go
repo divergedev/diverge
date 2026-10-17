@@ -483,6 +483,10 @@ func isKeyPrefixAsyncProto(p string) bool {
 	}
 }
 
+func isRedisValkeyPair(a, b string) bool {
+	return (a == "redis" || a == "valkey") && (b == "redis" || b == "valkey")
+}
+
 func (r *EnvironmentReconciler) resolveAsyncProvisioner(route divergeiov1alpha1.AsyncRouteSpec) async.Provisioner {
 	if r.AsyncProvisioner == nil {
 		return nil
@@ -492,19 +496,19 @@ func (r *EnvironmentReconciler) resolveAsyncProvisioner(route divergeiov1alpha1.
 	if name == "webhook" || !async.Providers.Has(name) {
 		return r.AsyncProvisioner
 	}
-	if name == proto {
+	if name == proto || isRedisValkeyPair(name, proto) {
 		return r.AsyncProvisioner
 	}
 	deps := registry.Deps{
 		Client: r.Client,
 		Scheme: r.Scheme,
 	}
-	if isKeyPrefixAsyncProto(proto) {
+	if (name != "noop" && async.Providers.Has(proto)) || isKeyPrefixAsyncProto(proto) {
 		if prov, err := async.Providers.Create(proto, deps); err == nil && prov != nil {
 			return prov
 		}
 	}
-	if isKeyPrefixAsyncProto(name) {
+	if isKeyPrefixAsyncProto(name) && !isKeyPrefixAsyncProto(proto) {
 		if prov, err := async.Providers.Create("noop", deps); err == nil && prov != nil {
 			return prov
 		}

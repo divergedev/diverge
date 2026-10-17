@@ -119,9 +119,10 @@ kubectl port-forward -n diverge-system svc/diverge-server 8443:8443
 ```
 
 - **Web Dashboard**: Open `http://localhost:8443` in your browser.
-- **CLI Health Check**:
+- **CLI Health & Verification Check**:
   ```bash
   diverge doctor
+  diverge verify pr-101 --base-url http://localhost:8080 --compare-baseline
   ```
 - **MCP Server (for Claude Code / Cursor / VS Code)**:
   ```bash

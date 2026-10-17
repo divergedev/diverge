@@ -29,9 +29,13 @@ func init() {
 					bucket = strings.TrimSpace(os.Getenv("DIVERGE_STORAGE_BUCKET"))
 				}
 				return &StorageProvisioner{
-					Endpoint: endpoint,
-					Bucket:   bucket,
-					Provider: providerName,
+					Endpoint:  endpoint,
+					Bucket:    bucket,
+					Provider:  providerName,
+					AccessKey: strings.TrimSpace(os.Getenv("DIVERGE_STORAGE_ACCESS_KEY")),
+					SecretKey: strings.TrimSpace(os.Getenv("DIVERGE_STORAGE_SECRET_KEY")),
+					Region:    strings.TrimSpace(os.Getenv("DIVERGE_STORAGE_REGION")),
+					GCSToken:  strings.TrimSpace(os.Getenv("DIVERGE_GCS_TOKEN")),
 				}, nil
 			},
 			Description: desc,

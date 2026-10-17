@@ -6,7 +6,8 @@ set -euo pipefail
 DIVERGE_BIN="${DIVERGE_BIN:-diverge}"
 KUBECTL_BIN="${KUBECTL_BIN:-kubectl}"
 
-INPUT_ACTION="${INPUT_ACTION:-deploy}"
+INPUT_ACTION="${INPUT_ACTION:-${ACTION:-deploy}}"
+ACTION="$INPUT_ACTION"
 INPUT_CONFIG="${INPUT_CONFIG:-.diverge.yaml}"
 INPUT_BASE_REF="${INPUT_BASE_REF:-origin/main}"
 INPUT_PREVIEW_NAME="${INPUT_PREVIEW_NAME:-}"
@@ -18,10 +19,15 @@ INPUT_IMAGE_TAG="${INPUT_IMAGE_TAG:-}"
 INPUT_HEADER_KEY="${INPUT_HEADER_KEY:-x-diverge-env}"
 INPUT_HEADER_VALUE="${INPUT_HEADER_VALUE:-}"
 INPUT_TTL="${INPUT_TTL:-4h}"
-INPUT_NAMESPACE="${INPUT_NAMESPACE:-default}"
+INPUT_NAMESPACE="${INPUT_NAMESPACE:-${NAMESPACE:-default}}"
+NAMESPACE="$INPUT_NAMESPACE"
 INPUT_BASE_URL="${INPUT_BASE_URL:-}"
 INPUT_WAIT="${INPUT_WAIT:-false}"
 INPUT_WAIT_TIMEOUT="${INPUT_WAIT_TIMEOUT:-180s}"
+INPUT_VERIFY="${INPUT_VERIFY:-false}"
+INPUT_VERIFY_PATH="${INPUT_VERIFY_PATH:-/}"
+INPUT_VERIFY_COMPARE_BASELINE="${INPUT_VERIFY_COMPARE_BASELINE:-false}"
+INPUT_VERIFY_MAX_LATENCY="${INPUT_VERIFY_MAX_LATENCY:-5s}"
 INPUT_DRY_RUN="${INPUT_DRY_RUN:-false}"
 INPUT_KUBECONFIG="${INPUT_KUBECONFIG:-}"
 
@@ -89,6 +95,24 @@ extract_config_services() {
       print line
     }
   ' "$cfg"
+}
+
+run_verify() {
+  local preview_name="$1"
+  local -a verify_args=(
+    verify "$preview_name"
+    -n "$NAMESPACE"
+    --path "${INPUT_VERIFY_PATH:-/}"
+    --max-latency "${INPUT_VERIFY_MAX_LATENCY:-5s}"
+  )
+  if [[ -n "${INPUT_BASE_URL:-}" ]]; then
+    verify_args+=(--base-url "$INPUT_BASE_URL")
+  fi
+  if [[ "${INPUT_VERIFY_COMPARE_BASELINE:-false}" == "true" ]]; then
+    verify_args+=(--compare-baseline)
+  fi
+  verify_args+=(--github-summary)
+  "$DIVERGE_BIN" "${verify_args[@]}"
 }
 
 case "$INPUT_ACTION" in
@@ -190,7 +214,10 @@ case "$INPUT_ACTION" in
     "$DIVERGE_BIN" "${CREATE_ARGS[@]}"
 
     if [[ "$INPUT_WAIT" == "true" && "$INPUT_DRY_RUN" != "true" ]]; then
-      "$KUBECTL_BIN" wait -n "$INPUT_NAMESPACE" --for=condition=Ready "previewgroup/$PREVIEW_NAME" --timeout="$INPUT_WAIT_TIMEOUT"
+      if ! "$KUBECTL_BIN" wait -n "$INPUT_NAMESPACE" --for=condition=Ready "previewgroup/$PREVIEW_NAME" --timeout="$INPUT_WAIT_TIMEOUT"; then
+        "$DIVERGE_BIN" doctor "$PREVIEW_NAME" -n "$NAMESPACE" || true
+        exit 1
+      fi
     fi
 
     PREVIEW_URL=""
@@ -205,6 +232,30 @@ case "$INPUT_ACTION" in
     emit_output "routing-header" "$ROUTING_HEADER"
     emit_output "routing-header-json" "$ROUTING_HEADER_JSON"
     emit_output "preview-url" "$PREVIEW_URL"
+
+    if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]] && { [[ -w "$GITHUB_STEP_SUMMARY" ]] || [[ -w "$(dirname "$GITHUB_STEP_SUMMARY")" ]]; }; then
+      {
+        echo "### 🚀 Diverge Preview Environment: \`${PREVIEW_NAME}\`"
+        echo ""
+        echo "| Field | Value |"
+        echo "| :--- | :--- |"
+        echo "| **Preview Name** | \`${PREVIEW_NAME}\` |"
+        echo "| **Preview URL** | ${PREVIEW_URL:-N/A} |"
+        echo "| **Routing Header** | \`${ROUTING_HEADER}\` |"
+        echo "| **Changed Services** | \`${SERVICES_JSON}\` |"
+        echo ""
+      } >> "$GITHUB_STEP_SUMMARY"
+    fi
+
+    if [[ "$INPUT_VERIFY" == "true" && "$INPUT_DRY_RUN" != "true" ]]; then
+      run_verify "$PREVIEW_NAME"
+    fi
+    ;;
+
+  verify)
+    PREVIEW_NAME="$(resolve_preview_name)"
+    run_verify "$PREVIEW_NAME"
+    emit_output "preview-name" "$PREVIEW_NAME"
     ;;
 
   teardown)
@@ -215,7 +266,7 @@ case "$INPUT_ACTION" in
     ;;
 
   *)
-    echo "Unsupported INPUT_ACTION: ${INPUT_ACTION} (expected validate, diff, deploy, or teardown)" >&2
+    echo "Unsupported INPUT_ACTION: ${INPUT_ACTION} (expected validate, diff, deploy, verify, or teardown)" >&2
     exit 1
     ;;
 esac

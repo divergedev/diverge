@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useListEnvironments } from '@/api/queries'
+import { useListEnvironments, useGetClusterInfo } from '@/api/queries'
 import { useWatchEnvironments } from '@/hooks/useWatch'
 import { EnvironmentTable } from '@/components/EnvironmentTable'
 import { CreateEnvironmentModal } from '@/components/CreateEnvironmentModal'
@@ -15,6 +15,7 @@ export default function EnvironmentList() {
   const [search, setSearch] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
   const { data, isLoading } = useListEnvironments({ namespace })
+  const { data: clusterInfo } = useGetClusterInfo()
   useWatchEnvironments(namespace)
 
   const environments = data?.environments ?? []
@@ -26,6 +27,17 @@ export default function EnvironmentList() {
   const monthlyRunRate = totalHourlyCost * 730
   const hibernatedCount = environments.filter(isEnvironmentHibernated).length
   const activeCount = environments.length - hibernatedCount
+
+  const quota = clusterInfo?.namespaceQuota
+  const hasCostQuota = (quota?.maxHourlyCostUsd ?? 0) > 0
+  const hasActiveQuota = (quota?.maxActiveEnvironments ?? 0) > 0
+  const hasCnpgQuota = (quota?.maxCnpgClusters ?? 0) > 0
+  const hasAnyQuota = hasCostQuota || hasActiveQuota || hasCnpgQuota
+  const quotaPolicy = quota?.quotaExceedPolicy || 'hibernate-oldest'
+  const cnpgCount = environments.filter((e) => {
+    const mode = (e.spec?.database?.mode || e.status?.databaseProvider || '').toLowerCase()
+    return mode === 'cnpg' || mode === 'fresh' || mode === 'snapshot'
+  }).length
 
   return (
     <div className="space-y-6">
@@ -48,6 +60,11 @@ export default function EnvironmentList() {
             <p className="text-xs text-muted-foreground mt-1">
               ~${monthlyRunRate.toFixed(2)}/mo projected run-rate
             </p>
+            {hasCostQuota && (
+              <p className="text-xs font-mono text-muted-foreground mt-1">
+                ${totalHourlyCost.toFixed(3)} / ${quota!.maxHourlyCostUsd.toFixed(3)}/hr budget
+              </p>
+            )}
           </CardContent>
         </Card>
         <Card>
@@ -62,6 +79,19 @@ export default function EnvironmentList() {
             <p className="text-xs text-muted-foreground mt-1">
               Scale-to-zero idle hibernation
             </p>
+            {hasAnyQuota && (
+              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground mt-1">
+                {hasActiveQuota && (
+                  <span className="font-mono">{activeCount} / {quota!.maxActiveEnvironments} max active</span>
+                )}
+                {hasCnpgQuota && (
+                  <span className="font-mono">{cnpgCount} / {quota!.maxCnpgClusters} CNPG</span>
+                )}
+                <span className="inline-flex items-center rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">
+                  {quotaPolicy}
+                </span>
+              </div>
+            )}
           </CardContent>
         </Card>
         <Card>

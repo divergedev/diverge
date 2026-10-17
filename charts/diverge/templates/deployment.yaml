@@ -31,6 +31,12 @@ spec:
         {{- end }}
         {{- if .Values.async }}
         - --async-provider={{ .Values.async.provider | default "noop" }}
+        {{- if and .Values.async.storage .Values.async.storage.endpoint }}
+        - --storage-endpoint={{ .Values.async.storage.endpoint }}
+        {{- end }}
+        {{- if and .Values.async.storage .Values.async.storage.bucket }}
+        - --storage-bucket={{ .Values.async.storage.bucket }}
+        {{- end }}
         {{- end }}
         {{- if .Values.deploy }}
         - --deploy-provider={{ .Values.deploy.provider | default "noop" }}
@@ -102,6 +108,28 @@ spec:
             secretKeyRef:
               name: {{ .Values.async.redis.passwordSecretName }}
               key: {{ .Values.async.redis.passwordSecretKey | default "password" }}
+        {{- end }}
+        {{- end }}
+        {{- if and .Values.async .Values.async.storage }}
+        {{- if .Values.async.storage.endpoint }}
+        - name: DIVERGE_STORAGE_ENDPOINT
+          value: {{ .Values.async.storage.endpoint | quote }}
+        {{- end }}
+        {{- if .Values.async.storage.bucket }}
+        - name: DIVERGE_STORAGE_BUCKET
+          value: {{ .Values.async.storage.bucket | quote }}
+        {{- end }}
+        {{- if .Values.async.storage.secretName }}
+        - name: DIVERGE_STORAGE_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.async.storage.secretName }}
+              key: {{ .Values.async.storage.accessKeyKey | default "access-key" }}
+        - name: DIVERGE_STORAGE_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.async.storage.secretName }}
+              key: {{ .Values.async.storage.secretKeyKey | default "secret-key" }}
         {{- end }}
         {{- end }}
         {{- if .Values.observability.otel.enabled }}

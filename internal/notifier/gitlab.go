@@ -7,9 +7,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
+	"strings"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/metrics"
 )
 
 // GitLabNotifier implements Notifier by posting and updating merge request
@@ -115,6 +120,7 @@ func buildTemplateData(env *v1alpha1.Environment, reason string) TemplateData {
 	}
 
 	var conditions []ConditionData
+	var driftWarning string
 	for _, c := range env.Status.Conditions {
 		icon := "✅"
 		if c.Status == "False" {
@@ -125,6 +131,13 @@ func buildTemplateData(env *v1alpha1.Environment, reason string) TemplateData {
 			Type:    c.Type,
 			Message: c.Message,
 		})
+		if c.Type == "BaselineDriftDetected" && c.Status == metav1.ConditionTrue {
+			msg := strings.TrimSpace(c.Message)
+			if msg == "" {
+				msg = "Baseline configuration has updated since this preview was deployed"
+			}
+			driftWarning = sanitizeMarkdown(msg)
+		}
 	}
 
 	baseURL := ""
@@ -139,21 +152,68 @@ func buildTemplateData(env *v1alpha1.Environment, reason string) TemplateData {
 		headerKey = sanitizeHeaderKey(env.Spec.Routing.HeaderKey)
 	}
 
+	headerVal := strings.TrimSpace(env.Spec.Routing.HeaderValue)
+	if headerVal == "" {
+		headerVal = env.Name
+	}
+
+	var dbSummary string
+	if mode := strings.TrimSpace(env.Spec.Database.Mode); mode != "" && mode != "none" {
+		dbSummary = fmt.Sprintf("`%s`", sanitizeMarkdown(mode))
+		if seed := strings.TrimSpace(env.Spec.Database.SeedSource); seed != "" {
+			dbSummary += fmt.Sprintf(" (seed: %s)", sanitizeMarkdown(seed))
+		}
+		if status := strings.TrimSpace(env.Status.DatabaseStatus); status != "" {
+			dbSummary += fmt.Sprintf(" (%s)", sanitizeMarkdown(status))
+		}
+	}
+
+	var asyncParts []string
+	for _, route := range env.Spec.Routing.AsyncRoutes {
+		if route.Protocol != "" && route.Target != "" {
+			asyncParts = append(asyncParts, fmt.Sprintf("`%s:%s`", sanitizeMarkdown(route.Protocol), sanitizeMarkdown(route.Target)))
+		}
+	}
+	if len(env.Status.AsyncEnvVars) > 0 {
+		keys := make([]string, 0, len(env.Status.AsyncEnvVars))
+		for k := range env.Status.AsyncEnvVars {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			asyncParts = append(asyncParts, fmt.Sprintf("`%s=%s`", sanitizeMarkdown(k), sanitizeMarkdown(env.Status.AsyncEnvVars[k])))
+		}
+	}
+	asyncSummary := strings.Join(asyncParts, ", ")
+
+	var costSummary string
+	if env.Annotations != nil && env.Annotations[metrics.AnnotationHibernated] == "true" {
+		costSummary = "💤 Hibernated ($0.000/hr)"
+	} else {
+		est := metrics.EstimateEnvironmentCost(env, time.Now(), metrics.DefaultCostRateCard())
+		costSummary = fmt.Sprintf("$%.3f/hr (active)", est.HourlyUSD)
+	}
+
 	return TemplateData{
-		Name:        env.Name,
-		Branch:      env.Spec.Source.Branch,
-		Mode:        env.Spec.Deploy.Mode,
-		RoutingMode: env.Spec.Routing.Mode,
-		Services:    env.Spec.Deploy.ChangedServices,
-		TTL:         ttlStr,
-		URL:         env.Status.URL,
-		NumServices: len(env.Spec.Deploy.ChangedServices),
-		Duration:    durationStr,
-		BaseURL:     baseURL,
-		ExpiryTime:  expiryStr,
-		Reason:      reason,
-		HeaderKey:   headerKey,
-		Conditions:  conditions,
+		Name:            env.Name,
+		Branch:          env.Spec.Source.Branch,
+		Mode:            env.Spec.Deploy.Mode,
+		RoutingMode:     env.Spec.Routing.Mode,
+		Services:        env.Spec.Deploy.ChangedServices,
+		TTL:             ttlStr,
+		URL:             env.Status.URL,
+		NumServices:     len(env.Spec.Deploy.ChangedServices),
+		Duration:        durationStr,
+		BaseURL:         baseURL,
+		ExpiryTime:      expiryStr,
+		Reason:          reason,
+		HeaderKey:       headerKey,
+		HeaderValue:     headerVal,
+		DatabaseSummary: dbSummary,
+		AsyncSummary:    asyncSummary,
+		CostSummary:     costSummary,
+		DriftWarning:    driftWarning,
+		Conditions:      conditions,
 	}
 }
 

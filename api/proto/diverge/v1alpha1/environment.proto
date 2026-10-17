@@ -47,6 +47,7 @@ message EnvironmentDeploy {
 }
 
 message AsyncRouteSpec {
+  // "temporal", "kafka", "redis", "valkey", "s3", "gcs", "minio"
   string protocol = 1;
   string target = 2;
   map<string, string> env_var_mapping = 3;
@@ -232,6 +233,8 @@ message EnvironmentStatus {
   string post_deploy_status = 15;
   string feature_config_map = 16;
   map<string, string> feature_env_vars = 17;
+  map<string, string> async_env_vars = 18;
+  string database_provider = 19;
 }
 
 message Environment {

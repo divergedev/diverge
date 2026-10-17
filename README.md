@@ -57,6 +57,8 @@ You can quickly test Diverge locally with the CLI:
 
 ```bash
 diverge dev --service my-app
+diverge verify pr-42 --compare-baseline
+diverge top --once
 ```
 
 ### How It Works: Delta Previews vs. Full-Stack Duplication
@@ -65,19 +67,20 @@ diverge dev --service my-app
   <img src="docs/assets/delta-vs-duplicated.svg" alt="Delta Preview vs Traditional Full-Stack Duplication" width="100%">
 </p>
 
-### Turnkey CI/CD (`divergedev/diverge@v0.16.0`)
+### Turnkey CI/CD (`divergedev/diverge@v0.18.0`)
 
-Deploy a delta `PreviewGroup` for only the services modified in a Pull Request and pass `routing-header-json` directly into Playwright E2E tests:
+Deploy a delta `PreviewGroup` for only the services modified in a Pull Request, run `diverge verify` health & latency SLO checks, and pass `routing-header-json` directly into Playwright E2E tests:
 
 ```yaml
 - name: Deploy Diverge Delta Preview
   id: diverge
-  uses: divergedev/diverge@v0.16.0
+  uses: divergedev/diverge@v0.18.0
   with:
     kubeconfig: ${{ secrets.PREVIEW_KUBECONFIG }}
     image-registry: ghcr.io/acme
     base-url: https://staging.example.com
     wait: "true"
+    verify: "true"
 
 - name: Run Playwright E2E Against Preview
   if: steps.diverge.outputs.skipped != 'true'
@@ -104,7 +107,7 @@ See [charts/diverge/values.yaml](charts/diverge/values.yaml) for configuration o
 *   **Delta Deployment & Baseline Drift Detection**: Only deploy what changed, falling back to a baseline for unmodified services. Automatically computes a deterministic SHA-256 baseline fingerprint (`divergedev.com/baseline-fingerprint`) across baseline `Deployment`s, `ConfigMap`s, and `Secret`s, surfacing drift warnings (`BaselineDriftDetected=True`, `⚠️ drift` in `diverge top`) or auto-refreshing preview pods (`divergedev.com/drift-policy: sync`).
 *   **Header-Based Routing & Gateway API**: Leverages Gateway API (`HTTPRoute` + `GRPCRoute` + cross-namespace `ReferenceGrant`), Istio (`ambient-mesh` / `waypoint`), Cilium, Linkerd, and the Diverge Proxy to route traffic seamlessly using HTTP/gRPC headers.
 *   **Configurable DB Modes & Atlas Migrations**: Options for `shared`, `schema`, `snapshot`, or `fresh` databases via in-cluster `schema` and CloudNativePG (`cnpg`) providers, plus native [Atlas Operator](docs/guides/database-branching-atlas.md) (`AtlasMigration` / `AtlasSchema`) integration.
-*   **Schema-per-Environment**: Actual execution of SQL-based schema provisioning (via `SQLExecutor`) with `public` schema write-protection, declarative `seedSource` seeding (`public`, `schema:<name>`, `configmap:<name>[/<key>]`), regex-validated naming, injection prevention, auto-generated `diverge-db-env-<env>` Secret (`DATABASE_URL` and `DIVERGE_PREVIEW_SCHEMA`), and automated migration Jobs.
+*   **Schema-per-Environment**: Actual execution of SQL-based schema provisioning (via `SQLExecutor`) with `public` schema write-protection, declarative `seedSource` seeding (`public`, `schema:<name>`, `configmap:<name>[/<key>]`) including foreign keys, sequences, and views, regex-validated naming, injection prevention, auto-generated `diverge-db-env-<env>` Secret (`DATABASE_URL` and `DIVERGE_PREVIEW_SCHEMA`), and automated migration Jobs.
 *   **MR-Triggered Lifecycle**: Environments spin up when a Merge Request opens and tear down upon merge/close.
 *   **Merge Gating**: GitLab/GitHub commit status checks (`diverge/preview`) block merges until environments are healthy.
 *   **Argo CD & Direct Deploy**: Argo CD GitOps (`Application` CRs) and No-ArgoCD mode (`DirectDeployer`) for Helm charts and Kustomize overlays.
@@ -125,9 +128,9 @@ See [charts/diverge/values.yaml](charts/diverge/values.yaml) for configuration o
 
 ### Async & Cache Routing
 
-Diverge provides fully isolated preview environments for asynchronous queues and shared caches.
+Diverge provides fully isolated preview environments for asynchronous queues, shared caches, and object storage buckets.
 *   **Subdomain vs Header Routing**: Use `mode: subdomain` for frontend-to-backend workflows without passing custom headers.
-*   **Available Providers**: Supported provisioners include Temporal, Kafka (with bounded topic `retention.ms` via `divergedev.com/kafka-retention-ms` or TTL), Redis / Valkey (key-prefix isolation `preview:<env>:` with non-blocking RESP `SCAN` + `UNLINK` teardown on `--redis-addr` / `DIVERGE_REDIS_ADDR`), Noop, and Webhook.
+*   **Available Providers**: Supported provisioners include Temporal, Kafka (with bounded topic `retention.ms` via `divergedev.com/kafka-retention-ms` or TTL), Redis / Valkey (key-prefix isolation `preview:<env>:` with non-blocking RESP `SCAN` + `UNLINK` teardown on `--redis-addr` / `DIVERGE_REDIS_ADDR`), **S3 / GCS / MinIO** object storage key-prefix isolation (`DIVERGE_STORAGE_PREFIX`, `ResolveStorageKey`, `resolveStorageKey`, `resolve_storage_key`), Noop, and Webhook.
 *   **Slim Builds**: Use `no_temporal` and `no_kafka` build tags for smaller binaries.
 
 See the [Async Routing Guide](https://divergedev.com/guides/async-routing/) for full configuration details and YAML examples.
@@ -185,9 +188,10 @@ spec:
 ## CLI Commands
 
 The `diverge` CLI helps you manage environments efficiently:
-*   `diverge init` - Initialize a `.diverge.yaml` config or local Kubernetes playground
+*   `diverge init` - Initialize a `.diverge.yaml` config (with automatic Postgres/Redis/S3/Kafka/Temporal stack detection) or local Kubernetes playground
 *   `diverge create` - Create a new environment
 *   `diverge curl` - Send HTTP requests to a preview environment and compare against baseline (`--compare-baseline`)
+*   `diverge verify` - Verify preview environment workload health (`doctor`), HTTP readiness, latency SLOs, and baseline parity (`--github-summary`)
 *   `diverge list` - List active environments
 *   `diverge status` - Check the status of an environment
 *   `diverge top` - Live terminal dashboard (`watch`) of environments, FinOps burn rate, hibernation state, and `AgentTask`s

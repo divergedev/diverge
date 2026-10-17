@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -388,4 +390,137 @@ func TestVerifyCmd_FailsWhenClusterUnavailableWithoutSkipDoctor(t *testing.T) {
 	assert.False(t, report.Checks[0].Passed)
 	assert.Equal(t, "ERROR", report.Checks[0].Status)
 	assert.Contains(t, report.Checks[0].Message, "cluster unavailable")
+}
+
+func TestVerifyCmd_GitHubStepSummaryAndAnnotations(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/fail" {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte("server error"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	t.Cleanup(srv.Close)
+
+	t.Run("writes Markdown scorecard to GITHUB_STEP_SUMMARY file", func(t *testing.T) {
+		tmpSummary := filepath.Join(t.TempDir(), "step-summary.md")
+		t.Setenv("GITHUB_STEP_SUMMARY", tmpSummary)
+
+		app := &App{Namespace: "staging"}
+		root := NewRootCmd(app)
+		var out bytes.Buffer
+		root.SetOut(&out)
+		root.SetErr(&out)
+		root.SetArgs([]string{
+			"verify", "pr-42", "/healthz",
+			"--kubeconfig", "/nonexistent/kubeconfig",
+			"--base-url", srv.URL,
+			"--skip-doctor",
+		})
+
+		require.NoError(t, root.Execute())
+
+		summaryBytes, err := os.ReadFile(tmpSummary)
+		require.NoError(t, err)
+		md := string(summaryBytes)
+		assert.Contains(t, md, "### ✅ Diverge Verification Passed: pr-42")
+		assert.Contains(t, md, "**URL:** "+srv.URL+" | **Header:** `x-diverge-env: pr-42` | **Namespace:** `staging`")
+		assert.Contains(t, md, "| Check | Status | Latency | Result | Details |")
+		assert.Contains(t, md, "| :--- | :--- | :--- | :--- | :--- |")
+		assert.Contains(t, md, "http-status:/healthz")
+		assert.Contains(t, md, "✅ PASS")
+	})
+
+	t.Run("--github-summary renders Markdown table to stdout when GITHUB_STEP_SUMMARY is unset", func(t *testing.T) {
+		t.Setenv("GITHUB_STEP_SUMMARY", "")
+
+		app := &App{Namespace: "default"}
+		root := NewRootCmd(app)
+		var out bytes.Buffer
+		root.SetOut(&out)
+		root.SetErr(&out)
+		root.SetArgs([]string{
+			"verify", "pr-42", "/healthz",
+			"--kubeconfig", "/nonexistent/kubeconfig",
+			"--base-url", srv.URL,
+			"--skip-doctor",
+			"--github-summary",
+		})
+
+		require.NoError(t, root.Execute())
+		output := out.String()
+		assert.Contains(t, output, "### ✅ Diverge Verification Passed: pr-42")
+		assert.Contains(t, output, "| Check | Status | Latency | Result | Details |")
+		assert.Contains(t, output, "✅ PASS")
+	})
+
+	t.Run("GITHUB_ACTIONS=true emits ::error annotations and doctor diagnostics on failure", func(t *testing.T) {
+		tmpSummary := filepath.Join(t.TempDir(), "failed-summary.md")
+		t.Setenv("GITHUB_STEP_SUMMARY", tmpSummary)
+		t.Setenv("GITHUB_ACTIONS", "true")
+
+		env := &divergeiov1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "pr-105",
+				Namespace: "default",
+			},
+			Status: divergeiov1alpha1.EnvironmentStatus{
+				Phase: divergeiov1alpha1.PhaseRunning,
+				URL:   srv.URL,
+			},
+		}
+
+		crashingPod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "api-pr-105-crash",
+				Namespace: "default",
+				Labels: map[string]string{
+					"divergedev.com/environment": "pr-105",
+				},
+			},
+			Status: corev1.PodStatus{
+				ContainerStatuses: []corev1.ContainerStatus{
+					{
+						Name: "api",
+						State: corev1.ContainerState{
+							Waiting: &corev1.ContainerStateWaiting{
+								Reason:  "CrashLoopBackOff",
+								Message: "back-off 10s restarting failed container=api",
+							},
+						},
+					},
+				},
+			},
+		}
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(newVerifyTestScheme(t)).
+			WithObjects(env, crashingPod).
+			Build()
+
+		app := &App{Namespace: "default", Client: fakeClient}
+		root := NewRootCmd(app)
+		var out bytes.Buffer
+		root.SetOut(&out)
+		root.SetErr(&out)
+		root.SetArgs([]string{"verify", "pr-105", "/fail", "--github-summary"})
+
+		err := root.Execute()
+		require.Error(t, err)
+
+		output := out.String()
+		assert.Contains(t, output, "::error title=Diverge Verify (workload-diagnostics)::1 issue(s) detected")
+		assert.Contains(t, output, "::error title=Diverge Verify (http-status:/fail)::expected 2xx/3xx, got 500")
+
+		summaryBytes, err := os.ReadFile(tmpSummary)
+		require.NoError(t, err)
+		md := string(summaryBytes)
+		assert.Contains(t, md, "### ❌ Diverge Verification Failed: pr-105")
+		assert.Contains(t, md, "❌ FAIL")
+		assert.Contains(t, md, "#### 🩺 Doctor Diagnostics")
+		assert.Contains(t, md, "[DIV-105] Container/api (api-pr-105-crash): Container is repeatedly crashing (CrashLoopBackOff)")
+		assert.Contains(t, md, "Remediation:")
+	})
 }

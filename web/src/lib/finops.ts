@@ -18,7 +18,26 @@ export type FinOpsEnvironment = PartialMessage<Environment> & {
 
 const CPU_CORE_HOURLY_RATE_USD = 0.031611
 const MEMORY_GIB_HOURLY_RATE_USD = 0.004237
-const DEFAULT_POD_HOURLY_COST_USD = 0.025
+export const DEFAULT_POD_HOURLY_COST_USD = 0.012
+export const DEFAULT_SCHEMA_DB_HOURLY_USD = 0.01
+export const DEFAULT_DEDICATED_DB_HOURLY_USD = 0.08
+
+/**
+ * Estimates the hourly database cost in USD based on the database mode/provider.
+ */
+export function estimateDatabaseHourlyCost(mode?: string): number {
+  switch (mode?.toLowerCase()) {
+    case 'cnpg':
+    case 'neon':
+    case 'snapshot':
+    case 'fresh':
+      return DEFAULT_DEDICATED_DB_HOURLY_USD
+    case 'schema':
+      return DEFAULT_SCHEMA_DB_HOURLY_USD
+    default:
+      return 0
+  }
+}
 
 /**
  * Parses a Kubernetes CPU quantity string (e.g. "500m", "0.5", "2") into cores.
@@ -100,23 +119,7 @@ export function estimateEnvironmentHourlyCostUSD(env?: FinOpsEnvironment | null)
     }
   }
 
-  let dbCost = 0
-  switch (env.spec?.database?.mode?.toLowerCase()) {
-    case 'cnpg':
-    case 'neon':
-      dbCost = 0.05
-      break
-    case 'snapshot':
-    case 'fresh':
-      dbCost = 0.02
-      break
-    case 'schema':
-      dbCost = 0.005
-      break
-    default:
-      dbCost = 0
-      break
-  }
+  const dbCost = estimateDatabaseHourlyCost(env.spec?.database?.mode || env.status?.databaseProvider)
 
   return computeCost + dbCost
 }

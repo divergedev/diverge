@@ -35,6 +35,9 @@ export function EnvironmentTable({ environments, isLoading }: { environments: En
       <TableBody>
         {environments.map((env) => {
           const magicUrl = buildMagicPreviewUrl(env)
+          const isDrifted = Boolean(
+            env.status?.conditions?.some((c) => c.type === 'BaselineDriftDetected' && c.status === 'True'),
+          )
           return (
             <TableRow key={`${env.namespace}/${env.name}`}>
               <TableCell>
@@ -48,6 +51,11 @@ export function EnvironmentTable({ environments, isLoading }: { environments: En
                 {isEnvironmentHibernated(env) && (
                   <span className="ml-2 inline-flex items-center rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-500">
                     Hibernated
+                  </span>
+                )}
+                {isDrifted && (
+                  <span className="ml-2 inline-flex items-center rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-500">
+                    Drifted
                   </span>
                 )}
               </TableCell>

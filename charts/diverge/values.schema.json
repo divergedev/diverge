@@ -179,7 +179,7 @@
       "properties": {
         "provider": {
           "type": "string",
-          "enum": ["noop", "kafka", "temporal", "redis", "valkey", "webhook"],
+          "enum": ["noop", "kafka", "temporal", "redis", "valkey", "s3", "gcs", "minio", "webhook"],
           "description": "Async provisioning provider"
         },
         "redis": {
@@ -190,6 +190,16 @@
             "username": { "type": "string" },
             "passwordSecretName": { "type": "string" },
             "passwordSecretKey": { "type": "string" }
+          }
+        },
+        "storage": {
+          "type": "object",
+          "properties": {
+            "endpoint": { "type": "string" },
+            "bucket": { "type": "string" },
+            "secretName": { "type": "string" },
+            "accessKeyKey": { "type": "string" },
+            "secretKeyKey": { "type": "string" }
           }
         }
       }

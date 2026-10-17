@@ -325,3 +325,69 @@ func TestPreviewGroup_ChangedServices_RoundTrip(t *testing.T) {
 		t.Errorf("expected roundtripped changedServices ['orders-svc', 'cart-svc'], got %v", roundTripped.Status.Services[0].ChangedServices)
 	}
 }
+
+func TestEnvironment_StatusAsyncEnvVarsAndDatabaseProvider_RoundTrip(t *testing.T) {
+	original := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "env-isolation",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Database: v1alpha1.EnvironmentDatabase{
+				Mode: "schema",
+			},
+			Routing: v1alpha1.EnvironmentRouting{
+				AsyncRoutes: []v1alpha1.AsyncRouteSpec{
+					{
+						Protocol: "redis",
+						Target:   "cache",
+					},
+					{
+						Protocol: "s3",
+						Target:   "uploads",
+					},
+				},
+			},
+		},
+		Status: v1alpha1.EnvironmentStatus{
+			Phase:            v1alpha1.PhaseRunning,
+			DatabaseProvider: "schema",
+			AsyncEnvVars: map[string]string{
+				"DIVERGE_REDIS_PREFIX":   "diverge:env-isolation:",
+				"DIVERGE_STORAGE_PREFIX": "previews/env-isolation/",
+			},
+		},
+	}
+
+	proto, err := CRDEnvToProto(original)
+	if err != nil {
+		t.Fatalf("CRDEnvToProto failed: %v", err)
+	}
+
+	if proto.Status == nil {
+		t.Fatal("expected non-nil proto.Status")
+	}
+	if proto.Status.DatabaseProvider != "schema" {
+		t.Errorf("expected proto.Status.DatabaseProvider to be 'schema', got %q", proto.Status.DatabaseProvider)
+	}
+	if proto.Status.AsyncEnvVars["DIVERGE_REDIS_PREFIX"] != "diverge:env-isolation:" {
+		t.Errorf("expected DIVERGE_REDIS_PREFIX in proto.Status.AsyncEnvVars, got %v", proto.Status.AsyncEnvVars)
+	}
+	if proto.Status.AsyncEnvVars["DIVERGE_STORAGE_PREFIX"] != "previews/env-isolation/" {
+		t.Errorf("expected DIVERGE_STORAGE_PREFIX in proto.Status.AsyncEnvVars, got %v", proto.Status.AsyncEnvVars)
+	}
+
+	roundTripped, err := ProtoEnvToCRD(proto)
+	if err != nil {
+		t.Fatalf("ProtoEnvToCRD failed: %v", err)
+	}
+	if roundTripped.Status.DatabaseProvider != "schema" {
+		t.Errorf("expected roundTripped.Status.DatabaseProvider to be 'schema', got %q", roundTripped.Status.DatabaseProvider)
+	}
+	if roundTripped.Status.AsyncEnvVars["DIVERGE_REDIS_PREFIX"] != "diverge:env-isolation:" {
+		t.Errorf("expected DIVERGE_REDIS_PREFIX in roundTripped.Status.AsyncEnvVars, got %v", roundTripped.Status.AsyncEnvVars)
+	}
+	if roundTripped.Status.AsyncEnvVars["DIVERGE_STORAGE_PREFIX"] != "previews/env-isolation/" {
+		t.Errorf("expected DIVERGE_STORAGE_PREFIX in roundTripped.Status.AsyncEnvVars, got %v", roundTripped.Status.AsyncEnvVars)
+	}
+}

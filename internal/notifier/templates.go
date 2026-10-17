@@ -67,13 +67,29 @@ const readyTmplStr = `## 🟢 Diverge Preview Environment — Ready!
 | **Environment** | ` + "`{{.Name | sanitize}}`" + ` |
 | **Branch** | ` + "`{{.Branch | sanitize}}`" + ` |
 | **Deploy Mode** | {{.Mode | sanitize}} ({{.NumServices}} services deployed) |
+{{- if .DatabaseSummary}}
+| **Database** | {{.DatabaseSummary}} |
+{{- end}}
+{{- if .AsyncSummary}}
+| **Async / Storage** | {{.AsyncSummary}} |
+{{- end}}
+{{- if .CostSummary}}
+| **Est. Cost** | {{.CostSummary}} |
+{{- end}}
 | **Deployed In** | {{.Duration}} |
+{{- if .DriftWarning}}
+
+> [!WARNING]
+> **Baseline Drift Detected:** {{.DriftWarning}} (run ` + "`kubectl annotate env {{.Name | sanitize}} divergedev.com/drift-policy=sync --overwrite`" + ` to auto-refresh)
+{{- end}}
 
 ### Services
 {{range .Services}}- ✅ {{. | sanitize}}
 {{end}}
 {{if .BaseURL}}### Quick Access
 ` + "```\n" + `curl -H "{{.HeaderKey | sanitize}}: {{if .HeaderValue}}{{.HeaderValue | sanitize}}{{else}}{{.Name | sanitize}}{{end}}" {{.BaseURL}}
+diverge verify {{.Name | sanitize}} --compare-baseline
+diverge open {{.Name | sanitize}} --magic
 ` + "```\n" + `
 > 💡 **Tip:** Open via 1-click [Magic Link]({{.BaseURL}}?_diverge_env={{if .HeaderValue}}{{.HeaderValue | sanitize}}{{else}}{{.Name | sanitize}}{{end}}) ([Exit Preview]({{.BaseURL}}?_diverge_env=clear)), use the Diverge browser extension, or add the header ` + "`{{.HeaderKey | sanitize}}: {{if .HeaderValue}}{{.HeaderValue | sanitize}}{{else}}{{.Name | sanitize}}{{end}}`" + ` to route traffic to this preview.
 {{end}}
@@ -102,21 +118,25 @@ Environment ` + "`{{.Name | sanitize}}`" + ` has been cleaned up.
 
 // TemplateData holds the values passed to notification message templates.
 type TemplateData struct {
-	Name        string
-	Branch      string
-	Mode        string
-	RoutingMode string
-	Services    []string
-	TTL         string
-	URL         string
-	NumServices int
-	Duration    string
-	BaseURL     string
-	ExpiryTime  string
-	Reason      string
-	HeaderKey   string // routing header key (defaults to x-diverge-env)
-	HeaderValue string // optional routing header value (defaults to Name)
-	Conditions  []ConditionData
+	Name            string
+	Branch          string
+	Mode            string
+	RoutingMode     string
+	Services        []string
+	TTL             string
+	URL             string
+	NumServices     int
+	Duration        string
+	BaseURL         string
+	ExpiryTime      string
+	Reason          string
+	HeaderKey       string // routing header key (defaults to x-diverge-env)
+	HeaderValue     string // optional routing header value (defaults to Name)
+	DatabaseSummary string
+	AsyncSummary    string
+	CostSummary     string
+	DriftWarning    string
+	Conditions      []ConditionData
 }
 
 // ConditionData represents a single status condition for template rendering.

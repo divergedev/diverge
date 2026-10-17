@@ -446,6 +446,7 @@ func TestAgentTaskReconcilerBudgetTimeoutAndTransientRetry(t *testing.T) {
 	require.NoError(t, err)
 	assert.InDelta(t, 10.00, claims.MaxCostUSD, 0.001)
 	assert.Equal(t, "default", claims.Namespace)
+	assert.Contains(t, claims.AllowedTools, "diverge_verify")
 
 	// 5. Simulate TimeoutSeconds elapsed -> tears down sandbox, revokes token, and transitions to Failed
 	require.NoError(t, fakeClient.Get(ctx, req.NamespacedName, updated))
