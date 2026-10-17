@@ -530,7 +530,7 @@ func (r *GatewayRouter) resolveParentRef(ctx context.Context, env *v1alpha1.Envi
 		}
 	}
 
-	if r.Client != nil && rawParentRef != "" {
+	if r.Client != nil && rawParentRef != "" && isServiceName(rawParentRef) {
 		gwNS := ""
 		if env != nil {
 			gwNS = strings.TrimSpace(env.Annotations["divergedev.com/gateway-namespace"])
@@ -543,7 +543,7 @@ func (r *GatewayRouter) resolveParentRef(ctx context.Context, env *v1alpha1.Envi
 		gw.SetKind("Gateway")
 		if err := r.Client.Get(ctx, client.ObjectKey{Name: rawParentRef, Namespace: gwNS}, gw); err == nil {
 			return rawParentRef, false, nil
-		} else if !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) {
+		} else if !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) && !apierrors.IsForbidden(err) {
 			return "", false, fmt.Errorf("failed to look up Gateway %s/%s: %w", gwNS, rawParentRef, err)
 		}
 	}
@@ -646,7 +646,7 @@ func (r *GatewayRouter) reconcileGatewayTLS(ctx context.Context, env *v1alpha1.E
 			if err := r.Client.Update(ctx, gw); err != nil {
 				return fmt.Errorf("failed to update Gateway %s/%s TLS annotations: %w", gwNS, gatewayName, err)
 			}
-		} else if !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) {
+		} else if !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) && !apierrors.IsForbidden(err) {
 			return fmt.Errorf("failed to get Gateway %s/%s for TLS reconciliation: %w", gwNS, gatewayName, err)
 		}
 	}
@@ -658,7 +658,7 @@ func (r *GatewayRouter) reconcileGatewayTLS(ctx context.Context, env *v1alpha1.E
 		staleCert.SetKind("Certificate")
 		staleCert.SetName(certName)
 		staleCert.SetNamespace(gwNS)
-		if err := r.Client.Delete(ctx, staleCert); err != nil && !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) {
+		if err := r.Client.Delete(ctx, staleCert); err != nil && !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) && !apierrors.IsForbidden(err) {
 			return fmt.Errorf("failed to delete stale Certificate %s/%s: %w", gwNS, certName, err)
 		}
 		return nil
@@ -686,7 +686,7 @@ func (r *GatewayRouter) reconcileGatewayTLS(ctx context.Context, env *v1alpha1.E
 	existingCert.SetKind("Certificate")
 	err := r.Client.Get(ctx, client.ObjectKey{Name: certName, Namespace: gwNS}, existingCert)
 	if err != nil {
-		if meta.IsNoMatchError(err) {
+		if meta.IsNoMatchError(err) || apierrors.IsForbidden(err) {
 			return nil
 		}
 		if client.IgnoreNotFound(err) != nil {
@@ -703,7 +703,7 @@ func (r *GatewayRouter) reconcileGatewayTLS(ctx context.Context, env *v1alpha1.E
 		})
 		cert.Object["spec"] = certSpec
 		if err := r.Client.Create(ctx, cert); err != nil {
-			if meta.IsNoMatchError(err) {
+			if meta.IsNoMatchError(err) || apierrors.IsForbidden(err) {
 				return nil
 			}
 			return fmt.Errorf("failed to create Certificate %s/%s: %w", gwNS, certName, err)
@@ -833,7 +833,7 @@ func (r *GatewayRouter) Teardown(ctx context.Context, env *v1alpha1.Environment)
 			client.InNamespace(certNS),
 			client.MatchingLabelsSelector{Selector: selector},
 		); err != nil {
-			if meta.IsNoMatchError(err) {
+			if meta.IsNoMatchError(err) || apierrors.IsForbidden(err) {
 				break
 			}
 			return fmt.Errorf("listing Certificates: %w", err)

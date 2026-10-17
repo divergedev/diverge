@@ -31,7 +31,11 @@ rules:
     verbs: [get, list, watch, create, update, patch, delete]
   # Gateway API
   - apiGroups: ["gateway.networking.k8s.io"]
-    resources: [httproutes, grpcroutes, referencegrants]
+    resources: [gateways, httproutes, grpcroutes, referencegrants]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # cert-manager
+  - apiGroups: ["cert-manager.io"]
+    resources: [certificates]
     verbs: [get, list, watch, create, update, patch, delete]
   # NetworkPolicies
   - apiGroups: ["networking.k8s.io"]
