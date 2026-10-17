@@ -393,3 +393,79 @@ func TestSchemaDatabaseProvider_Provision_SeedSource_ConfigMap(t *testing.T) {
 	assert.Contains(t, res.SetupSQL, "INSERT INTO users (id, email) VALUES (1, 'dev@example.com') ON CONFLICT DO NOTHING;")
 	assert.Contains(t, mockExec.lastSQL, "INSERT INTO users (id, email) VALUES (1, 'dev@example.com') ON CONFLICT DO NOTHING;")
 }
+
+func TestSchemaDatabaseProvider_Provision_ClonesForeignKeysAndViews(t *testing.T) {
+	mockExec := &recordingExecutor{}
+	provider := NewSchemaDatabaseProvider("postgres://admin@localhost/db")
+	provider.Executor = mockExec
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "fk-view-env",
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Database: v1alpha1.EnvironmentDatabase{
+				Mode:       "schema",
+				SeedSource: "public",
+			},
+		},
+	}
+
+	res, err := provider.Provision(context.Background(), env)
+	require.NoError(t, err)
+	assert.True(t, res.Ready)
+
+	// Verify foreign key constraint cloning uses catalog identity (confnsp/confrel) and quote_ident
+	assert.Contains(t, res.SetupSQL, "pg_get_constraintdef(c.oid, true)")
+	assert.Contains(t, res.SetupSQL, "confnsp.nspname AS ref_schema")
+	assert.Contains(t, res.SetupSQL, "confrel.relname AS ref_table")
+	assert.Contains(t, res.SetupSQL, "IF fk_row.ref_schema = 'public' THEN")
+	assert.Contains(t, res.SetupSQL, "quote_ident(fk_row.ref_table)")
+	assert.Contains(t, res.SetupSQL, "format(' REFERENCES %I.%I(', 'preview_fk_view_env', fk_row.ref_table)")
+	assert.Contains(t, res.SetupSQL, "DEFERRABLE INITIALLY IMMEDIATE")
+	assert.Contains(t, res.SetupSQL, "ALTER TABLE %I.%I ADD CONSTRAINT %I %s")
+
+	// Verify view cloning sets preview search_path before pg_get_viewdef and orders by dependency depth
+	searchPathIdx := strings.Index(mockExec.lastSQL, "PERFORM set_config('search_path', quote_ident('preview_fk_view_env') || ', public', true);")
+	viewLoopIdx := strings.Index(mockExec.lastSQL, "FOR view_row IN")
+	assert.Greater(t, searchPathIdx, 0, "executed DO block must set preview search_path before cloning views")
+	assert.Less(t, searchPathIdx, viewLoopIdx, "set_config('search_path', ...) must run before FOR view_row IN")
+	assert.Contains(t, res.SetupSQL, "WITH RECURSIVE public_views AS")
+	assert.Contains(t, res.SetupSQL, "JOIN pg_rewrite r ON r.ev_class = v.oid")
+	assert.Contains(t, res.SetupSQL, "JOIN pg_depend d ON d.objid = r.oid")
+	assert.Contains(t, res.SetupSQL, "ORDER BY level ASC, table_name ASC")
+	assert.Contains(t, res.SetupSQL, "CREATE OR REPLACE VIEW %I.%I AS %s")
+
+	// Verify seed SQL defers constraints and orders tables by recursive FK dependency depth
+	assert.Contains(t, res.SetupSQL, "SET CONSTRAINTS ALL DEFERRED;")
+	assert.Contains(t, res.SetupSQL, "WITH RECURSIVE seed_tables AS")
+	assert.Contains(t, res.SetupSQL, "fk_deps AS")
+	assert.Contains(t, res.SetupSQL, "dep_levels AS")
+	assert.Contains(t, res.SetupSQL, "ordered_seed_tables AS")
+}
+
+func TestSchemaDatabaseProvider_SharedDBPoolReuseAndClose(t *testing.T) {
+	provider := NewSchemaDatabaseProvider("postgres://admin@localhost:5432/db?sslmode=disable")
+	defer func() { _ = provider.Close() }()
+
+	// Close on uninitialized pool should be a no-op
+	require.NoError(t, provider.Close())
+
+	db1, err := provider.getOrOpenDB()
+	require.NoError(t, err)
+	require.NotNil(t, db1)
+	assert.Equal(t, 10, db1.Stats().MaxOpenConnections)
+
+	db2, err := provider.getOrOpenDB()
+	require.NoError(t, err)
+	assert.Same(t, db1, db2, "expected shared *sql.DB pool to be reused across calls")
+
+	// Changing AdminDSN should close old pool and open a new one
+	provider.AdminDSN = "postgres://admin@localhost:5433/db?sslmode=disable"
+	db3, err := provider.getOrOpenDB()
+	require.NoError(t, err)
+	require.NotNil(t, db3)
+	assert.NotSame(t, db1, db3, "expected a new *sql.DB pool when AdminDSN changes")
+
+	require.NoError(t, provider.Close())
+	assert.Nil(t, provider.db)
+}

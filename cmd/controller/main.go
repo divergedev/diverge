@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"runtime/debug"
@@ -193,6 +194,13 @@ func main() {
 	if err != nil {
 		setupLog.Error(err, "creating database provider", "provider", databaseProvider)
 		os.Exit(1)
+	}
+	if closer, ok := dbProviderImpl.(io.Closer); ok {
+		defer func() {
+			if closeErr := closer.Close(); closeErr != nil {
+				setupLog.Error(closeErr, "closing database provider")
+			}
+		}()
 	}
 
 	// Wrap with metrics

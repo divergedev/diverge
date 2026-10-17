@@ -256,6 +256,7 @@ spec:
                               - temporal: TEMPORAL_TASK_QUEUE
                               - kafka: KAFKA_CONSUMER_GROUP
                               - redis / valkey: DIVERGE_REDIS_PREFIX
+                              - s3 / gcs / minio: DIVERGE_STORAGE_PREFIX
                             type: object
                           protocol:
                             description: Protocol is the async protocol type.
@@ -264,6 +265,9 @@ spec:
                             - kafka
                             - redis
                             - valkey
+                            - s3
+                            - gcs
+                            - minio
                             type: string
                           target:
                             description: Target is the baseline resource name (e.g.,

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -109,6 +110,9 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 	tCtxDB, cancelDB := context.WithTimeout(ctx, 15*time.Second)
 	defer cancelDB()
 	dbProv, resolvedDBName, err := r.resolveDatabaseProvider(env, false)
+	if dbProv != nil && dbProv != r.DatabaseProvider {
+		defer closeDatabaseProvider(dbProv)
+	}
 	var dbStatus *pkgdb.DatabaseResult
 	if err == nil && dbProv != nil {
 		if env.Status.DatabaseProvider == "" && resolvedDBName != "" {
@@ -470,6 +474,15 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 	return ctrl.Result{}, false, nil
 }
 
+func isKeyPrefixAsyncProto(p string) bool {
+	switch p {
+	case "redis", "valkey", "s3", "gcs", "minio":
+		return true
+	default:
+		return false
+	}
+}
+
 func (r *EnvironmentReconciler) resolveAsyncProvisioner(route divergeiov1alpha1.AsyncRouteSpec) async.Provisioner {
 	if r.AsyncProvisioner == nil {
 		return nil
@@ -479,19 +492,19 @@ func (r *EnvironmentReconciler) resolveAsyncProvisioner(route divergeiov1alpha1.
 	if name == "webhook" || !async.Providers.Has(name) {
 		return r.AsyncProvisioner
 	}
-	if name == proto || ((proto == "redis" || proto == "valkey") && (name == "redis" || name == "valkey")) {
+	if name == proto {
 		return r.AsyncProvisioner
 	}
 	deps := registry.Deps{
 		Client: r.Client,
 		Scheme: r.Scheme,
 	}
-	if proto == "redis" || proto == "valkey" {
+	if isKeyPrefixAsyncProto(proto) {
 		if prov, err := async.Providers.Create(proto, deps); err == nil && prov != nil {
 			return prov
 		}
 	}
-	if name == "redis" || name == "valkey" {
+	if isKeyPrefixAsyncProto(name) {
 		if prov, err := async.Providers.Create("noop", deps); err == nil && prov != nil {
 			return prov
 		}
@@ -592,6 +605,19 @@ func isDefaultOrNoopDBProvider(p pkgdb.DatabaseProvider) bool {
 		return inst.Inner == nil || inst.Mode == "" || inst.Mode == "none" || inst.Mode == "noop" || isDefaultOrNoopDBProvider(inst.Inner)
 	}
 	return false
+}
+
+func closeDatabaseProvider(p pkgdb.DatabaseProvider) {
+	if p == nil {
+		return
+	}
+	if closer, ok := p.(io.Closer); ok {
+		_ = closer.Close()
+		return
+	}
+	if inst, ok := p.(*internaldb.InstrumentedDatabaseProvider); ok && inst.Inner != nil {
+		closeDatabaseProvider(inst.Inner)
+	}
 }
 
 func (r *EnvironmentReconciler) ensureBannerConfigMap(ctx context.Context, env *divergeiov1alpha1.Environment) error {

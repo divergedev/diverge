@@ -43,6 +43,8 @@ type SchemaDatabaseProvider struct {
 	Client    client.Client
 	mu        sync.Mutex
 	passwords map[string]string
+	db        *sql.DB
+	dbDSN     string
 }
 
 // NewSchemaDatabaseProvider creates a SchemaDatabaseProvider with an initialized password cache.
@@ -51,6 +53,46 @@ func NewSchemaDatabaseProvider(adminDSN string) *SchemaDatabaseProvider {
 		AdminDSN:  adminDSN,
 		passwords: make(map[string]string),
 	}
+}
+
+func (p *SchemaDatabaseProvider) getOrOpenDB() (*sql.DB, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.db != nil && p.dbDSN == p.AdminDSN {
+		return p.db, nil
+	}
+	if p.db != nil {
+		_ = p.db.Close()
+		p.db = nil
+	}
+
+	db, err := sql.Open("pgx", p.AdminDSN)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxIdleTime(5 * time.Minute)
+	db.SetConnMaxLifetime(30 * time.Minute)
+
+	p.db = db
+	p.dbDSN = p.AdminDSN
+	return db, nil
+}
+
+// Close closes the shared database connection pool if open.
+func (p *SchemaDatabaseProvider) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.db == nil {
+		return nil
+	}
+	err := p.db.Close()
+	p.db = nil
+	p.dbDSN = ""
+	return err
 }
 
 func (p *SchemaDatabaseProvider) durableKey(namespace, roleName string) string {
@@ -198,6 +240,13 @@ DECLARE
     row record;
     seq_row record;
     col_row record;
+    fk_row record;
+    fk_def text;
+    view_row record;
+    raw_view_def text;
+    view_def text;
+    v_idx integer;
+    v_len integer;
 BEGIN
     EXECUTE format('CREATE SCHEMA IF NOT EXISTS %%I', '%[1]s');
     FOR row IN
@@ -225,6 +274,175 @@ BEGIN
         EXECUTE format('ALTER TABLE %%I.%%I ALTER COLUMN %%I SET DEFAULT %%s',
             '%[1]s', col_row.table_name, col_row.column_name,
             replace(col_row.column_default, '''public.', '''%[1]s.'));
+    END LOOP;
+
+    -- Clone FOREIGN KEY constraints from public schema tables, rewriting intra-schema references to the preview schema
+    FOR fk_row IN
+        SELECT
+            c.conname AS constraint_name,
+            rel.relname AS table_name,
+            confnsp.nspname AS ref_schema,
+            confrel.relname AS ref_table,
+            c.condeferrable AS is_deferrable,
+            pg_get_constraintdef(c.oid, true) AS constraint_def
+        FROM pg_constraint c
+        JOIN pg_class rel ON rel.oid = c.conrelid
+        JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+        JOIN pg_class confrel ON confrel.oid = c.confrelid
+        JOIN pg_namespace confnsp ON confnsp.oid = confrel.relnamespace
+        WHERE nsp.nspname = 'public' AND c.contype = 'f'
+    LOOP
+        IF NOT EXISTS (
+            SELECT 1
+            FROM pg_constraint existing_c
+            JOIN pg_class existing_rel ON existing_rel.oid = existing_c.conrelid
+            JOIN pg_namespace existing_nsp ON existing_nsp.oid = existing_rel.relnamespace
+            WHERE existing_nsp.nspname = '%[1]s'
+              AND existing_rel.relname = fk_row.table_name
+              AND existing_c.conname = fk_row.constraint_name
+        ) THEN
+            IF fk_row.ref_schema = 'public' THEN
+                fk_def := replace(
+                    fk_row.constraint_def,
+                    ' REFERENCES public.' || quote_ident(fk_row.ref_table) || '(',
+                    format(' REFERENCES %%I.%%I(', '%[1]s', fk_row.ref_table)
+                );
+                IF fk_def = fk_row.constraint_def THEN
+                    fk_def := replace(
+                        fk_row.constraint_def,
+                        ' REFERENCES ' || quote_ident(fk_row.ref_table) || '(',
+                        format(' REFERENCES %%I.%%I(', '%[1]s', fk_row.ref_table)
+                    );
+                END IF;
+            ELSE
+                fk_def := fk_row.constraint_def;
+            END IF;
+            IF NOT fk_row.is_deferrable AND position('DEFERRABLE' IN upper(fk_def)) = 0 THEN
+                fk_def := fk_def || ' DEFERRABLE INITIALLY IMMEDIATE';
+            END IF;
+            EXECUTE format('ALTER TABLE %%I.%%I ADD CONSTRAINT %%I %%s',
+                '%[1]s', fk_row.table_name, fk_row.constraint_name, fk_def);
+        END IF;
+    END LOOP;
+
+    -- Clone VIEW definitions from public schema into the preview schema in dependency order.
+    -- Set search_path to the preview schema first so cloned preview tables shadow their
+    -- public counterparts and pg_get_viewdef emits explicit public.<name> qualifiers.
+    PERFORM set_config('search_path', quote_ident('%[1]s') || ', public', true);
+    FOR view_row IN
+        WITH RECURSIVE public_views AS (
+            SELECT c.oid, c.relname AS table_name, pg_get_viewdef(c.oid, true) AS view_definition
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' AND c.relkind = 'v'
+        ),
+        view_deps AS (
+            SELECT DISTINCT
+                v.oid AS view_oid,
+                dep_v.oid AS ref_view_oid
+            FROM public_views v
+            JOIN pg_rewrite r ON r.ev_class = v.oid
+            JOIN pg_depend d ON d.objid = r.oid
+            JOIN public_views dep_v ON dep_v.oid = d.refobjid
+            WHERE d.classid = 'pg_rewrite'::regclass
+              AND d.refclassid = 'pg_class'::regclass
+              AND dep_v.oid <> v.oid
+        ),
+        view_levels AS (
+            SELECT pv.oid, pv.table_name, pv.view_definition, 0 AS depth, ARRAY[pv.oid] AS path
+            FROM public_views pv
+            WHERE NOT EXISTS (SELECT 1 FROM view_deps vd WHERE vd.view_oid = pv.oid)
+            UNION ALL
+            SELECT pv.oid, pv.table_name, pv.view_definition, vl.depth + 1, vl.path || pv.oid
+            FROM view_levels vl
+            JOIN view_deps vd ON vd.ref_view_oid = vl.oid
+            JOIN public_views pv ON pv.oid = vd.view_oid
+            WHERE NOT (pv.oid = ANY(vl.path))
+        ),
+        ordered_views AS (
+            SELECT pv.table_name, pv.view_definition, COALESCE(MAX(vl.depth), 0) AS level
+            FROM public_views pv
+            LEFT JOIN view_levels vl ON vl.oid = pv.oid
+            GROUP BY pv.oid, pv.table_name, pv.view_definition
+        )
+        SELECT table_name, view_definition
+        FROM ordered_views
+        ORDER BY level ASC, table_name ASC
+    LOOP
+        IF view_row.view_definition IS NOT NULL AND btrim(view_row.view_definition) <> '' THEN
+            raw_view_def := btrim(rtrim(btrim(view_row.view_definition), ';'));
+            view_def := '';
+            v_idx := 1;
+            v_len := char_length(raw_view_def);
+            WHILE v_idx <= v_len LOOP
+                IF substr(raw_view_def, v_idx, 1) = '''' THEN
+                    view_def := view_def || '''';
+                    v_idx := v_idx + 1;
+                    WHILE v_idx <= v_len LOOP
+                        IF substr(raw_view_def, v_idx, 2) = '''''' THEN
+                            view_def := view_def || '''''';
+                            v_idx := v_idx + 2;
+                        ELSIF substr(raw_view_def, v_idx, 1) = '''' THEN
+                            view_def := view_def || '''';
+                            v_idx := v_idx + 1;
+                            EXIT;
+                        ELSE
+                            view_def := view_def || substr(raw_view_def, v_idx, 1);
+                            v_idx := v_idx + 1;
+                        END IF;
+                    END LOOP;
+                ELSIF substr(raw_view_def, v_idx, 2) = '--' THEN
+                    WHILE v_idx <= v_len LOOP
+                        view_def := view_def || substr(raw_view_def, v_idx, 1);
+                        IF substr(raw_view_def, v_idx, 1) = chr(10) THEN
+                            v_idx := v_idx + 1;
+                            EXIT;
+                        END IF;
+                        v_idx := v_idx + 1;
+                    END LOOP;
+                ELSIF substr(raw_view_def, v_idx, 2) = '/*' THEN
+                    view_def := view_def || '/*';
+                    v_idx := v_idx + 2;
+                    WHILE v_idx <= v_len LOOP
+                        IF substr(raw_view_def, v_idx, 2) = '*/' THEN
+                            view_def := view_def || '*/';
+                            v_idx := v_idx + 2;
+                            EXIT;
+                        END IF;
+                        view_def := view_def || substr(raw_view_def, v_idx, 1);
+                        v_idx := v_idx + 1;
+                    END LOOP;
+                ELSIF lower(substr(raw_view_def, v_idx, 9)) = '"public".' THEN
+                    view_def := view_def || format('%%I.', '%[1]s');
+                    v_idx := v_idx + 9;
+                ELSIF substr(raw_view_def, v_idx, 1) = '"' THEN
+                    view_def := view_def || '"';
+                    v_idx := v_idx + 1;
+                    WHILE v_idx <= v_len LOOP
+                        IF substr(raw_view_def, v_idx, 2) = '""' THEN
+                            view_def := view_def || '""';
+                            v_idx := v_idx + 2;
+                        ELSIF substr(raw_view_def, v_idx, 1) = '"' THEN
+                            view_def := view_def || '"';
+                            v_idx := v_idx + 1;
+                            EXIT;
+                        ELSE
+                            view_def := view_def || substr(raw_view_def, v_idx, 1);
+                            v_idx := v_idx + 1;
+                        END IF;
+                    END LOOP;
+                ELSIF lower(substr(raw_view_def, v_idx, 7)) = 'public.'
+                  AND (v_idx = 1 OR substr(raw_view_def, v_idx - 1, 1) !~ '[a-zA-Z0-9_$."]') THEN
+                    view_def := view_def || format('%%I.', '%[1]s');
+                    v_idx := v_idx + 7;
+                ELSE
+                    view_def := view_def || substr(raw_view_def, v_idx, 1);
+                    v_idx := v_idx + 1;
+                END IF;
+            END LOOP;
+            EXECUTE format('CREATE OR REPLACE VIEW %%I.%%I AS %%s',
+                '%[1]s', view_row.table_name, view_def);
+        END IF;
     END LOOP;
 END
 $$;`, schema)
@@ -313,13 +531,12 @@ $diverge_verify_public$;
 	if p.Executor != nil {
 		exec = p.Executor
 	} else {
-		db, err := sql.Open("pgx", p.AdminDSN)
+		db, err := p.getOrOpenDB()
 		if err != nil {
 			result.Ready = false
 			result.Message = fmt.Sprintf("failed to open database: %v", err)
 			return result, nil
 		}
-		defer func() { _ = db.Close() }()
 		exec = db
 	}
 
@@ -361,13 +578,54 @@ DECLARE
     seq_rec record;
     seq_name text;
 BEGIN
+    SET CONSTRAINTS ALL DEFERRED;
     FOR row IN
-        SELECT p_tbl.table_name
-        FROM information_schema.tables p_tbl
-        JOIN information_schema.tables s_tbl
-          ON s_tbl.table_name = p_tbl.table_name
-        WHERE p_tbl.table_schema = '%[1]s' AND p_tbl.table_type = 'BASE TABLE'
-          AND s_tbl.table_schema = '%[2]s' AND s_tbl.table_type = 'BASE TABLE'
+        WITH RECURSIVE seed_tables AS (
+            SELECT p_tbl.table_name
+            FROM information_schema.tables p_tbl
+            JOIN information_schema.tables s_tbl
+              ON s_tbl.table_name = p_tbl.table_name
+            WHERE p_tbl.table_schema = '%[1]s' AND p_tbl.table_type = 'BASE TABLE'
+              AND s_tbl.table_schema = '%[2]s' AND s_tbl.table_type = 'BASE TABLE'
+        ),
+        fk_deps AS (
+            SELECT DISTINCT
+                child_rel.relname AS child_table,
+                parent_rel.relname AS parent_table
+            FROM pg_constraint c
+            JOIN pg_class child_rel ON child_rel.oid = c.conrelid
+            JOIN pg_namespace child_nsp ON child_nsp.oid = child_rel.relnamespace
+            JOIN pg_class parent_rel ON parent_rel.oid = c.confrelid
+            JOIN pg_namespace parent_nsp ON parent_nsp.oid = parent_rel.relnamespace
+            WHERE child_nsp.nspname = '%[1]s'
+              AND parent_nsp.nspname = '%[1]s'
+              AND c.contype = 'f'
+              AND child_rel.relname <> parent_rel.relname
+        ),
+        dep_levels AS (
+            SELECT st.table_name, 0 AS depth, ARRAY[st.table_name::text] AS path
+            FROM seed_tables st
+            WHERE NOT EXISTS (
+                SELECT 1 FROM fk_deps d
+                JOIN seed_tables parent_st ON parent_st.table_name = d.parent_table
+                WHERE d.child_table = st.table_name
+            )
+            UNION ALL
+            SELECT st.table_name, dl.depth + 1, dl.path || st.table_name::text
+            FROM dep_levels dl
+            JOIN fk_deps d ON d.parent_table = dl.table_name
+            JOIN seed_tables st ON st.table_name = d.child_table
+            WHERE NOT (st.table_name::text = ANY(dl.path))
+        ),
+        ordered_seed_tables AS (
+            SELECT st.table_name, COALESCE(MAX(dl.depth), 999999) AS level
+            FROM seed_tables st
+            LEFT JOIN dep_levels dl ON dl.table_name = st.table_name
+            GROUP BY st.table_name
+        )
+        SELECT table_name
+        FROM ordered_seed_tables
+        ORDER BY level ASC, table_name ASC
     LOOP
         SELECT p_col.column_name INTO incompatible_col
         FROM information_schema.columns p_col
@@ -483,11 +741,10 @@ func (p *SchemaDatabaseProvider) Teardown(ctx context.Context, env *v1alpha1.Env
 	if p.Executor != nil {
 		exec = p.Executor
 	} else {
-		db, err := sql.Open("pgx", p.AdminDSN)
+		db, err := p.getOrOpenDB()
 		if err != nil {
 			return fmt.Errorf("failed to open database: %w", err)
 		}
-		defer func() { _ = db.Close() }()
 		exec = db
 	}
 
@@ -538,11 +795,10 @@ func (p *SchemaDatabaseProvider) Status(ctx context.Context, env *v1alpha1.Envir
 	}
 	schema := fmt.Sprintf("preview_%s", envName)
 
-	db, err := sql.Open("pgx", p.AdminDSN)
+	db, err := p.getOrOpenDB()
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
-	defer func() { _ = db.Close() }()
 
 	var exists bool
 	err = db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = $1)", schema).Scan(&exists)

@@ -86,7 +86,7 @@ var fieldConstraints = map[string]fieldConstraint{
 	},
 	"diverge.v1alpha1.ConfigService.async_routes": {
 		canonicalYAMLName: "asyncRoutes",
-		description:       "Async routing targets (Temporal task queues, Kafka topics, Redis/Valkey key prefixes) for event-driven services.",
+		description:       "Async routing targets (Temporal task queues, Kafka topics, Redis/Valkey key prefixes, S3/GCS/MinIO object prefixes) for event-driven services.",
 	},
 	"diverge.v1alpha1.ConfigService.depends_on": {
 		canonicalYAMLName: "dependsOn",
@@ -97,7 +97,7 @@ var fieldConstraints = map[string]fieldConstraint{
 	},
 	"diverge.v1alpha1.AsyncRouteSpec.protocol": {
 		description: "Async protocol type.",
-		enum:        []string{"temporal", "kafka", "redis", "valkey"},
+		enum:        []string{"temporal", "kafka", "redis", "valkey", "s3", "gcs", "minio"},
 	},
 	"diverge.v1alpha1.AsyncRouteSpec.target": {
 		description: "Baseline resource name (e.g., Temporal task queue, Kafka topic, or Redis/Valkey key prefix target).",

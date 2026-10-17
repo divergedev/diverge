@@ -308,3 +308,51 @@ describe('Redis / Valkey Key Prefix Resolution', () => {
   });
 });
 
+describe('S3 / GCS / MinIO Object Storage Key Prefix Resolution', () => {
+  const savedEnv: Record<string, string | undefined> = {};
+  const envKeys = [
+    'DIVERGE_ENV',
+    'DIVERGE_NAMESPACE',
+    'POD_NAMESPACE',
+    'DIVERGE_STORAGE_PREFIX',
+    'S3_KEY_PREFIX',
+    'AWS_S3_PREFIX',
+    'GCS_KEY_PREFIX',
+  ];
+
+  beforeEach(() => {
+    for (const key of envKeys) {
+      savedEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+  });
+
+  afterEach(() => {
+    for (const [key, val] of Object.entries(savedEnv)) {
+      if (val === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = val;
+      }
+    }
+  });
+
+  it('derives previews/<ns>/<env>/ or previews/<env>/ prefix and normalizes namespace fallback', async () => {
+    const { resolveStoragePrefix, resolveStorageKey } = await import('../src/index.js');
+    expect(resolveStoragePrefix()).toBe('');
+    expect(resolveStorageKey('avatars/user-123.png')).toBe('avatars/user-123.png');
+
+    expect(
+      resolveStoragePrefix({ DIVERGE_ENV: 'pr-42', DIVERGE_NAMESPACE: 'staging' })
+    ).toBe('previews/staging/pr-42/');
+    expect(
+      resolveStoragePrefix({
+        DIVERGE_ENV: 'pr-42',
+        DIVERGE_NAMESPACE: '/',
+        POD_NAMESPACE: 'team-a',
+      })
+    ).toBe('previews/team-a/pr-42/');
+  });
+});
+
+
