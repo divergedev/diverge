@@ -363,7 +363,7 @@ func main() {
 			Token:      notifierToken,
 			HTTPClient: &http.Client{Timeout: 15 * time.Second},
 		}
-		glCommenter = notifier.NewGitLabNotifier("", notifierToken)
+		glCommenter = notifier.NewGitLabNotifier(firstNonEmpty(os.Getenv("DIVERGE_BASE_URL"), os.Getenv("GITLAB_API_URL")), notifierToken)
 	}
 	mgr.GetWebhookServer().Register("/gitlab-webhook", &webhook.GitLabWebhookHandler{
 		Client:        mgr.GetClient(),
@@ -388,7 +388,7 @@ func main() {
 			Token:      notifierToken,
 			HTTPClient: &http.Client{Timeout: 15 * time.Second},
 		}
-		ghCommenter = notifier.NewGitHubNotifier("", notifierToken)
+		ghCommenter = notifier.NewGitHubNotifier(firstNonEmpty(os.Getenv("DIVERGE_BASE_URL"), os.Getenv("GITHUB_API_URL")), notifierToken)
 	}
 	mgr.GetWebhookServer().Register("/github-webhook", &webhook.GitHubWebhookHandler{
 		Client:        mgr.GetClient(),

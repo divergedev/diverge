@@ -134,7 +134,7 @@ func ParseSlashCommand(commentBody string) (*SlashCommand, bool) {
 				return nil, false
 			}
 			return &SlashCommand{
-				Action:    "resume",
+				Action:    subcmd,
 				BudgetUSD: budgetUSD,
 				Tokens:    tokens,
 			}, true
@@ -204,6 +204,8 @@ func ExecuteSlashCommandWithFeedback(ctx context.Context, c client.Client, ns st
 		return executeSuspendTaskCommand(ctx, c, ns, repoURL, prNumber, true, "", 0)
 	case "resume":
 		return executeSuspendTaskCommand(ctx, c, ns, repoURL, prNumber, false, cmd.BudgetUSD, cmd.Tokens)
+	case "budget":
+		return executeBudgetCommand(ctx, c, ns, repoURL, prNumber, cmd.BudgetUSD, cmd.Tokens)
 	case "status":
 		return executeStatusCommand(ctx, c, ns, repoURL, prNumber)
 	case "help":
@@ -304,9 +306,9 @@ func executeGuideCommand(ctx context.Context, c client.Client, ns, guidance, rep
 	}
 
 	if len(matchedTasks) == 1 {
-		return fmt.Sprintf("🧭 **Guidance dispatched** to agent task `%s`:\n\n> %s\n\nThe autonomous agent will incorporate this guidance in its next iteration.", matchedTasks[0].Name, guidance), nil
+		return fmt.Sprintf("🧭 **Guidance saved** to agent task `%s`:\n\n> %s\n\nThis guidance will be used when a new sandbox is created.", matchedTasks[0].Name, guidance), nil
 	}
-	return fmt.Sprintf("🧭 **Guidance dispatched** to %d agent tasks:\n\n> %s\n\nActive tasks will incorporate this guidance in their next iteration.", len(matchedTasks), guidance), nil
+	return fmt.Sprintf("🧭 **Guidance saved** to %d agent tasks:\n\n> %s\n\nThis guidance will be used when new sandboxes are created.", len(matchedTasks), guidance), nil
 }
 
 func executePreviewCommand(ctx context.Context, c client.Client, ns, repoURL, branch string, prNumber int) (string, error) {
@@ -452,16 +454,7 @@ func executeSuspendTaskCommand(ctx context.Context, c client.Client, ns, repoURL
 			task.Spec.BudgetUSD = fmt.Sprintf("%.2f", newBudget)
 		}
 		if !suspend && tokens > 0 {
-			if task.Annotations == nil {
-				task.Annotations = make(map[string]string)
-			}
-			currTokens := int64(0)
-			if tokStr := task.Annotations["divergedev.com/budget-tokens"]; tokStr != "" {
-				if parsed, err := strconv.ParseInt(tokStr, 10, 64); err == nil {
-					currTokens = parsed
-				}
-			}
-			task.Annotations["divergedev.com/budget-tokens"] = strconv.FormatInt(currTokens+tokens, 10)
+			task.Spec.BudgetTokens += tokens
 		}
 		if err := c.Update(ctx, task); err != nil {
 			return "", err
@@ -488,11 +481,72 @@ func executeSuspendTaskCommand(ctx context.Context, c client.Client, ns, repoURL
 	return fmt.Sprintf("▶️ **Agent task resumed**: `%s`%s\n\nThe autonomous loop will continue execution.", taskName, extraStr), nil
 }
 
+func executeBudgetCommand(ctx context.Context, c client.Client, ns, repoURL string, prNumber int, budgetUSD string, tokens int64) (string, error) {
+	var taskList v1alpha1.AgentTaskList
+	if err := c.List(ctx, &taskList, client.InNamespace(ns)); err != nil {
+		return "", fmt.Errorf("list agent tasks: %w", err)
+	}
+
+	prStr := strconv.Itoa(prNumber)
+	var matchedTasks []*v1alpha1.AgentTask
+	for i := range taskList.Items {
+		task := &taskList.Items[i]
+		if matchesTaskPR(task, repoURL, prNumber, prStr) {
+			matchedTasks = append(matchedTasks, task)
+		}
+	}
+
+	if len(matchedTasks) == 0 {
+		return "⚠️ No active agent task found to adjust budget for this PR/MR.", nil
+	}
+
+	for _, task := range matchedTasks {
+		if budgetUSD != "" {
+			currBudget := 0.0
+			if task.Spec.BudgetUSD != "" {
+				clean := strings.TrimPrefix(strings.TrimSpace(task.Spec.BudgetUSD), "$")
+				if val, err := strconv.ParseFloat(clean, 64); err == nil {
+					currBudget = val
+				}
+			}
+			inc, _ := strconv.ParseFloat(budgetUSD, 64)
+			newBudget := currBudget + inc
+			task.Spec.BudgetUSD = fmt.Sprintf("%.2f", newBudget)
+		}
+		if tokens > 0 {
+			task.Spec.BudgetTokens += tokens
+		}
+		if err := c.Update(ctx, task); err != nil {
+			return "", err
+		}
+	}
+
+	taskName := matchedTasks[0].Name
+	var extra []string
+	if budgetUSD != "" {
+		newBudget, _ := strconv.ParseFloat(strings.TrimPrefix(matchedTasks[0].Spec.BudgetUSD, "$"), 64)
+		extra = append(extra, fmt.Sprintf("**Budget**: `$%.2f` (+`$%s` added)", newBudget, budgetUSD))
+	}
+	if tokens > 0 {
+		extra = append(extra, fmt.Sprintf("**Tokens**: `%d` (+%d added)", matchedTasks[0].Spec.BudgetTokens, tokens))
+	}
+	extraStr := ""
+	if len(extra) > 0 {
+		extraStr = "\n- " + strings.Join(extra, "\n- ")
+	}
+	return fmt.Sprintf("💰 **Agent task budget updated**: `%s`%s\n\nTask suspension state was not modified.", taskName, extraStr), nil
+}
+
 func executeStatusCommand(ctx context.Context, c client.Client, ns, repoURL string, prNumber int) (string, error) {
 	var taskList v1alpha1.AgentTaskList
-	_ = c.List(ctx, &taskList, client.InNamespace(ns))
+	if err := c.List(ctx, &taskList, client.InNamespace(ns)); err != nil {
+		return "", fmt.Errorf("list agent tasks: %w", err)
+	}
 
-	envs, _ := findMatchingEnvironments(ctx, c, ns, repoURL, prNumber)
+	envs, err := findMatchingEnvironments(ctx, c, ns, repoURL, prNumber)
+	if err != nil {
+		return "", fmt.Errorf("list environments: %w", err)
+	}
 
 	prStr := strconv.Itoa(prNumber)
 	var matchedTasks []v1alpha1.AgentTask

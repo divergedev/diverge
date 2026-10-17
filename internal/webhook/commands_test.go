@@ -110,11 +110,11 @@ func TestParseSlashCommand(t *testing.T) {
 			},
 		},
 		{
-			name:   "budget command alias for resume",
+			name:   "budget command with amount",
 			body:   "/diverge budget +$7.50",
 			wantOK: true,
 			wantCmd: &SlashCommand{
-				Action:    "resume",
+				Action:    "budget",
 				BudgetUSD: "7.50",
 			},
 		},
@@ -328,7 +328,7 @@ func TestExecuteSlashCommand_GuideAndBudget(t *testing.T) {
 	require.True(t, ok)
 	feedback, err = ExecuteSlashCommandWithFeedback(ctx, c, "default", guideCmd, repoURL, branch, prNumber)
 	require.NoError(t, err)
-	assert.Contains(t, feedback, "Guidance dispatched")
+	assert.Contains(t, feedback, "Guidance saved")
 	assert.Contains(t, feedback, "Use exponential backoff")
 
 	var taskList v1alpha1.AgentTaskList
@@ -359,7 +359,7 @@ func TestExecuteSlashCommand_GuideAndBudget(t *testing.T) {
 	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: taskList.Items[0].Name, Namespace: "default"}, &task))
 	assert.False(t, task.Spec.Suspended)
 	assert.Equal(t, "15.50", task.Spec.BudgetUSD)
-	assert.Equal(t, "50000", task.Annotations["divergedev.com/budget-tokens"])
+	assert.Equal(t, int64(50000), task.Spec.BudgetTokens)
 
 	// Second resume with additional budget should be additive
 	resume2, _ := ParseSlashCommand("/diverge resume +$5.00")
@@ -369,6 +369,23 @@ func TestExecuteSlashCommand_GuideAndBudget(t *testing.T) {
 
 	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: taskList.Items[0].Name, Namespace: "default"}, &task))
 	assert.Equal(t, "20.50", task.Spec.BudgetUSD)
+
+	// 5. Pause task again, then use /diverge budget: must NOT un-suspend the task
+	_, err = ExecuteSlashCommandWithFeedback(ctx, c, "default", pauseCmd, repoURL, branch, prNumber)
+	require.NoError(t, err)
+
+	budgetCmd, ok := ParseSlashCommand("/diverge budget +$10.00 25000")
+	require.True(t, ok)
+	assert.Equal(t, "budget", budgetCmd.Action)
+	feedback, err = ExecuteSlashCommandWithFeedback(ctx, c, "default", budgetCmd, repoURL, branch, prNumber)
+	require.NoError(t, err)
+	assert.Contains(t, feedback, "budget updated")
+	assert.Contains(t, feedback, "Task suspension state was not modified")
+
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: taskList.Items[0].Name, Namespace: "default"}, &task))
+	assert.True(t, task.Spec.Suspended, "Task must remain suspended after /diverge budget")
+	assert.Equal(t, "30.50", task.Spec.BudgetUSD)
+	assert.Equal(t, int64(75000), task.Spec.BudgetTokens)
 }
 
 func TestExecuteSlashCommand_StatusAndHelp(t *testing.T) {
