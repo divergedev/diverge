@@ -1311,10 +1311,20 @@ func TestGatewayRouter_Reconcile_ExternalDNSAndCertManagerAnnotations(t *testing
 	assert.NotContains(t, ann, "cert-manager.io/cluster-issuer", "cert-manager annotations must not be placed on HTTPRoute")
 	assert.NotContains(t, ann, "cert-manager.io/issuer", "cert-manager annotations must not be placed on HTTPRoute")
 
-	// Verify Gateway received the cert-manager cluster-issuer annotation for gateway-shim
+	// Shared Gateway (without divergedev.com/environment=pr-42 ownership) must NOT be mutated
 	updatedGW := &unstructured.Unstructured{}
 	updatedGW.SetAPIVersion("gateway.networking.k8s.io/v1")
 	updatedGW.SetKind("Gateway")
+	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "diverge-gateway", Namespace: "default"}, updatedGW))
+	assert.Empty(t, updatedGW.GetAnnotations()["cert-manager.io/cluster-issuer"], "shared Gateway annotations must not be mutated")
+
+	// When the Gateway has an explicit per-environment ownership contract, its issuer annotation is updated
+	updatedGW.SetLabels(map[string]string{
+		"divergedev.com/environment": "pr-42",
+		"divergedev.com/managed-by":  "diverge",
+	})
+	require.NoError(t, c.Update(context.Background(), updatedGW))
+	require.NoError(t, r.Reconcile(context.Background(), env))
 	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "diverge-gateway", Namespace: "default"}, updatedGW))
 	assert.Equal(t, "letsencrypt-prod", updatedGW.GetAnnotations()["cert-manager.io/cluster-issuer"])
 

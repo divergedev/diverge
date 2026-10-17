@@ -27,9 +27,9 @@ def resolve_storage_prefix(
     ).strip("/")
     if active_env:
         ns = (
-            env_map.get("DIVERGE_NAMESPACE", "").strip()
-            or env_map.get("POD_NAMESPACE", "").strip()
-        ).strip("/")
+            env_map.get("DIVERGE_NAMESPACE", "").strip().strip("/")
+            or env_map.get("POD_NAMESPACE", "").strip().strip("/")
+        )
         if ns:
             return f"previews/{ns}/{active_env}/"
         return f"previews/{active_env}/"

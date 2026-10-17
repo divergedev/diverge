@@ -325,7 +325,10 @@ BEGIN
         END IF;
     END LOOP;
 
-    -- Clone VIEW definitions from public schema into the preview schema in dependency order
+    -- Clone VIEW definitions from public schema into the preview schema in dependency order.
+    -- Set search_path to the preview schema first so cloned preview tables shadow their
+    -- public counterparts and pg_get_viewdef emits explicit public.<name> qualifiers.
+    PERFORM set_config('search_path', quote_ident('%[1]s') || ', public', true);
     FOR view_row IN
         WITH RECURSIVE public_views AS (
             SELECT c.oid, c.relname AS table_name, pg_get_viewdef(c.oid, true) AS view_definition

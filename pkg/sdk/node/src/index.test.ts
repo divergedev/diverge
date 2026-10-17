@@ -87,6 +87,13 @@ describe('S3 / GCS / MinIO Object Storage Key Prefix Resolution', () => {
     expect(
       resolveStoragePrefix({ DIVERGE_ENV: 'pr-42', DIVERGE_NAMESPACE: 'staging' })
     ).toBe('previews/staging/pr-42/');
+    expect(
+      resolveStoragePrefix({
+        DIVERGE_ENV: 'pr-42',
+        DIVERGE_NAMESPACE: '/',
+        POD_NAMESPACE: 'team-a',
+      })
+    ).toBe('previews/team-a/pr-42/');
     expect(resolveStoragePrefix({})).toBe('');
     expect(
       setEnvironment('pr-99', () => resolveStoragePrefix({ DIVERGE_ENV: 'pr-42' }))

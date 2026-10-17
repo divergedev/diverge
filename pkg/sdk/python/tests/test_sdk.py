@@ -83,3 +83,13 @@ def test_resolve_storage_prefix_and_key(monkeypatch):
         )
         == "previews/staging/pr-88/"
     )
+    assert (
+        resolve_storage_prefix(
+            environ={
+                "DIVERGE_ENV": "pr-88",
+                "DIVERGE_NAMESPACE": "/",
+                "POD_NAMESPACE": "team-a",
+            }
+        )
+        == "previews/team-a/pr-88/"
+    )

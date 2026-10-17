@@ -601,9 +601,8 @@ func buildRouteAnnotations(env *v1alpha1.Environment, hostnames []interface{}) m
 }
 
 // reconcileGatewayTLS propagates cert-manager issuer annotations onto the target
-// Gateway (when present) and reconciles a cert-manager.io/v1 Certificate resource
-// for the preview route hostnames, since cert-manager gateway-shim watches Gateway
-// resources rather than HTTPRoute/GRPCRoute annotations.
+// Gateway only when the Gateway is explicitly dedicated to this environment, and
+// reconciles a cert-manager.io/v1 Certificate resource for the preview route hostnames.
 func (r *GatewayRouter) reconcileGatewayTLS(ctx context.Context, env *v1alpha1.Environment, ns, gatewayName string, hostnames []interface{}) error {
 	if r.Client == nil || env == nil {
 		return nil
@@ -626,25 +625,27 @@ func (r *GatewayRouter) reconcileGatewayTLS(ctx context.Context, env *v1alpha1.E
 		gwNS = ns
 	}
 
-	if gatewayName != "" && (clusterIssuer != "" || issuer != "") {
+	if gatewayName != "" && gwNS == ns && (clusterIssuer != "" || issuer != "") {
 		gw := &unstructured.Unstructured{}
 		gw.SetAPIVersion("gateway.networking.k8s.io/v1")
 		gw.SetKind("Gateway")
 		if err := r.Client.Get(ctx, client.ObjectKey{Name: gatewayName, Namespace: gwNS}, gw); err == nil {
-			gwAnn := gw.GetAnnotations()
-			if gwAnn == nil {
-				gwAnn = make(map[string]string)
-			}
-			delete(gwAnn, "cert-manager.io/cluster-issuer")
-			delete(gwAnn, "cert-manager.io/issuer")
-			if clusterIssuer != "" {
-				gwAnn["cert-manager.io/cluster-issuer"] = clusterIssuer
-			} else {
-				gwAnn["cert-manager.io/issuer"] = issuer
-			}
-			gw.SetAnnotations(gwAnn)
-			if err := r.Client.Update(ctx, gw); err != nil {
-				return fmt.Errorf("failed to update Gateway %s/%s TLS annotations: %w", gwNS, gatewayName, err)
+			if isEnvironmentOwnedGateway(gw, env) {
+				gwAnn := gw.GetAnnotations()
+				if gwAnn == nil {
+					gwAnn = make(map[string]string)
+				}
+				delete(gwAnn, "cert-manager.io/cluster-issuer")
+				delete(gwAnn, "cert-manager.io/issuer")
+				if clusterIssuer != "" {
+					gwAnn["cert-manager.io/cluster-issuer"] = clusterIssuer
+				} else {
+					gwAnn["cert-manager.io/issuer"] = issuer
+				}
+				gw.SetAnnotations(gwAnn)
+				if err := r.Client.Update(ctx, gw); err != nil {
+					return fmt.Errorf("failed to update Gateway %s/%s TLS annotations: %w", gwNS, gatewayName, err)
+				}
 			}
 		} else if !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) && !apierrors.IsForbidden(err) {
 			return fmt.Errorf("failed to get Gateway %s/%s for TLS reconciliation: %w", gwNS, gatewayName, err)
@@ -720,6 +721,21 @@ func (r *GatewayRouter) reconcileGatewayTLS(ctx context.Context, env *v1alpha1.E
 		return fmt.Errorf("failed to update Certificate %s/%s: %w", gwNS, certName, err)
 	}
 	return nil
+}
+
+// isEnvironmentOwnedGateway returns true only when a Gateway has an explicit,
+// environment-specific ownership contract (divergedev.com/environment=<env.Name>
+// and divergedev.com/managed-by=diverge), preventing shared or platform-owned
+// Gateways from having their annotations mutated.
+func isEnvironmentOwnedGateway(gw *unstructured.Unstructured, env *v1alpha1.Environment) bool {
+	if gw == nil || env == nil || env.Name == "" {
+		return false
+	}
+	lbls := gw.GetLabels()
+	if len(lbls) == 0 {
+		return false
+	}
+	return lbls["divergedev.com/environment"] == env.Name && lbls["divergedev.com/managed-by"] == "diverge"
 }
 
 // isServiceName heuristically determines if a parentRef name refers to a

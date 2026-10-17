@@ -424,7 +424,11 @@ func TestSchemaDatabaseProvider_Provision_ClonesForeignKeysAndViews(t *testing.T
 	assert.Contains(t, res.SetupSQL, "DEFERRABLE INITIALLY IMMEDIATE")
 	assert.Contains(t, res.SetupSQL, "ALTER TABLE %I.%I ADD CONSTRAINT %I %s")
 
-	// Verify view cloning orders by dependency depth via pg_depend/pg_rewrite and uses SQL-literal-safe scanner
+	// Verify view cloning sets preview search_path before pg_get_viewdef and orders by dependency depth
+	searchPathIdx := strings.Index(mockExec.lastSQL, "PERFORM set_config('search_path', quote_ident('preview_fk_view_env') || ', public', true);")
+	viewLoopIdx := strings.Index(mockExec.lastSQL, "FOR view_row IN")
+	assert.Greater(t, searchPathIdx, 0, "executed DO block must set preview search_path before cloning views")
+	assert.Less(t, searchPathIdx, viewLoopIdx, "set_config('search_path', ...) must run before FOR view_row IN")
 	assert.Contains(t, res.SetupSQL, "WITH RECURSIVE public_views AS")
 	assert.Contains(t, res.SetupSQL, "JOIN pg_rewrite r ON r.ev_class = v.oid")
 	assert.Contains(t, res.SetupSQL, "JOIN pg_depend d ON d.objid = r.oid")
