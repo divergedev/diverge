@@ -393,3 +393,64 @@ func TestSchemaDatabaseProvider_Provision_SeedSource_ConfigMap(t *testing.T) {
 	assert.Contains(t, res.SetupSQL, "INSERT INTO users (id, email) VALUES (1, 'dev@example.com') ON CONFLICT DO NOTHING;")
 	assert.Contains(t, mockExec.lastSQL, "INSERT INTO users (id, email) VALUES (1, 'dev@example.com') ON CONFLICT DO NOTHING;")
 }
+
+func TestSchemaDatabaseProvider_Provision_ClonesForeignKeysAndViews(t *testing.T) {
+	mockExec := &recordingExecutor{}
+	provider := NewSchemaDatabaseProvider("postgres://admin@localhost/db")
+	provider.Executor = mockExec
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "fk-view-env",
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Database: v1alpha1.EnvironmentDatabase{
+				Mode:       "schema",
+				SeedSource: "public",
+			},
+		},
+	}
+
+	res, err := provider.Provision(context.Background(), env)
+	require.NoError(t, err)
+	assert.True(t, res.Ready)
+
+	// Verify foreign key constraint cloning
+	assert.Contains(t, res.SetupSQL, "pg_get_constraintdef(c.oid, true)")
+	assert.Contains(t, res.SetupSQL, "WHERE nsp.nspname = 'public' AND c.contype = 'f'")
+	assert.Contains(t, res.SetupSQL, "ALTER TABLE %I.%I ADD CONSTRAINT %I %s")
+	assert.Contains(t, res.SetupSQL, "REFERENCES %I.\\1")
+
+	// Verify view cloning
+	assert.Contains(t, res.SetupSQL, "FROM information_schema.views")
+	assert.Contains(t, res.SetupSQL, "CREATE OR REPLACE VIEW %I.%I AS %s")
+
+	// Verify seed SQL orders tables by outgoing FK count
+	assert.Contains(t, res.SetupSQL, "ORDER BY (SELECT count(*) FROM pg_constraint c JOIN pg_class r ON r.oid = c.conrelid JOIN pg_namespace n ON n.oid = r.relnamespace WHERE n.nspname = 'preview_fk_view_env' AND r.relname = p_tbl.table_name AND c.contype = 'f') ASC, p_tbl.table_name ASC")
+}
+
+func TestSchemaDatabaseProvider_SharedDBPoolReuseAndClose(t *testing.T) {
+	provider := NewSchemaDatabaseProvider("postgres://admin@localhost:5432/db?sslmode=disable")
+	defer func() { _ = provider.Close() }()
+
+	// Close on uninitialized pool should be a no-op
+	require.NoError(t, provider.Close())
+
+	db1, err := provider.getOrOpenDB()
+	require.NoError(t, err)
+	require.NotNil(t, db1)
+	assert.Equal(t, 10, db1.Stats().MaxOpenConnections)
+
+	db2, err := provider.getOrOpenDB()
+	require.NoError(t, err)
+	assert.Same(t, db1, db2, "expected shared *sql.DB pool to be reused across calls")
+
+	// Changing AdminDSN should close old pool and open a new one
+	provider.AdminDSN = "postgres://admin@localhost:5433/db?sslmode=disable"
+	db3, err := provider.getOrOpenDB()
+	require.NoError(t, err)
+	require.NotNil(t, db3)
+	assert.NotSame(t, db1, db3, "expected a new *sql.DB pool when AdminDSN changes")
+
+	require.NoError(t, provider.Close())
+	assert.Nil(t, provider.db)
+}

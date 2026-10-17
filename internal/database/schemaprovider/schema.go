@@ -43,6 +43,8 @@ type SchemaDatabaseProvider struct {
 	Client    client.Client
 	mu        sync.Mutex
 	passwords map[string]string
+	db        *sql.DB
+	dbDSN     string
 }
 
 // NewSchemaDatabaseProvider creates a SchemaDatabaseProvider with an initialized password cache.
@@ -51,6 +53,46 @@ func NewSchemaDatabaseProvider(adminDSN string) *SchemaDatabaseProvider {
 		AdminDSN:  adminDSN,
 		passwords: make(map[string]string),
 	}
+}
+
+func (p *SchemaDatabaseProvider) getOrOpenDB() (*sql.DB, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.db != nil && p.dbDSN == p.AdminDSN {
+		return p.db, nil
+	}
+	if p.db != nil {
+		_ = p.db.Close()
+		p.db = nil
+	}
+
+	db, err := sql.Open("pgx", p.AdminDSN)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxIdleTime(5 * time.Minute)
+	db.SetConnMaxLifetime(30 * time.Minute)
+
+	p.db = db
+	p.dbDSN = p.AdminDSN
+	return db, nil
+}
+
+// Close closes the shared database connection pool if open.
+func (p *SchemaDatabaseProvider) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.db == nil {
+		return nil
+	}
+	err := p.db.Close()
+	p.db = nil
+	p.dbDSN = ""
+	return err
 }
 
 func (p *SchemaDatabaseProvider) durableKey(namespace, roleName string) string {
@@ -198,6 +240,10 @@ DECLARE
     row record;
     seq_row record;
     col_row record;
+    fk_row record;
+    fk_def text;
+    view_row record;
+    view_def text;
 BEGIN
     EXECUTE format('CREATE SCHEMA IF NOT EXISTS %%I', '%[1]s');
     FOR row IN
@@ -225,6 +271,56 @@ BEGIN
         EXECUTE format('ALTER TABLE %%I.%%I ALTER COLUMN %%I SET DEFAULT %%s',
             '%[1]s', col_row.table_name, col_row.column_name,
             replace(col_row.column_default, '''public.', '''%[1]s.'));
+    END LOOP;
+
+    -- Clone FOREIGN KEY constraints from public schema tables, rewriting intra-schema references to the preview schema
+    FOR fk_row IN
+        SELECT
+            c.conname AS constraint_name,
+            rel.relname AS table_name,
+            pg_get_constraintdef(c.oid, true) AS constraint_def
+        FROM pg_constraint c
+        JOIN pg_class rel ON rel.oid = c.conrelid
+        JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+        WHERE nsp.nspname = 'public' AND c.contype = 'f'
+    LOOP
+        IF NOT EXISTS (
+            SELECT 1
+            FROM pg_constraint existing_c
+            JOIN pg_class existing_rel ON existing_rel.oid = existing_c.conrelid
+            JOIN pg_namespace existing_nsp ON existing_nsp.oid = existing_rel.relnamespace
+            WHERE existing_nsp.nspname = '%[1]s'
+              AND existing_rel.relname = fk_row.table_name
+              AND existing_c.conname = fk_row.constraint_name
+        ) THEN
+            fk_def := regexp_replace(
+                fk_row.constraint_def,
+                'REFERENCES\s+(?:public\.)?("?[a-zA-Z0-9_]+"?)',
+                format('REFERENCES %%I.\1', '%[1]s'),
+                'gi'
+            );
+            EXECUTE format('ALTER TABLE %%I.%%I ADD CONSTRAINT %%I %%s',
+                '%[1]s', fk_row.table_name, fk_row.constraint_name, fk_def);
+        END IF;
+    END LOOP;
+
+    -- Clone VIEW definitions from public schema into the preview schema
+    FOR view_row IN
+        SELECT table_name, view_definition
+        FROM information_schema.views
+        WHERE table_schema = 'public'
+        ORDER BY table_name
+    LOOP
+        IF view_row.view_definition IS NOT NULL AND btrim(view_row.view_definition) <> '' THEN
+            view_def := regexp_replace(
+                btrim(rtrim(btrim(view_row.view_definition), ';')),
+                '\mpublic\.',
+                format('%%I.', '%[1]s'),
+                'gi'
+            );
+            EXECUTE format('CREATE OR REPLACE VIEW %%I.%%I AS %%s',
+                '%[1]s', view_row.table_name, view_def);
+        END IF;
     END LOOP;
 END
 $$;`, schema)
@@ -313,13 +409,12 @@ $diverge_verify_public$;
 	if p.Executor != nil {
 		exec = p.Executor
 	} else {
-		db, err := sql.Open("pgx", p.AdminDSN)
+		db, err := p.getOrOpenDB()
 		if err != nil {
 			result.Ready = false
 			result.Message = fmt.Sprintf("failed to open database: %v", err)
 			return result, nil
 		}
-		defer func() { _ = db.Close() }()
 		exec = db
 	}
 
@@ -368,6 +463,7 @@ BEGIN
           ON s_tbl.table_name = p_tbl.table_name
         WHERE p_tbl.table_schema = '%[1]s' AND p_tbl.table_type = 'BASE TABLE'
           AND s_tbl.table_schema = '%[2]s' AND s_tbl.table_type = 'BASE TABLE'
+        ORDER BY (SELECT count(*) FROM pg_constraint c JOIN pg_class r ON r.oid = c.conrelid JOIN pg_namespace n ON n.oid = r.relnamespace WHERE n.nspname = '%[1]s' AND r.relname = p_tbl.table_name AND c.contype = 'f') ASC, p_tbl.table_name ASC
     LOOP
         SELECT p_col.column_name INTO incompatible_col
         FROM information_schema.columns p_col
@@ -483,11 +579,10 @@ func (p *SchemaDatabaseProvider) Teardown(ctx context.Context, env *v1alpha1.Env
 	if p.Executor != nil {
 		exec = p.Executor
 	} else {
-		db, err := sql.Open("pgx", p.AdminDSN)
+		db, err := p.getOrOpenDB()
 		if err != nil {
 			return fmt.Errorf("failed to open database: %w", err)
 		}
-		defer func() { _ = db.Close() }()
 		exec = db
 	}
 
@@ -538,11 +633,10 @@ func (p *SchemaDatabaseProvider) Status(ctx context.Context, env *v1alpha1.Envir
 	}
 	schema := fmt.Sprintf("preview_%s", envName)
 
-	db, err := sql.Open("pgx", p.AdminDSN)
+	db, err := p.getOrOpenDB()
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
-	defer func() { _ = db.Close() }()
 
 	var exists bool
 	err = db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = $1)", schema).Scan(&exists)

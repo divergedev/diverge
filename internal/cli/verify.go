@@ -1,0 +1,314 @@
+package cli
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"text/tabwriter"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/divergedev/diverge/pkg/doctor"
+)
+
+// VerifyCheckResult represents the outcome of an individual verification check.
+type VerifyCheckResult struct {
+	Name       string `json:"name"`
+	Passed     bool   `json:"passed"`
+	Status     string `json:"status"`
+	DurationMs int64  `json:"durationMs,omitempty"`
+	Message    string `json:"message"`
+}
+
+// VerifyReport aggregates all verification checks and optional cluster diagnostics.
+type VerifyReport struct {
+	Environment string              `json:"environment"`
+	Namespace   string              `json:"namespace,omitempty"`
+	TargetURL   string              `json:"targetUrl,omitempty"`
+	Passed      bool                `json:"passed"`
+	Checks      []VerifyCheckResult `json:"checks"`
+	Doctor      *doctor.Report      `json:"doctor,omitempty"`
+}
+
+type verifyOptions struct {
+	baseURL          string
+	paths            []string
+	headerKey        string
+	headerValue      string
+	method           string
+	data             string
+	headers          []string
+	expectStatus     int
+	maxLatency       time.Duration
+	bodyContains     string
+	compareBaseline  bool
+	failOnStatusDiff bool
+	skipDoctor       bool
+	timeout          time.Duration
+	outputJSON       bool
+}
+
+func newVerifyCmd(app *App) *cobra.Command {
+	opts := &verifyOptions{}
+
+	cmd := &cobra.Command{
+		Use:   "verify <env-name> [path-or-url]",
+		Short: "Verify preview environment health, HTTP readiness, baseline parity, and latency SLOs",
+		Long: `Runs a unified verification suite against a preview environment combining
+Kubernetes workload diagnostics (doctor), routed HTTP readiness probes, latency SLO
+assertions, response substring checks, and optional baseline parity comparisons.`,
+		Example: `	# Verify environment health and default "/" HTTP endpoint
+	diverge verify pr-42
+
+	# Verify multiple endpoints with a latency SLO and baseline comparison
+	diverge verify pr-42 --path /healthz --path /api/orders --max-latency 500ms --compare-baseline
+
+	# Verify against an explicit URL in CI and emit JSON report
+	diverge verify pr-42 /api/status --base-url https://preview.example.com --body-contains '"ok":true' --json`,
+		Args:              cobra.RangeArgs(1, 2),
+		ValidArgsFunction: completeEnvironmentNames(app),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			envName := args[0]
+
+			pathsToProbe := opts.paths
+			if len(args) > 1 {
+				pathsToProbe = []string{args[1]}
+			}
+			if len(pathsToProbe) == 0 {
+				pathsToProbe = []string{"/"}
+			}
+			firstPath := pathsToProbe[0]
+			isFullURL := strings.HasPrefix(firstPath, "http://") || strings.HasPrefix(firstPath, "https://")
+
+			if app != nil && app.Namespace == "" {
+				_ = app.ResolveNamespace()
+			}
+			ns := "default"
+			if app != nil && app.Namespace != "" {
+				ns = app.Namespace
+			}
+
+			report := &VerifyReport{
+				Environment: envName,
+				Namespace:   ns,
+				Checks:      make([]VerifyCheckResult, 0),
+			}
+
+			// 1. Doctor & Resource Health Check
+			if !opts.skipDoctor && app != nil {
+				c, _, err := app.KubeClient()
+				if err == nil && c != nil {
+					diagnoser := doctor.NewDiagnoser(c)
+					docReport, docErr := diagnoser.Diagnose(cmd.Context(), ns, envName)
+					if docErr == nil && docReport != nil {
+						report.Doctor = docReport
+						docStatus := "HEALTHY"
+						docMsg := "All preview pods, migrations, and routes healthy"
+						if !docReport.Healthy {
+							docStatus = "UNHEALTHY"
+							docMsg = fmt.Sprintf("%d issue(s) detected", len(docReport.Issues))
+						}
+						report.Checks = append(report.Checks, VerifyCheckResult{
+							Name:    "workload-diagnostics",
+							Passed:  docReport.Healthy,
+							Status:  docStatus,
+							Message: docMsg,
+						})
+					}
+				} else if err != nil && opts.baseURL == "" && !isFullURL {
+					return fmt.Errorf("failed to connect to cluster: %w", err)
+				}
+			}
+
+			// 2. Resolve Routing & Target Paths
+			curlOpts := curlOptions{
+				baseURL:     opts.baseURL,
+				headerKey:   opts.headerKey,
+				headerValue: opts.headerValue,
+				method:      opts.method,
+				data:        opts.data,
+				headers:     opts.headers,
+				timeout:     opts.timeout,
+			}
+
+			baseURL, headerKey, headerValue, err := resolveCurlRouting(cmd, app, envName, firstPath, &curlOpts)
+			if err != nil {
+				return err
+			}
+			report.TargetURL = baseURL
+
+			method := strings.ToUpper(strings.TrimSpace(opts.method))
+			if method == "" {
+				if opts.data != "" {
+					method = http.MethodPost
+				} else {
+					method = http.MethodGet
+				}
+			}
+
+			httpClient := &http.Client{
+				Timeout: opts.timeout,
+			}
+
+			for _, p := range pathsToProbe {
+				targetURL, err := buildCurlTargetURL(baseURL, p)
+				if err != nil {
+					return err
+				}
+				if report.TargetURL == "" {
+					report.TargetURL = targetURL
+				}
+
+				prevResp, err := executeCurlRequest(cmd, httpClient, method, targetURL, opts.data, opts.headers, headerKey, headerValue)
+				if err != nil {
+					report.Checks = append(report.Checks, VerifyCheckResult{
+						Name:    "http-status:" + p,
+						Passed:  false,
+						Status:  "ERROR",
+						Message: err.Error(),
+					})
+					continue
+				}
+
+				var statusPassed bool
+				var statusMsg string
+				if opts.expectStatus > 0 {
+					statusPassed = prevResp.StatusCode == opts.expectStatus
+					statusMsg = fmt.Sprintf("expected HTTP %d, got %d (%s)", opts.expectStatus, prevResp.StatusCode, targetURL)
+				} else {
+					statusPassed = prevResp.StatusCode >= 200 && prevResp.StatusCode < 400
+					statusMsg = fmt.Sprintf("expected 2xx/3xx, got %d (%s)", prevResp.StatusCode, targetURL)
+				}
+
+				report.Checks = append(report.Checks, VerifyCheckResult{
+					Name:       "http-status:" + p,
+					Passed:     statusPassed,
+					Status:     fmt.Sprintf("HTTP %d", prevResp.StatusCode),
+					DurationMs: prevResp.Duration.Milliseconds(),
+					Message:    statusMsg,
+				})
+
+				if opts.maxLatency > 0 {
+					report.Checks = append(report.Checks, VerifyCheckResult{
+						Name:       "latency-slo:" + p,
+						Passed:     prevResp.Duration <= opts.maxLatency,
+						Status:     prevResp.Duration.Round(time.Millisecond).String(),
+						DurationMs: prevResp.Duration.Milliseconds(),
+						Message:    fmt.Sprintf("threshold <= %s", opts.maxLatency),
+					})
+				}
+
+				if opts.bodyContains != "" {
+					matched := strings.Contains(prevResp.Body, opts.bodyContains)
+					bodyStatus := "MATCH"
+					bodyMsg := fmt.Sprintf("response body contains %q", opts.bodyContains)
+					if !matched {
+						bodyStatus = "MISMATCH"
+						bodyMsg = fmt.Sprintf("response body missing %q", opts.bodyContains)
+					}
+					report.Checks = append(report.Checks, VerifyCheckResult{
+						Name:    "body-contains:" + p,
+						Passed:  matched,
+						Status:  bodyStatus,
+						Message: bodyMsg,
+					})
+				}
+
+				if opts.compareBaseline {
+					baseResp, baseErr := executeCurlRequest(cmd, httpClient, method, targetURL, opts.data, opts.headers, "", "")
+					if baseErr != nil {
+						report.Checks = append(report.Checks, VerifyCheckResult{
+							Name:    "baseline-parity:" + p,
+							Passed:  false,
+							Status:  "ERROR",
+							Message: fmt.Sprintf("baseline request failed: %v", baseErr),
+						})
+					} else {
+						statusMatch := baseResp.StatusCode == prevResp.StatusCode
+						passed := !opts.failOnStatusDiff || statusMatch
+						parityStatus := "PARITY"
+						if !statusMatch {
+							parityStatus = "DIFF"
+						}
+						report.Checks = append(report.Checks, VerifyCheckResult{
+							Name:       "baseline-parity:" + p,
+							Passed:     passed,
+							Status:     parityStatus,
+							DurationMs: baseResp.Duration.Milliseconds(),
+							Message:    fmt.Sprintf("baseline HTTP %d (%s) vs preview HTTP %d (%s)", baseResp.StatusCode, baseResp.Duration.Round(time.Millisecond), prevResp.StatusCode, prevResp.Duration.Round(time.Millisecond)),
+						})
+					}
+				}
+			}
+
+			// 3. Aggregate & Format Output
+			passedCount := 0
+			failedCount := 0
+			for _, chk := range report.Checks {
+				if chk.Passed {
+					passedCount++
+				} else {
+					failedCount++
+				}
+			}
+			report.Passed = len(report.Checks) > 0 && failedCount == 0
+
+			out := cmd.OutOrStdout()
+			if opts.outputJSON {
+				enc := json.NewEncoder(out)
+				enc.SetIndent("", "  ")
+				if err := enc.Encode(report); err != nil {
+					return fmt.Errorf("failed to encode verification report: %w", err)
+				}
+			} else {
+				renderVerifyTable(out, report, passedCount, failedCount)
+			}
+
+			if !report.Passed {
+				return fmt.Errorf("verification failed for environment %s", envName)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&opts.baseURL, "base-url", "", "Override the base URL for HTTP verification")
+	cmd.Flags().StringSliceVar(&opts.paths, "path", []string{"/"}, "HTTP path(s) to probe")
+	cmd.Flags().StringVar(&opts.headerKey, "header-key", "", "Override routing header key (default: x-diverge-env)")
+	cmd.Flags().StringVar(&opts.headerValue, "header-value", "", "Override routing header value (default: environment name)")
+	cmd.Flags().StringVarP(&opts.method, "method", "X", "GET", "HTTP request method")
+	cmd.Flags().StringVarP(&opts.data, "data", "d", "", "HTTP request body")
+	cmd.Flags().StringArrayVarP(&opts.headers, "header", "H", nil, "Additional HTTP header in 'Key: Value' format")
+	cmd.Flags().IntVar(&opts.expectStatus, "expect-status", 200, "Expected HTTP status code (0 allows any 2xx/3xx status < 400)")
+	cmd.Flags().DurationVar(&opts.maxLatency, "max-latency", 0, "Maximum acceptable preview response latency (e.g. 500ms)")
+	cmd.Flags().StringVar(&opts.bodyContains, "body-contains", "", "Substring that must appear in the preview HTTP response body")
+	cmd.Flags().BoolVar(&opts.compareBaseline, "compare-baseline", false, "Also probe baseline (without preview routing headers) and verify status parity")
+	cmd.Flags().BoolVar(&opts.failOnStatusDiff, "fail-on-status-diff", true, "Fail verification if baseline and preview HTTP status codes differ when --compare-baseline is enabled")
+	cmd.Flags().BoolVar(&opts.skipDoctor, "skip-doctor", false, "Skip Kubernetes workload health diagnostics (doctor)")
+	cmd.Flags().DurationVar(&opts.timeout, "timeout", 15*time.Second, "Per-request HTTP timeout")
+	cmd.Flags().BoolVar(&opts.outputJSON, "json", false, "Output verification report as JSON")
+
+	return cmd
+}
+
+func renderVerifyTable(out io.Writer, report *VerifyReport, passedCount, failedCount int) {
+	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprintln(tw, "CHECK\tSTATUS\tRESULT\tDETAILS")
+	for _, chk := range report.Checks {
+		result := "[PASS]"
+		if !chk.Passed {
+			result = "[FAIL]"
+		}
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", chk.Name, chk.Status, result, chk.Message)
+	}
+	_ = tw.Flush()
+	_, _ = fmt.Fprintln(out)
+	if report.Passed {
+		_, _ = fmt.Fprintf(out, "Verification PASSED (%d/%d checks)\n", passedCount, len(report.Checks))
+	} else {
+		_, _ = fmt.Fprintf(out, "Verification FAILED (%d/%d checks failed)\n", failedCount, len(report.Checks))
+	}
+}

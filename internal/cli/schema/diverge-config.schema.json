@@ -700,7 +700,7 @@
         "type": "object",
         "properties": {
           "asyncRoutes": {
-            "description": "Async routing targets (Temporal task queues, Kafka topics, Redis/Valkey key prefixes) for event-driven services.",
+            "description": "Async routing targets (Temporal task queues, Kafka topics, Redis/Valkey key prefixes, S3/GCS/MinIO object prefixes) for event-driven services.",
             "type": "array",
             "items": {
               "type": "object",
@@ -719,7 +719,10 @@
                     "temporal",
                     "kafka",
                     "redis",
-                    "valkey"
+                    "valkey",
+                    "s3",
+                    "gcs",
+                    "minio"
                   ]
                 },
                 "target": {

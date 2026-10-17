@@ -34,6 +34,7 @@ REQUIRED_PBT_FILES=(
   "internal/config/property_test.go"
   "internal/proxy/property_test.go"
   "pkg/doctor/diagnostics_test.go"
+  "pkg/sdk/storage_test.go"
   "internal/cli/init_test.go"
 )
 

@@ -21,6 +21,10 @@ from .redis import (
     resolve_redis_key,
     resolve_redis_prefix,
 )
+from .storage import (
+    resolve_storage_key,
+    resolve_storage_prefix,
+)
 
 __all__ = [
     "get_environment",
@@ -45,6 +49,8 @@ __all__ = [
     "temporal_header_context",
     "resolve_redis_prefix",
     "resolve_redis_key",
+    "resolve_storage_prefix",
+    "resolve_storage_key",
 ]
 
 try:

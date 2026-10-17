@@ -1098,3 +1098,189 @@ func TestGatewayRouter_Reconcile_GatewayNamespaceAnnotation(t *testing.T) {
 	assert.Equal(t, "Service", meshParent["kind"])
 	assert.Nil(t, meshParent["namespace"], "GAMMA Service parentRef should not have gateway-namespace")
 }
+
+func TestGatewayRouter_Reconcile_MeshServiceNamedGateway(t *testing.T) {
+	c := fake.NewClientBuilder().Build()
+	r := &GatewayRouter{Client: c, Namespace: "default"}
+
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-env",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Deploy: v1alpha1.EnvironmentDeploy{
+				ChangedServices: []string{"payment-gateway"},
+			},
+			ServiceConfig: &v1alpha1.ServicePreviewConfig{
+				ServiceName: "payment-gateway",
+			},
+		},
+	}
+
+	err := r.Reconcile(context.Background(), env)
+	require.NoError(t, err)
+
+	meshRoute := &unstructured.Unstructured{}
+	meshRoute.SetAPIVersion("gateway.networking.k8s.io/v1")
+	meshRoute.SetKind("HTTPRoute")
+	err = c.Get(context.Background(), client.ObjectKey{Name: "test-env-payment-gateway-mesh", Namespace: "default"}, meshRoute)
+	require.NoError(t, err)
+
+	parents, _, _ := unstructured.NestedSlice(meshRoute.Object, "spec", "parentRefs")
+	require.Len(t, parents, 1)
+	parent := parents[0].(map[string]interface{})
+	assert.Equal(t, "payment-gateway", parent["name"])
+	assert.Equal(t, "Service", parent["kind"])
+	assert.Equal(t, "", parent["group"])
+
+	// Mesh route must NOT strip the routing header
+	rules, _, _ := unstructured.NestedSlice(meshRoute.Object, "spec", "rules")
+	require.Len(t, rules, 1)
+	_, hasFilters, _ := unstructured.NestedSlice(rules[0].(map[string]interface{}), "filters")
+	assert.False(t, hasFilters, "GAMMA mesh route for payment-gateway must not have edge header-stripping filters")
+}
+
+func TestGatewayRouter_Reconcile_ParentRefDisambiguation_ProdIngressGateway(t *testing.T) {
+	t.Run("cluster lookup finds Gateway named prod-ingress", func(t *testing.T) {
+		gw := &unstructured.Unstructured{}
+		gw.SetAPIVersion("gateway.networking.k8s.io/v1")
+		gw.SetKind("Gateway")
+		gw.SetName("prod-ingress")
+		gw.SetNamespace("default")
+
+		c := fake.NewClientBuilder().WithObjects(gw).Build()
+		r := &GatewayRouter{Client: c, Namespace: "default"}
+
+		env := &v1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-env", Namespace: "default"},
+			Spec: v1alpha1.EnvironmentSpec{
+				Deploy: v1alpha1.EnvironmentDeploy{ChangedServices: []string{"web"}},
+				ServiceConfig: &v1alpha1.ServicePreviewConfig{
+					ParentRef: "prod-ingress",
+				},
+			},
+		}
+
+		require.NoError(t, r.Reconcile(context.Background(), env))
+
+		u := &unstructured.Unstructured{}
+		u.SetAPIVersion("gateway.networking.k8s.io/v1")
+		u.SetKind("HTTPRoute")
+		require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "test-env-web", Namespace: "default"}, u))
+
+		parents, _, _ := unstructured.NestedSlice(u.Object, "spec", "parentRefs")
+		require.Len(t, parents, 1)
+		parent := parents[0].(map[string]interface{})
+		assert.Equal(t, "prod-ingress", parent["name"])
+		assert.Nil(t, parent["kind"], "Gateway parentRef should not have kind=Service")
+	})
+
+	t.Run("annotation divergedev.com/parent-kind=Gateway", func(t *testing.T) {
+		c := fake.NewClientBuilder().Build()
+		r := &GatewayRouter{Client: c, Namespace: "default"}
+
+		env := &v1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-env",
+				Namespace: "default",
+				Annotations: map[string]string{
+					AnnotationParentKind: "Gateway",
+				},
+			},
+			Spec: v1alpha1.EnvironmentSpec{
+				Deploy: v1alpha1.EnvironmentDeploy{ChangedServices: []string{"web"}},
+				ServiceConfig: &v1alpha1.ServicePreviewConfig{
+					ParentRef: "prod-ingress",
+				},
+			},
+		}
+
+		require.NoError(t, r.Reconcile(context.Background(), env))
+
+		u := &unstructured.Unstructured{}
+		u.SetAPIVersion("gateway.networking.k8s.io/v1")
+		u.SetKind("HTTPRoute")
+		require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "test-env-web", Namespace: "default"}, u))
+
+		parents, _, _ := unstructured.NestedSlice(u.Object, "spec", "parentRefs")
+		require.Len(t, parents, 1)
+		parent := parents[0].(map[string]interface{})
+		assert.Equal(t, "prod-ingress", parent["name"])
+		assert.Nil(t, parent["kind"], "Gateway parentRef should not have kind=Service")
+	})
+
+	t.Run("explicit prefix Gateway/prod-ingress", func(t *testing.T) {
+		c := fake.NewClientBuilder().Build()
+		r := &GatewayRouter{Client: c, Namespace: "default"}
+
+		env := &v1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-env", Namespace: "default"},
+			Spec: v1alpha1.EnvironmentSpec{
+				Deploy: v1alpha1.EnvironmentDeploy{ChangedServices: []string{"web"}},
+				ServiceConfig: &v1alpha1.ServicePreviewConfig{
+					ParentRef: "Gateway/prod-ingress",
+				},
+			},
+		}
+
+		require.NoError(t, r.Reconcile(context.Background(), env))
+
+		u := &unstructured.Unstructured{}
+		u.SetAPIVersion("gateway.networking.k8s.io/v1")
+		u.SetKind("HTTPRoute")
+		require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "test-env-web", Namespace: "default"}, u))
+
+		parents, _, _ := unstructured.NestedSlice(u.Object, "spec", "parentRefs")
+		require.Len(t, parents, 1)
+		parent := parents[0].(map[string]interface{})
+		assert.Equal(t, "prod-ingress", parent["name"])
+		assert.Nil(t, parent["kind"], "Gateway parentRef should not have kind=Service")
+	})
+}
+
+func TestGatewayRouter_Reconcile_ExternalDNSAndCertManagerAnnotations(t *testing.T) {
+	c := fake.NewClientBuilder().Build()
+	r := &GatewayRouter{Client: c, Namespace: "default"}
+
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-42",
+			Namespace: "default",
+			Annotations: map[string]string{
+				AnnotationExternalDNS:                  "true",
+				AnnotationClusterIssuer:                "letsencrypt-prod",
+				"external-dns.alpha.kubernetes.io/ttl": "60",
+			},
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Deploy: v1alpha1.EnvironmentDeploy{
+				ChangedServices: []string{"web"},
+			},
+			Routing: v1alpha1.EnvironmentRouting{
+				Mode:       "subdomain",
+				BaseDomain: "preview.example.com",
+			},
+		},
+	}
+
+	require.NoError(t, r.Reconcile(context.Background(), env))
+
+	u := &unstructured.Unstructured{}
+	u.SetAPIVersion("gateway.networking.k8s.io/v1")
+	u.SetKind("HTTPRoute")
+	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "pr-42-web", Namespace: "default"}, u))
+
+	ann := u.GetAnnotations()
+	require.NotNil(t, ann)
+	assert.Equal(t, "pr-42.preview.example.com", ann["external-dns.alpha.kubernetes.io/hostname"])
+	assert.Equal(t, "letsencrypt-prod", ann["cert-manager.io/cluster-issuer"])
+	assert.Equal(t, "60", ann["external-dns.alpha.kubernetes.io/ttl"])
+
+	// Update existing route with custom external-dns-hostname override
+	env.Annotations[AnnotationExternalDNSHostname] = "custom.preview.example.com"
+	require.NoError(t, r.Reconcile(context.Background(), env))
+
+	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "pr-42-web", Namespace: "default"}, u))
+	assert.Equal(t, "custom.preview.example.com", u.GetAnnotations()["external-dns.alpha.kubernetes.io/hostname"])
+}

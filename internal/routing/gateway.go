@@ -32,6 +32,13 @@ var _ Router = (*GatewayRouter)(nil)
 // DNS maximum of 253 characters.
 var ErrHostnameTooLong = errors.New("derived hostname exceeds 253 characters")
 
+const (
+	AnnotationParentKind          = "divergedev.com/parent-kind"
+	AnnotationExternalDNS         = "divergedev.com/external-dns"
+	AnnotationExternalDNSHostname = "divergedev.com/external-dns-hostname"
+	AnnotationClusterIssuer       = "divergedev.com/cluster-issuer"
+)
+
 // Reconcile creates or updates routing resources for each changed service
 // in the environment, configuring header-based routing rules.
 // Supports both HTTPRoute (default) and GRPCRoute (when protocol=grpc).
@@ -85,12 +92,13 @@ func (r *GatewayRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment
 		// GAMMA mesh route: parentRef is the baseline Service for east-west routing
 		if cfg := env.Spec.ServiceConfig; cfg != nil && cfg.ServiceName != "" {
 			meshRouteName := fmt.Sprintf("%s-%s-mesh", env.Name, svc)
+			meshParentRef := "Service/" + cfg.ServiceName
 			if protocol == "grpc" {
-				if err := r.reconcileGRPCRoute(ctx, env, meshRouteName, svc, ns, cfg.ServiceName, headerKey, headerValue, backendPort); err != nil {
+				if err := r.reconcileGRPCRoute(ctx, env, meshRouteName, svc, ns, meshParentRef, headerKey, headerValue, backendPort); err != nil {
 					return err
 				}
 			} else {
-				if err := r.reconcileHTTPRoute(ctx, env, meshRouteName, svc, ns, cfg.ServiceName, headerKey, headerValue, backendPort); err != nil {
+				if err := r.reconcileHTTPRoute(ctx, env, meshRouteName, svc, ns, meshParentRef, headerKey, headerValue, backendPort); err != nil {
 					return err
 				}
 			}
@@ -183,10 +191,11 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 		}
 	}
 
+	resolvedParentName, isServiceParent := r.resolveParentRef(ctx, env, ns, parentRefName)
 	parentRef := map[string]interface{}{
-		"name": parentRefName,
+		"name": resolvedParentName,
 	}
-	if isServiceName(parentRefName) {
+	if isServiceParent {
 		parentRef["kind"] = "Service"
 		parentRef["group"] = ""
 	} else if gwNS := strings.TrimSpace(env.Annotations["divergedev.com/gateway-namespace"]); gwNS != "" && gwNS != ns {
@@ -209,7 +218,7 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 
 	var filters []interface{}
 
-	if !isServiceName(parentRefName) && env.Spec.Routing.Mode != "subdomain" {
+	if !isServiceParent && env.Spec.Routing.Mode != "subdomain" {
 		filters = append(filters, map[string]interface{}{
 			"type": "RequestHeaderModifier",
 			"requestHeaderModifier": map[string]interface{}{
@@ -311,6 +320,11 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 		spec["hostnames"] = hostnames
 	}
 
+	routeAnnotations := buildRouteAnnotations(env, hostnames)
+	if len(routeAnnotations) > 0 {
+		u.SetAnnotations(routeAnnotations)
+	}
+
 	existing := &unstructured.Unstructured{}
 	existing.SetAPIVersion(apiVersion)
 	existing.SetKind(kind)
@@ -326,6 +340,16 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 		}
 		logger.V(1).Info(fmt.Sprintf("Created %s", kind), "name", routeName, "service", svc)
 	} else {
+		if len(routeAnnotations) > 0 {
+			existingAnn := existing.GetAnnotations()
+			if existingAnn == nil {
+				existingAnn = make(map[string]string, len(routeAnnotations))
+			}
+			for k, v := range routeAnnotations {
+				existingAnn[k] = v
+			}
+			existing.SetAnnotations(existingAnn)
+		}
 		existing.Object["spec"] = spec
 		if err := r.Client.Update(ctx, existing); err != nil {
 			return fmt.Errorf("failed to update %s for %s: %w", kind, svc, err)
@@ -437,6 +461,86 @@ func (r *GatewayRouter) reconcileHTTPRoute(ctx context.Context, env *v1alpha1.En
 // reconcileGRPCRoute creates or updates a single GRPCRoute for gRPC services.
 func (r *GatewayRouter) reconcileGRPCRoute(ctx context.Context, env *v1alpha1.Environment, routeName, svc, ns, parentRefName, headerKey, headerValue string, backendPort int64) error {
 	return r.reconcileRoute(ctx, env, "GRPCRoute", "gateway.networking.k8s.io/v1", routeName, svc, ns, parentRefName, headerKey, headerValue, backendPort)
+}
+
+// resolveParentRef disambiguates whether rawParentRef targets a Kubernetes Service
+// (GAMMA east-west mesh) or a Gateway API Gateway (north-south ingress).
+func (r *GatewayRouter) resolveParentRef(ctx context.Context, env *v1alpha1.Environment, ns, rawParentRef string) (string, bool) {
+	rawParentRef = strings.TrimSpace(rawParentRef)
+	lowerRef := strings.ToLower(rawParentRef)
+	if strings.HasPrefix(lowerRef, "service/") {
+		return strings.TrimSpace(rawParentRef[len("service/"):]), true
+	}
+	if strings.HasPrefix(lowerRef, "gateway/") {
+		return strings.TrimSpace(rawParentRef[len("gateway/"):]), false
+	}
+
+	if env != nil {
+		parentKind := strings.TrimSpace(env.Annotations[AnnotationParentKind])
+		if strings.EqualFold(parentKind, "service") {
+			return rawParentRef, true
+		}
+		if strings.EqualFold(parentKind, "gateway") {
+			return rawParentRef, false
+		}
+	}
+
+	if r.Client != nil && rawParentRef != "" {
+		gwNS := ""
+		if env != nil {
+			gwNS = strings.TrimSpace(env.Annotations["divergedev.com/gateway-namespace"])
+		}
+		if gwNS == "" {
+			gwNS = ns
+		}
+		gw := &unstructured.Unstructured{}
+		gw.SetAPIVersion("gateway.networking.k8s.io/v1")
+		gw.SetKind("Gateway")
+		if err := r.Client.Get(ctx, client.ObjectKey{Name: rawParentRef, Namespace: gwNS}, gw); err == nil {
+			return rawParentRef, false
+		}
+	}
+
+	return rawParentRef, isServiceName(rawParentRef)
+}
+
+func buildRouteAnnotations(env *v1alpha1.Environment, hostnames []interface{}) map[string]string {
+	if env == nil || len(env.Annotations) == 0 {
+		return nil
+	}
+	out := make(map[string]string)
+
+	for _, key := range []string{
+		"external-dns.alpha.kubernetes.io/hostname",
+		"external-dns.alpha.kubernetes.io/ttl",
+		"cert-manager.io/cluster-issuer",
+		"cert-manager.io/issuer",
+	} {
+		if val := strings.TrimSpace(env.Annotations[key]); val != "" {
+			out[key] = val
+		}
+	}
+
+	if h := strings.TrimSpace(env.Annotations[AnnotationExternalDNSHostname]); h != "" {
+		out["external-dns.alpha.kubernetes.io/hostname"] = h
+	} else if ext := strings.TrimSpace(env.Annotations[AnnotationExternalDNS]); ext != "" && !strings.EqualFold(ext, "false") {
+		if strings.EqualFold(ext, "true") {
+			if len(hostnames) > 0 {
+				out["external-dns.alpha.kubernetes.io/hostname"] = fmt.Sprint(hostnames[0])
+			}
+		} else {
+			out["external-dns.alpha.kubernetes.io/hostname"] = ext
+		}
+	}
+
+	if issuer := strings.TrimSpace(env.Annotations[AnnotationClusterIssuer]); issuer != "" {
+		out["cert-manager.io/cluster-issuer"] = issuer
+	}
+
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // isServiceName heuristically determines if a parentRef name refers to a
