@@ -302,9 +302,21 @@ func TestKubernetesSecretTokenStore_IndexOnlyRevoke(t *testing.T) {
 
 	require.NoError(t, indexStore.RevokeToken(ctx, taskID, namespace))
 	assert.True(t, indexStore.IsRevoked(ctx, taskID, namespace))
+	assert.True(t, store.IsRevoked(ctx, taskID, namespace))
 
 	_, err = indexStore.GetToken(ctx, taskID, namespace)
 	assert.ErrorIs(t, err, ErrTokenRevoked)
+	_, err = store.GetToken(ctx, taskID, namespace)
+	assert.ErrorIs(t, err, ErrTokenRevoked)
+
+	// Re-minting on ResumeTask clears revocation in both controller and server index-only stores
+	require.NoError(t, store.SaveToken(ctx, taskID, namespace, []byte("reminted-tok-payload")))
+	assert.False(t, indexStore.IsRevoked(ctx, taskID, namespace))
+	assert.False(t, store.IsRevoked(ctx, taskID, namespace))
+
+	reminted, err := indexStore.GetToken(ctx, taskID, namespace)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("reminted-tok-payload"), reminted)
 }
 
 func TestKubernetesSecretTokenStore_LegacyLabelMigration(t *testing.T) {

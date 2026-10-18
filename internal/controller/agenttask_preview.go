@@ -24,6 +24,7 @@ const (
 	annotationPreviewEnvironment = "divergedev.com/preview-environment"
 	annotationPreviewURL         = "divergedev.com/preview-url"
 	annotationSandboxIP          = "divergedev.com/sandbox-ip"
+	annotationHibernated         = "divergedev.com/hibernated"
 
 	labelAgentTask           = "divergedev.com/agent-task"
 	managedByAgentTask       = "diverge-agenttask"
@@ -109,6 +110,36 @@ func isOwnedByAgentTask(env *v1alpha1.Environment, task *v1alpha1.AgentTask) boo
 	return false
 }
 
+func (r *AgentTaskReconciler) setLinkedPreviewEnvironmentHibernated(ctx context.Context, task *v1alpha1.AgentTask, hibernated bool) error {
+	if task == nil {
+		return nil
+	}
+	envName := linkedPreviewEnvironmentName(task.Name)
+	var env v1alpha1.Environment
+	if err := r.Get(ctx, types.NamespacedName{Name: envName, Namespace: task.Namespace}, &env); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if !isOwnedByAgentTask(&env, task) {
+		return nil
+	}
+	patch := client.MergeFrom(env.DeepCopy())
+	if env.Annotations == nil {
+		env.Annotations = make(map[string]string)
+	}
+	if hibernated {
+		if env.Annotations[annotationHibernated] == "true" {
+			return nil
+		}
+		env.Annotations[annotationHibernated] = "true"
+	} else {
+		if _, ok := env.Annotations[annotationHibernated]; !ok {
+			return nil
+		}
+		delete(env.Annotations, annotationHibernated)
+	}
+	return r.Patch(ctx, &env, patch)
+}
+
 func (r *AgentTaskReconciler) reconcileLinkedPreviewEnvironment(ctx context.Context, task *v1alpha1.AgentTask) error {
 	if task == nil {
 		return nil
@@ -166,6 +197,14 @@ func (r *AgentTaskReconciler) reconcileLinkedPreviewEnvironment(ctx context.Cont
 				env.Annotations = make(map[string]string)
 			}
 			env.Annotations[annotationSandboxIP] = task.Status.SandboxIP
+		}
+		if task.Spec.Suspended || task.Status.Phase == v1alpha1.AgentTaskPhasePaused {
+			if env.Annotations == nil {
+				env.Annotations = make(map[string]string)
+			}
+			env.Annotations[annotationHibernated] = "true"
+		} else if env.Annotations != nil {
+			delete(env.Annotations, annotationHibernated)
 		}
 
 		if r.Scheme != nil {

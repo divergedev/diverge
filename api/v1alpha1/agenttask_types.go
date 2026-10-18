@@ -150,6 +150,11 @@ type AgentTaskStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
+	// LastMeterRequestIDs stores a bounded ring buffer (max 32 entries) of recently processed
+	// LLM meter request IDs to guarantee idempotency across retries and server replicas.
+	// +optional
+	LastMeterRequestIDs []string `json:"lastMeterRequestIds,omitempty"`
+
 	// ObservedGeneration is the most recent metadata generation observed by the controller.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`

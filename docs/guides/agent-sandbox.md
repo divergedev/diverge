@@ -244,3 +244,48 @@ You can interactively trigger, steer, inspect, and control `AgentTask` workflows
 
 All commands post interactive Markdown confirmation replies back to the PR or MR comment thread.
 
+---
+
+## 10. Connecting `google/ax` & MCP Clients (`diverge mcp`)
+
+Both sandboxed agents and external AI orchestrators (`google/ax`, Claude Code, Cursor, Gemini CLI) can manage and inspect `AgentTask` lifecycles via the Model Context Protocol (MCP) using `diverge mcp`:
+
+```json
+{
+  "mcpServers": {
+    "diverge": {
+      "command": "diverge",
+      "args": ["mcp"],
+      "env": {
+        "DIVERGE_SERVER_URL": "http://diverge-server.diverge-system.svc:8080",
+        "DIVERGE_TOKEN_FILE": "/etc/diverge/token/token"
+      }
+    }
+  }
+}
+```
+
+### Exposed `AgentTask` MCP Tools
+- `diverge_create_task` — Create and launch an autonomous `AgentTask` in an isolated sandbox.
+- `diverge_get_task` — Retrieve specification, phase, sandbox status, and token/cost consumption.
+- `diverge_list_tasks` — List `AgentTask` resources in a namespace.
+- `diverge_pause_task` — Pause an active `AgentTask` and suspend its sandbox (`spec.operatingMode: Suspended`).
+- `diverge_resume_task` — Resume a paused `AgentTask` with optional additive budget bumps (`budget_usd_bump`, `budget_tokens_bump`).
+- `diverge_guide_task` — Send real-time steering instructions (`divergedev.com/guidance`) delivered to the agent on its next metering heartbeat.
+- `diverge_delete_task` — Delete an `AgentTask` and tear down its sandbox (requires `--allow-destructive`).
+
+### Production Helm Setup (`macaroonSecretRef`)
+To enable cryptographic Macaroon minting and live budget metering in production, create a 32-byte shared secret and configure `sandbox.macaroonSecretRef` in Helm:
+
+```bash
+kubectl create secret generic diverge-macaroon-key \
+  -n diverge-system \
+  --from-literal=root-key="$(openssl rand -hex 32)"
+
+helm upgrade --install diverge ./charts/diverge \
+  -n diverge-system \
+  --set sandbox.enabled=true \
+  --set sandbox.macaroonSecretRef.name=diverge-macaroon-key \
+  --set sandbox.macaroonSecretRef.key=root-key
+```
+

@@ -172,11 +172,22 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// 4. Handle Suspended State
 	if task.Spec.Suspended {
+		if provider, err := r.resolveSandboxProvider(task); err == nil && provider != nil {
+			if suspender, ok := provider.(pkgsandbox.SandboxSuspender); ok {
+				_ = suspender.Suspend(ctx, task)
+			} else if task.Spec.Sandbox.Provider == "pod" || task.Spec.Sandbox.Provider == "k8s-pod" {
+				_ = provider.Teardown(ctx, task)
+			}
+		}
+		_ = r.setLinkedPreviewEnvironmentHibernated(ctx, task, true)
 		if task.Status.Phase != v1alpha1.AgentTaskPhasePaused {
 			patch := client.MergeFrom(task.DeepCopy())
 			oldPhase := task.Status.Phase
 			task.Status.Phase = v1alpha1.AgentTaskPhasePaused
 			task.Status.Message = "Task execution paused by spec.suspended"
+			if task.Spec.Sandbox.Provider == "pod" || task.Spec.Sandbox.Provider == "k8s-pod" {
+				task.Status.SandboxPodName = ""
+			}
 			if r.Notifier != nil && oldPhase != task.Status.Phase {
 				_ = r.Notifier.NotifyPhaseChange(ctx, task, oldPhase, task.Status.Phase)
 			}
@@ -325,10 +336,19 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 		// Check iteration, USD budget, and token budget limits
 		if exceeded, reason := r.checkBudgetOrIterationLimit(task); exceeded {
+			if suspender, ok := provider.(pkgsandbox.SandboxSuspender); ok {
+				_ = suspender.Suspend(ctx, task)
+			} else if task.Spec.Sandbox.Provider == "pod" || task.Spec.Sandbox.Provider == "k8s-pod" {
+				_ = provider.Teardown(ctx, task)
+			}
+			_ = r.setLinkedPreviewEnvironmentHibernated(ctx, task, true)
 			patch := client.MergeFrom(task.DeepCopy())
 			oldPhase := task.Status.Phase
 			task.Status.Phase = v1alpha1.AgentTaskPhasePaused
 			task.Status.Message = reason
+			if task.Spec.Sandbox.Provider == "pod" || task.Spec.Sandbox.Provider == "k8s-pod" {
+				task.Status.SandboxPodName = ""
+			}
 			if r.Notifier != nil && oldPhase != task.Status.Phase {
 				_ = r.Notifier.NotifyPhaseChange(ctx, task, oldPhase, task.Status.Phase)
 			}
@@ -369,12 +389,23 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 				}
 				return ctrl.Result{}, nil
 			}
+			_ = r.setLinkedPreviewEnvironmentHibernated(ctx, task, false)
 			patch := client.MergeFrom(task.DeepCopy())
 			oldPhase := task.Status.Phase
+			if task.Status.SandboxPodName != "" {
+				if sbStatus, sbErr := provider.Status(ctx, task); sbErr == nil && sbStatus != nil {
+					if sbStatus.Phase == "Failed" || sbStatus.Phase == "Succeeded" || sbStatus.Message == "Sandbox pod not found" {
+						task.Status.SandboxPodName = ""
+					}
+				}
+			}
 			if task.Status.SandboxPodName != "" {
 				// Re-mint capability token with updated budget/token limits and fresh expiry
 				if err := r.mintAndSaveToken(ctx, task); err != nil {
 					return ctrl.Result{}, err
+				}
+				if suspender, ok := provider.(pkgsandbox.SandboxSuspender); ok {
+					_ = suspender.Resume(ctx, task)
 				}
 				task.Status.Phase = v1alpha1.AgentTaskPhaseActive
 				task.Status.Message = "Task resumed and active"
@@ -450,6 +481,7 @@ func (r *AgentTaskReconciler) mintAndSaveToken(ctx context.Context, task *v1alph
 			"diverge_loadtest",
 			"diverge_visual_test",
 			"diverge_get_task",
+			"diverge_list_tasks",
 		},
 		AllowedModels: task.Spec.Capabilities,
 		MaxTokens:     task.Spec.BudgetTokens,

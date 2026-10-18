@@ -25,6 +25,8 @@ var errTokensOverflow = errors.New("tokensUsed overflows accumulated usage")
 
 // LLMMeterRequest is the JSON payload sent by a sandbox LLM proxy or agent to report token and cost usage.
 type LLMMeterRequest struct {
+	RequestID  string  `json:"requestId,omitempty"`
+	Iteration  int32   `json:"iteration,omitempty"`
 	Model      string  `json:"model"`
 	TokensUsed int64   `json:"tokensUsed"`
 	CostUSD    float64 `json:"costUSD"`
@@ -37,6 +39,9 @@ type LLMMeterResponse struct {
 	Reason          string  `json:"reason,omitempty"`
 	TotalTokensUsed int64   `json:"totalTokensUsed"`
 	TotalCostUSD    float64 `json:"totalCostUSD"`
+	Iteration       int32   `json:"iteration,omitempty"`
+	MaxIterations   int32   `json:"maxIterations,omitempty"`
+	Guidance        string  `json:"guidance,omitempty"`
 }
 
 // LLMMeterHandler enforces live cost, token, and model capability budgets for AgentTasks.
@@ -164,7 +169,7 @@ func (h *LLMMeterHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		modelAllowed := false
 		for _, m := range claims.AllowedModels {
-			if m == req.Model {
+			if pkgauth.MatchesAllowedModel(m, req.Model) {
 				modelAllowed = true
 				break
 			}
@@ -203,7 +208,11 @@ func (h *LLMMeterHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		task           v1alpha1.AgentTask
 		totalCost      float64
 		totalTokens    int64
+		curIteration   int32
+		maxIterations  int32
+		guidance       string
 		budgetExceeded bool
+		exceedReason   string
 		loadFailed     bool
 	)
 
@@ -226,11 +235,45 @@ func (h *LLMMeterHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		totalCost = prevCost + req.CostUSD
-		totalTokens = task.Status.TokensConsumed + req.TokensUsed
+		alreadyCounted := false
+		if req.RequestID != "" {
+			for _, id := range task.Status.LastMeterRequestIDs {
+				if id == req.RequestID {
+					alreadyCounted = true
+					break
+				}
+			}
+		}
 
-		task.Status.TokensConsumed = totalTokens
-		task.Status.CostUSD = fmt.Sprintf("%.4f", totalCost)
+		if alreadyCounted {
+			totalCost = prevCost
+			totalTokens = task.Status.TokensConsumed
+		} else {
+			totalCost = prevCost + req.CostUSD
+			totalTokens = task.Status.TokensConsumed + req.TokensUsed
+
+			task.Status.TokensConsumed = totalTokens
+			task.Status.CostUSD = fmt.Sprintf("%.4f", totalCost)
+
+			if req.Iteration > task.Status.Iteration {
+				task.Status.Iteration = req.Iteration
+			} else if req.Iteration > 0 {
+				task.Status.Iteration++
+			}
+
+			if req.RequestID != "" {
+				task.Status.LastMeterRequestIDs = append(task.Status.LastMeterRequestIDs, req.RequestID)
+				if len(task.Status.LastMeterRequestIDs) > 32 {
+					task.Status.LastMeterRequestIDs = task.Status.LastMeterRequestIDs[len(task.Status.LastMeterRequestIDs)-32:]
+				}
+			}
+		}
+
+		curIteration = task.Status.Iteration
+		maxIterations = task.Spec.MaxIterations
+		if task.Annotations != nil {
+			guidance = strings.TrimSpace(task.Annotations["divergedev.com/guidance"])
+		}
 
 		budgetExceeded = (claims.MaxCostUSD > 0 && totalCost > claims.MaxCostUSD) ||
 			(claims.MaxTokens > 0 && totalTokens > claims.MaxTokens)
@@ -242,10 +285,20 @@ func (h *LLMMeterHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if task.Spec.BudgetTokens > 0 && totalTokens > task.Spec.BudgetTokens {
 			budgetExceeded = true
 		}
+		exceedReason = "budget exceeded"
+
+		if !budgetExceeded && task.Spec.MaxIterations > 0 && task.Status.Iteration > task.Spec.MaxIterations {
+			budgetExceeded = true
+			exceedReason = "max iterations exceeded"
+		}
 
 		if budgetExceeded {
 			task.Status.Phase = v1alpha1.AgentTaskPhasePaused
-			task.Status.Message = "Budget exceeded"
+			if exceedReason == "max iterations exceeded" {
+				task.Status.Message = "Max iterations exceeded"
+			} else {
+				task.Status.Message = "Budget exceeded"
+			}
 		}
 		return h.updateTaskStatus(ctx, &task)
 	})
@@ -306,9 +359,12 @@ func (h *LLMMeterHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeMeterJSON(w, http.StatusTooManyRequests, LLMMeterResponse{
 			Allowed:         false,
 			Suspended:       true,
-			Reason:          "budget exceeded",
+			Reason:          exceedReason,
 			TotalTokensUsed: totalTokens,
 			TotalCostUSD:    totalCost,
+			Iteration:       curIteration,
+			MaxIterations:   maxIterations,
+			Guidance:        guidance,
 		})
 		return
 	}
@@ -318,6 +374,9 @@ func (h *LLMMeterHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Suspended:       false,
 		TotalTokensUsed: totalTokens,
 		TotalCostUSD:    totalCost,
+		Iteration:       curIteration,
+		MaxIterations:   maxIterations,
+		Guidance:        guidance,
 	})
 }
 

@@ -363,6 +363,16 @@ func TestMCPBearerTokenAuth(t *testing.T) {
 	_, err = remoteHTTPClient.Get("http://diverge.example.com:8080/healthz")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "insecure HTTP scheme is only allowed for loopback addresses")
+
+	// In-cluster Kubernetes Service DNS hosts (.svc and .svc.cluster.local) are allowed over HTTP
+	assert.True(t, isLoopbackOrClusterHost("diverge-server.diverge-system.svc:8080"))
+	assert.True(t, isLoopbackOrClusterHost("diverge-server.diverge-system.svc.cluster.local:8443"))
+	assert.False(t, isLoopbackOrClusterHost("diverge.example.com:8080"))
+
+	// Verify resolveMCPServerURL falls back to DIVERGE_MCP_URL and strips /mcp suffix
+	t.Setenv("DIVERGE_SERVER_URL", "")
+	t.Setenv("DIVERGE_MCP_URL", "http://diverge-server.diverge-system.svc:8443/mcp")
+	assert.Equal(t, "http://diverge-server.diverge-system.svc:8443", resolveMCPServerURL(""))
 }
 
 func TestMCPCmdVisibleInHelp(t *testing.T) {

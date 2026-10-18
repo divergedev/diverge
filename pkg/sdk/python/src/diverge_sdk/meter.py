@@ -17,6 +17,9 @@ class LLMMeterResponse:
     total_tokens_used: int
     total_cost_usd: float
     reason: str = ""
+    iteration: int = 0
+    max_iterations: int = 0
+    guidance: str = ""
 
 
 class LLMMeterError(Exception):
@@ -80,6 +83,11 @@ def _parse_meter_response(data: Any) -> Optional[LLMMeterResponse]:
             data.get("totalCostUSD", data.get("total_cost_usd", 0.0))
         ),
         reason=str(data.get("reason", "") or ""),
+        iteration=int(data.get("iteration", 0) or 0),
+        max_iterations=int(
+            data.get("maxIterations", data.get("max_iterations", 0)) or 0
+        ),
+        guidance=str(data.get("guidance", "") or ""),
     )
 
 
@@ -88,6 +96,8 @@ def meter_llm_usage(
     tokens_used: int,
     cost_usd: float,
     *,
+    request_id: Optional[str] = None,
+    iteration: Optional[int] = None,
     server_url: Optional[str] = None,
     token: Optional[str] = None,
     token_file: Optional[str] = None,
@@ -102,18 +112,22 @@ def meter_llm_usage(
         or DEFAULT_SERVER_URL
     )
     normalized_url = raw_url.rstrip("/")
-    if normalized_url.endswith(METER_ENDPOINT_PATH):
+    if normalized_url.endswith("/meter"):
         endpoint = normalized_url
     else:
         endpoint = f"{normalized_url}{METER_ENDPOINT_PATH}"
 
-    payload = json.dumps(
-        {
-            "model": model,
-            "tokensUsed": tokens_used,
-            "costUSD": cost_usd,
-        }
-    ).encode("utf-8")
+    body_dict: dict[str, Any] = {
+        "model": model,
+        "tokensUsed": tokens_used,
+        "costUSD": cost_usd,
+    }
+    if request_id:
+        body_dict["requestId"] = request_id
+    if iteration is not None:
+        body_dict["iteration"] = iteration
+
+    payload = json.dumps(body_dict).encode("utf-8")
 
     req = urllib.request.Request(
         endpoint,

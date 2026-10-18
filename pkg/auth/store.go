@@ -313,12 +313,24 @@ func (s *KubernetesSecretTokenStore) GetToken(ctx context.Context, taskID, names
 	if sec.Labels != nil && sec.Labels[LabelRevoked] == "true" {
 		return nil, ErrTokenRevoked
 	}
+	if s.isRevokedInIndex(ctx, taskID, namespace) {
+		return nil, ErrTokenRevoked
+	}
 
 	tok, ok := sec.Data["token"]
 	if !ok || len(tok) == 0 {
 		return nil, ErrTokenNotFound
 	}
 	return tok, nil
+}
+
+// isRevokedInIndex checks whether TokenIndexSecretName records taskID as revoked.
+func (s *KubernetesSecretTokenStore) isRevokedInIndex(ctx context.Context, taskID, namespace string) bool {
+	sec := &corev1.Secret{}
+	if err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: TokenIndexSecretName}, sec); err != nil {
+		return false
+	}
+	return sec.Annotations != nil && sec.Annotations[revokedIndexKey(taskID)] == "true"
 }
 
 // getTokenFromIndex reads a task's active or revoked token state from TokenIndexSecretName.
@@ -395,21 +407,20 @@ func (s *KubernetesSecretTokenStore) RevokeToken(ctx context.Context, taskID, na
 // IsRevoked inspects whether the token Secret (or TokenIndexSecretName when indexOnly is enabled) is marked revoked.
 func (s *KubernetesSecretTokenStore) IsRevoked(ctx context.Context, taskID, namespace string) bool {
 	if s.indexOnly {
-		sec := &corev1.Secret{}
-		if err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: TokenIndexSecretName}, sec); err != nil {
-			return false
-		}
-		return sec.Annotations != nil && sec.Annotations[revokedIndexKey(taskID)] == "true"
+		return s.isRevokedInIndex(ctx, taskID, namespace)
 	}
 	name := SecretName(taskID)
 	sec := &corev1.Secret{}
 	if err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, sec); err != nil {
-		return false
+		return s.isRevokedInIndex(ctx, taskID, namespace)
 	}
 	if !matchesTaskLabel(sec.Labels, taskID) {
 		return false
 	}
-	return sec.Labels[LabelRevoked] == "true"
+	if sec.Labels[LabelRevoked] == "true" {
+		return true
+	}
+	return s.isRevokedInIndex(ctx, taskID, namespace)
 }
 
 // upsertTokenIndex records or updates a task's active token in the namespace TokenIndexSecretName Secret.

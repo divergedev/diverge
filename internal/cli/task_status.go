@@ -76,6 +76,9 @@ func runTaskStatus(ctx context.Context, app *App, name, output string) error {
 		if task.Status.PRURL != "" {
 			_, _ = fmt.Fprintf(os.Stdout, "PR Link:      %s\n", task.Status.PRURL)
 		}
+		if task.Annotations != nil && task.Annotations[AnnotationGuidance] != "" {
+			_, _ = fmt.Fprintf(os.Stdout, "Guidance:     %s\n", task.Annotations[AnnotationGuidance])
+		}
 		if task.Status.Message != "" {
 			_, _ = fmt.Fprintf(os.Stdout, "Status Msg:   %s\n", task.Status.Message)
 		}

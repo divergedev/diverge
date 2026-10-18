@@ -5,6 +5,8 @@ export const DEFAULT_TOKEN_FILE = '/etc/diverge/token/token';
 export const METER_ENDPOINT_PATH = '/api/v1/agenttask/meter';
 
 export interface LLMMeterRequest {
+  requestId?: string;
+  iteration?: number;
   model: string;
   tokensUsed: number;
   costUSD: number;
@@ -16,6 +18,9 @@ export interface LLMMeterResponse {
   reason?: string;
   totalTokensUsed: number;
   totalCostUSD: number;
+  iteration?: number;
+  maxIterations?: number;
+  guidance?: string;
 }
 
 export interface LLMMeterOptions {
@@ -83,22 +88,30 @@ export async function meterLLMUsage(
     process.env.DIVERGE_SERVER_URL ||
     DEFAULT_SERVER_URL;
   const normalizedUrl = rawUrl.replace(/\/$/, '');
-  const endpoint = normalizedUrl.endsWith(METER_ENDPOINT_PATH)
+  const endpoint = normalizedUrl.endsWith('/meter')
     ? normalizedUrl
     : `${normalizedUrl}${METER_ENDPOINT_PATH}`;
 
   const fetchFn = opts?.fetchImpl ?? fetch;
+  const bodyObj: Record<string, unknown> = {
+    model: req.model,
+    tokensUsed: req.tokensUsed,
+    costUSD: req.costUSD,
+  };
+  if (req.requestId) {
+    bodyObj.requestId = req.requestId;
+  }
+  if (req.iteration !== undefined) {
+    bodyObj.iteration = req.iteration;
+  }
+
   const res = await fetchFn(endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({
-      model: req.model,
-      tokensUsed: req.tokensUsed,
-      costUSD: req.costUSD,
-    }),
+    body: JSON.stringify(bodyObj),
   });
 
   let data: LLMMeterResponse | undefined;

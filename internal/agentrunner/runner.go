@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -185,6 +186,8 @@ func LoadConfigFromEnv(getenv func(string) string) (*Config, error) {
 
 // MeterRequest matches internal/server.LLMMeterRequest JSON schema for POST /api/v1/agenttask/meter.
 type MeterRequest struct {
+	RequestID  string  `json:"requestId,omitempty"`
+	Iteration  int32   `json:"iteration,omitempty"`
 	Model      string  `json:"model"`
 	TokensUsed int64   `json:"tokensUsed"`
 	CostUSD    float64 `json:"costUSD"`
@@ -197,6 +200,9 @@ type MeterResponse struct {
 	Reason          string  `json:"reason,omitempty"`
 	TotalTokensUsed int64   `json:"totalTokensUsed"`
 	TotalCostUSD    float64 `json:"totalCostUSD"`
+	Iteration       int32   `json:"iteration,omitempty"`
+	MaxIterations   int32   `json:"maxIterations,omitempty"`
+	Guidance        string  `json:"guidance,omitempty"`
 }
 
 // CommandExecutor abstracts external command execution for testability.
@@ -296,7 +302,18 @@ func (r *Runner) ResolveToken() (string, error) {
 
 // ReportUsage reports token and cost consumption for an iteration to the Diverge metering endpoint.
 func (r *Runner) ReportUsage(ctx context.Context, token, model string, tokensUsed int64, costUSD float64) (*MeterResponse, error) {
+	return r.ReportUsageForIteration(ctx, 0, token, model, tokensUsed, costUSD)
+}
+
+// ReportUsageForIteration reports token, cost, and iteration consumption with a deterministic idempotency RequestID.
+func (r *Runner) ReportUsageForIteration(ctx context.Context, iter int, token, model string, tokensUsed int64, costUSD float64) (*MeterResponse, error) {
+	var reqID string
+	if iter > 0 && r.Config != nil && r.Config.TaskName != "" {
+		reqID = fmt.Sprintf("%s-iter-%d", r.Config.TaskName, iter)
+	}
 	payload := MeterRequest{
+		RequestID:  reqID,
+		Iteration:  int32(iter),
 		Model:      model,
 		TokensUsed: tokensUsed,
 		CostUSD:    costUSD,
@@ -399,10 +416,20 @@ func (r *Runner) Run(ctx context.Context) (*RunResult, error) {
 	for iter := 1; iter <= r.Config.MaxIterations; iter++ {
 		r.logf("starting iteration %d/%d", iter, r.Config.MaxIterations)
 
-		meterResp, err := r.ReportUsage(ctx, token, r.Config.Model, r.Config.TokensPerIteration, r.Config.CostPerIterationUSD)
+		if latestToken, tokErr := r.ResolveToken(); tokErr == nil && latestToken != "" {
+			token = latestToken
+		}
+
+		meterResp, err := r.ReportUsageForIteration(ctx, iter, token, r.Config.Model, r.Config.TokensPerIteration, r.Config.CostPerIterationUSD)
 		if meterResp != nil {
 			lastTokens = meterResp.TotalTokensUsed
 			lastCost = meterResp.TotalCostUSD
+			if liveGuidance := strings.TrimSpace(meterResp.Guidance); liveGuidance != "" {
+				r.Config.Guidance = liveGuidance
+				if r.Config.WorkspaceDir != "" {
+					_ = os.WriteFile(filepath.Join(r.Config.WorkspaceDir, ".diverge-guidance.md"), []byte(liveGuidance+"\n"), 0600)
+				}
+			}
 		}
 		failedResult := func() *RunResult {
 			return &RunResult{

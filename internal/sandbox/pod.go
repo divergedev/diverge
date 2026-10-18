@@ -84,6 +84,7 @@ func (p *PodSandboxProvider) Provision(ctx context.Context, task *v1alpha1.Agent
 		runtimeClassName = ptr(rc)
 	}
 
+	serverBaseURL := resolveServerBaseURL()
 	containerEnv := []corev1.EnvVar{
 		{Name: "DIVERGE_TASK_NAME", Value: task.Name},
 		{Name: "DIVERGE_TASK_NAMESPACE", Value: task.Namespace},
@@ -94,8 +95,8 @@ func (p *PodSandboxProvider) Provision(ctx context.Context, task *v1alpha1.Agent
 		{Name: "DIVERGE_BUDGET_USD", Value: task.Spec.BudgetUSD},
 		{Name: "DIVERGE_MAX_ITERATIONS", Value: strconv.Itoa(int(task.Spec.MaxIterations))},
 		{Name: "DIVERGE_TOKEN_FILE", Value: "/etc/diverge/token/token"},
-		{Name: "DIVERGE_MCP_URL", Value: "http://diverge-server.diverge-system.svc:8080/mcp"},
-		{Name: "DIVERGE_METER_URL", Value: "http://diverge-server.diverge-system.svc:8080/api/v1/agenttask/meter"},
+		{Name: "DIVERGE_MCP_URL", Value: serverBaseURL + "/mcp"},
+		{Name: "DIVERGE_METER_URL", Value: serverBaseURL + "/api/v1/agenttask/meter"},
 	}
 	if guidance := strings.TrimSpace(task.Annotations["divergedev.com/guidance"]); guidance != "" {
 		containerEnv = append(containerEnv, corev1.EnvVar{Name: "DIVERGE_GUIDANCE", Value: guidance})

@@ -351,14 +351,13 @@ func (p *MacaroonProvider) VerifyAndExtract(_ context.Context, raw []byte) (*Mac
 				claims.AllowedModels = newModels
 				hasAllowedModels = true
 			} else {
-				existingSet := make(map[string]bool, len(claims.AllowedModels))
-				for _, m := range claims.AllowedModels {
-					existingSet[m] = true
-				}
 				var narrowed []string
 				for _, m := range newModels {
-					if existingSet[m] {
-						narrowed = append(narrowed, m)
+					for _, existing := range claims.AllowedModels {
+						if MatchesAllowedModel(existing, m) {
+							narrowed = append(narrowed, m)
+							break
+						}
 					}
 				}
 				if len(narrowed) == 0 {
@@ -417,6 +416,28 @@ func (p *MacaroonProvider) VerifyAndExtract(_ context.Context, raw []byte) (*Mac
 	}
 
 	return &mac, claims, nil
+}
+
+// MatchesAllowedModel reports whether model is permitted by pattern (exact match, trailing '*' prefix match, or glob).
+func MatchesAllowedModel(pattern, model string) bool {
+	pattern = strings.TrimSpace(pattern)
+	model = strings.TrimSpace(model)
+	if pattern == "" || model == "" {
+		return false
+	}
+	if pattern == "*" || pattern == model {
+		return true
+	}
+	if strings.HasSuffix(pattern, "*") {
+		prefix := strings.TrimSuffix(pattern, "*")
+		if strings.HasPrefix(model, prefix) {
+			return true
+		}
+	}
+	if ok, err := filepath.Match(pattern, model); err == nil && ok {
+		return true
+	}
+	return false
 }
 
 // evaluateCaveat verifies that a single Caveat holds against the provided request Claims.
@@ -489,12 +510,15 @@ func evaluateCaveat(c Caveat, req Claims) error {
 			return fmt.Errorf("%w: token restricts allowed models to %q but no model was specified in request", ErrCaveatFailed, c.Value)
 		}
 		allowedList := strings.Split(c.Value, ",")
-		allowedMap := make(map[string]bool)
-		for _, m := range allowedList {
-			allowedMap[m] = true
-		}
 		for _, model := range req.AllowedModels {
-			if !allowedMap[model] {
+			matched := false
+			for _, allowedPat := range allowedList {
+				if MatchesAllowedModel(allowedPat, model) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
 				return fmt.Errorf("%w: model %q not in allowed models %v", ErrCaveatFailed, model, allowedList)
 			}
 		}

@@ -261,6 +261,13 @@ func FormatAgentTaskComment(task *v1alpha1.AgentTask, phaseBadge, reason string)
 	fmt.Fprintf(&b, "| **Working Branch** | `%s` |\n", sanitizeMarkdown(workingBranch))
 	fmt.Fprintf(&b, "| **Linked Preview** | %s |\n", previewCell)
 	fmt.Fprintf(&b, "| **LLM Usage** | %s |\n", llmUsage)
+	if task.Status.Iteration > 0 {
+		if task.Spec.MaxIterations > 0 {
+			fmt.Fprintf(&b, "| **Iterations** | %d / %d |\n", task.Status.Iteration, task.Spec.MaxIterations)
+		} else {
+			fmt.Fprintf(&b, "| **Iterations** | %d |\n", task.Status.Iteration)
+		}
+	}
 	if strings.TrimSpace(reason) != "" {
 		fmt.Fprintf(&b, "| **Failure Reason** | %s |\n", sanitizeMarkdown(reason))
 	}

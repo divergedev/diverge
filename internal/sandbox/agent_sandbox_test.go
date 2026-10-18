@@ -165,6 +165,8 @@ func TestBuildSandboxClaimSpec(t *testing.T) {
 	assert.Equal(t, "8.00", envMap["DIVERGE_BUDGET_USD"])
 	assert.Equal(t, "12", envMap["DIVERGE_MAX_ITERATIONS"])
 	assert.Equal(t, "/etc/diverge/token/token", envMap["DIVERGE_TOKEN_FILE"])
+	assert.Contains(t, envMap["DIVERGE_MCP_URL"], "/mcp")
+	assert.Contains(t, envMap["DIVERGE_METER_URL"], "/api/v1/agenttask/meter")
 
 	// Assert securityContext & volumes
 	assert.Equal(t, false, tmplSpec["automountServiceAccountToken"])
@@ -184,7 +186,7 @@ func TestBuildSandboxClaimSpec(t *testing.T) {
 
 	volumes, ok := tmplSpec["volumes"].([]interface{})
 	require.True(t, ok)
-	assert.Len(t, volumes, 2)
+	assert.Len(t, volumes, 3)
 
 	// 4. Long task name (>63 chars) must produce a valid <=63-char label value
 	longName := "agent-task-with-very-long-name-exceeding-sixty-three-characters-limit-1234567890"
@@ -201,6 +203,42 @@ func TestBuildSandboxClaimSpec(t *testing.T) {
 	labelsLong := metaLong["labels"].(map[string]interface{})
 	labelVal := labelsLong["divergedev.com/agent-task"].(string)
 	assert.Equal(t, 63, len(labelVal))
+}
+
+func TestAgentSandboxProvider_SuspendAndResume(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	_ = v1alpha1.AddToScheme(scheme)
+
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	p := NewAgentSandboxProvider(fakeClient, nil, scheme)
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "task-suspend",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective: "Test suspend and resume",
+		},
+	}
+
+	res, err := p.Provision(ctx, task)
+	require.NoError(t, err)
+	task.Status.SandboxClaimRef = res.ClaimName
+
+	require.NoError(t, p.Suspend(ctx, task))
+
+	claim := &unstructured.Unstructured{}
+	claim.SetGroupVersionKind(sandboxClaimGVK)
+	require.NoError(t, fakeClient.Get(ctx, client.ObjectKey{Namespace: "default", Name: res.ClaimName}, claim))
+	mode, _, _ := unstructured.NestedString(claim.Object, "spec", "operatingMode")
+	assert.Equal(t, "Suspended", mode)
+
+	require.NoError(t, p.Resume(ctx, task))
+	require.NoError(t, fakeClient.Get(ctx, client.ObjectKey{Namespace: "default", Name: res.ClaimName}, claim))
+	mode, _, _ = unstructured.NestedString(claim.Object, "spec", "operatingMode")
+	assert.Equal(t, "Running", mode)
 }
 
 func TestAgentSandboxProvider_FallbackToPodOnNoMatchError(t *testing.T) {

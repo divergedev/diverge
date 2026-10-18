@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	"connectrpc.com/connect"
@@ -320,6 +321,15 @@ func (s *AgentTaskService) PauseTask(ctx context.Context, req *connect.Request[p
 	}), nil
 }
 
+func normalizeBudgetBumpString(raw string) string {
+	s := strings.TrimSpace(raw)
+	s = strings.TrimPrefix(s, "+")
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "$")
+	s = strings.TrimPrefix(s, "+")
+	return strings.TrimSpace(s)
+}
+
 // ResumeTask resumes execution of a paused AgentTask with optional budget bumps.
 func (s *AgentTaskService) ResumeTask(ctx context.Context, req *connect.Request[pb.ResumeTaskRequest]) (*connect.Response[pb.ResumeTaskResponse], error) {
 	msg := req.Msg
@@ -340,9 +350,10 @@ func (s *AgentTaskService) ResumeTask(ctx context.Context, req *connect.Request[
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("budget_tokens_bump must be non-negative"))
 	}
 	var bumpUSD float64
-	if msg.BudgetUsdBump != "" {
+	cleanBump := normalizeBudgetBumpString(msg.BudgetUsdBump)
+	if cleanBump != "" {
 		var err error
-		bumpUSD, err = strconv.ParseFloat(msg.BudgetUsdBump, 64)
+		bumpUSD, err = strconv.ParseFloat(cleanBump, 64)
 		if err != nil || math.IsNaN(bumpUSD) || math.IsInf(bumpUSD, 0) || bumpUSD <= 0 {
 			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("budget_usd_bump must be a positive number"))
 		}
@@ -359,8 +370,8 @@ func (s *AgentTaskService) ResumeTask(ctx context.Context, req *connect.Request[
 			return err
 		}
 		task.Spec.Suspended = false
-		if msg.BudgetUsdBump != "" {
-			existing, err := strconv.ParseFloat(task.Spec.BudgetUSD, 64)
+		if cleanBump != "" {
+			existing, err := strconv.ParseFloat(normalizeBudgetBumpString(task.Spec.BudgetUSD), 64)
 			if err == nil && !math.IsNaN(existing) && !math.IsInf(existing, 0) {
 				task.Spec.BudgetUSD = fmt.Sprintf("%.2f", existing+bumpUSD)
 			} else {
@@ -369,6 +380,9 @@ func (s *AgentTaskService) ResumeTask(ctx context.Context, req *connect.Request[
 		}
 		if msg.BudgetTokensBump > 0 {
 			task.Spec.BudgetTokens += msg.BudgetTokensBump
+		}
+		if task.Spec.MaxIterations > 0 && task.Status.Iteration >= task.Spec.MaxIterations {
+			task.Spec.MaxIterations = task.Status.Iteration + 5
 		}
 		if err := s.client.Update(ctx, task); err != nil {
 			return err

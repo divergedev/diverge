@@ -285,3 +285,74 @@ func TestAgentTaskPreview_CustomPortAndSandboxIP(t *testing.T) {
 	assert.Equal(t, int32(3000), env.Spec.ServiceConfig.Port)
 	assert.Equal(t, "10.244.1.42", env.Annotations["divergedev.com/sandbox-ip"])
 }
+
+func TestAgentTaskPreview_HibernationOnPauseAndResume(t *testing.T) {
+	ctx := context.Background()
+	s := newAgentTaskTestScheme(t)
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "hibernate-task",
+			Namespace: "default",
+			UID:       "uid-hibernate-task",
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective: "Test preview hibernation on pause and resume",
+			Repository: v1alpha1.AgentTaskRepository{
+				URL:           "https://github.com/org/repo",
+				WorkingBranch: "agent/hibernate-task",
+			},
+			Sandbox: v1alpha1.AgentTaskSandbox{
+				Provider: "noop",
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(task).
+		WithStatusSubresource(&v1alpha1.AgentTask{}, &v1alpha1.Environment{}).
+		Build()
+
+	reconciler := &AgentTaskReconciler{
+		Client:          c,
+		Scheme:          s,
+		SandboxRegistry: pkgsandbox.Providers,
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: task.Name, Namespace: task.Namespace}}
+
+	// 1. Add finalizer + provision sandbox and linked preview environment
+	_, err := reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+
+	expectedEnvName := linkedPreviewEnvironmentName(task.Name)
+	var env v1alpha1.Environment
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: expectedEnvName, Namespace: "default"}, &env))
+	assert.Empty(t, env.Annotations["divergedev.com/hibernated"])
+
+	// 2. Pause task via Spec.Suspended = true -> linked Environment gets divergedev.com/hibernated=true
+	var updatedTask v1alpha1.AgentTask
+	require.NoError(t, c.Get(ctx, req.NamespacedName, &updatedTask))
+	updatedTask.Spec.Suspended = true
+	require.NoError(t, c.Update(ctx, &updatedTask))
+
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: expectedEnvName, Namespace: "default"}, &env))
+	assert.Equal(t, "true", env.Annotations["divergedev.com/hibernated"])
+
+	// 3. Resume task via Spec.Suspended = false -> divergedev.com/hibernated annotation is removed
+	require.NoError(t, c.Get(ctx, req.NamespacedName, &updatedTask))
+	updatedTask.Spec.Suspended = false
+	require.NoError(t, c.Update(ctx, &updatedTask))
+
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: expectedEnvName, Namespace: "default"}, &env))
+	assert.Empty(t, env.Annotations["divergedev.com/hibernated"])
+}

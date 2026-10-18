@@ -403,3 +403,91 @@ func TestLLMMeterHandler_PerTaskLocking(t *testing.T) {
 	assert.NotSame(t, muA1, muB, "different taskIDs should use distinct mutexes")
 	assert.NotSame(t, muA1, muOtherNS, "different namespaces should use distinct mutexes")
 }
+
+func TestLLMMeterHandler_IdempotencyWildcardIterationAndGuidance(t *testing.T) {
+	ctx := context.Background()
+	crdClient, verifier, store, handler := setupLLMMeterTest(t)
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "task-idempotent",
+			Namespace: "default",
+			Annotations: map[string]string{
+				"divergedev.com/guidance": "Use mock database in unit tests",
+			},
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective:     "Test idempotency and wildcard model",
+			BudgetUSD:     "5.00",
+			BudgetTokens:  100000,
+			MaxIterations: 2,
+			Capabilities:  []string{"claude-sonnet-4*"},
+			Repository: v1alpha1.AgentTaskRepository{
+				URL: "https://github.com/divergedev/diverge",
+			},
+		},
+	}
+	require.NoError(t, crdClient.Create(ctx, task))
+
+	token := mintTestMeterToken(t, verifier, store, pkgauth.Claims{
+		TaskID:        "task-idempotent",
+		Namespace:     "default",
+		AllowedModels: []string{"claude-sonnet-4*"},
+		MaxCostUSD:    5.00,
+		MaxTokens:     100000,
+		ExpiresAt:     time.Now().Add(time.Hour),
+	})
+
+	// 1. Wildcard model "claude-sonnet-4-20250514" with RequestID "req-1" and Iteration 1
+	body1, _ := json.Marshal(LLMMeterRequest{
+		RequestID:  "req-1",
+		Iteration:  1,
+		Model:      "claude-sonnet-4-20250514",
+		TokensUsed: 5000,
+		CostUSD:    0.20,
+	})
+	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/agenttask/meter", bytes.NewReader(body1))
+	req1.Header.Set("Authorization", "Bearer "+token)
+	rec1 := httptest.NewRecorder()
+	handler.ServeHTTP(rec1, req1)
+	require.Equal(t, http.StatusOK, rec1.Code)
+	var resp1 LLMMeterResponse
+	require.NoError(t, json.NewDecoder(rec1.Body).Decode(&resp1))
+	assert.True(t, resp1.Allowed)
+	assert.Equal(t, int64(5000), resp1.TotalTokensUsed)
+	assert.InDelta(t, 0.20, resp1.TotalCostUSD, 0.0001)
+	assert.Equal(t, int32(1), resp1.Iteration)
+	assert.Equal(t, int32(2), resp1.MaxIterations)
+	assert.Equal(t, "Use mock database in unit tests", resp1.Guidance)
+
+	// 2. Duplicate RequestID "req-1" is idempotent and does NOT double-count tokens/cost/iteration
+	reqDup := httptest.NewRequest(http.MethodPost, "/api/v1/agenttask/meter", bytes.NewReader(body1))
+	reqDup.Header.Set("Authorization", "Bearer "+token)
+	recDup := httptest.NewRecorder()
+	handler.ServeHTTP(recDup, reqDup)
+	require.Equal(t, http.StatusOK, recDup.Code)
+	var respDup LLMMeterResponse
+	require.NoError(t, json.NewDecoder(recDup.Body).Decode(&respDup))
+	assert.Equal(t, int64(5000), respDup.TotalTokensUsed)
+	assert.InDelta(t, 0.20, respDup.TotalCostUSD, 0.0001)
+	assert.Equal(t, int32(1), respDup.Iteration)
+
+	// 3. Exceeding MaxIterations (Iteration 3 > MaxIterations 2) pauses and suspends task
+	body3, _ := json.Marshal(LLMMeterRequest{
+		RequestID:  "req-3",
+		Iteration:  3,
+		Model:      "claude-sonnet-4-20250514",
+		TokensUsed: 5000,
+		CostUSD:    0.20,
+	})
+	req3 := httptest.NewRequest(http.MethodPost, "/api/v1/agenttask/meter", bytes.NewReader(body3))
+	req3.Header.Set("Authorization", "Bearer "+token)
+	rec3 := httptest.NewRecorder()
+	handler.ServeHTTP(rec3, req3)
+	require.Equal(t, http.StatusTooManyRequests, rec3.Code)
+	var resp3 LLMMeterResponse
+	require.NoError(t, json.NewDecoder(rec3.Body).Decode(&resp3))
+	assert.False(t, resp3.Allowed)
+	assert.True(t, resp3.Suspended)
+	assert.Equal(t, "max iterations exceeded", resp3.Reason)
+}

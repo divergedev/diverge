@@ -148,6 +148,13 @@ type SandboxSnapshotter interface {
 	Restore(ctx context.Context, task *v1alpha1.AgentTask, snapshotID string) error
 }
 
+// SandboxSuspender is an optional interface implemented by providers that can
+// suspend and resume sandbox compute in-place without destroying workspace state.
+type SandboxSuspender interface {
+	Suspend(ctx context.Context, task *v1alpha1.AgentTask) error
+	Resume(ctx context.Context, task *v1alpha1.AgentTask) error
+}
+
 // Capability represents optional features supported by a SandboxProvider.
 type Capability string
 
@@ -159,6 +166,7 @@ const (
 	CapPools        Capability = "pools"
 	CapMetrics      Capability = "metrics"
 	CapSnapshot     Capability = "snapshot"
+	CapSuspend      Capability = "suspend"
 )
 
 // CapabilityDetector allows callers to discover supported features on a provider.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -11,6 +12,15 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+func normalizeTaskBudgetArg(raw string) string {
+	s := strings.TrimSpace(raw)
+	s = strings.TrimPrefix(s, "+")
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "$")
+	s = strings.TrimPrefix(s, "+")
+	return strings.TrimSpace(s)
+}
 
 // TaskClient unifies all agent task operations behind a testable, decoupled interface.
 type TaskClient interface {
@@ -96,21 +106,29 @@ func (c *KubeTaskClient) Resume(ctx context.Context, namespace, name string, bud
 		return err
 	}
 	task.Spec.Suspended = false
-	if budgetUSD != "" {
+	cleanBump := normalizeTaskBudgetArg(budgetUSD)
+	if cleanBump != "" {
 		if task.Spec.BudgetUSD == "" {
-			task.Spec.BudgetUSD = budgetUSD
+			if bump, err := strconv.ParseFloat(cleanBump, 64); err == nil {
+				task.Spec.BudgetUSD = fmt.Sprintf("%.2f", bump)
+			} else {
+				task.Spec.BudgetUSD = cleanBump
+			}
 		} else {
-			existing, err1 := strconv.ParseFloat(task.Spec.BudgetUSD, 64)
-			bump, err2 := strconv.ParseFloat(budgetUSD, 64)
+			existing, err1 := strconv.ParseFloat(normalizeTaskBudgetArg(task.Spec.BudgetUSD), 64)
+			bump, err2 := strconv.ParseFloat(cleanBump, 64)
 			if err1 == nil && err2 == nil {
 				task.Spec.BudgetUSD = fmt.Sprintf("%.2f", existing+bump)
 			} else {
-				task.Spec.BudgetUSD = budgetUSD
+				task.Spec.BudgetUSD = cleanBump
 			}
 		}
 	}
 	if tokens > 0 {
 		task.Spec.BudgetTokens += tokens
+	}
+	if task.Spec.MaxIterations > 0 && task.Status.Iteration >= task.Spec.MaxIterations {
+		task.Spec.MaxIterations = task.Status.Iteration + 5
 	}
 	if err := c.client.Update(ctx, task); err != nil {
 		return fmt.Errorf("resume AgentTask %s: %w", name, err)
@@ -222,21 +240,29 @@ func (m *MockTaskClient) Resume(_ context.Context, namespace, name string, budge
 		return fmt.Errorf("agent task %q not found", name)
 	}
 	task.Spec.Suspended = false
-	if budgetUSD != "" {
+	cleanBump := normalizeTaskBudgetArg(budgetUSD)
+	if cleanBump != "" {
 		if task.Spec.BudgetUSD == "" {
-			task.Spec.BudgetUSD = budgetUSD
+			if bump, err := strconv.ParseFloat(cleanBump, 64); err == nil {
+				task.Spec.BudgetUSD = fmt.Sprintf("%.2f", bump)
+			} else {
+				task.Spec.BudgetUSD = cleanBump
+			}
 		} else {
-			existing, err1 := strconv.ParseFloat(task.Spec.BudgetUSD, 64)
-			bump, err2 := strconv.ParseFloat(budgetUSD, 64)
+			existing, err1 := strconv.ParseFloat(normalizeTaskBudgetArg(task.Spec.BudgetUSD), 64)
+			bump, err2 := strconv.ParseFloat(cleanBump, 64)
 			if err1 == nil && err2 == nil {
 				task.Spec.BudgetUSD = fmt.Sprintf("%.2f", existing+bump)
 			} else {
-				task.Spec.BudgetUSD = budgetUSD
+				task.Spec.BudgetUSD = cleanBump
 			}
 		}
 	}
 	if tokens > 0 {
 		task.Spec.BudgetTokens += tokens
+	}
+	if task.Spec.MaxIterations > 0 && task.Status.Iteration >= task.Spec.MaxIterations {
+		task.Spec.MaxIterations = task.Status.Iteration + 5
 	}
 	return nil
 }

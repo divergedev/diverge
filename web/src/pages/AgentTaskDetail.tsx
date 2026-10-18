@@ -114,7 +114,7 @@ export default function AgentTaskDetail() {
 
   const handleResume = async () => {
     setMutationError(null)
-    const trimmedBump = budgetUsdBump.trim()
+    const trimmedBump = budgetUsdBump.trim().replace(/^[+$]+/, '').trim()
     if (trimmedBump) {
       const parsedBump = Number(trimmedBump)
       if (!Number.isFinite(parsedBump) || parsedBump <= 0) {

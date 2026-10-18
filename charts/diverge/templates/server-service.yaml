@@ -13,6 +13,12 @@ spec:
       targetPort: grpc
       protocol: TCP
       name: grpc
+    {{- if ne (int .Values.server.service.port) 8080 }}
+    - port: 8080
+      targetPort: grpc
+      protocol: TCP
+      name: http-compat
+    {{- end }}
     - port: 9090
       targetPort: metrics
       protocol: TCP
