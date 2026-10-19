@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 
@@ -36,6 +37,14 @@ func isCRDUnavailableError(err error) bool {
 	return meta.IsNoMatchError(err) || runtime.IsNotRegisteredError(err)
 }
 
+// resolveServerBaseURL returns the base URL for diverge-server reachable from inside sandbox pods.
+func resolveServerBaseURL() string {
+	if raw := strings.TrimSpace(os.Getenv("DIVERGE_SERVER_URL")); raw != "" {
+		return strings.TrimRight(raw, "/")
+	}
+	return "http://diverge-server.diverge-system.svc:8080"
+}
+
 // AgentSandboxProvider integrates with the Kubernetes Agent Sandbox (SIG Apps) controller.
 type AgentSandboxProvider struct {
 	client    client.Client
@@ -43,7 +52,10 @@ type AgentSandboxProvider struct {
 	scheme    *runtime.Scheme
 }
 
-var _ pkgsandbox.SandboxProvider = (*AgentSandboxProvider)(nil)
+var (
+	_ pkgsandbox.SandboxProvider  = (*AgentSandboxProvider)(nil)
+	_ pkgsandbox.SandboxSuspender = (*AgentSandboxProvider)(nil)
+)
 
 // NewAgentSandboxProvider initializes a new AgentSandboxProvider.
 func NewAgentSandboxProvider(c client.Client, cs kubernetes.Interface, scheme *runtime.Scheme) *AgentSandboxProvider {
@@ -124,6 +136,48 @@ func (p *AgentSandboxProvider) Teardown(ctx context.Context, task *v1alpha1.Agen
 	return nil
 }
 
+// Suspend sets spec.operatingMode = "Suspended" on the SandboxClaim without destroying workspace state.
+func (p *AgentSandboxProvider) Suspend(ctx context.Context, task *v1alpha1.AgentTask) error {
+	return p.setOperatingMode(ctx, task, "Suspended")
+}
+
+// Resume sets spec.operatingMode = "Running" on the SandboxClaim.
+func (p *AgentSandboxProvider) Resume(ctx context.Context, task *v1alpha1.AgentTask) error {
+	return p.setOperatingMode(ctx, task, "Running")
+}
+
+func (p *AgentSandboxProvider) setOperatingMode(ctx context.Context, task *v1alpha1.AgentTask, mode string) error {
+	claimName := fmt.Sprintf("sb-claim-%s", task.Name)
+	claim := &unstructured.Unstructured{}
+	claim.SetGroupVersionKind(sandboxClaimGVK)
+	if err := p.client.Get(ctx, client.ObjectKey{Namespace: task.Namespace, Name: claimName}, claim); err != nil {
+		if isCRDUnavailableError(err) || (apierrors.IsNotFound(err) && task.Status.SandboxClaimRef == SandboxPodName(task.Name)) {
+			podProvider := NewPodSandboxProvider(p.client, p.clientset, p.scheme)
+			if mode == "Suspended" {
+				return podProvider.Suspend(ctx, task)
+			}
+			return podProvider.Resume(ctx, task)
+		}
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("get SandboxClaim %s: %w", claimName, err)
+	}
+	specMap, _ := claim.Object["spec"].(map[string]interface{})
+	if specMap == nil {
+		specMap = map[string]interface{}{}
+	}
+	if specMap["operatingMode"] == mode {
+		return nil
+	}
+	specMap["operatingMode"] = mode
+	claim.Object["spec"] = specMap
+	if err := p.client.Update(ctx, claim); err != nil {
+		return fmt.Errorf("update SandboxClaim %s operatingMode=%s: %w", claimName, mode, err)
+	}
+	return nil
+}
+
 // Status inspects the SandboxClaim and resolves its bound pod and phase.
 func (p *AgentSandboxProvider) Status(ctx context.Context, task *v1alpha1.AgentTask) (*pkgsandbox.SandboxStatus, error) {
 	claimName := fmt.Sprintf("sb-claim-%s", task.Name)
@@ -199,6 +253,7 @@ func (p *AgentSandboxProvider) StreamLogs(ctx context.Context, task *v1alpha1.Ag
 	}
 
 	podLogOpts := &corev1.PodLogOptions{
+		Container:  "agent",
 		Follow:     opts.Follow,
 		Timestamps: opts.Timestamps,
 	}
@@ -264,7 +319,18 @@ func BuildSandboxClaimSpec(task *v1alpha1.AgentTask) map[string]interface{} {
 		baseBranch = "main"
 	}
 
+	serverBaseURL := resolveServerBaseURL()
+	previewEnvName := strings.TrimSpace(task.Annotations["divergedev.com/preview-environment"])
+	if previewEnvName == "" {
+		previewEnvName = fmt.Sprintf("agent-preview-%s", pkgauth.TaskLabelValue(task.Name))
+	}
 	envVars := []interface{}{
+		map[string]interface{}{"name": "HOME", "value": "/tmp"},
+		map[string]interface{}{"name": "GIT_CONFIG_GLOBAL", "value": "/tmp/.gitconfig"},
+		map[string]interface{}{"name": "GIT_AUTHOR_NAME", "value": "Diverge Agent"},
+		map[string]interface{}{"name": "GIT_AUTHOR_EMAIL", "value": "agent@divergedev.com"},
+		map[string]interface{}{"name": "GIT_COMMITTER_NAME", "value": "Diverge Agent"},
+		map[string]interface{}{"name": "GIT_COMMITTER_EMAIL", "value": "agent@divergedev.com"},
 		map[string]interface{}{"name": "DIVERGE_TASK_NAME", "value": task.Name},
 		map[string]interface{}{"name": "DIVERGE_TASK_NAMESPACE", "value": task.Namespace},
 		map[string]interface{}{"name": "DIVERGE_OBJECTIVE", "value": task.Spec.Objective},
@@ -274,8 +340,15 @@ func BuildSandboxClaimSpec(task *v1alpha1.AgentTask) map[string]interface{} {
 		map[string]interface{}{"name": "DIVERGE_BUDGET_USD", "value": task.Spec.BudgetUSD},
 		map[string]interface{}{"name": "DIVERGE_MAX_ITERATIONS", "value": strconv.Itoa(int(task.Spec.MaxIterations))},
 		map[string]interface{}{"name": "DIVERGE_TOKEN_FILE", "value": "/etc/diverge/token/token"},
+		map[string]interface{}{"name": "DIVERGE_MCP_URL", "value": serverBaseURL + "/mcp"},
+		map[string]interface{}{"name": "DIVERGE_METER_URL", "value": serverBaseURL + "/api/v1/agenttask/meter"},
+		map[string]interface{}{"name": "DIVERGE_PREVIEW_HEADER_KEY", "value": "x-diverge-env"},
+		map[string]interface{}{"name": "DIVERGE_PREVIEW_HEADER_VALUE", "value": previewEnvName},
 	}
 
+	if previewURL := strings.TrimSpace(task.Annotations["divergedev.com/preview-url"]); previewURL != "" {
+		envVars = append(envVars, map[string]interface{}{"name": "DIVERGE_PREVIEW_URL", "value": previewURL})
+	}
 	if guidance := strings.TrimSpace(task.Annotations["divergedev.com/guidance"]); guidance != "" {
 		envVars = append(envVars, map[string]interface{}{"name": "DIVERGE_GUIDANCE", "value": guidance})
 	}
@@ -317,6 +390,10 @@ func BuildSandboxClaimSpec(task *v1alpha1.AgentTask) map[string]interface{} {
 							"mountPath": "/workspace",
 						},
 						map[string]interface{}{
+							"name":      "tmp",
+							"mountPath": "/tmp",
+						},
+						map[string]interface{}{
 							"name":      "token",
 							"mountPath": "/etc/diverge/token",
 							"readOnly":  true,
@@ -332,10 +409,17 @@ func BuildSandboxClaimSpec(task *v1alpha1.AgentTask) map[string]interface{} {
 					},
 				},
 				map[string]interface{}{
+					"name": "tmp",
+					"emptyDir": map[string]interface{}{
+						"sizeLimit": "1Gi",
+					},
+				},
+				map[string]interface{}{
 					"name": "token",
 					"secret": map[string]interface{}{
 						"secretName":  pkgauth.SecretName(task.Name),
 						"defaultMode": int64(0400),
+						"optional":    true,
 					},
 				},
 			},

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 
@@ -21,7 +22,24 @@ import (
 	pkgsandbox "github.com/divergedev/diverge/pkg/sandbox"
 )
 
-const agentTaskFinalizer = "divergedev.com/agenttask-finalizer"
+const (
+	agentTaskFinalizer    = "divergedev.com/agenttask-finalizer"
+	annotationActiveSince = "divergedev.com/active-since"
+)
+
+func activeStartTime(task *v1alpha1.AgentTask) time.Time {
+	if task == nil {
+		return time.Time{}
+	}
+	if task.Annotations != nil {
+		if raw := task.Annotations[annotationActiveSince]; raw != "" {
+			if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
+				return parsed
+			}
+		}
+	}
+	return task.CreationTimestamp.Time
+}
 
 // TaskNotifier notifies external observers when an AgentTask changes phases.
 type TaskNotifier interface {
@@ -160,7 +178,7 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// 3. Dynamic Feature Gate Check
 	if r.FeatureGate != nil && !r.FeatureGate.IsEnabled(ctx, "agent_sandbox") {
 		if task.Status.Phase != v1alpha1.AgentTaskPhasePaused {
-			patch := client.MergeFrom(task.DeepCopy())
+			patch := client.MergeFromWithOptions(task.DeepCopy(), client.MergeFromWithOptimisticLock{})
 			task.Status.Phase = v1alpha1.AgentTaskPhasePaused
 			task.Status.Message = "Agent sandbox execution paused: feature gate 'agent_sandbox' is disabled"
 			if err := r.Status().Patch(ctx, task, patch); err != nil {
@@ -172,16 +190,35 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// 4. Handle Suspended State
 	if task.Spec.Suspended {
+		if provider, err := r.resolveSandboxProvider(task); err == nil && provider != nil {
+			if suspender, ok := provider.(pkgsandbox.SandboxSuspender); ok {
+				if err := suspender.Suspend(ctx, task); err != nil {
+					return ctrl.Result{}, err
+				}
+			} else if task.Spec.Sandbox.Provider == "pod" || task.Spec.Sandbox.Provider == "k8s-pod" {
+				if err := provider.Teardown(ctx, task); err != nil {
+					return ctrl.Result{}, err
+				}
+			}
+		}
+		if err := r.setLinkedPreviewEnvironmentHibernated(ctx, task, true); err != nil {
+			return ctrl.Result{}, err
+		}
 		if task.Status.Phase != v1alpha1.AgentTaskPhasePaused {
-			patch := client.MergeFrom(task.DeepCopy())
+			patch := client.MergeFromWithOptions(task.DeepCopy(), client.MergeFromWithOptimisticLock{})
 			oldPhase := task.Status.Phase
 			task.Status.Phase = v1alpha1.AgentTaskPhasePaused
-			task.Status.Message = "Task execution paused by spec.suspended"
-			if r.Notifier != nil && oldPhase != task.Status.Phase {
-				_ = r.Notifier.NotifyPhaseChange(ctx, task, oldPhase, task.Status.Phase)
+			if task.Status.Message == "" || task.Status.Message == "Sandbox active and ready" || task.Status.Message == "Task resumed and active" {
+				task.Status.Message = "Task execution paused by spec.suspended"
+			}
+			if task.Spec.Sandbox.Provider == "pod" || task.Spec.Sandbox.Provider == "k8s-pod" {
+				task.Status.SandboxPodName = ""
 			}
 			if err := r.Status().Patch(ctx, task, patch); err != nil {
 				return ctrl.Result{}, err
+			}
+			if r.Notifier != nil && oldPhase != task.Status.Phase {
+				_ = r.Notifier.NotifyPhaseChange(ctx, task, oldPhase, task.Status.Phase)
 			}
 		}
 		if err := r.revokeToken(ctx, task, "paused by spec.suspended"); err != nil {
@@ -193,14 +230,14 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// 5. Resolve Sandbox Provider
 	provider, err := r.resolveSandboxProvider(task)
 	if err != nil {
-		patch := client.MergeFrom(task.DeepCopy())
+		patch := client.MergeFromWithOptions(task.DeepCopy(), client.MergeFromWithOptimisticLock{})
 		oldPhase := task.Status.Phase
 		task.Status.Phase = v1alpha1.AgentTaskPhaseFailed
 		task.Status.Message = fmt.Sprintf("Failed to resolve sandbox provider: %v", err)
+		_ = r.Status().Patch(ctx, task, patch)
 		if r.Notifier != nil && oldPhase != task.Status.Phase {
 			_ = r.Notifier.NotifyPhaseChange(ctx, task, oldPhase, task.Status.Phase)
 		}
-		_ = r.Status().Patch(ctx, task, patch)
 		return ctrl.Result{}, err
 	}
 
@@ -210,7 +247,7 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		logger.Info("Provisioning sandbox for AgentTask", "task", task.Name)
 
 		if err := r.mintAndSaveToken(ctx, task); err != nil {
-			patch := client.MergeFrom(task.DeepCopy())
+			patch := client.MergeFromWithOptions(task.DeepCopy(), client.MergeFromWithOptimisticLock{})
 			task.Status.Phase = v1alpha1.AgentTaskPhasePending
 			task.Status.Message = fmt.Sprintf("Token provisioning failed (retrying): %v", err)
 			_ = r.Status().Patch(ctx, task, patch)
@@ -225,7 +262,7 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 		res, err := provider.Provision(ctx, task)
 		if err != nil {
-			patch := client.MergeFrom(task.DeepCopy())
+			patch := client.MergeFromWithOptions(task.DeepCopy(), client.MergeFromWithOptimisticLock{})
 			task.Status.Phase = v1alpha1.AgentTaskPhasePending
 			task.Status.Message = fmt.Sprintf("Provisioning failed (retrying): %v", err)
 			_ = r.Status().Patch(ctx, task, patch)
@@ -249,18 +286,18 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		}
 		baseTask.ObjectMeta = *task.ObjectMeta.DeepCopy()
 
-		patch := client.MergeFrom(baseTask)
+		patch := client.MergeFromWithOptions(baseTask, client.MergeFromWithOptimisticLock{})
 		if res.Ready {
 			task.Status.Phase = v1alpha1.AgentTaskPhaseActive
 		} else {
 			task.Status.Phase = v1alpha1.AgentTaskPhaseProvisioning
 		}
-		if r.Notifier != nil && oldPhase != task.Status.Phase {
-			_ = r.Notifier.NotifyPhaseChange(ctx, task, oldPhase, task.Status.Phase)
-		}
 
 		if err := r.Status().Patch(ctx, task, patch); err != nil {
 			return ctrl.Result{}, err
+		}
+		if r.Notifier != nil && oldPhase != task.Status.Phase {
+			_ = r.Notifier.NotifyPhaseChange(ctx, task, oldPhase, task.Status.Phase)
 		}
 		return ctrl.Result{RequeueAfter: 3 * time.Second}, nil
 
@@ -269,6 +306,10 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		if err != nil {
 			logger.Error(err, "Error polling sandbox status")
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+
+		if handled, res, termErr := r.handleTerminalSandboxPhase(ctx, task, sbStatus); handled {
+			return res, termErr
 		}
 
 		baseTask := task.DeepCopy()
@@ -280,17 +321,17 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			logger.Error(err, "Failed to reconcile linked preview environment")
 		}
 		baseTask.ObjectMeta = *task.ObjectMeta.DeepCopy()
-		patch := client.MergeFrom(baseTask)
+		patch := client.MergeFromWithOptions(baseTask, client.MergeFromWithOptimisticLock{})
 		if sbStatus.Ready {
 			task.Status.Phase = v1alpha1.AgentTaskPhaseActive
 			task.Status.Message = "Sandbox active and ready"
 		}
-		if r.Notifier != nil && oldPhase != task.Status.Phase {
-			_ = r.Notifier.NotifyPhaseChange(ctx, task, oldPhase, task.Status.Phase)
-		}
 
 		if err := r.Status().Patch(ctx, task, patch); err != nil {
 			return ctrl.Result{}, err
+		}
+		if r.Notifier != nil && oldPhase != task.Status.Phase {
+			_ = r.Notifier.NotifyPhaseChange(ctx, task, oldPhase, task.Status.Phase)
 		}
 		if !sbStatus.Ready {
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
@@ -298,24 +339,26 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 
 	case v1alpha1.AgentTaskPhaseActive:
-		// Check sandbox execution timeout
-		if task.Spec.Sandbox.TimeoutSeconds > 0 && !task.CreationTimestamp.IsZero() {
-			if time.Since(task.CreationTimestamp.Time) > time.Duration(task.Spec.Sandbox.TimeoutSeconds)*time.Second {
+		// Check sandbox execution timeout from active start time (or CreationTimestamp)
+		startTime := activeStartTime(task)
+		if task.Spec.Sandbox.TimeoutSeconds > 0 && !startTime.IsZero() {
+			if time.Since(startTime) > time.Duration(task.Spec.Sandbox.TimeoutSeconds)*time.Second {
 				if err := provider.Teardown(ctx, task); err != nil {
 					logger.Error(err, "Failed to teardown timed-out sandbox")
 					_ = r.revokeToken(ctx, task, "sandbox timeout exceeded")
 					return ctrl.Result{RequeueAfter: 5 * time.Second}, err
 				}
-				patch := client.MergeFrom(task.DeepCopy())
+				patch := client.MergeFromWithOptions(task.DeepCopy(), client.MergeFromWithOptimisticLock{})
 				oldPhase := task.Status.Phase
 				task.Status.Phase = v1alpha1.AgentTaskPhaseFailed
 				task.Status.Message = fmt.Sprintf("Sandbox execution timed out after %ds", task.Spec.Sandbox.TimeoutSeconds)
-				if r.Notifier != nil && oldPhase != task.Status.Phase {
-					_ = r.Notifier.NotifyPhaseChange(ctx, task, oldPhase, task.Status.Phase)
-				}
 				if err := r.Status().Patch(ctx, task, patch); err != nil {
 					return ctrl.Result{}, err
 				}
+				if r.Notifier != nil && oldPhase != task.Status.Phase {
+					_ = r.Notifier.NotifyPhaseChange(ctx, task, oldPhase, task.Status.Phase)
+				}
+				_ = r.setLinkedPreviewEnvironmentHibernated(ctx, task, true)
 				if err := r.revokeToken(ctx, task, "sandbox timeout exceeded"); err != nil {
 					return ctrl.Result{}, err
 				}
@@ -325,15 +368,30 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 		// Check iteration, USD budget, and token budget limits
 		if exceeded, reason := r.checkBudgetOrIterationLimit(task); exceeded {
-			patch := client.MergeFrom(task.DeepCopy())
+			if suspender, ok := provider.(pkgsandbox.SandboxSuspender); ok {
+				if err := suspender.Suspend(ctx, task); err != nil {
+					return ctrl.Result{}, err
+				}
+			} else if task.Spec.Sandbox.Provider == "pod" || task.Spec.Sandbox.Provider == "k8s-pod" {
+				if err := provider.Teardown(ctx, task); err != nil {
+					return ctrl.Result{}, err
+				}
+			}
+			if err := r.setLinkedPreviewEnvironmentHibernated(ctx, task, true); err != nil {
+				return ctrl.Result{}, err
+			}
+			patch := client.MergeFromWithOptions(task.DeepCopy(), client.MergeFromWithOptimisticLock{})
 			oldPhase := task.Status.Phase
 			task.Status.Phase = v1alpha1.AgentTaskPhasePaused
 			task.Status.Message = reason
-			if r.Notifier != nil && oldPhase != task.Status.Phase {
-				_ = r.Notifier.NotifyPhaseChange(ctx, task, oldPhase, task.Status.Phase)
+			if task.Spec.Sandbox.Provider == "pod" || task.Spec.Sandbox.Provider == "k8s-pod" {
+				task.Status.SandboxPodName = ""
 			}
 			if err := r.Status().Patch(ctx, task, patch); err != nil {
 				return ctrl.Result{}, err
+			}
+			if r.Notifier != nil && oldPhase != task.Status.Phase {
+				_ = r.Notifier.NotifyPhaseChange(ctx, task, oldPhase, task.Status.Phase)
 			}
 			if err := r.revokeToken(ctx, task, reason); err != nil {
 				return ctrl.Result{}, err
@@ -341,8 +399,18 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			return ctrl.Result{}, nil
 		}
 
-		// Periodic health check and linked preview environment sync
+		// Re-mint token if budgetUSD or budgetTokens was bumped while Active (e.g. via /diverge budget)
+		if err := r.ensureActiveTokenMatchesSpec(ctx, task); err != nil {
+			logger.Error(err, "Failed to refresh token after spec budget update")
+		}
+
+		// Periodic health check, terminal sandbox detection, and linked preview environment sync
 		sbStatus, err := provider.Status(ctx, task)
+		if err == nil && sbStatus != nil {
+			if handled, res, termErr := r.handleTerminalSandboxPhase(ctx, task, sbStatus); handled {
+				return res, termErr
+			}
+		}
 		baseTask := task.DeepCopy()
 		if err == nil && sbStatus != nil {
 			if sbStatus.PodName != "" {
@@ -356,7 +424,7 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			logger.Error(err, "Failed to reconcile linked preview environment")
 		}
 		baseTask.ObjectMeta = *task.ObjectMeta.DeepCopy()
-		patch := client.MergeFrom(baseTask)
+		patch := client.MergeFromWithOptions(baseTask, client.MergeFromWithOptimisticLock{})
 
 		_ = r.Status().Patch(ctx, task, patch)
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
@@ -369,12 +437,40 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 				}
 				return ctrl.Result{}, nil
 			}
-			patch := client.MergeFrom(task.DeepCopy())
+			if task.Spec.Sandbox.TimeoutSeconds > 0 && !task.CreationTimestamp.IsZero() &&
+				time.Since(task.CreationTimestamp.Time) > time.Duration(task.Spec.Sandbox.TimeoutSeconds)*time.Second {
+				metaPatch := client.MergeFrom(task.DeepCopy())
+				if task.Annotations == nil {
+					task.Annotations = make(map[string]string)
+				}
+				task.Annotations[annotationActiveSince] = time.Now().UTC().Format(time.RFC3339)
+				savedStatus := task.Status.DeepCopy()
+				if err := r.Patch(ctx, task, metaPatch); err != nil {
+					return ctrl.Result{}, err
+				}
+				restoreReconcilerStatus(task, savedStatus)
+			}
+			if err := r.setLinkedPreviewEnvironmentHibernated(ctx, task, false); err != nil {
+				return ctrl.Result{}, err
+			}
+			patch := client.MergeFromWithOptions(task.DeepCopy(), client.MergeFromWithOptimisticLock{})
 			oldPhase := task.Status.Phase
+			if task.Status.SandboxPodName != "" {
+				if sbStatus, sbErr := provider.Status(ctx, task); sbErr == nil && sbStatus != nil {
+					if sbStatus.Phase == "Failed" || sbStatus.Phase == "Succeeded" || sbStatus.Message == "Sandbox pod not found" || sbStatus.Message == "SandboxClaim not found" {
+						task.Status.SandboxPodName = ""
+					}
+				}
+			}
 			if task.Status.SandboxPodName != "" {
 				// Re-mint capability token with updated budget/token limits and fresh expiry
 				if err := r.mintAndSaveToken(ctx, task); err != nil {
 					return ctrl.Result{}, err
+				}
+				if suspender, ok := provider.(pkgsandbox.SandboxSuspender); ok {
+					if err := suspender.Resume(ctx, task); err != nil {
+						return ctrl.Result{}, err
+					}
 				}
 				task.Status.Phase = v1alpha1.AgentTaskPhaseActive
 				task.Status.Message = "Task resumed and active"
@@ -382,11 +478,12 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 				task.Status.Phase = v1alpha1.AgentTaskPhasePending
 				task.Status.Message = "Task resumed, awaiting provisioning"
 			}
-			if r.Notifier != nil && oldPhase != task.Status.Phase {
-				_ = r.Notifier.NotifyPhaseChange(ctx, task, oldPhase, task.Status.Phase)
-			}
+			task.Status.LastMeterRequestIDs = nil
 			if err := r.Status().Patch(ctx, task, patch); err != nil {
 				return ctrl.Result{}, err
+			}
+			if r.Notifier != nil && oldPhase != task.Status.Phase {
+				_ = r.Notifier.NotifyPhaseChange(ctx, task, oldPhase, task.Status.Phase)
 			}
 			return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
 		}
@@ -402,10 +499,75 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	return ctrl.Result{}, nil
 }
 
+func (r *AgentTaskReconciler) handleTerminalSandboxPhase(ctx context.Context, task *v1alpha1.AgentTask, sbStatus *pkgsandbox.SandboxStatus) (bool, ctrl.Result, error) {
+	if sbStatus == nil || (sbStatus.Phase != "Succeeded" && sbStatus.Phase != "Failed") {
+		return false, ctrl.Result{}, nil
+	}
+	patch := client.MergeFromWithOptions(task.DeepCopy(), client.MergeFromWithOptimisticLock{})
+	oldPhase := task.Status.Phase
+	if sbStatus.PodName != "" {
+		task.Status.SandboxPodName = sbStatus.PodName
+	}
+	if sbStatus.PodIP != "" {
+		task.Status.SandboxIP = sbStatus.PodIP
+	}
+	var revokeReason string
+	if sbStatus.Phase == "Succeeded" {
+		task.Status.Phase = v1alpha1.AgentTaskPhaseCompleted
+		task.Status.Message = "Agent task completed successfully"
+		revokeReason = "task completed"
+	} else {
+		task.Status.Phase = v1alpha1.AgentTaskPhaseFailed
+		if sbStatus.Message != "" {
+			task.Status.Message = sbStatus.Message
+		} else {
+			task.Status.Message = "Sandbox execution failed"
+		}
+		revokeReason = "task failed"
+	}
+	if err := r.Status().Patch(ctx, task, patch); err != nil {
+		return true, ctrl.Result{}, err
+	}
+	if r.Notifier != nil && oldPhase != task.Status.Phase {
+		_ = r.Notifier.NotifyPhaseChange(ctx, task, oldPhase, task.Status.Phase)
+	}
+	_ = r.setLinkedPreviewEnvironmentHibernated(ctx, task, true)
+	if err := r.revokeToken(ctx, task, revokeReason); err != nil {
+		return true, ctrl.Result{}, err
+	}
+	return true, ctrl.Result{}, nil
+}
+
+func (r *AgentTaskReconciler) ensureActiveTokenMatchesSpec(ctx context.Context, task *v1alpha1.AgentTask) error {
+	verifier, ok := r.TokenMinter.(*auth.MacaroonProvider)
+	if !ok || verifier == nil {
+		return nil
+	}
+	store := r.resolveTokenStore()
+	rawTok, err := store.GetToken(ctx, task.Name, task.Namespace)
+	if err != nil {
+		return r.mintAndSaveToken(ctx, task)
+	}
+	_, claims, err := verifier.VerifyAndExtract(ctx, rawTok)
+	if err != nil {
+		return r.mintAndSaveToken(ctx, task)
+	}
+	var specCost float64
+	if task.Spec.BudgetUSD != "" {
+		if parsed, parseErr := strconv.ParseFloat(task.Spec.BudgetUSD, 64); parseErr == nil {
+			specCost = parsed
+		}
+	}
+	if claims.MaxTokens != task.Spec.BudgetTokens || math.Abs(claims.MaxCostUSD-specCost) > 1e-6 {
+		return r.mintAndSaveToken(ctx, task)
+	}
+	return nil
+}
+
 // checkBudgetOrIterationLimit reports whether the AgentTask has reached its configured
 // maxIterations, budgetUSD, or budgetTokens limit and returns the human-readable pause reason.
 func (r *AgentTaskReconciler) checkBudgetOrIterationLimit(task *v1alpha1.AgentTask) (bool, string) {
-	if task.Spec.MaxIterations > 0 && task.Status.Iteration >= task.Spec.MaxIterations {
+	if task.Spec.MaxIterations > 0 && task.Status.Iteration > task.Spec.MaxIterations {
 		return true, fmt.Sprintf("Reached max iterations limit (%d); paused", task.Spec.MaxIterations)
 	}
 	if task.Spec.BudgetUSD != "" && task.Status.CostUSD != "" {
@@ -450,6 +612,7 @@ func (r *AgentTaskReconciler) mintAndSaveToken(ctx context.Context, task *v1alph
 			"diverge_loadtest",
 			"diverge_visual_test",
 			"diverge_get_task",
+			"diverge_list_tasks",
 		},
 		AllowedModels: task.Spec.Capabilities,
 		MaxTokens:     task.Spec.BudgetTokens,

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	"connectrpc.com/connect"
@@ -255,6 +256,9 @@ func (s *AgentTaskService) DeleteTask(ctx context.Context, req *connect.Request[
 	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "delete", namespace, "agenttasks"); err != nil {
 		return nil, err
 	}
+	if err := AuthorizeTaskObjectAccess(ctx, s.auditLogger, "delete", namespace, msg.Name); err != nil {
+		return nil, err
+	}
 
 	task := &v1alpha1.AgentTask{
 		ObjectMeta: metav1.ObjectMeta{
@@ -293,6 +297,9 @@ func (s *AgentTaskService) PauseTask(ctx context.Context, req *connect.Request[p
 	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "update", namespace, "agenttasks"); err != nil {
 		return nil, err
 	}
+	if err := AuthorizeTaskObjectAccess(ctx, s.auditLogger, "update", namespace, msg.Name); err != nil {
+		return nil, err
+	}
 
 	var updatedTask *v1alpha1.AgentTask
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -320,6 +327,15 @@ func (s *AgentTaskService) PauseTask(ctx context.Context, req *connect.Request[p
 	}), nil
 }
 
+func normalizeBudgetBumpString(raw string) string {
+	s := strings.TrimSpace(raw)
+	s = strings.TrimPrefix(s, "+")
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "$")
+	s = strings.TrimPrefix(s, "+")
+	return strings.TrimSpace(s)
+}
+
 // ResumeTask resumes execution of a paused AgentTask with optional budget bumps.
 func (s *AgentTaskService) ResumeTask(ctx context.Context, req *connect.Request[pb.ResumeTaskRequest]) (*connect.Response[pb.ResumeTaskResponse], error) {
 	msg := req.Msg
@@ -340,15 +356,22 @@ func (s *AgentTaskService) ResumeTask(ctx context.Context, req *connect.Request[
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("budget_tokens_bump must be non-negative"))
 	}
 	var bumpUSD float64
-	if msg.BudgetUsdBump != "" {
+	cleanBump := normalizeBudgetBumpString(msg.BudgetUsdBump)
+	if strings.TrimSpace(msg.BudgetUsdBump) != "" && cleanBump == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("budget_usd_bump must be a positive number"))
+	}
+	if cleanBump != "" {
 		var err error
-		bumpUSD, err = strconv.ParseFloat(msg.BudgetUsdBump, 64)
+		bumpUSD, err = strconv.ParseFloat(cleanBump, 64)
 		if err != nil || math.IsNaN(bumpUSD) || math.IsInf(bumpUSD, 0) || bumpUSD <= 0 {
 			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("budget_usd_bump must be a positive number"))
 		}
 	}
 
 	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "update", namespace, "agenttasks"); err != nil {
+		return nil, err
+	}
+	if err := AuthorizeTaskObjectAccess(ctx, s.auditLogger, "update", namespace, msg.Name); err != nil {
 		return nil, err
 	}
 
@@ -359,8 +382,8 @@ func (s *AgentTaskService) ResumeTask(ctx context.Context, req *connect.Request[
 			return err
 		}
 		task.Spec.Suspended = false
-		if msg.BudgetUsdBump != "" {
-			existing, err := strconv.ParseFloat(task.Spec.BudgetUSD, 64)
+		if cleanBump != "" {
+			existing, err := strconv.ParseFloat(normalizeBudgetBumpString(task.Spec.BudgetUSD), 64)
 			if err == nil && !math.IsNaN(existing) && !math.IsInf(existing, 0) {
 				task.Spec.BudgetUSD = fmt.Sprintf("%.2f", existing+bumpUSD)
 			} else {
@@ -370,6 +393,9 @@ func (s *AgentTaskService) ResumeTask(ctx context.Context, req *connect.Request[
 		if msg.BudgetTokensBump > 0 {
 			task.Spec.BudgetTokens += msg.BudgetTokensBump
 		}
+		if task.Spec.MaxIterations > 0 && task.Status.Iteration >= task.Spec.MaxIterations {
+			task.Spec.MaxIterations = task.Status.Iteration + 5
+		}
 		if err := s.client.Update(ctx, task); err != nil {
 			return err
 		}
@@ -378,6 +404,36 @@ func (s *AgentTaskService) ResumeTask(ctx context.Context, req *connect.Request[
 	})
 	if err != nil {
 		return nil, SanitizeK8sError(s.logger, err)
+	}
+
+	if updatedTask.Status.Message != "" || len(updatedTask.Status.LastMeterRequestIDs) > 0 {
+		statusErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			latest := &v1alpha1.AgentTask{}
+			if err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: msg.Name}, latest); err != nil {
+				return err
+			}
+			if latest.Status.Message == "" && len(latest.Status.LastMeterRequestIDs) == 0 {
+				updatedTask = latest
+				return nil
+			}
+			latest.Status.Message = ""
+			latest.Status.LastMeterRequestIDs = nil
+			if err := s.client.Status().Update(ctx, latest); err != nil {
+				if apierrors.IsNotFound(err) {
+					if uErr := s.client.Update(ctx, latest); uErr != nil {
+						return uErr
+					}
+					updatedTask = latest
+					return nil
+				}
+				return err
+			}
+			updatedTask = latest
+			return nil
+		})
+		if statusErr != nil {
+			return nil, SanitizeK8sError(s.logger, statusErr)
+		}
 	}
 
 	if s.auditLogger != nil {
@@ -407,6 +463,9 @@ func (s *AgentTaskService) GuideTask(ctx context.Context, req *connect.Request[p
 	}
 
 	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "update", namespace, "agenttasks"); err != nil {
+		return nil, err
+	}
+	if err := AuthorizeTaskObjectAccess(ctx, s.auditLogger, "update", namespace, msg.Name); err != nil {
 		return nil, err
 	}
 
@@ -499,7 +558,8 @@ func (s *AgentTaskService) StreamTaskLogs(
 	}
 
 	logOpts := &corev1.PodLogOptions{
-		Follow: msg.Follow,
+		Container: "agent",
+		Follow:    msg.Follow,
 	}
 	if msg.TailLines > 0 {
 		logOpts.TailLines = &msg.TailLines
@@ -508,7 +568,7 @@ func (s *AgentTaskService) StreamTaskLogs(
 	reqStream := s.k8sClient.CoreV1().Pods(namespace).GetLogs(podName, logOpts)
 	readCloser, err := reqStream.Stream(ctx)
 	if err != nil {
-		return connect.NewError(connect.CodeInternal, fmt.Errorf("open pod log stream: %w", err))
+		return SanitizeK8sError(s.logger, err)
 	}
 	defer func() { _ = readCloser.Close() }()
 

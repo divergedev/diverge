@@ -284,6 +284,9 @@ func executeGuideCommand(ctx context.Context, c client.Client, ns, guidance, rep
 	var matchedTasks []*v1alpha1.AgentTask
 	for i := range taskList.Items {
 		task := &taskList.Items[i]
+		if task.Status.Phase == v1alpha1.AgentTaskPhaseCompleted || task.Status.Phase == v1alpha1.AgentTaskPhaseFailed {
+			continue
+		}
 		if matchesTaskPR(task, repoURL, prNumber, prStr) {
 			matchedTasks = append(matchedTasks, task)
 		}
@@ -306,9 +309,9 @@ func executeGuideCommand(ctx context.Context, c client.Client, ns, guidance, rep
 	}
 
 	if len(matchedTasks) == 1 {
-		return fmt.Sprintf("🧭 **Guidance saved** to agent task `%s`:\n\n> %s\n\nThis guidance will be used when a new sandbox is created.", matchedTasks[0].Name, guidance), nil
+		return fmt.Sprintf("🧭 **Guidance saved** to agent task `%s`:\n\n> %s\n\nThis guidance will be delivered to the agent on its next iteration.", matchedTasks[0].Name, guidance), nil
 	}
-	return fmt.Sprintf("🧭 **Guidance saved** to %d agent tasks:\n\n> %s\n\nThis guidance will be used when new sandboxes are created.", len(matchedTasks), guidance), nil
+	return fmt.Sprintf("🧭 **Guidance saved** to %d agent tasks:\n\n> %s\n\nThis guidance will be delivered to the agents on their next iteration.", len(matchedTasks), guidance), nil
 }
 
 func executePreviewCommand(ctx context.Context, c client.Client, ns, repoURL, branch string, prNumber int) (string, error) {
@@ -377,7 +380,23 @@ func executeTeardownCommand(ctx context.Context, c client.Client, ns, repoURL st
 		}
 	}
 
-	feedback := fmt.Sprintf("🧹 **Teardown requested**: Cleaned up %d preview environment(s) and %d preview group(s) for this PR/MR.", len(envs), len(pgs))
+	var taskList v1alpha1.AgentTaskList
+	if err := c.List(ctx, &taskList, client.InNamespace(ns)); err != nil {
+		return "", err
+	}
+	prStr := strconv.Itoa(prNumber)
+	deletedTasks := 0
+	for i := range taskList.Items {
+		task := &taskList.Items[i]
+		if matchesTaskPR(task, repoURL, prNumber, prStr) {
+			if err := client.IgnoreNotFound(c.Delete(ctx, task)); err != nil {
+				return "", err
+			}
+			deletedTasks++
+		}
+	}
+
+	feedback := fmt.Sprintf("🧹 **Teardown requested**: Cleaned up %d preview environment(s), %d preview group(s), and %d agent task(s) for this PR/MR.", len(envs), len(pgs), deletedTasks)
 	return feedback, nil
 }
 
@@ -456,8 +475,16 @@ func executeSuspendTaskCommand(ctx context.Context, c client.Client, ns, repoURL
 		if !suspend && tokens > 0 {
 			task.Spec.BudgetTokens += tokens
 		}
+		if !suspend && task.Spec.MaxIterations > 0 && task.Status.Iteration >= task.Spec.MaxIterations {
+			task.Spec.MaxIterations = task.Status.Iteration + 5
+		}
 		if err := c.Update(ctx, task); err != nil {
 			return "", err
+		}
+		if !suspend && (task.Status.Message != "" || len(task.Status.LastMeterRequestIDs) > 0) {
+			task.Status.Message = ""
+			task.Status.LastMeterRequestIDs = nil
+			_ = c.Status().Update(ctx, task)
 		}
 	}
 

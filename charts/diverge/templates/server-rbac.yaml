@@ -9,7 +9,7 @@ metadata:
     app.kubernetes.io/component: server
 rules:
   - apiGroups: ["divergedev.com"]
-    resources: ["environments", "previewgroups", "agenttasks"]
+    resources: ["environments", "environments/status", "previewgroups", "previewgroups/status", "agenttasks", "agenttasks/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -80,11 +80,11 @@ rules:
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["get", "list", "delete"]
-  {{- if and .Values.sandbox .Values.sandbox.macaroonSecretRef .Values.sandbox.macaroonSecretRef.name }}
+  {{- if and .Values.sandbox .Values.sandbox.enabled }}
   - apiGroups: [""]
     resources: ["secrets"]
     resourceNames: ["diverge-agenttask-tokens"]
-    verbs: ["get", "update"]
+    verbs: ["get", "update", "patch"]
   {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -128,11 +128,11 @@ rules:
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["get", "list", "delete"]
-  {{- if and $.Values.sandbox $.Values.sandbox.macaroonSecretRef $.Values.sandbox.macaroonSecretRef.name }}
+  {{- if and $.Values.sandbox $.Values.sandbox.enabled }}
   - apiGroups: [""]
     resources: ["secrets"]
     resourceNames: ["diverge-agenttask-tokens"]
-    verbs: ["get", "update"]
+    verbs: ["get", "update", "patch"]
   {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1

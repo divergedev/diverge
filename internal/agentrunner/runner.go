@@ -3,6 +3,8 @@ package agentrunner
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -59,6 +62,7 @@ type Config struct {
 	VerifyCommand       string
 	Guidance            string
 	Model               string
+	RunID               string
 	TokensPerIteration  int64
 	CostPerIterationUSD float64
 }
@@ -178,6 +182,7 @@ func LoadConfigFromEnv(getenv func(string) string) (*Config, error) {
 		VerifyCommand:       strings.TrimSpace(getenv("DIVERGE_VERIFY_CMD")),
 		Guidance:            strings.TrimSpace(getenv("DIVERGE_GUIDANCE")),
 		Model:               model,
+		RunID:               strings.TrimSpace(getenv("DIVERGE_RUN_ID")),
 		TokensPerIteration:  tokensPerIteration,
 		CostPerIterationUSD: costPerIterationUSD,
 	}, nil
@@ -185,6 +190,8 @@ func LoadConfigFromEnv(getenv func(string) string) (*Config, error) {
 
 // MeterRequest matches internal/server.LLMMeterRequest JSON schema for POST /api/v1/agenttask/meter.
 type MeterRequest struct {
+	RequestID  string  `json:"requestId,omitempty"`
+	Iteration  int32   `json:"iteration,omitempty"`
 	Model      string  `json:"model"`
 	TokensUsed int64   `json:"tokensUsed"`
 	CostUSD    float64 `json:"costUSD"`
@@ -197,6 +204,10 @@ type MeterResponse struct {
 	Reason          string  `json:"reason,omitempty"`
 	TotalTokensUsed int64   `json:"totalTokensUsed"`
 	TotalCostUSD    float64 `json:"totalCostUSD"`
+	Iteration       int32   `json:"iteration,omitempty"`
+	MaxIterations   int32   `json:"maxIterations,omitempty"`
+	Guidance        string  `json:"guidance,omitempty"`
+	PreviewURL      string  `json:"previewUrl,omitempty"`
 }
 
 // CommandExecutor abstracts external command execution for testability.
@@ -239,6 +250,7 @@ type Runner struct {
 	Exec       CommandExecutor
 	HTTPClient *http.Client
 	Logger     io.Writer
+	runID      string
 }
 
 // NewRunner constructs a Runner with default OSCommandExecutor and HTTPClient.
@@ -296,7 +308,29 @@ func (r *Runner) ResolveToken() (string, error) {
 
 // ReportUsage reports token and cost consumption for an iteration to the Diverge metering endpoint.
 func (r *Runner) ReportUsage(ctx context.Context, token, model string, tokensUsed int64, costUSD float64) (*MeterResponse, error) {
+	return r.ReportUsageForIteration(ctx, 0, token, model, tokensUsed, costUSD)
+}
+
+// ReportUsageForIteration reports token, cost, and iteration consumption with a deterministic idempotency RequestID.
+func (r *Runner) ReportUsageForIteration(ctx context.Context, iter int, token, model string, tokensUsed int64, costUSD float64) (*MeterResponse, error) {
+	var reqID string
+	if iter > 0 && r.Config != nil && r.Config.TaskName != "" {
+		if r.runID == "" {
+			if r.Config.RunID != "" {
+				r.runID = r.Config.RunID
+			} else {
+				nonce := make([]byte, 16)
+				if _, err := rand.Read(nonce); err != nil {
+					return nil, fmt.Errorf("generate run ID: %w", err)
+				}
+				r.runID = hex.EncodeToString(nonce)
+			}
+		}
+		reqID = fmt.Sprintf("%s-%s-iter-%d", r.Config.TaskName, r.runID, iter)
+	}
 	payload := MeterRequest{
+		RequestID:  reqID,
+		Iteration:  int32(iter),
 		Model:      model,
 		TokensUsed: tokensUsed,
 		CostUSD:    costUSD,
@@ -339,6 +373,28 @@ func (r *Runner) ReportUsage(ctx context.Context, token, model string, tokensUse
 	return &meterResp, nil
 }
 
+// ensureGitExcludeGuidance appends guidance file patterns to .git/info/exclude when a .git directory exists
+// so live steering instructions are never staged by git add -A.
+func ensureGitExcludeGuidance(workspaceDir string) {
+	gitDir := filepath.Join(workspaceDir, ".git")
+	info, err := os.Stat(gitDir)
+	if err != nil || !info.IsDir() {
+		return
+	}
+	infoDir := filepath.Join(gitDir, "info")
+	_ = os.MkdirAll(infoDir, 0755)
+	excludePath := filepath.Join(infoDir, "exclude")
+	existing, _ := os.ReadFile(excludePath)
+	content := string(existing)
+	if !strings.Contains(content, ".diverge-guidance.md") {
+		if len(content) > 0 && !strings.HasSuffix(content, "\n") {
+			content += "\n"
+		}
+		content += ".diverge-guidance.md\n.diverge/guidance.md\n"
+		_ = os.WriteFile(excludePath, []byte(content), 0600)
+	}
+}
+
 // CheckPreviewHealth probes the ephemeral preview URL (if configured) with the Diverge isolation header.
 func (r *Runner) CheckPreviewHealth(ctx context.Context) error {
 	if r.Config == nil || r.Config.PreviewURL == "" {
@@ -372,6 +428,7 @@ func (r *Runner) Run(ctx context.Context) (*RunResult, error) {
 	if r.Config == nil {
 		return nil, errors.New("runner config is nil")
 	}
+	r.runID = ""
 
 	token, err := r.ResolveToken()
 	if err != nil {
@@ -399,10 +456,31 @@ func (r *Runner) Run(ctx context.Context) (*RunResult, error) {
 	for iter := 1; iter <= r.Config.MaxIterations; iter++ {
 		r.logf("starting iteration %d/%d", iter, r.Config.MaxIterations)
 
-		meterResp, err := r.ReportUsage(ctx, token, r.Config.Model, r.Config.TokensPerIteration, r.Config.CostPerIterationUSD)
+		if latestToken, tokErr := r.ResolveToken(); tokErr == nil && latestToken != "" {
+			token = latestToken
+		}
+
+		meterResp, err := r.ReportUsageForIteration(ctx, iter, token, r.Config.Model, r.Config.TokensPerIteration, r.Config.CostPerIterationUSD)
 		if meterResp != nil {
 			lastTokens = meterResp.TotalTokensUsed
 			lastCost = meterResp.TotalCostUSD
+			if meterResp.MaxIterations > 0 {
+				r.Config.MaxIterations = int(meterResp.MaxIterations)
+			}
+			if strings.TrimSpace(meterResp.PreviewURL) != "" {
+				r.Config.PreviewURL = strings.TrimSpace(meterResp.PreviewURL)
+			}
+			if liveGuidance := strings.TrimSpace(meterResp.Guidance); liveGuidance != "" {
+				r.Config.Guidance = liveGuidance
+				if r.Config.WorkspaceDir != "" {
+					ensureGitExcludeGuidance(r.Config.WorkspaceDir)
+					_ = os.WriteFile(filepath.Join(r.Config.WorkspaceDir, ".diverge-guidance.md"), []byte(liveGuidance+"\n"), 0600)
+					divergeDir := filepath.Join(r.Config.WorkspaceDir, ".diverge")
+					if mkErr := os.MkdirAll(divergeDir, 0755); mkErr == nil {
+						_ = os.WriteFile(filepath.Join(divergeDir, "guidance.md"), []byte(liveGuidance+"\n"), 0600)
+					}
+				}
+			}
 		}
 		failedResult := func() *RunResult {
 			return &RunResult{

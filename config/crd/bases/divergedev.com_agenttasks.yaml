@@ -210,6 +210,13 @@ spec:
                 description: Iteration tracks the current autonomous loop cycle.
                 format: int32
                 type: integer
+              lastMeterRequestIds:
+                description: |-
+                  LastMeterRequestIDs stores a bounded ring buffer (max 32 entries) of recently processed
+                  LLM meter request IDs to guarantee idempotency across retries and server replicas.
+                items:
+                  type: string
+                type: array
               message:
                 description: Message is human-readable status or diagnostic text.
                 type: string

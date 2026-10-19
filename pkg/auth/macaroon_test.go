@@ -447,3 +447,91 @@ func encodeHex(b []byte) string {
 	}
 	return string(dst)
 }
+
+func TestMacaroonModelGlobAndPrefixMatching(t *testing.T) {
+	ctx := context.Background()
+	rootKey := []byte("0123456789abcdef0123456789abcdef")
+	provider := NewMacaroonProvider(rootKey)
+
+	tok, err := provider.Mint(ctx, Claims{
+		TaskID:        "task-model-glob",
+		Namespace:     "default",
+		AllowedModels: []string{"claude-sonnet-*", "gemini-2.5-*"},
+	})
+	require.NoError(t, err)
+
+	raw, err := tok.Serialize()
+	require.NoError(t, err)
+
+	// Prefix/glob match succeeds
+	require.NoError(t, provider.Verify(ctx, raw, Claims{
+		TaskID:        "task-model-glob",
+		Namespace:     "default",
+		AllowedModels: []string{"claude-sonnet-4-20250514", "gemini-2.5-pro"},
+	}))
+
+	// Unmatched model fails
+	err = provider.Verify(ctx, raw, Claims{
+		TaskID:        "task-model-glob",
+		Namespace:     "default",
+		AllowedModels: []string{"gpt-4o"},
+	})
+	assert.ErrorIs(t, err, ErrCaveatFailed)
+
+	// Attenuating from wildcard pattern to specific model succeeds in VerifyAndExtract
+	attenuated, err := provider.Attenuate(ctx, tok, Caveat{
+		Key:   "allowed_models",
+		Op:    OpIn,
+		Value: "claude-sonnet-4-20250514",
+	})
+	require.NoError(t, err)
+	attRaw, err := attenuated.Serialize()
+	require.NoError(t, err)
+	_, extracted, err := provider.VerifyAndExtract(ctx, attRaw)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"claude-sonnet-4-20250514"}, extracted.AllowedModels)
+
+	// Capability tier aliases ("fast", "smart", "lite") match standard model names
+	tierTok, err := provider.Mint(ctx, Claims{
+		TaskID:        "task-tier-alias",
+		Namespace:     "default",
+		AllowedModels: []string{"fast", "smart"},
+		MaxCostUSD:    0.004,
+	})
+	require.NoError(t, err)
+	tierRaw, err := tierTok.Serialize()
+	require.NoError(t, err)
+	_, tierExtracted, err := provider.VerifyAndExtract(ctx, tierRaw)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.004, tierExtracted.MaxCostUSD, 0.0001)
+	assert.True(t, MatchesAllowedModel("fast", "claude-3-7-sonnet"))
+	assert.True(t, MatchesAllowedModel("smart", "claude-sonnet-4-6"))
+	assert.True(t, MatchesAllowedModel("smart", "gpt-4o"))
+	assert.True(t, MatchesAllowedModel("lite", "gemini-2.5-flash-lite"))
+
+	// Short root key (< 32 bytes) is rejected by Mint, Verify, and VerifyAndExtract
+	shortProvider := NewMacaroonProvider([]byte("short-key"))
+	_, err = shortProvider.Mint(ctx, Claims{TaskID: "t1", Namespace: "default"})
+	assert.Error(t, err)
+	assert.ErrorIs(t, shortProvider.Verify(ctx, tierRaw, Claims{TaskID: "task-tier-alias"}), ErrInvalidSignature)
+	_, _, err = shortProvider.VerifyAndExtract(ctx, tierRaw)
+	assert.ErrorIs(t, err, ErrInvalidSignature)
+
+	// Regression test: attenuating gpt-4? to broader gpt-4* must be rejected
+	qTok, err := provider.Mint(ctx, Claims{
+		TaskID:        "task-qmark",
+		Namespace:     "default",
+		AllowedModels: []string{"gpt-4?"},
+	})
+	require.NoError(t, err)
+	broadened, err := provider.Attenuate(ctx, qTok, Caveat{
+		Key:   "allowed_models",
+		Op:    OpIn,
+		Value: "gpt-4*",
+	})
+	require.NoError(t, err)
+	broadenedRaw, err := broadened.Serialize()
+	require.NoError(t, err)
+	_, _, err = provider.VerifyAndExtract(ctx, broadenedRaw)
+	assert.ErrorIs(t, err, ErrCaveatFailed)
+}

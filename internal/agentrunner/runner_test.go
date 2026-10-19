@@ -645,3 +645,108 @@ func TestRunner_Run_VerifyCommandReceivesPreviewHeaderEnv(t *testing.T) {
 		}
 	}
 }
+
+func TestRunner_Run_TokenRotationAndLiveGuidance(t *testing.T) {
+	t.Setenv("DIVERGE_MACAROON_TOKEN", "")
+	tokenPath := writeTempToken(t, "token-v1")
+	workspaceDir := t.TempDir()
+
+	var (
+		meterCalls  int
+		authHeaders []string
+		meterReqs   []MeterRequest
+	)
+
+	meterSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		meterCalls++
+		authHeaders = append(authHeaders, r.Header.Get("Authorization"))
+		var req MeterRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode meter req: %v", err)
+		}
+		meterReqs = append(meterReqs, req)
+
+		guidance := ""
+		if meterCalls == 2 {
+			guidance = "Switch to mock Redis client"
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(MeterResponse{
+			Allowed:         true,
+			TotalTokensUsed: int64(meterCalls) * 2500,
+			TotalCostUSD:    float64(meterCalls) * 0.05,
+			Iteration:       int32(meterCalls),
+			MaxIterations:   3,
+			Guidance:        guidance,
+		})
+	}))
+	defer meterSrv.Close()
+
+	var verifyAttempts int
+	mockExec := &mockCommandExecutor{
+		handler: func(_ int, cmd recordedCommand) (string, error) {
+			if cmd.Name == "sh" && len(cmd.Args) == 2 && cmd.Args[1] == "go test ./..." {
+				verifyAttempts++
+				if verifyAttempts == 1 {
+					// Simulate token rotation on disk between iteration 1 and iteration 2
+					_ = os.WriteFile(tokenPath, []byte("token-v2\n"), 0600)
+					return "FAIL", errors.New("exit status 1")
+				}
+				return "PASS", nil
+			}
+			return "", nil
+		},
+	}
+
+	cfg := &Config{
+		TaskName:            "rotate-task",
+		TaskNamespace:       "default",
+		Objective:           "Test live token rotation and guidance",
+		RepoURL:             "https://github.com/divergedev/shop.git",
+		BaseBranch:          "main",
+		WorkingBranch:       "agent/rotate-task",
+		MaxIterations:       3,
+		TokenFile:           tokenPath,
+		MeterURL:            meterSrv.URL,
+		WorkspaceDir:        workspaceDir,
+		AgentCommand:        "run-agent",
+		VerifyCommand:       "go test ./...",
+		Model:               "claude-sonnet-4-20250514",
+		TokensPerIteration:  2500,
+		CostPerIterationUSD: 0.05,
+	}
+
+	runner := &Runner{
+		Config:     cfg,
+		Exec:       mockExec,
+		HTTPClient: meterSrv.Client(),
+		Logger:     &bytes.Buffer{},
+	}
+
+	res, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.Succeeded || res.Iterations != 2 {
+		t.Fatalf("expected success on iteration 2, got %+v", res)
+	}
+	if len(authHeaders) != 2 || authHeaders[0] != "Bearer token-v1" || authHeaders[1] != "Bearer token-v2" {
+		t.Fatalf("expected rotated auth headers [Bearer token-v1, Bearer token-v2], got %v", authHeaders)
+	}
+	if !strings.HasPrefix(meterReqs[0].RequestID, "rotate-task-") || !strings.HasSuffix(meterReqs[0].RequestID, "-iter-1") || len(meterReqs[0].RequestID) != len("rotate-task-")+32+len("-iter-1") || meterReqs[0].Iteration != 1 {
+		t.Errorf("unexpected iter 1 meter req: %+v", meterReqs[0])
+	}
+	expectedIter2ReqID := strings.TrimSuffix(meterReqs[0].RequestID, "-iter-1") + "-iter-2"
+	if meterReqs[1].RequestID != expectedIter2ReqID || meterReqs[1].Iteration != 2 {
+		t.Errorf("unexpected iter 2 meter req: %+v (want RequestID %q)", meterReqs[1], expectedIter2ReqID)
+	}
+
+	// Verify live guidance was written to .diverge-guidance.md and passed in DIVERGE_GUIDANCE on iteration 2
+	guidanceData, err := os.ReadFile(filepath.Join(workspaceDir, ".diverge-guidance.md"))
+	if err != nil {
+		t.Fatalf("expected .diverge-guidance.md to be written: %v", err)
+	}
+	if strings.TrimSpace(string(guidanceData)) != "Switch to mock Redis client" {
+		t.Errorf("unexpected guidance file content: %q", string(guidanceData))
+	}
+}

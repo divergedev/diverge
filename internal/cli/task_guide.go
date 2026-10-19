@@ -41,6 +41,9 @@ func (g *KubeTaskGuider) Guide(ctx context.Context, namespace, name, message str
 	if err := g.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, task); err != nil {
 		return fmt.Errorf("get AgentTask %s: %w", name, err)
 	}
+	if task.Status.Phase == v1alpha1.AgentTaskPhaseCompleted || task.Status.Phase == v1alpha1.AgentTaskPhaseFailed {
+		return fmt.Errorf("cannot guide AgentTask %s in terminal phase %s", name, task.Status.Phase)
+	}
 
 	if task.Annotations == nil {
 		task.Annotations = make(map[string]string)

@@ -73,8 +73,21 @@ func runTaskStatus(ctx context.Context, app *App, name, output string) error {
 		if task.Status.CostUSD != "" {
 			_, _ = fmt.Fprintf(os.Stdout, "Cost:         $%s / $%s\n", task.Status.CostUSD, task.Spec.BudgetUSD)
 		}
+		if task.Status.TokensConsumed > 0 || task.Spec.BudgetTokens > 0 {
+			if task.Spec.BudgetTokens > 0 {
+				_, _ = fmt.Fprintf(os.Stdout, "Tokens:       %d / %d\n", task.Status.TokensConsumed, task.Spec.BudgetTokens)
+			} else {
+				_, _ = fmt.Fprintf(os.Stdout, "Tokens:       %d\n", task.Status.TokensConsumed)
+			}
+		}
+		if task.Annotations != nil && task.Annotations["divergedev.com/preview-url"] != "" {
+			_, _ = fmt.Fprintf(os.Stdout, "Preview URL:  %s\n", task.Annotations["divergedev.com/preview-url"])
+		}
 		if task.Status.PRURL != "" {
 			_, _ = fmt.Fprintf(os.Stdout, "PR Link:      %s\n", task.Status.PRURL)
+		}
+		if task.Annotations != nil && task.Annotations[AnnotationGuidance] != "" {
+			_, _ = fmt.Fprintf(os.Stdout, "Guidance:     %s\n", task.Annotations[AnnotationGuidance])
 		}
 		if task.Status.Message != "" {
 			_, _ = fmt.Fprintf(os.Stdout, "Status Msg:   %s\n", task.Status.Message)

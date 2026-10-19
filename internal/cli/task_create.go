@@ -66,9 +66,18 @@ func runTaskCreate(ctx context.Context, app *App, objective, name, repoURL, base
 		}
 	}
 
-	if err := app.ResolveNamespace(); err != nil {
-		return err
+	if !dryRun {
+		if err := app.ResolveNamespace(); err != nil {
+			return err
+		}
+	} else if app.Namespace == "" {
+		app.Namespace = "default"
 	}
+
+	var (
+		sandboxProvider string
+		timeoutSeconds  int32
+	)
 
 	// Apply defaults from .diverge/agent.yaml if present and flags were not explicitly overridden
 	if repoCfg, _ := LoadAgentRepoConfig("."); repoCfg != nil {
@@ -86,6 +95,12 @@ func runTaskCreate(ctx context.Context, app *App, objective, name, repoURL, base
 		}
 		if templateRef == "" && repoCfg.Agent.Sandbox.TemplateRef != "" {
 			templateRef = repoCfg.Agent.Sandbox.TemplateRef
+		}
+		if repoCfg.Agent.Sandbox.Provider != "" {
+			sandboxProvider = repoCfg.Agent.Sandbox.Provider
+		}
+		if repoCfg.Agent.Sandbox.TimeoutSeconds > 0 {
+			timeoutSeconds = repoCfg.Agent.Sandbox.TimeoutSeconds
 		}
 		if len(capabilities) == 2 && capabilities[0] == "fast" && capabilities[1] == "smart" && len(repoCfg.Agent.AllowedModels) > 0 {
 			capabilities = repoCfg.Agent.AllowedModels
@@ -113,8 +128,10 @@ func runTaskCreate(ctx context.Context, app *App, objective, name, repoURL, base
 				BaseBranch: baseBranch,
 			},
 			Sandbox: v1alpha1.AgentTaskSandbox{
-				PoolRef:     poolRef,
-				TemplateRef: templateRef,
+				Provider:       sandboxProvider,
+				PoolRef:        poolRef,
+				TemplateRef:    templateRef,
+				TimeoutSeconds: timeoutSeconds,
 			},
 			BudgetUSD:     budgetUSD,
 			MaxIterations: maxIter,

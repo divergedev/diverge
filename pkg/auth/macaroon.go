@@ -69,6 +69,9 @@ func computeHMAC(key, data []byte) []byte {
 
 // Mint creates a fresh root Macaroon.
 func (p *MacaroonProvider) Mint(_ context.Context, claims Claims) (Token, error) {
+	if p == nil || len(p.rootKey) < MinMacaroonRootKeyLen {
+		return nil, fmt.Errorf("macaroon root key must be at least %d bytes", MinMacaroonRootKeyLen)
+	}
 	if claims.TaskID == "" {
 		return nil, errors.New("claims must specify TaskID")
 	}
@@ -110,10 +113,14 @@ func (p *MacaroonProvider) Mint(_ context.Context, claims Claims) (Token, error)
 		})
 	}
 	if claims.MaxCostUSD > 0 {
+		costVal := fmt.Sprintf("%.2f", claims.MaxCostUSD)
+		if claims.MaxCostUSD < 0.01 {
+			costVal = strconv.FormatFloat(claims.MaxCostUSD, 'f', -1, 64)
+		}
 		caveats = append(caveats, Caveat{
 			Key:   "max_cost_usd",
 			Op:    OpLessThan,
-			Value: fmt.Sprintf("%.2f", claims.MaxCostUSD),
+			Value: costVal,
 		})
 	}
 	if claims.MaxTokens > 0 {
@@ -193,6 +200,9 @@ func (p *MacaroonProvider) Attenuate(_ context.Context, token Token, caveats ...
 
 // Verify validates that the signature chain is intact and all caveats hold true.
 func (p *MacaroonProvider) Verify(_ context.Context, raw []byte, required Claims) error {
+	if p == nil || len(p.rootKey) < MinMacaroonRootKeyLen {
+		return ErrInvalidSignature
+	}
 	var mac Macaroon
 	if err := json.Unmarshal(raw, &mac); err != nil {
 		return fmt.Errorf("%w: %v", ErrMalformedToken, err)
@@ -240,6 +250,9 @@ func (p *MacaroonProvider) Verify(_ context.Context, raw []byte, required Claims
 // VerifyAndExtract validates the cryptographic HMAC chain, expiration, and caveat syntax of a
 // serialized Macaroon and extracts the effective Claims embedded in its caveat sequence.
 func (p *MacaroonProvider) VerifyAndExtract(_ context.Context, raw []byte) (*Macaroon, Claims, error) {
+	if p == nil || len(p.rootKey) < MinMacaroonRootKeyLen {
+		return nil, Claims{}, ErrInvalidSignature
+	}
 	var mac Macaroon
 	if err := json.Unmarshal(raw, &mac); err != nil {
 		return nil, Claims{}, fmt.Errorf("%w: %v", ErrMalformedToken, err)
@@ -351,14 +364,13 @@ func (p *MacaroonProvider) VerifyAndExtract(_ context.Context, raw []byte) (*Mac
 				claims.AllowedModels = newModels
 				hasAllowedModels = true
 			} else {
-				existingSet := make(map[string]bool, len(claims.AllowedModels))
-				for _, m := range claims.AllowedModels {
-					existingSet[m] = true
-				}
 				var narrowed []string
 				for _, m := range newModels {
-					if existingSet[m] {
-						narrowed = append(narrowed, m)
+					for _, existing := range claims.AllowedModels {
+						if allowedModelPatternNarrows(existing, m) {
+							narrowed = append(narrowed, m)
+							break
+						}
 					}
 				}
 				if len(narrowed) == 0 {
@@ -417,6 +429,56 @@ func (p *MacaroonProvider) VerifyAndExtract(_ context.Context, raw []byte) (*Mac
 	}
 
 	return &mac, claims, nil
+}
+
+var capabilityTierModelPatterns = map[string][]string{
+	"fast": {
+		"*flash*", "*haiku*", "*mini*",
+		"gpt-4o*", "claude-3-5-sonnet*", "claude-3-7-sonnet*", "claude-sonnet*", "gemini-2.5-*",
+	},
+	"smart": {
+		"claude-*", "gpt-4*", "gpt-5*", "o1*", "o3*", "o4*", "gemini-*",
+	},
+	"lite": {
+		"*lite*", "*flash*", "*haiku*", "*mini*", "*nano*",
+	},
+}
+
+// MatchesAllowedModel reports whether model is permitted by pattern (exact match, capability tier alias,
+// trailing '*' prefix match, or glob).
+func MatchesAllowedModel(pattern, model string) bool {
+	pattern = strings.TrimSpace(pattern)
+	model = strings.TrimSpace(model)
+	if pattern == "" || model == "" {
+		return false
+	}
+	if pattern == "*" || pattern == model {
+		return true
+	}
+	if tierPatterns, ok := capabilityTierModelPatterns[strings.ToLower(pattern)]; ok {
+		lowerModel := strings.ToLower(model)
+		for _, tp := range tierPatterns {
+			if MatchesAllowedModel(tp, lowerModel) {
+				return true
+			}
+		}
+	}
+	if strings.HasSuffix(pattern, "*") && !strings.HasPrefix(pattern, "*") {
+		prefix := strings.TrimSuffix(pattern, "*")
+		if strings.HasPrefix(model, prefix) {
+			return true
+		}
+	}
+	if strings.HasPrefix(pattern, "*") && strings.HasSuffix(pattern, "*") && len(pattern) > 2 {
+		sub := strings.Trim(pattern, "*")
+		if strings.Contains(model, sub) {
+			return true
+		}
+	}
+	if ok, err := filepath.Match(pattern, model); err == nil && ok {
+		return true
+	}
+	return false
 }
 
 // evaluateCaveat verifies that a single Caveat holds against the provided request Claims.
@@ -489,12 +551,15 @@ func evaluateCaveat(c Caveat, req Claims) error {
 			return fmt.Errorf("%w: token restricts allowed models to %q but no model was specified in request", ErrCaveatFailed, c.Value)
 		}
 		allowedList := strings.Split(c.Value, ",")
-		allowedMap := make(map[string]bool)
-		for _, m := range allowedList {
-			allowedMap[m] = true
-		}
 		for _, model := range req.AllowedModels {
-			if !allowedMap[model] {
+			matched := false
+			for _, allowedPat := range allowedList {
+				if MatchesAllowedModel(allowedPat, model) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
 				return fmt.Errorf("%w: model %q not in allowed models %v", ErrCaveatFailed, model, allowedList)
 			}
 		}
@@ -537,4 +602,27 @@ func evaluateCaveat(c Caveat, req Claims) error {
 		return fmt.Errorf("%w: unrecognized caveat key %q", ErrCaveatFailed, c.Key)
 	}
 	return nil
+}
+
+// allowedModelPatternNarrows reports whether every model accepted by candidate is also accepted by existing.
+func allowedModelPatternNarrows(existing, candidate string) bool {
+	existing = strings.TrimSpace(existing)
+	candidate = strings.TrimSpace(candidate)
+	if existing == "" || candidate == "" {
+		return false
+	}
+	if existing == candidate || existing == "*" {
+		return true
+	}
+	const meta = "*?[\\"
+	if !strings.ContainsAny(candidate, meta) {
+		return MatchesAllowedModel(existing, candidate)
+	}
+	// Both are pure trailing-'*' prefix patterns.
+	ePrefix, eOK := strings.CutSuffix(existing, "*")
+	cPrefix, cOK := strings.CutSuffix(candidate, "*")
+	if eOK && cOK && !strings.ContainsAny(ePrefix, meta) && !strings.ContainsAny(cPrefix, meta) {
+		return strings.HasPrefix(cPrefix, ePrefix)
+	}
+	return false
 }

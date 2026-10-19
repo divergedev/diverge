@@ -1,6 +1,8 @@
 from .context import get_environment, set_environment, get_header_key, reset_environment
 from .propagation import encode_propagation_context, decode_propagation_context, PropagationContext, RoutingMode
 from .middleware import DivergASGIMiddleware, diverge_wsgi_middleware
+
+DivergeASGIMiddleware = DivergASGIMiddleware
 from .meter import (
     LLMMeterError,
     LLMMeterResponse,
@@ -36,6 +38,7 @@ __all__ = [
     "PropagationContext",
     "RoutingMode",
     "DivergASGIMiddleware",
+    "DivergeASGIMiddleware",
     "diverge_wsgi_middleware",
     "LLMMeterError",
     "LLMMeterResponse",

@@ -53,6 +53,8 @@ version: v1
 agent:
   # Allowed LLM models for this repository
   allowedModels:
+    - claude-3-7-sonnet
+    - claude-sonnet-4-6
     - claude-3-5-sonnet
     - gpt-4o
     - gemini-2.5-pro
@@ -92,13 +94,34 @@ diverge task init --force
 
 ---
 
-## 3. Cryptographic Macaroon Authentication
+## 3. Cryptographic Macaroon Authentication & Sandbox Runtime Contract
 
-Every agent sandbox receives a short-lived, cryptographically bounded token mounted at `/etc/diverge/token` with mode `0400`.
+Every agent sandbox receives a short-lived, cryptographically bounded token mounted at `/etc/diverge/token/token` (volume mounted at `/etc/diverge/token` with mode `0400`).
 
 - **Cryptographic Nonce Freshness**: Every token issuance generates a 128-bit cryptographic nonce caveat (`nonce = <hex>`). Even identical tasks running on the same branch receive distinct cryptographic signatures.
 - **Fail-Closed Caveat Evaluation**: Unknown caveat keys or invalid operators immediately reject authorization.
+- **Live Token Rotation**: Because the token secret is mounted as a Kubernetes volume (without `subPath`), `kubelet` automatically projects refreshed tokens into `/etc/diverge/token/token` when a task's budget is bumped.
 - **In-Process Attenuation**: Sub-agents can derive further restricted child tokens (e.g. read-only tool sets or lower budget thresholds) without contacting the Diverge control plane.
+
+### Injected Sandbox Environment Variables
+
+| Environment Variable | Default / Example | Description |
+| :--- | :--- | :--- |
+| `DIVERGE_TASK_NAME` | `fix-checkout` | Name of the `AgentTask` resource |
+| `DIVERGE_TASK_NAMESPACE` | `default` | Kubernetes namespace of the `AgentTask` |
+| `DIVERGE_OBJECTIVE` | `Fix checkout bug` | Natural-language task objective |
+| `DIVERGE_REPO_URL` | `https://github.com/org/repo.git` | Git clone URL |
+| `DIVERGE_BASE_BRANCH` | `main` | Base branch for clone and PR target |
+| `DIVERGE_WORKING_BRANCH` | `agent/fix-checkout` | Branch checked out and pushed by the agent |
+| `DIVERGE_BUDGET_USD` | `5.00` | Configured USD spend limit |
+| `DIVERGE_MAX_ITERATIONS` | `5` | Maximum autonomous build-verify-fix iterations |
+| `DIVERGE_TOKEN_FILE` | `/etc/diverge/token/token` | Path to the mounted Macaroon capability token |
+| `DIVERGE_MCP_URL` | `http://diverge-server.diverge-system.svc:8080/mcp` | Diverge MCP endpoint |
+| `DIVERGE_METER_URL` | `http://diverge-server.diverge-system.svc:8080/api/v1/agenttask/meter` | Live LLM metering & heartbeat endpoint |
+| `DIVERGE_PREVIEW_URL` | `https://preview.example.com` | Linked preview URL (also returned dynamically by the metering API) |
+| `DIVERGE_PREVIEW_HEADER_KEY` | `x-diverge-env` | Routing header key for isolated preview requests |
+| `DIVERGE_PREVIEW_HEADER_VALUE` | `agent-preview-fix-checkout` | Routing header value for the linked preview environment |
+| `DIVERGE_GUIDANCE` | *(optional)* | Latest human-in-the-loop steering guidance (also written to `/workspace/.diverge-guidance.md` and `/workspace/.diverge/guidance.md`) |
 
 ---
 
@@ -176,8 +199,8 @@ diverge task guide task-1718902842 "Ensure backward compatibility with API v1 cl
 # Pause an active task
 diverge task pause task-1718902842
 
-# Resume with a budget bump
-diverge task resume task-1718902842 --budget 15.00 --tokens 2000000
+# Resume with an additive budget bump (+$15.00 USD and +2,000,000 tokens)
+diverge task resume task-1718902842 --budget +15.00 --tokens 2000000
 ```
 
 ---
@@ -189,6 +212,8 @@ Sandbox agents and in-cluster LLM proxies report real-time model token and cost 
 ### Request Payload
 ```json
 {
+  "requestId": "fix-checkout-iter-1",
+  "iteration": 1,
   "model": "claude-3-7-sonnet",
   "tokensUsed": 1500,
   "costUSD": 0.0225
@@ -201,13 +226,61 @@ Sandbox agents and in-cluster LLM proxies report real-time model token and cost 
   "allowed": true,
   "suspended": false,
   "totalTokensUsed": 1500,
-  "totalCostUSD": 0.0225
+  "totalCostUSD": 0.0225,
+  "iteration": 1,
+  "maxIterations": 5,
+  "guidance": "Ensure backward compatibility with API v1 clients",
+  "previewUrl": "https://preview.example.com"
+}
+```
+
+### Python & Node.js SDK Helpers
+
+**Python (`diverge-sdk`)**:
+```python
+from diverge_sdk import meter_llm_usage, LLMMeterError
+
+try:
+    res = meter_llm_usage(
+        model="claude-3-7-sonnet",
+        tokens_used=1500,
+        cost_usd=0.0225,
+        request_id="fix-checkout-iter-1",
+        iteration=1,
+    )
+    if res.guidance:
+        print("Live steering guidance:", res.guidance)
+except LLMMeterError as err:
+    if err.is_budget_exceeded:
+        raise SystemExit("Task paused: budget or iteration limit reached")
+```
+
+**Node.js / TypeScript (`@divergedev/sdk`)**:
+```typescript
+import { meterLLMUsage, LLMMeterError } from '@divergedev/sdk';
+
+try {
+  const res = await meterLLMUsage({
+    requestId: 'fix-checkout-iter-1',
+    iteration: 1,
+    model: 'claude-3-7-sonnet',
+    tokensUsed: 1500,
+    costUSD: 0.0225,
+  });
+  if (res.guidance) {
+    console.log('Live steering guidance:', res.guidance);
+  }
+} catch (err) {
+  if (err instanceof LLMMeterError && err.isBudgetExceeded) {
+    process.exit(1);
+  }
 }
 ```
 
 ### Enforcement Behavior
+- **Idempotency (`requestId`)**: Retried metering calls with the same `requestId` return the current accumulated totals and live `guidance`/`previewUrl` without double-charging tokens, cost, or iterations.
 - **Model Restriction (`403 Forbidden`)**: If the task's Macaroon token includes `allowed_models` caveats (`spec.capabilities`), omitting `model` or requesting a model outside `allowed_models` returns `403 Forbidden`.
-- **Budget Exhaustion (`429 Too Many Requests`)**: If the updated `totalCostUSD` or `totalTokensUsed` exceeds the Macaroon caveats or `AgentTask` spec (`budgetUSD` / `budgetTokens`), `diverge-server` atomically transitions the `AgentTask` to `Paused`, sets `spec.suspended = true`, revokes the token in `diverge-agenttask-tokens`, and responds with `429 Too Many Requests` (`"suspended": true, "reason": "budget exceeded"`).
+- **Budget / Iteration Exhaustion (`429 Too Many Requests`)**: If the updated `totalCostUSD`, `totalTokensUsed`, or `iteration` exceeds the `AgentTask` spec (`budgetUSD` / `budgetTokens` / `maxIterations`), `diverge-server` atomically transitions the `AgentTask` to `Paused`, sets `spec.suspended = true`, revokes the token in `diverge-agenttask-tokens`, and responds with `429 Too Many Requests` (`"suspended": true, "reason": "budget exceeded"`).
 
 ---
 
@@ -243,4 +316,70 @@ You can interactively trigger, steer, inspect, and control `AgentTask` workflows
 - `/diverge extend-ttl [duration]` — Extends the preview environment's TTL.
 
 All commands post interactive Markdown confirmation replies back to the PR or MR comment thread.
+
+---
+
+## 10. Connecting `google/ax` & MCP Clients (`diverge mcp`)
+
+Both sandboxed agents and external AI orchestrators (`google/ax`, Claude Code, Cursor, Gemini CLI) can manage and inspect `AgentTask` lifecycles via the Model Context Protocol (MCP) using `diverge mcp`.
+
+### In-Cluster Sandboxed Agent Configuration
+Inside a Kubernetes sandbox pod, connect over the cluster Service DNS and mounted Secret volume:
+
+```json
+{
+  "mcpServers": {
+    "diverge": {
+      "command": "diverge",
+      "args": ["mcp"],
+      "env": {
+        "DIVERGE_SERVER_URL": "http://diverge-server.diverge-system.svc.cluster.local:8080",
+        "DIVERGE_TOKEN_FILE": "/etc/diverge/token/token"
+      }
+    }
+  }
+}
+```
+
+### External MCP Client Configuration (`google/ax`, Claude Code, Cursor)
+Outside the cluster, connect over a reachable HTTPS endpoint (or `kubectl port-forward` loopback URL) and pass the bearer token via `DIVERGE_MACAROON_TOKEN` (or `DIVERGE_TOKEN`):
+
+```json
+{
+  "mcpServers": {
+    "diverge": {
+      "command": "diverge",
+      "args": ["mcp"],
+      "env": {
+        "DIVERGE_SERVER_URL": "https://diverge.example.com",
+        "DIVERGE_MACAROON_TOKEN": "<base64-macaroon-or-bearer-token>"
+      }
+    }
+  }
+}
+```
+
+### Exposed `AgentTask` MCP Tools
+- `diverge_create_task` — Create and launch an autonomous `AgentTask` in an isolated sandbox.
+- `diverge_get_task` — Retrieve specification, phase, sandbox status, and token/cost consumption.
+- `diverge_list_tasks` — List `AgentTask` resources in a namespace.
+- `diverge_pause_task` — Pause an active `AgentTask` and suspend its sandbox (`spec.operatingMode: Suspended`).
+- `diverge_resume_task` — Resume a paused `AgentTask` with optional additive budget bumps (`budget_usd_bump`, `budget_tokens_bump`).
+- `diverge_guide_task` — Send real-time steering instructions (`divergedev.com/guidance`) delivered to the agent on its next metering heartbeat.
+- `diverge_delete_task` — Delete an `AgentTask` and tear down its sandbox (requires `--allow-destructive`).
+
+### Production Helm Setup (`macaroonSecretRef`)
+To enable cryptographic Macaroon minting and live budget metering in production, create a 32-byte shared secret and configure `sandbox.macaroonSecretRef` in Helm:
+
+```bash
+kubectl create secret generic diverge-macaroon-key \
+  -n diverge-system \
+  --from-literal=root-key="$(openssl rand -hex 32)"
+
+helm upgrade --install diverge ./charts/diverge \
+  -n diverge-system \
+  --set sandbox.enabled=true \
+  --set sandbox.macaroonSecretRef.name=diverge-macaroon-key \
+  --set sandbox.macaroonSecretRef.key=root-key
+```
 

@@ -11,12 +11,23 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	pkgauth "github.com/divergedev/diverge/pkg/auth"
 	"github.com/divergedev/diverge/pkg/registry"
 )
+
+var defaultNotifierHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
+func resolveHTTPClient(c *http.Client) *http.Client {
+	if c != nil {
+		return c
+	}
+	return defaultNotifierHTTPClient
+}
 
 const (
 	// AgentTaskCommentMarker is the hidden HTML marker used to identify AgentTask PR/MR comments.
@@ -236,7 +247,7 @@ func FormatAgentTaskComment(task *v1alpha1.AgentTask, phaseBadge, reason string)
 		if rawURL := strings.TrimSpace(task.Annotations[annotationPreviewURL]); rawURL != "" {
 			envName := strings.TrimSpace(task.Annotations[annotationPreviewEnvironment])
 			if envName == "" && task.Name != "" {
-				envName = "agent-preview-" + task.Name
+				envName = "agent-preview-" + pkgauth.TaskLabelValue(task.Name)
 			}
 			magicURL := buildMagicPreviewURL(rawURL, envName)
 			exitURL := buildMagicPreviewURL(rawURL, "clear")
@@ -261,8 +272,19 @@ func FormatAgentTaskComment(task *v1alpha1.AgentTask, phaseBadge, reason string)
 	fmt.Fprintf(&b, "| **Working Branch** | `%s` |\n", sanitizeMarkdown(workingBranch))
 	fmt.Fprintf(&b, "| **Linked Preview** | %s |\n", previewCell)
 	fmt.Fprintf(&b, "| **LLM Usage** | %s |\n", llmUsage)
+	if task.Status.Iteration > 0 {
+		if task.Spec.MaxIterations > 0 {
+			fmt.Fprintf(&b, "| **Iterations** | %d / %d |\n", task.Status.Iteration, task.Spec.MaxIterations)
+		} else {
+			fmt.Fprintf(&b, "| **Iterations** | %d |\n", task.Status.Iteration)
+		}
+	}
 	if strings.TrimSpace(reason) != "" {
-		fmt.Fprintf(&b, "| **Failure Reason** | %s |\n", sanitizeMarkdown(reason))
+		reasonLabel := "Failure Reason"
+		if strings.Contains(phaseBadge, "Paused") || task.Status.Phase == v1alpha1.AgentTaskPhasePaused {
+			reasonLabel = "Pause Reason"
+		}
+		fmt.Fprintf(&b, "| **%s** | %s |\n", reasonLabel, sanitizeMarkdown(reason))
 	}
 	if strings.TrimSpace(task.Status.PRURL) != "" {
 		fmt.Fprintf(&b, "| **Pull Request** | %s |\n", sanitizeMarkdown(task.Status.PRURL))
@@ -418,7 +440,7 @@ func (g *GitHubNotifier) FindExistingComment(ctx context.Context, project string
 	if err != nil {
 		return 0, err
 	}
-	reqURL := fmt.Sprintf("%s/repos/%s/issues/%d/comments", g.BaseURL, escapedProject, mrID)
+	reqURL := fmt.Sprintf("%s/repos/%s/issues/%d/comments?per_page=100", g.BaseURL, escapedProject, mrID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return 0, err
@@ -426,11 +448,7 @@ func (g *GitHubNotifier) FindExistingComment(ctx context.Context, project string
 	req.Header.Set("Authorization", "Bearer "+g.Token)
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
-	client := g.HTTPClient
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(req)
+	resp, err := resolveHTTPClient(g.HTTPClient).Do(req)
 	if err != nil {
 		return 0, err
 	}
@@ -471,11 +489,7 @@ func (g *GitHubNotifier) PostComment(ctx context.Context, project string, mrID i
 	req.Header.Set("Authorization", "Bearer "+g.Token)
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
-	client := g.HTTPClient
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(req)
+	resp, err := resolveHTTPClient(g.HTTPClient).Do(req)
 	if err != nil {
 		return 0, err
 	}
@@ -507,11 +521,7 @@ func (g *GitHubNotifier) UpdateComment(ctx context.Context, project string, _ in
 	req.Header.Set("Authorization", "Bearer "+g.Token)
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
-	client := g.HTTPClient
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(req)
+	resp, err := resolveHTTPClient(g.HTTPClient).Do(req)
 	if err != nil {
 		return err
 	}
@@ -529,18 +539,14 @@ func (g *GitLabNotifier) FindExistingComment(ctx context.Context, project string
 		marker = AgentTaskCommentMarker
 	}
 	escapedProject := url.PathEscape(project)
-	reqURL := fmt.Sprintf("%s/api/v4/projects/%s/merge_requests/%d/notes", g.BaseURL, escapedProject, mrID)
+	reqURL := fmt.Sprintf("%s/api/v4/projects/%s/merge_requests/%d/notes?per_page=100", g.BaseURL, escapedProject, mrID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return 0, err
 	}
 	req.Header.Set("PRIVATE-TOKEN", g.Token)
 
-	client := g.HTTPClient
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(req)
+	resp, err := resolveHTTPClient(g.HTTPClient).Do(req)
 	if err != nil {
 		return 0, err
 	}
@@ -577,11 +583,7 @@ func (g *GitLabNotifier) PostComment(ctx context.Context, project string, mrID i
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("PRIVATE-TOKEN", g.Token)
 
-	client := g.HTTPClient
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(req)
+	resp, err := resolveHTTPClient(g.HTTPClient).Do(req)
 	if err != nil {
 		return 0, err
 	}
@@ -609,11 +611,7 @@ func (g *GitLabNotifier) UpdateComment(ctx context.Context, project string, mrID
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("PRIVATE-TOKEN", g.Token)
 
-	client := g.HTTPClient
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(req)
+	resp, err := resolveHTTPClient(g.HTTPClient).Do(req)
 	if err != nil {
 		return err
 	}

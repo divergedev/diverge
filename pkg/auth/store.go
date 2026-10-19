@@ -313,12 +313,31 @@ func (s *KubernetesSecretTokenStore) GetToken(ctx context.Context, taskID, names
 	if sec.Labels != nil && sec.Labels[LabelRevoked] == "true" {
 		return nil, ErrTokenRevoked
 	}
+	revoked, err := s.isRevokedInIndex(ctx, taskID, namespace)
+	if err != nil {
+		return nil, err
+	}
+	if revoked {
+		return nil, ErrTokenRevoked
+	}
 
 	tok, ok := sec.Data["token"]
 	if !ok || len(tok) == 0 {
 		return nil, ErrTokenNotFound
 	}
 	return tok, nil
+}
+
+// isRevokedInIndex checks whether TokenIndexSecretName records taskID as revoked.
+func (s *KubernetesSecretTokenStore) isRevokedInIndex(ctx context.Context, taskID, namespace string) (bool, error) {
+	sec := &corev1.Secret{}
+	if err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: TokenIndexSecretName}, sec); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("get token index secret %s: %w", TokenIndexSecretName, err)
+	}
+	return sec.Annotations != nil && sec.Annotations[revokedIndexKey(taskID)] == "true", nil
 }
 
 // getTokenFromIndex reads a task's active or revoked token state from TokenIndexSecretName.
@@ -392,24 +411,36 @@ func (s *KubernetesSecretTokenStore) RevokeToken(ctx context.Context, taskID, na
 	return s.markRevokedInIndex(ctx, taskID, namespace)
 }
 
-// IsRevoked inspects whether the token Secret (or TokenIndexSecretName when indexOnly is enabled) is marked revoked.
-func (s *KubernetesSecretTokenStore) IsRevoked(ctx context.Context, taskID, namespace string) bool {
+// CheckRevoked inspects whether the token Secret (or TokenIndexSecretName when indexOnly is enabled)
+// is marked revoked, returning any underlying storage read error rather than treating read errors as unrevoked.
+func (s *KubernetesSecretTokenStore) CheckRevoked(ctx context.Context, taskID, namespace string) (bool, error) {
 	if s.indexOnly {
-		sec := &corev1.Secret{}
-		if err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: TokenIndexSecretName}, sec); err != nil {
-			return false
-		}
-		return sec.Annotations != nil && sec.Annotations[revokedIndexKey(taskID)] == "true"
+		return s.isRevokedInIndex(ctx, taskID, namespace)
 	}
 	name := SecretName(taskID)
 	sec := &corev1.Secret{}
 	if err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, sec); err != nil {
-		return false
+		if !apierrors.IsNotFound(err) {
+			return false, fmt.Errorf("get token secret %s: %w", name, err)
+		}
+		return s.isRevokedInIndex(ctx, taskID, namespace)
 	}
 	if !matchesTaskLabel(sec.Labels, taskID) {
+		return false, nil
+	}
+	if sec.Labels[LabelRevoked] == "true" {
+		return true, nil
+	}
+	return s.isRevokedInIndex(ctx, taskID, namespace)
+}
+
+// IsRevoked inspects whether the token Secret (or TokenIndexSecretName when indexOnly is enabled) is marked revoked.
+func (s *KubernetesSecretTokenStore) IsRevoked(ctx context.Context, taskID, namespace string) bool {
+	revoked, err := s.CheckRevoked(ctx, taskID, namespace)
+	if err != nil {
 		return false
 	}
-	return sec.Labels[LabelRevoked] == "true"
+	return revoked
 }
 
 // upsertTokenIndex records or updates a task's active token in the namespace TokenIndexSecretName Secret.

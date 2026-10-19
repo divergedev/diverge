@@ -32,7 +32,10 @@ type PodSandboxProvider struct {
 	scheme    *runtime.Scheme
 }
 
-var _ pkgsandbox.SandboxProvider = (*PodSandboxProvider)(nil)
+var (
+	_ pkgsandbox.SandboxProvider  = (*PodSandboxProvider)(nil)
+	_ pkgsandbox.SandboxSuspender = (*PodSandboxProvider)(nil)
+)
 
 // NewPodSandboxProvider initializes a new PodSandboxProvider.
 func NewPodSandboxProvider(c client.Client, cs kubernetes.Interface, scheme *runtime.Scheme) *PodSandboxProvider {
@@ -84,6 +87,7 @@ func (p *PodSandboxProvider) Provision(ctx context.Context, task *v1alpha1.Agent
 		runtimeClassName = ptr(rc)
 	}
 
+	serverBaseURL := resolveServerBaseURL()
 	containerEnv := []corev1.EnvVar{
 		{Name: "DIVERGE_TASK_NAME", Value: task.Name},
 		{Name: "DIVERGE_TASK_NAMESPACE", Value: task.Namespace},
@@ -94,8 +98,8 @@ func (p *PodSandboxProvider) Provision(ctx context.Context, task *v1alpha1.Agent
 		{Name: "DIVERGE_BUDGET_USD", Value: task.Spec.BudgetUSD},
 		{Name: "DIVERGE_MAX_ITERATIONS", Value: strconv.Itoa(int(task.Spec.MaxIterations))},
 		{Name: "DIVERGE_TOKEN_FILE", Value: "/etc/diverge/token/token"},
-		{Name: "DIVERGE_MCP_URL", Value: "http://diverge-server.diverge-system.svc:8080/mcp"},
-		{Name: "DIVERGE_METER_URL", Value: "http://diverge-server.diverge-system.svc:8080/api/v1/agenttask/meter"},
+		{Name: "DIVERGE_MCP_URL", Value: serverBaseURL + "/mcp"},
+		{Name: "DIVERGE_METER_URL", Value: serverBaseURL + "/api/v1/agenttask/meter"},
 	}
 	if guidance := strings.TrimSpace(task.Annotations["divergedev.com/guidance"]); guidance != "" {
 		containerEnv = append(containerEnv, corev1.EnvVar{Name: "DIVERGE_GUIDANCE", Value: guidance})
@@ -199,8 +203,16 @@ func (p *PodSandboxProvider) Provision(ctx context.Context, task *v1alpha1.Agent
 		}
 	}
 
-	if err := p.client.Create(ctx, pod); err != nil && !apierrors.IsAlreadyExists(err) {
-		return nil, fmt.Errorf("create sandbox pod: %w", err)
+	if err := p.client.Create(ctx, pod); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			return nil, fmt.Errorf("create sandbox pod: %w", err)
+		}
+		existing := &corev1.Pod{}
+		if getErr := p.client.Get(ctx, client.ObjectKey{Namespace: task.Namespace, Name: podName}, existing); getErr == nil {
+			if existing.DeletionTimestamp != nil || existing.Status.Phase == corev1.PodFailed || existing.Status.Phase == corev1.PodSucceeded {
+				return nil, fmt.Errorf("sandbox pod %s is terminating or in terminal phase %s; waiting for deletion", podName, existing.Status.Phase)
+			}
+		}
 	}
 
 	status, err := p.Status(ctx, task)
@@ -286,6 +298,39 @@ func (p *PodSandboxProvider) Teardown(ctx context.Context, task *v1alpha1.AgentT
 			return nil
 		}
 		return fmt.Errorf("delete sandbox pod %s: %w", podName, err)
+	}
+	return nil
+}
+
+// Suspend deletes the standalone sandbox Pod when paused to reclaim cluster compute.
+func (p *PodSandboxProvider) Suspend(ctx context.Context, task *v1alpha1.AgentTask) error {
+	return p.Teardown(ctx, task)
+}
+
+// Resume ensures a healthy sandbox Pod is running, re-provisioning if missing or in a terminal phase.
+func (p *PodSandboxProvider) Resume(ctx context.Context, task *v1alpha1.AgentTask) error {
+	podName := SandboxPodName(task.Name)
+	pod := &corev1.Pod{}
+	err := p.client.Get(ctx, client.ObjectKey{Namespace: task.Namespace, Name: podName}, pod)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			_, provErr := p.Provision(ctx, task)
+			return provErr
+		}
+		return fmt.Errorf("get sandbox pod %s on resume: %w", podName, err)
+	}
+	if pod.DeletionTimestamp != nil {
+		return fmt.Errorf("sandbox pod %s is terminating; waiting for deletion before reprovisioning", podName)
+	}
+	if pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded {
+		if delErr := p.Teardown(ctx, task); delErr != nil {
+			return delErr
+		}
+		if getErr := p.client.Get(ctx, client.ObjectKey{Namespace: task.Namespace, Name: podName}, &corev1.Pod{}); getErr == nil || !apierrors.IsNotFound(getErr) {
+			return fmt.Errorf("sandbox pod %s deletion in progress; retry reprovisioning once deleted", podName)
+		}
+		_, provErr := p.Provision(ctx, task)
+		return provErr
 	}
 	return nil
 }

@@ -433,7 +433,20 @@ func (rt *bearerAuthRoundTripper) matchesTargetOrigin(u *url.URL) bool {
 	return strings.EqualFold(u.Scheme, rt.targetScheme) && strings.EqualFold(u.Host, rt.targetHost)
 }
 
-// RoundTrip attaches the resolved bearer token to same-origin requests over HTTPS (or loopback HTTP)
+// isLoopbackOrClusterHost reports whether host is a loopback address or an in-cluster Kubernetes Service DNS name.
+func isLoopbackOrClusterHost(host string) bool {
+	if isLoopbackHost(host) {
+		return true
+	}
+	h := strings.TrimSpace(host)
+	if idx := strings.LastIndex(h, ":"); idx != -1 && !strings.Contains(h[idx:], "]") {
+		h = h[:idx]
+	}
+	h = strings.ToLower(strings.TrimSuffix(h, "."))
+	return strings.HasSuffix(h, ".svc") || strings.HasSuffix(h, ".svc.cluster.local")
+}
+
+// RoundTrip attaches the resolved bearer token to same-origin requests over HTTPS (or loopback/in-cluster HTTP)
 // when no Authorization header is already present.
 func (rt *bearerAuthRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	base := rt.base
@@ -442,8 +455,8 @@ func (rt *bearerAuthRoundTripper) RoundTrip(req *http.Request) (*http.Response, 
 	}
 	if rt.tokenFunc != nil && req.Header.Get("Authorization") == "" && rt.matchesTargetOrigin(req.URL) {
 		if token := rt.tokenFunc(); token != "" {
-			// Security: Do not transmit bearer credentials in cleartext over non-loopback HTTP.
-			if strings.EqualFold(req.URL.Scheme, "http") && !isLoopbackHost(req.URL.Host) {
+			// Security: Do not transmit bearer credentials in cleartext over external non-loopback HTTP.
+			if strings.EqualFold(req.URL.Scheme, "http") && !isLoopbackOrClusterHost(req.URL.Host) {
 				return nil, fmt.Errorf("insecure HTTP scheme is only allowed for loopback addresses, got %q", req.URL.Host)
 			}
 			if !strings.EqualFold(req.URL.Scheme, "https") && !strings.EqualFold(req.URL.Scheme, "http") {
@@ -457,9 +470,12 @@ func (rt *bearerAuthRoundTripper) RoundTrip(req *http.Request) (*http.Response, 
 	return base.RoundTrip(req)
 }
 
-// resolveMCPBearerToken reads the MCP bearer token from DIVERGE_TOKEN or the mounted token file.
+// resolveMCPBearerToken reads the MCP bearer token from DIVERGE_TOKEN, DIVERGE_MACAROON_TOKEN, or the mounted token file.
 func resolveMCPBearerToken() string {
 	if token := strings.TrimSpace(os.Getenv("DIVERGE_TOKEN")); token != "" {
+		return token
+	}
+	if token := strings.TrimSpace(os.Getenv("DIVERGE_MACAROON_TOKEN")); token != "" {
 		return token
 	}
 	tokenFile := strings.TrimSpace(os.Getenv("DIVERGE_TOKEN_FILE"))
@@ -490,13 +506,25 @@ func newMCPHTTPClient(serverURL string) *http.Client {
 	}
 }
 
+// resolveMCPServerURL resolves the Diverge API server base URL from flag or environment variables.
+func resolveMCPServerURL(serverURL string) string {
+	if s := strings.TrimSpace(serverURL); s != "" {
+		return strings.TrimRight(strings.TrimSuffix(strings.TrimRight(s, "/"), "/mcp"), "/")
+	}
+	if s := strings.TrimSpace(os.Getenv("DIVERGE_SERVER_URL")); s != "" {
+		return strings.TrimRight(strings.TrimSuffix(strings.TrimRight(s, "/"), "/mcp"), "/")
+	}
+	if s := strings.TrimSpace(os.Getenv("DIVERGE_MCP_URL")); s != "" {
+		return strings.TrimRight(strings.TrimSuffix(strings.TrimRight(s, "/"), "/mcp"), "/")
+	}
+	return ""
+}
+
 // runMCP starts the MCP stdio server connected to the given Diverge API server URL.
 func runMCP(ctx context.Context, app *App, serverURL string, allowDestructive bool) error {
+	serverURL = resolveMCPServerURL(serverURL)
 	if serverURL == "" {
-		serverURL = os.Getenv("DIVERGE_SERVER_URL")
-		if serverURL == "" {
-			return fmt.Errorf("server URL required: use --server-url or set DIVERGE_SERVER_URL")
-		}
+		return fmt.Errorf("server URL required: use --server-url or set DIVERGE_SERVER_URL")
 	}
 
 	httpClient := newMCPHTTPClient(serverURL)

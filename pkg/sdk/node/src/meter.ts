@@ -5,6 +5,8 @@ export const DEFAULT_TOKEN_FILE = '/etc/diverge/token/token';
 export const METER_ENDPOINT_PATH = '/api/v1/agenttask/meter';
 
 export interface LLMMeterRequest {
+  requestId?: string;
+  iteration?: number;
   model: string;
   tokensUsed: number;
   costUSD: number;
@@ -16,12 +18,17 @@ export interface LLMMeterResponse {
   reason?: string;
   totalTokensUsed: number;
   totalCostUSD: number;
+  iteration?: number;
+  maxIterations?: number;
+  guidance?: string;
+  previewUrl?: string;
 }
 
 export interface LLMMeterOptions {
   serverUrl?: string;
   token?: string;
   tokenFile?: string;
+  timeoutMs?: number;
   fetchImpl?: typeof fetch;
 }
 
@@ -36,7 +43,9 @@ export class LLMMeterError extends Error {
     this.name = 'LLMMeterError';
     this.statusCode = statusCode;
     this.response = response;
-    this.isBudgetExceeded = statusCode === 429;
+    this.isBudgetExceeded =
+      statusCode !== 403 &&
+      (statusCode === 429 || Boolean(response && (!response.allowed || response.suspended)));
     this.isModelDisallowed = statusCode === 403;
     Object.setPrototypeOf(this, LLMMeterError.prototype);
   }
@@ -83,23 +92,36 @@ export async function meterLLMUsage(
     process.env.DIVERGE_SERVER_URL ||
     DEFAULT_SERVER_URL;
   const normalizedUrl = rawUrl.replace(/\/$/, '');
-  const endpoint = normalizedUrl.endsWith(METER_ENDPOINT_PATH)
+  const endpoint = normalizedUrl.endsWith('/meter')
     ? normalizedUrl
     : `${normalizedUrl}${METER_ENDPOINT_PATH}`;
 
   const fetchFn = opts?.fetchImpl ?? fetch;
-  const res = await fetchFn(endpoint, {
+  const bodyObj: Record<string, unknown> = {
+    model: req.model,
+    tokensUsed: req.tokensUsed,
+    costUSD: req.costUSD,
+  };
+  if (req.requestId) {
+    bodyObj.requestId = req.requestId;
+  }
+  if (req.iteration !== undefined) {
+    bodyObj.iteration = req.iteration;
+  }
+
+  const fetchInit: RequestInit = {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({
-      model: req.model,
-      tokensUsed: req.tokensUsed,
-      costUSD: req.costUSD,
-    }),
-  });
+    body: JSON.stringify(bodyObj),
+  };
+  if (opts?.timeoutMs && opts.timeoutMs > 0 && typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal) {
+    fetchInit.signal = AbortSignal.timeout(opts.timeoutMs);
+  }
+
+  const res = await fetchFn(endpoint, fetchInit);
 
   let data: LLMMeterResponse | undefined;
   try {
@@ -121,6 +143,14 @@ export async function meterLLMUsage(
 
   if (!data || typeof data !== 'object') {
     throw new LLMMeterError('Invalid meter response payload', res.status);
+  }
+
+  if (!data.allowed || data.suspended) {
+    throw new LLMMeterError(
+      data.reason || 'Agent task suspended or budget exceeded',
+      res.status,
+      data
+    );
   }
 
   return data;
