@@ -321,7 +321,10 @@ All commands post interactive Markdown confirmation replies back to the PR or MR
 
 ## 10. Connecting `google/ax` & MCP Clients (`diverge mcp`)
 
-Both sandboxed agents and external AI orchestrators (`google/ax`, Claude Code, Cursor, Gemini CLI) can manage and inspect `AgentTask` lifecycles via the Model Context Protocol (MCP) using `diverge mcp`:
+Both sandboxed agents and external AI orchestrators (`google/ax`, Claude Code, Cursor, Gemini CLI) can manage and inspect `AgentTask` lifecycles via the Model Context Protocol (MCP) using `diverge mcp`.
+
+### In-Cluster Sandboxed Agent Configuration
+Inside a Kubernetes sandbox pod, connect over the cluster Service DNS and mounted Secret volume:
 
 ```json
 {
@@ -330,8 +333,26 @@ Both sandboxed agents and external AI orchestrators (`google/ax`, Claude Code, C
       "command": "diverge",
       "args": ["mcp"],
       "env": {
-        "DIVERGE_SERVER_URL": "http://diverge-server.diverge-system.svc:8080",
+        "DIVERGE_SERVER_URL": "http://diverge-server.diverge-system.svc.cluster.local:8080",
         "DIVERGE_TOKEN_FILE": "/etc/diverge/token/token"
+      }
+    }
+  }
+}
+```
+
+### External MCP Client Configuration (`google/ax`, Claude Code, Cursor)
+Outside the cluster, connect over a reachable HTTPS endpoint (or `kubectl port-forward` loopback URL) and pass the bearer token via `DIVERGE_MACAROON_TOKEN` (or `DIVERGE_TOKEN`):
+
+```json
+{
+  "mcpServers": {
+    "diverge": {
+      "command": "diverge",
+      "args": ["mcp"],
+      "env": {
+        "DIVERGE_SERVER_URL": "https://diverge.example.com",
+        "DIVERGE_MACAROON_TOKEN": "<base64-macaroon-or-bearer-token>"
       }
     }
   }

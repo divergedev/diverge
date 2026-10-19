@@ -192,12 +192,18 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if task.Spec.Suspended {
 		if provider, err := r.resolveSandboxProvider(task); err == nil && provider != nil {
 			if suspender, ok := provider.(pkgsandbox.SandboxSuspender); ok {
-				_ = suspender.Suspend(ctx, task)
+				if err := suspender.Suspend(ctx, task); err != nil {
+					return ctrl.Result{}, err
+				}
 			} else if task.Spec.Sandbox.Provider == "pod" || task.Spec.Sandbox.Provider == "k8s-pod" {
-				_ = provider.Teardown(ctx, task)
+				if err := provider.Teardown(ctx, task); err != nil {
+					return ctrl.Result{}, err
+				}
 			}
 		}
-		_ = r.setLinkedPreviewEnvironmentHibernated(ctx, task, true)
+		if err := r.setLinkedPreviewEnvironmentHibernated(ctx, task, true); err != nil {
+			return ctrl.Result{}, err
+		}
 		if task.Status.Phase != v1alpha1.AgentTaskPhasePaused {
 			patch := client.MergeFromWithOptions(task.DeepCopy(), client.MergeFromWithOptimisticLock{})
 			oldPhase := task.Status.Phase
@@ -363,11 +369,17 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		// Check iteration, USD budget, and token budget limits
 		if exceeded, reason := r.checkBudgetOrIterationLimit(task); exceeded {
 			if suspender, ok := provider.(pkgsandbox.SandboxSuspender); ok {
-				_ = suspender.Suspend(ctx, task)
+				if err := suspender.Suspend(ctx, task); err != nil {
+					return ctrl.Result{}, err
+				}
 			} else if task.Spec.Sandbox.Provider == "pod" || task.Spec.Sandbox.Provider == "k8s-pod" {
-				_ = provider.Teardown(ctx, task)
+				if err := provider.Teardown(ctx, task); err != nil {
+					return ctrl.Result{}, err
+				}
 			}
-			_ = r.setLinkedPreviewEnvironmentHibernated(ctx, task, true)
+			if err := r.setLinkedPreviewEnvironmentHibernated(ctx, task, true); err != nil {
+				return ctrl.Result{}, err
+			}
 			patch := client.MergeFromWithOptions(task.DeepCopy(), client.MergeFromWithOptimisticLock{})
 			oldPhase := task.Status.Phase
 			task.Status.Phase = v1alpha1.AgentTaskPhasePaused
@@ -438,12 +450,14 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 				}
 				restoreReconcilerStatus(task, savedStatus)
 			}
-			_ = r.setLinkedPreviewEnvironmentHibernated(ctx, task, false)
+			if err := r.setLinkedPreviewEnvironmentHibernated(ctx, task, false); err != nil {
+				return ctrl.Result{}, err
+			}
 			patch := client.MergeFromWithOptions(task.DeepCopy(), client.MergeFromWithOptimisticLock{})
 			oldPhase := task.Status.Phase
 			if task.Status.SandboxPodName != "" {
 				if sbStatus, sbErr := provider.Status(ctx, task); sbErr == nil && sbStatus != nil {
-					if sbStatus.Phase == "Failed" || sbStatus.Phase == "Succeeded" || sbStatus.Message == "Sandbox pod not found" {
+					if sbStatus.Phase == "Failed" || sbStatus.Phase == "Succeeded" || sbStatus.Message == "Sandbox pod not found" || sbStatus.Message == "SandboxClaim not found" {
 						task.Status.SandboxPodName = ""
 					}
 				}
@@ -454,7 +468,9 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 					return ctrl.Result{}, err
 				}
 				if suspender, ok := provider.(pkgsandbox.SandboxSuspender); ok {
-					_ = suspender.Resume(ctx, task)
+					if err := suspender.Resume(ctx, task); err != nil {
+						return ctrl.Result{}, err
+					}
 				}
 				task.Status.Phase = v1alpha1.AgentTaskPhaseActive
 				task.Status.Message = "Task resumed and active"

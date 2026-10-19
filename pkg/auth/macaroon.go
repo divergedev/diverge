@@ -367,7 +367,7 @@ func (p *MacaroonProvider) VerifyAndExtract(_ context.Context, raw []byte) (*Mac
 				var narrowed []string
 				for _, m := range newModels {
 					for _, existing := range claims.AllowedModels {
-						if MatchesAllowedModel(existing, m) {
+						if allowedModelPatternNarrows(existing, m) {
 							narrowed = append(narrowed, m)
 							break
 						}
@@ -602,4 +602,27 @@ func evaluateCaveat(c Caveat, req Claims) error {
 		return fmt.Errorf("%w: unrecognized caveat key %q", ErrCaveatFailed, c.Key)
 	}
 	return nil
+}
+
+// allowedModelPatternNarrows reports whether every model accepted by candidate is also accepted by existing.
+func allowedModelPatternNarrows(existing, candidate string) bool {
+	existing = strings.TrimSpace(existing)
+	candidate = strings.TrimSpace(candidate)
+	if existing == "" || candidate == "" {
+		return false
+	}
+	if existing == candidate || existing == "*" {
+		return true
+	}
+	const meta = "*?[\\"
+	if !strings.ContainsAny(candidate, meta) {
+		return MatchesAllowedModel(existing, candidate)
+	}
+	// Both are pure trailing-'*' prefix patterns.
+	ePrefix, eOK := strings.CutSuffix(existing, "*")
+	cPrefix, cOK := strings.CutSuffix(candidate, "*")
+	if eOK && cOK && !strings.ContainsAny(ePrefix, meta) && !strings.ContainsAny(cPrefix, meta) {
+		return strings.HasPrefix(cPrefix, ePrefix)
+	}
+	return false
 }

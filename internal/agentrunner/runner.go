@@ -3,6 +3,8 @@ package agentrunner
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -248,6 +250,7 @@ type Runner struct {
 	Exec       CommandExecutor
 	HTTPClient *http.Client
 	Logger     io.Writer
+	runID      string
 }
 
 // NewRunner constructs a Runner with default OSCommandExecutor and HTTPClient.
@@ -312,11 +315,18 @@ func (r *Runner) ReportUsage(ctx context.Context, token, model string, tokensUse
 func (r *Runner) ReportUsageForIteration(ctx context.Context, iter int, token, model string, tokensUsed int64, costUSD float64) (*MeterResponse, error) {
 	var reqID string
 	if iter > 0 && r.Config != nil && r.Config.TaskName != "" {
-		if r.Config.RunID != "" {
-			reqID = fmt.Sprintf("%s-%s-iter-%d", r.Config.TaskName, r.Config.RunID, iter)
-		} else {
-			reqID = fmt.Sprintf("%s-iter-%d", r.Config.TaskName, iter)
+		if r.runID == "" {
+			if r.Config.RunID != "" {
+				r.runID = r.Config.RunID
+			} else {
+				nonce := make([]byte, 16)
+				if _, err := rand.Read(nonce); err != nil {
+					return nil, fmt.Errorf("generate run ID: %w", err)
+				}
+				r.runID = hex.EncodeToString(nonce)
+			}
 		}
+		reqID = fmt.Sprintf("%s-%s-iter-%d", r.Config.TaskName, r.runID, iter)
 	}
 	payload := MeterRequest{
 		RequestID:  reqID,
@@ -418,6 +428,7 @@ func (r *Runner) Run(ctx context.Context) (*RunResult, error) {
 	if r.Config == nil {
 		return nil, errors.New("runner config is nil")
 	}
+	r.runID = ""
 
 	token, err := r.ResolveToken()
 	if err != nil {

@@ -151,7 +151,14 @@ func (p *AgentSandboxProvider) setOperatingMode(ctx context.Context, task *v1alp
 	claim := &unstructured.Unstructured{}
 	claim.SetGroupVersionKind(sandboxClaimGVK)
 	if err := p.client.Get(ctx, client.ObjectKey{Namespace: task.Namespace, Name: claimName}, claim); err != nil {
-		if isCRDUnavailableError(err) || apierrors.IsNotFound(err) {
+		if isCRDUnavailableError(err) || (apierrors.IsNotFound(err) && task.Status.SandboxClaimRef == SandboxPodName(task.Name)) {
+			podProvider := NewPodSandboxProvider(p.client, p.clientset, p.scheme)
+			if mode == "Suspended" {
+				return podProvider.Suspend(ctx, task)
+			}
+			return podProvider.Resume(ctx, task)
+		}
+		if apierrors.IsNotFound(err) {
 			return nil
 		}
 		return fmt.Errorf("get SandboxClaim %s: %w", claimName, err)

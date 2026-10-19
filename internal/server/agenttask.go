@@ -357,6 +357,9 @@ func (s *AgentTaskService) ResumeTask(ctx context.Context, req *connect.Request[
 	}
 	var bumpUSD float64
 	cleanBump := normalizeBudgetBumpString(msg.BudgetUsdBump)
+	if strings.TrimSpace(msg.BudgetUsdBump) != "" && cleanBump == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("budget_usd_bump must be a positive number"))
+	}
 	if cleanBump != "" {
 		var err error
 		bumpUSD, err = strconv.ParseFloat(cleanBump, 64)
@@ -396,16 +399,41 @@ func (s *AgentTaskService) ResumeTask(ctx context.Context, req *connect.Request[
 		if err := s.client.Update(ctx, task); err != nil {
 			return err
 		}
-		if task.Status.Message != "" || len(task.Status.LastMeterRequestIDs) > 0 {
-			task.Status.Message = ""
-			task.Status.LastMeterRequestIDs = nil
-			_ = s.client.Status().Update(ctx, task)
-		}
 		updatedTask = task
 		return nil
 	})
 	if err != nil {
 		return nil, SanitizeK8sError(s.logger, err)
+	}
+
+	if updatedTask.Status.Message != "" || len(updatedTask.Status.LastMeterRequestIDs) > 0 {
+		statusErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			latest := &v1alpha1.AgentTask{}
+			if err := s.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: msg.Name}, latest); err != nil {
+				return err
+			}
+			if latest.Status.Message == "" && len(latest.Status.LastMeterRequestIDs) == 0 {
+				updatedTask = latest
+				return nil
+			}
+			latest.Status.Message = ""
+			latest.Status.LastMeterRequestIDs = nil
+			if err := s.client.Status().Update(ctx, latest); err != nil {
+				if apierrors.IsNotFound(err) {
+					if uErr := s.client.Update(ctx, latest); uErr != nil {
+						return uErr
+					}
+					updatedTask = latest
+					return nil
+				}
+				return err
+			}
+			updatedTask = latest
+			return nil
+		})
+		if statusErr != nil {
+			return nil, SanitizeK8sError(s.logger, statusErr)
+		}
 	}
 
 	if s.auditLogger != nil {

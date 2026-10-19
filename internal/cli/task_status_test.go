@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"io"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -55,8 +57,21 @@ func TestTaskStatusCmd(t *testing.T) {
 		Client:    fakeClient,
 	}
 
-	err := runTaskStatus(context.Background(), app, "test-task", "text")
+	r, w, err := os.Pipe()
 	require.NoError(t, err)
+	origStdout := os.Stdout
+	os.Stdout = w
+	runErr := runTaskStatus(context.Background(), app, "test-task", "text")
+	_ = w.Close()
+	os.Stdout = origStdout
+	require.NoError(t, runErr)
+	out, err := io.ReadAll(r)
+	require.NoError(t, err)
+	require.Contains(t, string(out), "Iteration:    4 / 15")
+	require.Contains(t, string(out), "Cost:         $1.25 / $10.00")
+	require.Contains(t, string(out), "Guidance:     Focus on retry idempotency")
+	require.Contains(t, string(out), "Sandbox Pod:  sandbox-test-task (IP: 10.244.0.42)")
+	require.Contains(t, string(out), "Status Msg:   Running migration tests")
 
 	err = runTaskStatus(context.Background(), app, "test-task", "json")
 	require.NoError(t, err)

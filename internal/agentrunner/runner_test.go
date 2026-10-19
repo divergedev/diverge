@@ -733,11 +733,12 @@ func TestRunner_Run_TokenRotationAndLiveGuidance(t *testing.T) {
 	if len(authHeaders) != 2 || authHeaders[0] != "Bearer token-v1" || authHeaders[1] != "Bearer token-v2" {
 		t.Fatalf("expected rotated auth headers [Bearer token-v1, Bearer token-v2], got %v", authHeaders)
 	}
-	if meterReqs[0].RequestID != "rotate-task-iter-1" || meterReqs[0].Iteration != 1 {
+	if !strings.HasPrefix(meterReqs[0].RequestID, "rotate-task-") || !strings.HasSuffix(meterReqs[0].RequestID, "-iter-1") || len(meterReqs[0].RequestID) != len("rotate-task-")+32+len("-iter-1") || meterReqs[0].Iteration != 1 {
 		t.Errorf("unexpected iter 1 meter req: %+v", meterReqs[0])
 	}
-	if meterReqs[1].RequestID != "rotate-task-iter-2" || meterReqs[1].Iteration != 2 {
-		t.Errorf("unexpected iter 2 meter req: %+v", meterReqs[1])
+	expectedIter2ReqID := strings.TrimSuffix(meterReqs[0].RequestID, "-iter-1") + "-iter-2"
+	if meterReqs[1].RequestID != expectedIter2ReqID || meterReqs[1].Iteration != 2 {
+		t.Errorf("unexpected iter 2 meter req: %+v (want RequestID %q)", meterReqs[1], expectedIter2ReqID)
 	}
 
 	// Verify live guidance was written to .diverge-guidance.md and passed in DIVERGE_GUIDANCE on iteration 2

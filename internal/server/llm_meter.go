@@ -133,7 +133,13 @@ func (h *LLMMeterHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ns = "default"
 	}
 
-	if h.tokenStore != nil && h.tokenStore.IsRevoked(ctx, claims.TaskID, ns) {
+	if revoked, revErr := h.checkTokenRevoked(ctx, claims.TaskID, ns); revErr != nil {
+		writeMeterJSON(w, http.StatusServiceUnavailable, LLMMeterResponse{
+			Allowed: false,
+			Reason:  "failed to verify token revocation status",
+		})
+		return
+	} else if revoked {
 		writeMeterJSON(w, http.StatusUnauthorized, LLMMeterResponse{
 			Allowed: false,
 			Reason:  "token revoked",
@@ -197,7 +203,13 @@ func (h *LLMMeterHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	if h.tokenStore != nil && h.tokenStore.IsRevoked(ctx, claims.TaskID, ns) {
+	if revoked, revErr := h.checkTokenRevoked(ctx, claims.TaskID, ns); revErr != nil {
+		writeMeterJSON(w, http.StatusServiceUnavailable, LLMMeterResponse{
+			Allowed: false,
+			Reason:  "failed to verify token revocation status",
+		})
+		return
+	} else if revoked {
 		writeMeterJSON(w, http.StatusUnauthorized, LLMMeterResponse{
 			Allowed: false,
 			Reason:  "token revoked",
@@ -417,6 +429,18 @@ func (h *LLMMeterHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Guidance:        guidance,
 		PreviewURL:      previewURL,
 	})
+}
+
+func (h *LLMMeterHandler) checkTokenRevoked(ctx context.Context, taskID, namespace string) (bool, error) {
+	if h.tokenStore == nil {
+		return false, nil
+	}
+	if checker, ok := h.tokenStore.(interface {
+		CheckRevoked(ctx context.Context, taskID, namespace string) (bool, error)
+	}); ok {
+		return checker.CheckRevoked(ctx, taskID, namespace)
+	}
+	return h.tokenStore.IsRevoked(ctx, taskID, namespace), nil
 }
 
 func (h *LLMMeterHandler) updateTaskStatus(ctx context.Context, task *v1alpha1.AgentTask) error {

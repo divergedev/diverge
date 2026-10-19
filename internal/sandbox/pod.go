@@ -203,8 +203,16 @@ func (p *PodSandboxProvider) Provision(ctx context.Context, task *v1alpha1.Agent
 		}
 	}
 
-	if err := p.client.Create(ctx, pod); err != nil && !apierrors.IsAlreadyExists(err) {
-		return nil, fmt.Errorf("create sandbox pod: %w", err)
+	if err := p.client.Create(ctx, pod); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			return nil, fmt.Errorf("create sandbox pod: %w", err)
+		}
+		existing := &corev1.Pod{}
+		if getErr := p.client.Get(ctx, client.ObjectKey{Namespace: task.Namespace, Name: podName}, existing); getErr == nil {
+			if existing.DeletionTimestamp != nil || existing.Status.Phase == corev1.PodFailed || existing.Status.Phase == corev1.PodSucceeded {
+				return nil, fmt.Errorf("sandbox pod %s is terminating or in terminal phase %s; waiting for deletion", podName, existing.Status.Phase)
+			}
+		}
 	}
 
 	status, err := p.Status(ctx, task)
@@ -311,9 +319,15 @@ func (p *PodSandboxProvider) Resume(ctx context.Context, task *v1alpha1.AgentTas
 		}
 		return fmt.Errorf("get sandbox pod %s on resume: %w", podName, err)
 	}
+	if pod.DeletionTimestamp != nil {
+		return fmt.Errorf("sandbox pod %s is terminating; waiting for deletion before reprovisioning", podName)
+	}
 	if pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded {
 		if delErr := p.Teardown(ctx, task); delErr != nil {
 			return delErr
+		}
+		if getErr := p.client.Get(ctx, client.ObjectKey{Namespace: task.Namespace, Name: podName}, &corev1.Pod{}); getErr == nil || !apierrors.IsNotFound(getErr) {
+			return fmt.Errorf("sandbox pod %s deletion in progress; retry reprovisioning once deleted", podName)
 		}
 		_, provErr := p.Provision(ctx, task)
 		return provErr

@@ -516,4 +516,22 @@ func TestMacaroonModelGlobAndPrefixMatching(t *testing.T) {
 	assert.ErrorIs(t, shortProvider.Verify(ctx, tierRaw, Claims{TaskID: "task-tier-alias"}), ErrInvalidSignature)
 	_, _, err = shortProvider.VerifyAndExtract(ctx, tierRaw)
 	assert.ErrorIs(t, err, ErrInvalidSignature)
+
+	// Regression test: attenuating gpt-4? to broader gpt-4* must be rejected
+	qTok, err := provider.Mint(ctx, Claims{
+		TaskID:        "task-qmark",
+		Namespace:     "default",
+		AllowedModels: []string{"gpt-4?"},
+	})
+	require.NoError(t, err)
+	broadened, err := provider.Attenuate(ctx, qTok, Caveat{
+		Key:   "allowed_models",
+		Op:    OpIn,
+		Value: "gpt-4*",
+	})
+	require.NoError(t, err)
+	broadenedRaw, err := broadened.Serialize()
+	require.NoError(t, err)
+	_, _, err = provider.VerifyAndExtract(ctx, broadenedRaw)
+	assert.ErrorIs(t, err, ErrCaveatFailed)
 }

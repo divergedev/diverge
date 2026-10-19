@@ -309,6 +309,7 @@ func TestMCPBearerTokenAuth(t *testing.T) {
 	require.NoError(t, os.WriteFile(tokenFile, []byte("  file-macaroon-token-1\n"), 0o600))
 
 	t.Setenv("DIVERGE_TOKEN", "")
+	t.Setenv("DIVERGE_MACAROON_TOKEN", "")
 	t.Setenv("DIVERGE_TOKEN_FILE", tokenFile)
 	assert.Equal(t, "file-macaroon-token-1", resolveMCPBearerToken())
 
