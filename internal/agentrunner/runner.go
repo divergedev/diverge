@@ -60,6 +60,7 @@ type Config struct {
 	VerifyCommand       string
 	Guidance            string
 	Model               string
+	RunID               string
 	TokensPerIteration  int64
 	CostPerIterationUSD float64
 }
@@ -179,6 +180,7 @@ func LoadConfigFromEnv(getenv func(string) string) (*Config, error) {
 		VerifyCommand:       strings.TrimSpace(getenv("DIVERGE_VERIFY_CMD")),
 		Guidance:            strings.TrimSpace(getenv("DIVERGE_GUIDANCE")),
 		Model:               model,
+		RunID:               strings.TrimSpace(getenv("DIVERGE_RUN_ID")),
 		TokensPerIteration:  tokensPerIteration,
 		CostPerIterationUSD: costPerIterationUSD,
 	}, nil
@@ -203,6 +205,7 @@ type MeterResponse struct {
 	Iteration       int32   `json:"iteration,omitempty"`
 	MaxIterations   int32   `json:"maxIterations,omitempty"`
 	Guidance        string  `json:"guidance,omitempty"`
+	PreviewURL      string  `json:"previewUrl,omitempty"`
 }
 
 // CommandExecutor abstracts external command execution for testability.
@@ -309,7 +312,11 @@ func (r *Runner) ReportUsage(ctx context.Context, token, model string, tokensUse
 func (r *Runner) ReportUsageForIteration(ctx context.Context, iter int, token, model string, tokensUsed int64, costUSD float64) (*MeterResponse, error) {
 	var reqID string
 	if iter > 0 && r.Config != nil && r.Config.TaskName != "" {
-		reqID = fmt.Sprintf("%s-iter-%d", r.Config.TaskName, iter)
+		if r.Config.RunID != "" {
+			reqID = fmt.Sprintf("%s-%s-iter-%d", r.Config.TaskName, r.Config.RunID, iter)
+		} else {
+			reqID = fmt.Sprintf("%s-iter-%d", r.Config.TaskName, iter)
+		}
 	}
 	payload := MeterRequest{
 		RequestID:  reqID,
@@ -354,6 +361,28 @@ func (r *Runner) ReportUsageForIteration(ctx context.Context, iter int, token, m
 	}
 
 	return &meterResp, nil
+}
+
+// ensureGitExcludeGuidance appends guidance file patterns to .git/info/exclude when a .git directory exists
+// so live steering instructions are never staged by git add -A.
+func ensureGitExcludeGuidance(workspaceDir string) {
+	gitDir := filepath.Join(workspaceDir, ".git")
+	info, err := os.Stat(gitDir)
+	if err != nil || !info.IsDir() {
+		return
+	}
+	infoDir := filepath.Join(gitDir, "info")
+	_ = os.MkdirAll(infoDir, 0755)
+	excludePath := filepath.Join(infoDir, "exclude")
+	existing, _ := os.ReadFile(excludePath)
+	content := string(existing)
+	if !strings.Contains(content, ".diverge-guidance.md") {
+		if len(content) > 0 && !strings.HasSuffix(content, "\n") {
+			content += "\n"
+		}
+		content += ".diverge-guidance.md\n.diverge/guidance.md\n"
+		_ = os.WriteFile(excludePath, []byte(content), 0600)
+	}
 }
 
 // CheckPreviewHealth probes the ephemeral preview URL (if configured) with the Diverge isolation header.
@@ -424,10 +453,21 @@ func (r *Runner) Run(ctx context.Context) (*RunResult, error) {
 		if meterResp != nil {
 			lastTokens = meterResp.TotalTokensUsed
 			lastCost = meterResp.TotalCostUSD
+			if meterResp.MaxIterations > 0 {
+				r.Config.MaxIterations = int(meterResp.MaxIterations)
+			}
+			if strings.TrimSpace(meterResp.PreviewURL) != "" {
+				r.Config.PreviewURL = strings.TrimSpace(meterResp.PreviewURL)
+			}
 			if liveGuidance := strings.TrimSpace(meterResp.Guidance); liveGuidance != "" {
 				r.Config.Guidance = liveGuidance
 				if r.Config.WorkspaceDir != "" {
+					ensureGitExcludeGuidance(r.Config.WorkspaceDir)
 					_ = os.WriteFile(filepath.Join(r.Config.WorkspaceDir, ".diverge-guidance.md"), []byte(liveGuidance+"\n"), 0600)
+					divergeDir := filepath.Join(r.Config.WorkspaceDir, ".diverge")
+					if mkErr := os.MkdirAll(divergeDir, 0755); mkErr == nil {
+						_ = os.WriteFile(filepath.Join(divergeDir, "guidance.md"), []byte(liveGuidance+"\n"), 0600)
+					}
 				}
 			}
 		}

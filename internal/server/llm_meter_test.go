@@ -491,3 +491,103 @@ func TestLLMMeterHandler_IdempotencyWildcardIterationAndGuidance(t *testing.T) {
 	assert.True(t, resp3.Suspended)
 	assert.Equal(t, "max iterations exceeded", resp3.Reason)
 }
+
+func TestLLMMeterHandler_MultiCallSameIterationAndSpecBudgetAuthority(t *testing.T) {
+	ctx := context.Background()
+	crdClient, verifier, store, handler := setupLLMMeterTest(t)
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "task-multi-call-iter",
+			Namespace: "default",
+			Annotations: map[string]string{
+				"divergedev.com/preview-url": "https://pr-42.preview.diverge.dev",
+			},
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective:     "Multi-call per iteration and live budget bump",
+			BudgetUSD:     "10.00", // Live spec bumped from initial $2.00 token caveat
+			BudgetTokens:  200000,
+			MaxIterations: 3,
+			Capabilities:  []string{"fast"},
+			Repository: v1alpha1.AgentTaskRepository{
+				URL: "https://github.com/divergedev/diverge",
+			},
+		},
+	}
+	require.NoError(t, crdClient.Create(ctx, task))
+	task.Status.Phase = v1alpha1.AgentTaskPhaseActive
+	require.NoError(t, crdClient.Status().Update(ctx, task))
+
+	// Token minted with older $2.00 caveat and capability tier alias "fast"
+	token := mintTestMeterToken(t, verifier, store, pkgauth.Claims{
+		TaskID:        "task-multi-call-iter",
+		Namespace:     "default",
+		AllowedModels: []string{"fast"},
+		MaxCostUSD:    2.00,
+		MaxTokens:     50000,
+		ExpiresAt:     time.Now().Add(time.Hour),
+	})
+
+	// Three LLM sub-calls all belonging to Iteration 1, totaling $3.00 (> $2.00 token caveat, <= $10.00 live spec)
+	for i := 1; i <= 3; i++ {
+		body, _ := json.Marshal(LLMMeterRequest{
+			Iteration:  1,
+			Model:      "gemini-2.5-flash",
+			TokensUsed: 10000,
+			CostUSD:    1.00,
+		})
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/agenttask/meter", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code)
+
+		var resp LLMMeterResponse
+		require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+		assert.True(t, resp.Allowed)
+		assert.Equal(t, int32(1), resp.Iteration, "multiple calls with Iteration=1 must not increment past 1")
+		assert.Equal(t, "https://pr-42.preview.diverge.dev", resp.PreviewURL)
+	}
+}
+
+func TestLLMMeterHandler_RejectsSuspendedOrTerminalTask(t *testing.T) {
+	ctx := context.Background()
+	crdClient, verifier, store, handler := setupLLMMeterTest(t)
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "task-completed",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective: "Completed task",
+			Repository: v1alpha1.AgentTaskRepository{
+				URL: "https://github.com/divergedev/diverge",
+			},
+		},
+	}
+	require.NoError(t, crdClient.Create(ctx, task))
+	task.Status.Phase = v1alpha1.AgentTaskPhaseCompleted
+	require.NoError(t, crdClient.Status().Update(ctx, task))
+
+	token := mintTestMeterToken(t, verifier, store, pkgauth.Claims{
+		TaskID:    "task-completed",
+		Namespace: "default",
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+
+	body, _ := json.Marshal(LLMMeterRequest{
+		TokensUsed: 100,
+		CostUSD:    0.01,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agenttask/meter", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusTooManyRequests, rec.Code)
+	var resp LLMMeterResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.False(t, resp.Allowed)
+	assert.True(t, resp.Suspended)
+}

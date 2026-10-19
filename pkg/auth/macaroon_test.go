@@ -490,4 +490,30 @@ func TestMacaroonModelGlobAndPrefixMatching(t *testing.T) {
 	_, extracted, err := provider.VerifyAndExtract(ctx, attRaw)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"claude-sonnet-4-20250514"}, extracted.AllowedModels)
+
+	// Capability tier aliases ("fast", "smart", "lite") match standard model names
+	tierTok, err := provider.Mint(ctx, Claims{
+		TaskID:        "task-tier-alias",
+		Namespace:     "default",
+		AllowedModels: []string{"fast", "smart"},
+		MaxCostUSD:    0.004,
+	})
+	require.NoError(t, err)
+	tierRaw, err := tierTok.Serialize()
+	require.NoError(t, err)
+	_, tierExtracted, err := provider.VerifyAndExtract(ctx, tierRaw)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.004, tierExtracted.MaxCostUSD, 0.0001)
+	assert.True(t, MatchesAllowedModel("fast", "claude-3-7-sonnet"))
+	assert.True(t, MatchesAllowedModel("smart", "claude-sonnet-4-6"))
+	assert.True(t, MatchesAllowedModel("smart", "gpt-4o"))
+	assert.True(t, MatchesAllowedModel("lite", "gemini-2.5-flash-lite"))
+
+	// Short root key (< 32 bytes) is rejected by Mint, Verify, and VerifyAndExtract
+	shortProvider := NewMacaroonProvider([]byte("short-key"))
+	_, err = shortProvider.Mint(ctx, Claims{TaskID: "t1", Namespace: "default"})
+	assert.Error(t, err)
+	assert.ErrorIs(t, shortProvider.Verify(ctx, tierRaw, Claims{TaskID: "task-tier-alias"}), ErrInvalidSignature)
+	_, _, err = shortProvider.VerifyAndExtract(ctx, tierRaw)
+	assert.ErrorIs(t, err, ErrInvalidSignature)
 }

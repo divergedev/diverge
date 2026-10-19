@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	pkgauth "github.com/divergedev/diverge/pkg/auth"
 )
 
 const (
@@ -30,6 +31,30 @@ const (
 	managedByAgentTask       = "diverge-agenttask"
 	conditionPreviewEnvReady = "PreviewEnvironmentReady"
 )
+
+func restoreReconcilerStatus(task *v1alpha1.AgentTask, saved *v1alpha1.AgentTaskStatus) {
+	if task == nil || saved == nil {
+		return
+	}
+	if task.Status.Phase == "" && saved.Phase != "" {
+		task.Status.Phase = saved.Phase
+	}
+	if saved.SandboxClaimRef != "" {
+		task.Status.SandboxClaimRef = saved.SandboxClaimRef
+	}
+	if saved.SandboxPodName != "" {
+		task.Status.SandboxPodName = saved.SandboxPodName
+	}
+	if saved.SandboxIP != "" {
+		task.Status.SandboxIP = saved.SandboxIP
+	}
+	if task.Status.Message == "" && saved.Message != "" {
+		task.Status.Message = saved.Message
+	}
+	for _, c := range saved.Conditions {
+		meta.SetStatusCondition(&task.Status.Conditions, c)
+	}
+}
 
 func isPreviewEnabledForTask(task *v1alpha1.AgentTask) bool {
 	if task == nil {
@@ -99,7 +124,8 @@ func isOwnedByAgentTask(env *v1alpha1.Environment, task *v1alpha1.AgentTask) boo
 	if env == nil || task == nil {
 		return false
 	}
-	if env.Labels[labelManagedBy] == managedByAgentTask && env.Labels[labelAgentTask] == truncateLabel(task.Name) {
+	lbl := env.Labels[labelAgentTask]
+	if env.Labels[labelManagedBy] == managedByAgentTask && (lbl == pkgauth.TaskLabelValue(task.Name) || lbl == truncateLabel(task.Name)) {
 		return true
 	}
 	for _, ref := range env.OwnerReferences {
@@ -167,7 +193,7 @@ func (r *AgentTaskReconciler) reconcileLinkedPreviewEnvironment(ctx context.Cont
 			if err := r.Patch(ctx, task, metaPatch); err != nil {
 				return fmt.Errorf("failed to clear task preview annotations: %w", err)
 			}
-			task.Status = *savedStatus
+			restoreReconcilerStatus(task, savedStatus)
 		}
 
 		meta.RemoveStatusCondition(&task.Status.Conditions, conditionPreviewEnvReady)
@@ -189,7 +215,7 @@ func (r *AgentTaskReconciler) reconcileLinkedPreviewEnvironment(ctx context.Cont
 		if env.Labels == nil {
 			env.Labels = make(map[string]string)
 		}
-		env.Labels[labelAgentTask] = truncateLabel(task.Name)
+		env.Labels[labelAgentTask] = pkgauth.TaskLabelValue(task.Name)
 		env.Labels[labelManagedBy] = managedByAgentTask
 
 		if task.Status.SandboxIP != "" {
@@ -273,7 +299,7 @@ func (r *AgentTaskReconciler) reconcileLinkedPreviewEnvironment(ctx context.Cont
 		if err := r.Patch(ctx, task, metaPatch); err != nil {
 			return fmt.Errorf("failed to patch task preview annotations: %w", err)
 		}
-		task.Status = *savedStatus
+		restoreReconcilerStatus(task, savedStatus)
 	}
 
 	cond := metav1.Condition{

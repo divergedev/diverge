@@ -17,6 +17,8 @@ var defaultAgentConfigContent = strings.Join([]string{
 	"agent:",
 	"  # Allowed LLM models for this repository",
 	"  allowedModels:",
+	"    - claude-3-7-sonnet",
+	"    - claude-sonnet-4-6",
 	"    - claude-3-5-sonnet",
 	"    - gpt-4o",
 	"    - gemini-2.5-pro",

@@ -21,12 +21,14 @@ export interface LLMMeterResponse {
   iteration?: number;
   maxIterations?: number;
   guidance?: string;
+  previewUrl?: string;
 }
 
 export interface LLMMeterOptions {
   serverUrl?: string;
   token?: string;
   tokenFile?: string;
+  timeoutMs?: number;
   fetchImpl?: typeof fetch;
 }
 
@@ -41,7 +43,9 @@ export class LLMMeterError extends Error {
     this.name = 'LLMMeterError';
     this.statusCode = statusCode;
     this.response = response;
-    this.isBudgetExceeded = statusCode === 429;
+    this.isBudgetExceeded =
+      statusCode !== 403 &&
+      (statusCode === 429 || Boolean(response && (!response.allowed || response.suspended)));
     this.isModelDisallowed = statusCode === 403;
     Object.setPrototypeOf(this, LLMMeterError.prototype);
   }
@@ -105,14 +109,19 @@ export async function meterLLMUsage(
     bodyObj.iteration = req.iteration;
   }
 
-  const res = await fetchFn(endpoint, {
+  const fetchInit: RequestInit = {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify(bodyObj),
-  });
+  };
+  if (opts?.timeoutMs && opts.timeoutMs > 0 && typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal) {
+    fetchInit.signal = AbortSignal.timeout(opts.timeoutMs);
+  }
+
+  const res = await fetchFn(endpoint, fetchInit);
 
   let data: LLMMeterResponse | undefined;
   try {
@@ -134,6 +143,14 @@ export async function meterLLMUsage(
 
   if (!data || typeof data !== 'object') {
     throw new LLMMeterError('Invalid meter response payload', res.status);
+  }
+
+  if (!data.allowed || data.suspended) {
+    throw new LLMMeterError(
+      data.reason || 'Agent task suspended or budget exceeded',
+      res.status,
+      data
+    );
   }
 
   return data;

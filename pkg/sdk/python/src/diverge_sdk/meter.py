@@ -20,6 +20,7 @@ class LLMMeterResponse:
     iteration: int = 0
     max_iterations: int = 0
     guidance: str = ""
+    preview_url: str = ""
 
 
 class LLMMeterError(Exception):
@@ -35,7 +36,11 @@ class LLMMeterError(Exception):
 
     @property
     def is_budget_exceeded(self) -> bool:
-        return self.status_code == 429
+        if self.status_code == 403:
+            return False
+        return self.status_code == 429 or bool(
+            self.response and (not self.response.allowed or self.response.suspended)
+        )
 
     @property
     def is_model_disallowed(self) -> bool:
@@ -88,6 +93,9 @@ def _parse_meter_response(data: Any) -> Optional[LLMMeterResponse]:
             data.get("maxIterations", data.get("max_iterations", 0)) or 0
         ),
         guidance=str(data.get("guidance", "") or ""),
+        preview_url=str(
+            data.get("previewUrl", data.get("preview_url", "")) or ""
+        ),
     )
 
 
@@ -152,6 +160,12 @@ def meter_llm_usage(
                     "Invalid meter response payload",
                     resp.status,
                     None,
+                )
+            if not meter_resp.allowed or meter_resp.suspended:
+                raise LLMMeterError(
+                    meter_resp.reason or "Agent task suspended or budget exceeded",
+                    resp.status,
+                    meter_resp,
                 )
             return meter_resp
     except urllib.error.HTTPError as exc:

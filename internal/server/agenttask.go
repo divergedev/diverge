@@ -256,6 +256,9 @@ func (s *AgentTaskService) DeleteTask(ctx context.Context, req *connect.Request[
 	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "delete", namespace, "agenttasks"); err != nil {
 		return nil, err
 	}
+	if err := AuthorizeTaskObjectAccess(ctx, s.auditLogger, "delete", namespace, msg.Name); err != nil {
+		return nil, err
+	}
 
 	task := &v1alpha1.AgentTask{
 		ObjectMeta: metav1.ObjectMeta{
@@ -292,6 +295,9 @@ func (s *AgentTaskService) PauseTask(ctx context.Context, req *connect.Request[p
 	}
 
 	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "update", namespace, "agenttasks"); err != nil {
+		return nil, err
+	}
+	if err := AuthorizeTaskObjectAccess(ctx, s.auditLogger, "update", namespace, msg.Name); err != nil {
 		return nil, err
 	}
 
@@ -362,6 +368,9 @@ func (s *AgentTaskService) ResumeTask(ctx context.Context, req *connect.Request[
 	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "update", namespace, "agenttasks"); err != nil {
 		return nil, err
 	}
+	if err := AuthorizeTaskObjectAccess(ctx, s.auditLogger, "update", namespace, msg.Name); err != nil {
+		return nil, err
+	}
 
 	var updatedTask *v1alpha1.AgentTask
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -387,8 +396,9 @@ func (s *AgentTaskService) ResumeTask(ctx context.Context, req *connect.Request[
 		if err := s.client.Update(ctx, task); err != nil {
 			return err
 		}
-		if task.Status.Message != "" {
+		if task.Status.Message != "" || len(task.Status.LastMeterRequestIDs) > 0 {
 			task.Status.Message = ""
+			task.Status.LastMeterRequestIDs = nil
 			_ = s.client.Status().Update(ctx, task)
 		}
 		updatedTask = task
@@ -425,6 +435,9 @@ func (s *AgentTaskService) GuideTask(ctx context.Context, req *connect.Request[p
 	}
 
 	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "update", namespace, "agenttasks"); err != nil {
+		return nil, err
+	}
+	if err := AuthorizeTaskObjectAccess(ctx, s.auditLogger, "update", namespace, msg.Name); err != nil {
 		return nil, err
 	}
 
@@ -517,7 +530,8 @@ func (s *AgentTaskService) StreamTaskLogs(
 	}
 
 	logOpts := &corev1.PodLogOptions{
-		Follow: msg.Follow,
+		Container: "agent",
+		Follow:    msg.Follow,
 	}
 	if msg.TailLines > 0 {
 		logOpts.TailLines = &msg.TailLines
@@ -526,7 +540,7 @@ func (s *AgentTaskService) StreamTaskLogs(
 	reqStream := s.k8sClient.CoreV1().Pods(namespace).GetLogs(podName, logOpts)
 	readCloser, err := reqStream.Stream(ctx)
 	if err != nil {
-		return connect.NewError(connect.CodeInternal, fmt.Errorf("open pod log stream: %w", err))
+		return SanitizeK8sError(s.logger, err)
 	}
 	defer func() { _ = readCloser.Close() }()
 

@@ -857,3 +857,97 @@ func TestAgentTaskReconciler_SuspendResumeLinkedPreviewAndListTasksTool(t *testi
 	require.NoError(t, err)
 	assert.Equal(t, 2, suspender.provisionCalls, "Resume must re-provision when sandbox pod is in Failed phase")
 }
+
+func TestAgentTaskReconciler_TerminalSandboxPhaseAndLiveBudgetReMint(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	_ = v1alpha1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+
+	reg := registry.New[pkgsandbox.SandboxProvider]("test-terminal")
+	suspender := &trackingSuspenderProvider{}
+	reg.Register("suspender", registry.Provider[pkgsandbox.SandboxProvider]{
+		Create: func(_ registry.Deps) (pkgsandbox.SandboxProvider, error) {
+			return suspender, nil
+		},
+		Description: "test suspender provider",
+	})
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "task-terminal-phase",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective:     "Test terminal sandbox phase and live budget bump",
+			BudgetUSD:     "2.00",
+			MaxIterations: 2,
+			Repository: v1alpha1.AgentTaskRepository{
+				URL: "https://github.com/org/repo",
+			},
+			Sandbox: v1alpha1.AgentTaskSandbox{
+				Provider: "suspender",
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(task).
+		WithStatusSubresource(&v1alpha1.AgentTask{}, &v1alpha1.Environment{}).
+		Build()
+
+	macProvider := auth.NewMacaroonProvider([]byte("0123456789abcdef0123456789abcdef"))
+	memStore := auth.NewInMemoryTokenStore()
+
+	reconciler := &AgentTaskReconciler{
+		Client:          fakeClient,
+		Scheme:          scheme,
+		SandboxRegistry: reg,
+		TokenMinter:     macProvider,
+		TokenStore:      memStore,
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "task-terminal-phase"}}
+
+	// Provision to Active
+	_, err := reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+
+	// 1. Iteration == MaxIterations (2 == 2) must remain Active (not off-by-one paused)
+	current := &v1alpha1.AgentTask{}
+	require.NoError(t, fakeClient.Get(ctx, req.NamespacedName, current))
+	current.Status.Iteration = 2
+	require.NoError(t, fakeClient.Status().Update(ctx, current))
+
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	require.NoError(t, fakeClient.Get(ctx, req.NamespacedName, current))
+	assert.Equal(t, v1alpha1.AgentTaskPhaseActive, current.Status.Phase, "Iteration == MaxIterations must allow final iteration to finish")
+
+	// 2. Live budget bump while Active -> re-mints token with updated MaxCostUSD
+	current.Spec.BudgetUSD = "7.50"
+	require.NoError(t, fakeClient.Update(ctx, current))
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+
+	tokBytes, err := memStore.GetToken(ctx, task.Name, task.Namespace)
+	require.NoError(t, err)
+	_, claims, err := macProvider.VerifyAndExtract(ctx, tokBytes)
+	require.NoError(t, err)
+	assert.InDelta(t, 7.50, claims.MaxCostUSD, 0.0001)
+
+	// 3. Sandbox transitions to "Succeeded" -> AgentTask transitions to Completed and revokes token
+	suspender.phase = "Succeeded"
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+
+	require.NoError(t, fakeClient.Get(ctx, req.NamespacedName, current))
+	assert.Equal(t, v1alpha1.AgentTaskPhaseCompleted, current.Status.Phase)
+	assert.Equal(t, "Agent task completed successfully", current.Status.Message)
+	assert.True(t, memStore.IsRevoked(ctx, task.Name, task.Namespace))
+}

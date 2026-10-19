@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -99,30 +100,23 @@ func (c *KubeTaskClient) Pause(ctx context.Context, namespace, name string) erro
 	return nil
 }
 
-// Resume unpauses execution of an AgentTask and optionally bumps budget or tokens.
-func (c *KubeTaskClient) Resume(ctx context.Context, namespace, name string, budgetUSD string, tokens int64) error {
-	task, err := c.Get(ctx, namespace, name)
-	if err != nil {
-		return err
+func applyResumeBudgetAndIterationBumps(task *v1alpha1.AgentTask, budgetUSD string, tokens int64) error {
+	if tokens < 0 {
+		return fmt.Errorf("tokens bump must be non-negative")
 	}
-	task.Spec.Suspended = false
 	cleanBump := normalizeTaskBudgetArg(budgetUSD)
 	if cleanBump != "" {
-		if task.Spec.BudgetUSD == "" {
-			if bump, err := strconv.ParseFloat(cleanBump, 64); err == nil {
-				task.Spec.BudgetUSD = fmt.Sprintf("%.2f", bump)
-			} else {
-				task.Spec.BudgetUSD = cleanBump
-			}
-		} else {
-			existing, err1 := strconv.ParseFloat(normalizeTaskBudgetArg(task.Spec.BudgetUSD), 64)
-			bump, err2 := strconv.ParseFloat(cleanBump, 64)
-			if err1 == nil && err2 == nil {
-				task.Spec.BudgetUSD = fmt.Sprintf("%.2f", existing+bump)
-			} else {
-				task.Spec.BudgetUSD = cleanBump
+		bump, err := strconv.ParseFloat(cleanBump, 64)
+		if err != nil || math.IsNaN(bump) || math.IsInf(bump, 0) || bump <= 0 {
+			return fmt.Errorf("budget bump %q must be a positive number", budgetUSD)
+		}
+		existing := 0.0
+		if task.Spec.BudgetUSD != "" {
+			if parsed, pErr := strconv.ParseFloat(normalizeTaskBudgetArg(task.Spec.BudgetUSD), 64); pErr == nil && !math.IsNaN(parsed) && !math.IsInf(parsed, 0) {
+				existing = parsed
 			}
 		}
+		task.Spec.BudgetUSD = fmt.Sprintf("%.2f", existing+bump)
 	}
 	if tokens > 0 {
 		task.Spec.BudgetTokens += tokens
@@ -130,8 +124,26 @@ func (c *KubeTaskClient) Resume(ctx context.Context, namespace, name string, bud
 	if task.Spec.MaxIterations > 0 && task.Status.Iteration >= task.Spec.MaxIterations {
 		task.Spec.MaxIterations = task.Status.Iteration + 5
 	}
+	task.Spec.Suspended = false
+	return nil
+}
+
+// Resume unpauses execution of an AgentTask and optionally bumps budget or tokens.
+func (c *KubeTaskClient) Resume(ctx context.Context, namespace, name string, budgetUSD string, tokens int64) error {
+	task, err := c.Get(ctx, namespace, name)
+	if err != nil {
+		return err
+	}
+	if err := applyResumeBudgetAndIterationBumps(task, budgetUSD, tokens); err != nil {
+		return err
+	}
 	if err := c.client.Update(ctx, task); err != nil {
 		return fmt.Errorf("resume AgentTask %s: %w", name, err)
+	}
+	if task.Status.Message != "" || len(task.Status.LastMeterRequestIDs) > 0 {
+		task.Status.Message = ""
+		task.Status.LastMeterRequestIDs = nil
+		_ = c.client.Status().Update(ctx, task)
 	}
 	return nil
 }
@@ -141,6 +153,9 @@ func (c *KubeTaskClient) Guide(ctx context.Context, namespace, name, message str
 	task, err := c.Get(ctx, namespace, name)
 	if err != nil {
 		return err
+	}
+	if task.Status.Phase == v1alpha1.AgentTaskPhaseCompleted || task.Status.Phase == v1alpha1.AgentTaskPhaseFailed {
+		return fmt.Errorf("cannot guide task %s in terminal phase %s", name, task.Status.Phase)
 	}
 	if task.Annotations == nil {
 		task.Annotations = make(map[string]string)
@@ -239,31 +254,11 @@ func (m *MockTaskClient) Resume(_ context.Context, namespace, name string, budge
 	if !ok {
 		return fmt.Errorf("agent task %q not found", name)
 	}
-	task.Spec.Suspended = false
-	cleanBump := normalizeTaskBudgetArg(budgetUSD)
-	if cleanBump != "" {
-		if task.Spec.BudgetUSD == "" {
-			if bump, err := strconv.ParseFloat(cleanBump, 64); err == nil {
-				task.Spec.BudgetUSD = fmt.Sprintf("%.2f", bump)
-			} else {
-				task.Spec.BudgetUSD = cleanBump
-			}
-		} else {
-			existing, err1 := strconv.ParseFloat(normalizeTaskBudgetArg(task.Spec.BudgetUSD), 64)
-			bump, err2 := strconv.ParseFloat(cleanBump, 64)
-			if err1 == nil && err2 == nil {
-				task.Spec.BudgetUSD = fmt.Sprintf("%.2f", existing+bump)
-			} else {
-				task.Spec.BudgetUSD = cleanBump
-			}
-		}
+	if err := applyResumeBudgetAndIterationBumps(task, budgetUSD, tokens); err != nil {
+		return err
 	}
-	if tokens > 0 {
-		task.Spec.BudgetTokens += tokens
-	}
-	if task.Spec.MaxIterations > 0 && task.Status.Iteration >= task.Spec.MaxIterations {
-		task.Spec.MaxIterations = task.Status.Iteration + 5
-	}
+	task.Status.Message = ""
+	task.Status.LastMeterRequestIDs = nil
 	return nil
 }
 
@@ -275,6 +270,9 @@ func (m *MockTaskClient) Guide(_ context.Context, namespace, name, message strin
 	task, ok := m.tasks[key]
 	if !ok {
 		return fmt.Errorf("agent task %q not found", name)
+	}
+	if task.Status.Phase == v1alpha1.AgentTaskPhaseCompleted || task.Status.Phase == v1alpha1.AgentTaskPhaseFailed {
+		return fmt.Errorf("cannot guide task %s in terminal phase %s", name, task.Status.Phase)
 	}
 	if task.Annotations == nil {
 		task.Annotations = make(map[string]string)

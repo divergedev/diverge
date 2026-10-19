@@ -83,11 +83,17 @@ export default function AgentTaskDetail() {
   const canPause = !isPaused && (phase === AgentTaskPhase.ACTIVE || phase === AgentTaskPhase.PROVISIONING || phase === AgentTaskPhase.PENDING)
   const canGuide = !isTerminal
   const safePrUrl = isSafeExternalUrl(task.status?.prUrl) ? task.status?.prUrl : undefined
-  const linkedEnv = (envListData?.environments ?? []).find(
-    (env) =>
-      env.labels?.['divergedev.com/agent-task'] === name ||
-      env.name === `agent-preview-${name}`,
-  )
+  const linkedEnv = (envListData?.environments ?? []).find((env) => {
+    const labelVal = env.labels?.['divergedev.com/agent-task']
+    return (
+      labelVal === name ||
+      env.name === `agent-preview-${name}` ||
+      (name.length > 48 &&
+        ((labelVal && name.startsWith(labelVal.slice(0, 40))) ||
+          (env.name.startsWith('agent-preview-') &&
+            name.startsWith(env.name.slice('agent-preview-'.length, 'agent-preview-'.length + 36)))))
+    )
+  })
   const safePreviewUrl = isSafeExternalUrl(linkedEnv?.status?.url)
     ? linkedEnv?.status?.url
     : undefined

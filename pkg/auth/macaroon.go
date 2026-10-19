@@ -69,6 +69,9 @@ func computeHMAC(key, data []byte) []byte {
 
 // Mint creates a fresh root Macaroon.
 func (p *MacaroonProvider) Mint(_ context.Context, claims Claims) (Token, error) {
+	if p == nil || len(p.rootKey) < MinMacaroonRootKeyLen {
+		return nil, fmt.Errorf("macaroon root key must be at least %d bytes", MinMacaroonRootKeyLen)
+	}
 	if claims.TaskID == "" {
 		return nil, errors.New("claims must specify TaskID")
 	}
@@ -110,10 +113,14 @@ func (p *MacaroonProvider) Mint(_ context.Context, claims Claims) (Token, error)
 		})
 	}
 	if claims.MaxCostUSD > 0 {
+		costVal := fmt.Sprintf("%.2f", claims.MaxCostUSD)
+		if claims.MaxCostUSD < 0.01 {
+			costVal = strconv.FormatFloat(claims.MaxCostUSD, 'f', -1, 64)
+		}
 		caveats = append(caveats, Caveat{
 			Key:   "max_cost_usd",
 			Op:    OpLessThan,
-			Value: fmt.Sprintf("%.2f", claims.MaxCostUSD),
+			Value: costVal,
 		})
 	}
 	if claims.MaxTokens > 0 {
@@ -193,6 +200,9 @@ func (p *MacaroonProvider) Attenuate(_ context.Context, token Token, caveats ...
 
 // Verify validates that the signature chain is intact and all caveats hold true.
 func (p *MacaroonProvider) Verify(_ context.Context, raw []byte, required Claims) error {
+	if p == nil || len(p.rootKey) < MinMacaroonRootKeyLen {
+		return ErrInvalidSignature
+	}
 	var mac Macaroon
 	if err := json.Unmarshal(raw, &mac); err != nil {
 		return fmt.Errorf("%w: %v", ErrMalformedToken, err)
@@ -240,6 +250,9 @@ func (p *MacaroonProvider) Verify(_ context.Context, raw []byte, required Claims
 // VerifyAndExtract validates the cryptographic HMAC chain, expiration, and caveat syntax of a
 // serialized Macaroon and extracts the effective Claims embedded in its caveat sequence.
 func (p *MacaroonProvider) VerifyAndExtract(_ context.Context, raw []byte) (*Macaroon, Claims, error) {
+	if p == nil || len(p.rootKey) < MinMacaroonRootKeyLen {
+		return nil, Claims{}, ErrInvalidSignature
+	}
 	var mac Macaroon
 	if err := json.Unmarshal(raw, &mac); err != nil {
 		return nil, Claims{}, fmt.Errorf("%w: %v", ErrMalformedToken, err)
@@ -418,7 +431,21 @@ func (p *MacaroonProvider) VerifyAndExtract(_ context.Context, raw []byte) (*Mac
 	return &mac, claims, nil
 }
 
-// MatchesAllowedModel reports whether model is permitted by pattern (exact match, trailing '*' prefix match, or glob).
+var capabilityTierModelPatterns = map[string][]string{
+	"fast": {
+		"*flash*", "*haiku*", "*mini*",
+		"gpt-4o*", "claude-3-5-sonnet*", "claude-3-7-sonnet*", "claude-sonnet*", "gemini-2.5-*",
+	},
+	"smart": {
+		"claude-*", "gpt-4*", "gpt-5*", "o1*", "o3*", "o4*", "gemini-*",
+	},
+	"lite": {
+		"*lite*", "*flash*", "*haiku*", "*mini*", "*nano*",
+	},
+}
+
+// MatchesAllowedModel reports whether model is permitted by pattern (exact match, capability tier alias,
+// trailing '*' prefix match, or glob).
 func MatchesAllowedModel(pattern, model string) bool {
 	pattern = strings.TrimSpace(pattern)
 	model = strings.TrimSpace(model)
@@ -428,9 +455,23 @@ func MatchesAllowedModel(pattern, model string) bool {
 	if pattern == "*" || pattern == model {
 		return true
 	}
-	if strings.HasSuffix(pattern, "*") {
+	if tierPatterns, ok := capabilityTierModelPatterns[strings.ToLower(pattern)]; ok {
+		lowerModel := strings.ToLower(model)
+		for _, tp := range tierPatterns {
+			if MatchesAllowedModel(tp, lowerModel) {
+				return true
+			}
+		}
+	}
+	if strings.HasSuffix(pattern, "*") && !strings.HasPrefix(pattern, "*") {
 		prefix := strings.TrimSuffix(pattern, "*")
 		if strings.HasPrefix(model, prefix) {
+			return true
+		}
+	}
+	if strings.HasPrefix(pattern, "*") && strings.HasSuffix(pattern, "*") && len(pattern) > 2 {
+		sub := strings.Trim(pattern, "*")
+		if strings.Contains(model, sub) {
 			return true
 		}
 	}

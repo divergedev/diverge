@@ -246,6 +246,7 @@ func (p *AgentSandboxProvider) StreamLogs(ctx context.Context, task *v1alpha1.Ag
 	}
 
 	podLogOpts := &corev1.PodLogOptions{
+		Container:  "agent",
 		Follow:     opts.Follow,
 		Timestamps: opts.Timestamps,
 	}
@@ -312,7 +313,17 @@ func BuildSandboxClaimSpec(task *v1alpha1.AgentTask) map[string]interface{} {
 	}
 
 	serverBaseURL := resolveServerBaseURL()
+	previewEnvName := strings.TrimSpace(task.Annotations["divergedev.com/preview-environment"])
+	if previewEnvName == "" {
+		previewEnvName = fmt.Sprintf("agent-preview-%s", pkgauth.TaskLabelValue(task.Name))
+	}
 	envVars := []interface{}{
+		map[string]interface{}{"name": "HOME", "value": "/tmp"},
+		map[string]interface{}{"name": "GIT_CONFIG_GLOBAL", "value": "/tmp/.gitconfig"},
+		map[string]interface{}{"name": "GIT_AUTHOR_NAME", "value": "Diverge Agent"},
+		map[string]interface{}{"name": "GIT_AUTHOR_EMAIL", "value": "agent@divergedev.com"},
+		map[string]interface{}{"name": "GIT_COMMITTER_NAME", "value": "Diverge Agent"},
+		map[string]interface{}{"name": "GIT_COMMITTER_EMAIL", "value": "agent@divergedev.com"},
 		map[string]interface{}{"name": "DIVERGE_TASK_NAME", "value": task.Name},
 		map[string]interface{}{"name": "DIVERGE_TASK_NAMESPACE", "value": task.Namespace},
 		map[string]interface{}{"name": "DIVERGE_OBJECTIVE", "value": task.Spec.Objective},
@@ -324,8 +335,13 @@ func BuildSandboxClaimSpec(task *v1alpha1.AgentTask) map[string]interface{} {
 		map[string]interface{}{"name": "DIVERGE_TOKEN_FILE", "value": "/etc/diverge/token/token"},
 		map[string]interface{}{"name": "DIVERGE_MCP_URL", "value": serverBaseURL + "/mcp"},
 		map[string]interface{}{"name": "DIVERGE_METER_URL", "value": serverBaseURL + "/api/v1/agenttask/meter"},
+		map[string]interface{}{"name": "DIVERGE_PREVIEW_HEADER_KEY", "value": "x-diverge-env"},
+		map[string]interface{}{"name": "DIVERGE_PREVIEW_HEADER_VALUE", "value": previewEnvName},
 	}
 
+	if previewURL := strings.TrimSpace(task.Annotations["divergedev.com/preview-url"]); previewURL != "" {
+		envVars = append(envVars, map[string]interface{}{"name": "DIVERGE_PREVIEW_URL", "value": previewURL})
+	}
 	if guidance := strings.TrimSpace(task.Annotations["divergedev.com/guidance"]); guidance != "" {
 		envVars = append(envVars, map[string]interface{}{"name": "DIVERGE_GUIDANCE", "value": guidance})
 	}
