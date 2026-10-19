@@ -387,6 +387,10 @@ func (s *AgentTaskService) ResumeTask(ctx context.Context, req *connect.Request[
 		if err := s.client.Update(ctx, task); err != nil {
 			return err
 		}
+		if task.Status.Message != "" {
+			task.Status.Message = ""
+			_ = s.client.Status().Update(ctx, task)
+		}
 		updatedTask = task
 		return nil
 	})

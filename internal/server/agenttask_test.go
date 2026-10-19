@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	fakek8s "k8s.io/client-go/kubernetes/fake"
 	coretesting "k8s.io/client-go/testing"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -389,4 +390,55 @@ func TestAgentTaskMacaroonCapabilityAuthorization(t *testing.T) {
 	if assert.ErrorAs(t, err, &connectErr) {
 		assert.Equal(t, connect.CodePermissionDenied, connectErr.Code())
 	}
+}
+
+func TestAgentTaskService_ResumeClearsFailureMessageAndSupportsPlusPrefix(t *testing.T) {
+	ctx := auth.ContextWithUserInfo(context.Background(), &auth.UserInfo{Username: "test-user"})
+	scheme := runtime.NewScheme()
+	_ = v1alpha1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1alpha1.AgentTask{}).
+		Build()
+	k8s := fakek8s.NewSimpleClientset()
+	k8s.PrependReactor("create", "subjectaccessreviews", func(action coretesting.Action) (handled bool, ret runtime.Object, err error) {
+		sar := action.(coretesting.CreateAction).GetObject().(*authorizationv1.SubjectAccessReview)
+		sar.Status.Allowed = true
+		return true, sar, nil
+	})
+	svc := NewAgentTaskService(c, k8s, nil, nil, nil, nil)
+
+	_, err := svc.CreateTask(ctx, connect.NewRequest(&pb.CreateTaskRequest{
+		Namespace: "default",
+		Name:      "task-resume-clear",
+		Spec: &pb.AgentTaskSpec{
+			Objective: "Fix checkout",
+			BudgetUsd: "5.00",
+			Suspended: true,
+			Repository: &pb.AgentTaskRepository{
+				Url: "https://github.com/divergedev/diverge",
+			},
+		},
+	}))
+	require.NoError(t, err)
+
+	// Simulate controller setting Paused phase and a budget failure message in status
+	task := &v1alpha1.AgentTask{}
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Namespace: "default", Name: "task-resume-clear"}, task))
+	task.Status.Phase = v1alpha1.AgentTaskPhasePaused
+	task.Status.Message = "Budget of $5.00 USD reached (spent $5.00)"
+	require.NoError(t, c.Status().Update(ctx, task))
+
+	// ResumeTask with "+$2.50" bump increments budget to "7.50" and clears status.message
+	res, err := svc.ResumeTask(ctx, connect.NewRequest(&pb.ResumeTaskRequest{
+		Namespace:     "default",
+		Name:          "task-resume-clear",
+		BudgetUsdBump: "+$2.50",
+	}))
+	require.NoError(t, err)
+	assert.False(t, res.Msg.Task.Spec.Suspended)
+	assert.Equal(t, "7.50", res.Msg.Task.Spec.BudgetUsd)
+	assert.Empty(t, res.Msg.Task.Status.Message)
 }

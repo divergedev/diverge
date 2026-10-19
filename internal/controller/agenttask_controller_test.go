@@ -693,3 +693,167 @@ func TestAgentTaskReconcilerDeletionBlocksFinalizerOnDeleteTokenError(t *testing
 	err = fakeClient.Get(ctx, req.NamespacedName, stillThere)
 	assert.True(t, apierrors.IsNotFound(err))
 }
+
+type trackingSuspenderProvider struct {
+	provisionCalls int
+	suspendCalls   int
+	resumeCalls    int
+	phase          string
+	ready          bool
+}
+
+func (p *trackingSuspenderProvider) Provision(_ context.Context, task *v1alpha1.AgentTask) (*pkgsandbox.SandboxResult, error) {
+	p.provisionCalls++
+	p.phase = "Running"
+	p.ready = true
+	return &pkgsandbox.SandboxResult{
+		ClaimName: "claim-" + task.Name,
+		PodName:   "pod-" + task.Name,
+		Ready:     true,
+	}, nil
+}
+
+func (p *trackingSuspenderProvider) Teardown(_ context.Context, _ *v1alpha1.AgentTask) error {
+	return nil
+}
+
+func (p *trackingSuspenderProvider) Status(_ context.Context, task *v1alpha1.AgentTask) (*pkgsandbox.SandboxStatus, error) {
+	return &pkgsandbox.SandboxStatus{
+		ClaimName: "claim-" + task.Name,
+		PodName:   "pod-" + task.Name,
+		Phase:     p.phase,
+		Ready:     p.ready,
+	}, nil
+}
+
+func (p *trackingSuspenderProvider) StreamLogs(_ context.Context, _ *v1alpha1.AgentTask, _ pkgsandbox.LogOptions) (io.ReadCloser, error) {
+	return nil, nil
+}
+
+func (p *trackingSuspenderProvider) Suspend(_ context.Context, _ *v1alpha1.AgentTask) error {
+	p.suspendCalls++
+	p.phase = "Suspended"
+	p.ready = false
+	return nil
+}
+
+func (p *trackingSuspenderProvider) Resume(_ context.Context, _ *v1alpha1.AgentTask) error {
+	p.resumeCalls++
+	p.phase = "Running"
+	p.ready = true
+	return nil
+}
+
+func TestAgentTaskReconciler_SuspendResumeLinkedPreviewAndListTasksTool(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	_ = v1alpha1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+
+	reg := registry.New[pkgsandbox.SandboxProvider]("test-suspender")
+	suspender := &trackingSuspenderProvider{}
+	reg.Register("suspender", registry.Provider[pkgsandbox.SandboxProvider]{
+		Create: func(_ registry.Deps) (pkgsandbox.SandboxProvider, error) {
+			return suspender, nil
+		},
+		Description: "test suspender provider",
+	})
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "task-suspend-preview",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.AgentTaskSpec{
+			Objective: "Test suspend, resume, preview hibernation, and diverge_list_tasks",
+			BudgetUSD: "5.00",
+			Repository: v1alpha1.AgentTaskRepository{
+				URL: "https://github.com/org/repo",
+			},
+			Sandbox: v1alpha1.AgentTaskSandbox{
+				Provider: "suspender",
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(task).
+		WithStatusSubresource(&v1alpha1.AgentTask{}, &v1alpha1.Environment{}).
+		Build()
+
+	macProvider := auth.NewMacaroonProvider([]byte("0123456789abcdef0123456789abcdef"))
+	memStore := auth.NewInMemoryTokenStore()
+
+	reconciler := &AgentTaskReconciler{
+		Client:          fakeClient,
+		Scheme:          scheme,
+		SandboxRegistry: reg,
+		TokenMinter:     macProvider,
+		TokenStore:      memStore,
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "task-suspend-preview"}}
+
+	// 1. Add finalizer + provision + active reconcile to create linked preview Environment
+	_, err := reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, 1, suspender.provisionCalls)
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+
+	// Verify minted token includes "diverge_list_tasks" in AllowedTools
+	tokBytes, err := memStore.GetToken(ctx, task.Name, task.Namespace)
+	require.NoError(t, err)
+	_, claims, err := macProvider.VerifyAndExtract(ctx, tokBytes)
+	require.NoError(t, err)
+	assert.Contains(t, claims.AllowedTools, "diverge_list_tasks")
+
+	// Verify linked preview Environment exists and is not hibernated
+	envKey := types.NamespacedName{Namespace: "default", Name: linkedPreviewEnvironmentName(task.Name)}
+	env := &v1alpha1.Environment{}
+	require.NoError(t, fakeClient.Get(ctx, envKey, env))
+	assert.Empty(t, env.Annotations["divergedev.com/hibernated"])
+
+	// 2. Pause via Spec.Suspended = true -> calls Suspend() and hibernates linked preview Environment
+	updated := &v1alpha1.AgentTask{}
+	require.NoError(t, fakeClient.Get(ctx, req.NamespacedName, updated))
+	updated.Spec.Suspended = true
+	require.NoError(t, fakeClient.Update(ctx, updated))
+
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, 1, suspender.suspendCalls)
+	require.NoError(t, fakeClient.Get(ctx, envKey, env))
+	assert.Equal(t, "true", env.Annotations["divergedev.com/hibernated"])
+
+	// 3. Resume via Spec.Suspended = false -> calls Resume() and un-hibernates linked preview Environment
+	require.NoError(t, fakeClient.Get(ctx, req.NamespacedName, updated))
+	updated.Spec.Suspended = false
+	require.NoError(t, fakeClient.Update(ctx, updated))
+
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, 1, suspender.resumeCalls)
+	require.NoError(t, fakeClient.Get(ctx, envKey, env))
+	assert.Empty(t, env.Annotations["divergedev.com/hibernated"])
+
+	// 4. Pause again, simulate terminated pod ("Failed"), and verify Resume transitions to Pending and re-provisions
+	require.NoError(t, fakeClient.Get(ctx, req.NamespacedName, updated))
+	updated.Spec.Suspended = true
+	require.NoError(t, fakeClient.Update(ctx, updated))
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+
+	suspender.phase = "Failed"
+	require.NoError(t, fakeClient.Get(ctx, req.NamespacedName, updated))
+	updated.Spec.Suspended = false
+	require.NoError(t, fakeClient.Update(ctx, updated))
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, 2, suspender.provisionCalls, "Resume must re-provision when sandbox pod is in Failed phase")
+}

@@ -32,7 +32,10 @@ type PodSandboxProvider struct {
 	scheme    *runtime.Scheme
 }
 
-var _ pkgsandbox.SandboxProvider = (*PodSandboxProvider)(nil)
+var (
+	_ pkgsandbox.SandboxProvider  = (*PodSandboxProvider)(nil)
+	_ pkgsandbox.SandboxSuspender = (*PodSandboxProvider)(nil)
+)
 
 // NewPodSandboxProvider initializes a new PodSandboxProvider.
 func NewPodSandboxProvider(c client.Client, cs kubernetes.Interface, scheme *runtime.Scheme) *PodSandboxProvider {
@@ -287,6 +290,33 @@ func (p *PodSandboxProvider) Teardown(ctx context.Context, task *v1alpha1.AgentT
 			return nil
 		}
 		return fmt.Errorf("delete sandbox pod %s: %w", podName, err)
+	}
+	return nil
+}
+
+// Suspend deletes the standalone sandbox Pod when paused to reclaim cluster compute.
+func (p *PodSandboxProvider) Suspend(ctx context.Context, task *v1alpha1.AgentTask) error {
+	return p.Teardown(ctx, task)
+}
+
+// Resume ensures a healthy sandbox Pod is running, re-provisioning if missing or in a terminal phase.
+func (p *PodSandboxProvider) Resume(ctx context.Context, task *v1alpha1.AgentTask) error {
+	podName := SandboxPodName(task.Name)
+	pod := &corev1.Pod{}
+	err := p.client.Get(ctx, client.ObjectKey{Namespace: task.Namespace, Name: podName}, pod)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			_, provErr := p.Provision(ctx, task)
+			return provErr
+		}
+		return fmt.Errorf("get sandbox pod %s on resume: %w", podName, err)
+	}
+	if pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded {
+		if delErr := p.Teardown(ctx, task); delErr != nil {
+			return delErr
+		}
+		_, provErr := p.Provision(ctx, task)
+		return provErr
 	}
 	return nil
 }

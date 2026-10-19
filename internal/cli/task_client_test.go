@@ -135,3 +135,58 @@ func TestKubeTaskClient(t *testing.T) {
 	err = taskClient.Delete(ctx, "default", "non-existent-task")
 	assert.NoError(t, err)
 }
+
+func TestNormalizeTaskBudgetArgAndAdditiveResume(t *testing.T) {
+	assert.Equal(t, "5.00", normalizeTaskBudgetArg("+5.00"))
+	assert.Equal(t, "2.50", normalizeTaskBudgetArg("+$2.50"))
+	assert.Equal(t, "10.00", normalizeTaskBudgetArg("$10.00"))
+	assert.Equal(t, "7.25", normalizeTaskBudgetArg(" + $7.25 "))
+
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	_ = v1alpha1.AddToScheme(scheme)
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	for _, tc := range []struct {
+		name   string
+		client TaskClient
+	}{
+		{name: "mock", client: NewMockTaskClient()},
+		{name: "kube", client: NewKubeTaskClient(fakeClient)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task := &v1alpha1.AgentTask{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "task-budget-" + tc.name,
+					Namespace: "default",
+				},
+				Spec: v1alpha1.AgentTaskSpec{
+					Objective:     "Test additive resume budget and maxIterations bump",
+					BudgetUSD:     "10.00",
+					BudgetTokens:  100000,
+					MaxIterations: 5,
+					Suspended:     true,
+				},
+				Status: v1alpha1.AgentTaskStatus{
+					Iteration: 5,
+				},
+			}
+			require.NoError(t, tc.client.Create(ctx, task))
+
+			// Additive resume with "+$5.00" and +50000 tokens
+			require.NoError(t, tc.client.Resume(ctx, "default", task.Name, "+$5.00", 50000))
+			fetched, err := tc.client.Get(ctx, "default", task.Name)
+			require.NoError(t, err)
+			assert.False(t, fetched.Spec.Suspended)
+			assert.Equal(t, "15.00", fetched.Spec.BudgetUSD)
+			assert.Equal(t, int64(150000), fetched.Spec.BudgetTokens)
+			assert.Equal(t, int32(10), fetched.Spec.MaxIterations)
+
+			// Second additive resume with "+2.50"
+			require.NoError(t, tc.client.Resume(ctx, "default", task.Name, "+2.50", 0))
+			fetched, err = tc.client.Get(ctx, "default", task.Name)
+			require.NoError(t, err)
+			assert.Equal(t, "17.50", fetched.Spec.BudgetUSD)
+		})
+	}
+}

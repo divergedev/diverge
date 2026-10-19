@@ -189,6 +189,60 @@ def test_resolve_sandbox_token_from_file(tmp_path, monkeypatch):
     assert resolve_sandbox_token() == "sandbox-file-token-999"
 
 
+def test_meter_llm_usage_with_request_id_iteration_and_guidance(meter_server, tmp_path, monkeypatch):
+    base_url, handler = meter_server
+    monkeypatch.delenv("DIVERGE_MACAROON_TOKEN", raising=False)
+    token_file = tmp_path / "token"
+    token_file.write_text("minted-token-v1\n", encoding="utf-8")
+    monkeypatch.setenv("DIVERGE_TOKEN_FILE", str(token_file))
+
+    handler.response_body = {
+        "allowed": True,
+        "suspended": False,
+        "totalTokensUsed": 3200,
+        "totalCostUSD": 0.095,
+        "iteration": 4,
+        "maxIterations": 20,
+        "guidance": "Switch to exponential backoff for retries",
+    }
+
+    resp = meter_llm_usage(
+        "claude-sonnet-4-6",
+        1200,
+        0.035,
+        request_id="task-1-iter-4",
+        iteration=4,
+        server_url=base_url,
+    )
+
+    assert resp.allowed is True
+    assert resp.iteration == 4
+    assert resp.max_iterations == 20
+    assert resp.guidance == "Switch to exponential backoff for retries"
+    assert len(handler.recorded_requests) == 1
+    assert handler.recorded_requests[0]["auth"] == "Bearer minted-token-v1"
+    assert handler.recorded_requests[0]["body"] == {
+        "model": "claude-sonnet-4-6",
+        "tokensUsed": 1200,
+        "costUSD": 0.035,
+        "requestId": "task-1-iter-4",
+        "iteration": 4,
+    }
+
+    # Simulate kubelet rotating the mounted Secret token on resume
+    token_file.write_text("minted-token-v2-resumed\n", encoding="utf-8")
+    meter_llm_usage(
+        "claude-sonnet-4-6",
+        800,
+        0.025,
+        request_id="task-1-iter-5",
+        iteration=5,
+        server_url=base_url,
+    )
+    assert len(handler.recorded_requests) == 2
+    assert handler.recorded_requests[1]["auth"] == "Bearer minted-token-v2-resumed"
+
+
 def test_kafka_headers_and_context(monkeypatch):
     _current_env.set("")
     monkeypatch.delenv("DIVERGE_ENV", raising=False)

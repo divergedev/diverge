@@ -124,8 +124,9 @@ describe('AgentTaskDetail', () => {
     })
   })
 
-  it('resumes a paused task with an optional USD budget bump and rejects negative bumps', async () => {
+  it('resumes a paused task with an optional USD budget bump, supports steering while paused, and rejects negative bumps', async () => {
     let resumeBody: { budgetUsdBump?: string } | null = null
+    let guidedMessage = ''
     const pausedTask = {
       task: {
         ...mockActiveTask.task,
@@ -138,6 +139,11 @@ describe('AgentTaskDetail', () => {
       http.post('*/diverge.v1alpha1.AgentTaskService/GetTask', () =>
         HttpResponse.json(pausedTask),
       ),
+      http.post('*/diverge.v1alpha1.AgentTaskService/GuideTask', async ({ request }) => {
+        const body = (await request.json()) as { message?: string }
+        guidedMessage = body.message ?? ''
+        return HttpResponse.json({ accepted: true })
+      }),
       http.post('*/diverge.v1alpha1.AgentTaskService/ResumeTask', async ({ request }) => {
         resumeBody = (await request.json()) as { budgetUsdBump?: string }
         return HttpResponse.json(mockActiveTask)
@@ -148,10 +154,9 @@ describe('AgentTaskDetail', () => {
     const resumeBtn = await screen.findByRole('button', { name: /Resume/i })
     // Unsafe javascript: PR URL must not render an Open PR anchor
     expect(screen.queryByRole('button', { name: /Open PR/i })).not.toBeInTheDocument()
-    // Live steering input is disabled while paused and shows paused placeholder
+    // Live steering input remains enabled while paused so operators can steer before resuming
     const guidanceInput = screen.getByLabelText('Guidance message')
-    expect(guidanceInput).toBeDisabled()
-    expect(guidanceInput).toHaveAttribute('placeholder', 'Task is paused; resume the task to send live guidance')
+    expect(guidanceInput).not.toBeDisabled()
 
     fireEvent.click(resumeBtn)
     const bumpInput = await screen.findByLabelText(/Additional Budget USD/i)
@@ -161,12 +166,16 @@ describe('AgentTaskDetail', () => {
     fireEvent.click(screen.getAllByRole('button', { name: /^Resume$/i, hidden: true }).at(-1)!)
     expect(await screen.findByRole('alert')).toHaveTextContent('Additional budget USD must be a positive number')
 
-    // Valid bump calls ResumeTask RPC
+    // Valid bump (+$7.50) + optional resume guidance calls GuideTask and ResumeTask RPCs
     fireEvent.click(screen.getByRole('button', { name: /Resume/i }))
-    fireEvent.change(await screen.findByLabelText(/Additional Budget USD/i), { target: { value: '7.50' } })
-    fireEvent.click(screen.getAllByRole('button', { name: /^Resume$/i, hidden: true }).at(-1)!)
+    fireEvent.change(await screen.findByLabelText(/Additional Budget USD/i), { target: { value: '+$7.50' } })
+    fireEvent.change(await screen.findByLabelText(/Guidance for Resume/i), {
+      target: { value: 'Skip e2e suite and focus on unit tests' },
+    })
+    fireEvent.click(screen.getAllByRole('button', { name: /Guide & Resume/i, hidden: true }).at(-1)!)
 
     await waitFor(() => {
+      expect(guidedMessage).toBe('Skip e2e suite and focus on unit tests')
       expect(resumeBody).toMatchObject({ budgetUsdBump: '7.50' })
       expect(screen.getByRole('status')).toHaveTextContent('Task resumed (+$7.50 budget)')
     })

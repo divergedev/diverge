@@ -128,7 +128,7 @@ describe('LLM Usage Metering', () => {
     });
   });
 
-  it('loads token from file when opts.tokenFile or DIVERGE_TOKEN_FILE is configured', () => {
+  it('loads token from file when opts.tokenFile or DIVERGE_TOKEN_FILE is configured and hot-reloads across calls', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'diverge-sdk-node-test-'));
     try {
       const tokenPath = join(tempDir, 'token');
@@ -137,6 +137,62 @@ describe('LLM Usage Metering', () => {
 
       process.env.DIVERGE_TOKEN_FILE = tokenPath;
       expect(resolveSandboxToken()).toBe('file-macaroon-token-xyz');
+
+      const seenAuth: string[] = [];
+      const seenBodies: Array<Record<string, unknown>> = [];
+      const mockFetch: typeof fetch = async (_input, init) => {
+        seenAuth.push(String((init?.headers as Record<string, string>)?.Authorization));
+        seenBodies.push(JSON.parse(String(init?.body ?? '{}')));
+        return new Response(
+          JSON.stringify({
+            allowed: true,
+            suspended: false,
+            totalTokensUsed: 2500,
+            totalCostUSD: 0.08,
+            iteration: 3,
+            maxIterations: 15,
+            guidance: 'Use exponential backoff on conflict',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      };
+
+      const res = await meterLLMUsage(
+        {
+          requestId: 'task-1-iter-3',
+          iteration: 3,
+          model: 'claude-sonnet-4-6',
+          tokensUsed: 900,
+          costUSD: 0.03,
+        },
+        { fetchImpl: mockFetch }
+      );
+      expect(res.iteration).toBe(3);
+      expect(res.maxIterations).toBe(15);
+      expect(res.guidance).toBe('Use exponential backoff on conflict');
+      expect(seenBodies[0]).toEqual({
+        requestId: 'task-1-iter-3',
+        iteration: 3,
+        model: 'claude-sonnet-4-6',
+        tokensUsed: 900,
+        costUSD: 0.03,
+      });
+
+      writeFileSync(tokenPath, 'rotated-macaroon-token-v2\n', 'utf-8');
+      await meterLLMUsage(
+        {
+          requestId: 'task-1-iter-4',
+          iteration: 4,
+          model: 'claude-sonnet-4-6',
+          tokensUsed: 700,
+          costUSD: 0.02,
+        },
+        { fetchImpl: mockFetch }
+      );
+      expect(seenAuth).toEqual([
+        'Bearer file-macaroon-token-xyz',
+        'Bearer rotated-macaroon-token-v2',
+      ]);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

@@ -48,6 +48,7 @@ export default function AgentTaskDetail() {
   const [guidanceMessage, setGuidanceMessage] = useState('')
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false)
   const [budgetUsdBump, setBudgetUsdBump] = useState('')
+  const [resumeGuidance, setResumeGuidance] = useState('')
 
   useEffect(() => {
     if (!successMessage) return
@@ -80,7 +81,7 @@ export default function AgentTaskDetail() {
   const isPaused = phase === AgentTaskPhase.PAUSED || task.spec?.suspended
   const isTerminal = phase === AgentTaskPhase.COMPLETED || phase === AgentTaskPhase.FAILED
   const canPause = !isPaused && (phase === AgentTaskPhase.ACTIVE || phase === AgentTaskPhase.PROVISIONING || phase === AgentTaskPhase.PENDING)
-  const canGuide = !isTerminal && !isPaused
+  const canGuide = !isTerminal
   const safePrUrl = isSafeExternalUrl(task.status?.prUrl) ? task.status?.prUrl : undefined
   const linkedEnv = (envListData?.environments ?? []).find(
     (env) =>
@@ -124,6 +125,13 @@ export default function AgentTaskDetail() {
       }
     }
     try {
+      if (resumeGuidance.trim()) {
+        await guideTask.mutateAsync({
+          namespace,
+          name,
+          message: resumeGuidance.trim(),
+        })
+      }
       await resumeTask.mutateAsync({
         namespace,
         name,
@@ -131,6 +139,7 @@ export default function AgentTaskDetail() {
       })
       setResumeDialogOpen(false)
       setBudgetUsdBump('')
+      setResumeGuidance('')
       setSuccessMessage(trimmedBump ? `Task resumed (+$${trimmedBump} budget)` : 'Task resumed')
     } catch (err) {
       setMutationError(err instanceof Error ? err.message : 'Failed to resume task')
@@ -351,22 +360,37 @@ export default function AgentTaskDetail() {
           <DialogHeader>
             <DialogTitle>Resume Agent Task</DialogTitle>
             <DialogDescription>
-              Resume execution of {namespace}/{name}. Optionally increase the USD budget.
+              Resume execution of {namespace}/{name}. Optionally increase the USD budget or attach steering guidance.
             </DialogDescription>
           </DialogHeader>
-          <div className="py-2">
-            <label htmlFor="budget-usd-bump" className="text-sm font-medium mb-1 block">Additional Budget USD (optional)</label>
-            <Input
-              id="budget-usd-bump"
-              value={budgetUsdBump}
-              onChange={(e) => setBudgetUsdBump(e.target.value)}
-              placeholder="e.g. 5.00"
-            />
+          <div className="py-2 space-y-3">
+            <div>
+              <label htmlFor="budget-usd-bump" className="text-sm font-medium mb-1 block">Additional Budget USD (optional)</label>
+              <Input
+                id="budget-usd-bump"
+                value={budgetUsdBump}
+                onChange={(e) => setBudgetUsdBump(e.target.value)}
+                placeholder="e.g. 5.00"
+              />
+            </div>
+            <div>
+              <label htmlFor="resume-guidance" className="text-sm font-medium mb-1 block">Guidance for Resume (optional)</label>
+              <Input
+                id="resume-guidance"
+                value={resumeGuidance}
+                onChange={(e) => setResumeGuidance(e.target.value)}
+                placeholder="e.g. Focus on fixing the nil pointer in handler.go"
+              />
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setResumeDialogOpen(false)}>Cancel</Button>
-            <Button onClick={handleResume} disabled={resumeTask.isPending}>
-              {resumeTask.isPending ? 'Resuming...' : 'Resume'}
+            <Button onClick={handleResume} disabled={resumeTask.isPending || guideTask.isPending}>
+              {resumeTask.isPending || guideTask.isPending
+                ? 'Resuming...'
+                : resumeGuidance.trim()
+                  ? 'Guide & Resume'
+                  : 'Resume'}
             </Button>
           </DialogFooter>
         </DialogContent>

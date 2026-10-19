@@ -447,3 +447,47 @@ func encodeHex(b []byte) string {
 	}
 	return string(dst)
 }
+
+func TestMacaroonModelGlobAndPrefixMatching(t *testing.T) {
+	ctx := context.Background()
+	rootKey := []byte("0123456789abcdef0123456789abcdef")
+	provider := NewMacaroonProvider(rootKey)
+
+	tok, err := provider.Mint(ctx, Claims{
+		TaskID:        "task-model-glob",
+		Namespace:     "default",
+		AllowedModels: []string{"claude-sonnet-*", "gemini-2.5-*"},
+	})
+	require.NoError(t, err)
+
+	raw, err := tok.Serialize()
+	require.NoError(t, err)
+
+	// Prefix/glob match succeeds
+	require.NoError(t, provider.Verify(ctx, raw, Claims{
+		TaskID:        "task-model-glob",
+		Namespace:     "default",
+		AllowedModels: []string{"claude-sonnet-4-20250514", "gemini-2.5-pro"},
+	}))
+
+	// Unmatched model fails
+	err = provider.Verify(ctx, raw, Claims{
+		TaskID:        "task-model-glob",
+		Namespace:     "default",
+		AllowedModels: []string{"gpt-4o"},
+	})
+	assert.ErrorIs(t, err, ErrCaveatFailed)
+
+	// Attenuating from wildcard pattern to specific model succeeds in VerifyAndExtract
+	attenuated, err := provider.Attenuate(ctx, tok, Caveat{
+		Key:   "allowed_models",
+		Op:    OpIn,
+		Value: "claude-sonnet-4-20250514",
+	})
+	require.NoError(t, err)
+	attRaw, err := attenuated.Serialize()
+	require.NoError(t, err)
+	_, extracted, err := provider.VerifyAndExtract(ctx, attRaw)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"claude-sonnet-4-20250514"}, extracted.AllowedModels)
+}

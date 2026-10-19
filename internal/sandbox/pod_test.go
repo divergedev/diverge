@@ -321,3 +321,40 @@ func TestSandboxPodName_LongNameTruncation(t *testing.T) {
 	differentLong := longTaskName + "-other"
 	assert.NotEqual(t, podName1, SandboxPodName(differentLong), "Distinct long task names must not collide")
 }
+
+func TestPodSandboxProvider_SuspendAndResume(t *testing.T) {
+	ctx := context.Background()
+	scheme := buildPodTestScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	p := NewPodSandboxProvider(c, nil, scheme)
+
+	task := &v1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "task-suspend",
+			Namespace: "default",
+		},
+	}
+
+	_, err := p.Provision(ctx, task)
+	require.NoError(t, err)
+
+	podKey := client.ObjectKey{Namespace: "default", Name: SandboxPodName(task.Name)}
+	pod := &corev1.Pod{}
+	require.NoError(t, c.Get(ctx, podKey, pod))
+
+	// Suspend deletes the pod to reclaim compute
+	require.NoError(t, p.Suspend(ctx, task))
+	err = c.Get(ctx, podKey, pod)
+	assert.True(t, apierrors.IsNotFound(err))
+
+	// Resume re-provisions the pod when missing
+	require.NoError(t, p.Resume(ctx, task))
+	require.NoError(t, c.Get(ctx, podKey, pod))
+
+	// If the pod is in a terminal phase (PodFailed), Resume deletes and re-provisions it
+	pod.Status.Phase = corev1.PodFailed
+	require.NoError(t, c.Status().Update(ctx, pod))
+	require.NoError(t, p.Resume(ctx, task))
+	require.NoError(t, c.Get(ctx, podKey, pod))
+	assert.NotEqual(t, corev1.PodFailed, pod.Status.Phase)
+}

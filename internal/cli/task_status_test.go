@@ -20,15 +20,27 @@ func TestTaskStatusCmd(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-task",
 			Namespace: "default",
+			Annotations: map[string]string{
+				AnnotationGuidance: "Focus on retry idempotency",
+			},
 		},
 		Spec: v1alpha1.AgentTaskSpec{
-			Objective: "Refactor database migrations",
+			Objective:     "Refactor database migrations",
+			BudgetUSD:     "10.00",
+			MaxIterations: 15,
 			Repository: v1alpha1.AgentTaskRepository{
-				URL: "https://github.com/org/repo",
+				URL:        "https://github.com/org/repo",
+				BaseBranch: "main",
 			},
 		},
 		Status: v1alpha1.AgentTaskStatus{
-			Phase: v1alpha1.AgentTaskPhaseActive,
+			Phase:          v1alpha1.AgentTaskPhaseActive,
+			SandboxPodName: "sandbox-test-task",
+			SandboxIP:      "10.244.0.42",
+			Iteration:      4,
+			CostUSD:        "1.25",
+			PRURL:          "https://github.com/org/repo/pull/99",
+			Message:        "Running migration tests",
 		},
 	}
 

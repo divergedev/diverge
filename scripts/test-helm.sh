@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+cd "$(dirname "$0")/.."
 echo '=== Helm lint ==='
 helm lint charts/diverge/
 echo '=== Helm template (defaults) ==='
@@ -113,4 +114,27 @@ if ! echo "$cabundle_output" | grep -q 'caBundle: "dGVzdC1jYQ=="'; then
   exit 1
 fi
 
+echo '=== Helm template (server status subresource RBAC, sandbox token Secret gating, and port 8080) ==='
+server_default=$(helm template diverge charts/diverge/ --set server.enabled=true)
+for subres in "environments/status" "previewgroups/status" "agenttasks/status"; do
+  if ! echo "$server_default" | grep -q "\"$subres\""; then
+    echo "FAIL: Expected $subres in server RBAC rules"
+    exit 1
+  fi
+done
+if ! echo "$server_default" | grep -q 'name: http-compat'; then
+  echo 'FAIL: Expected http-compat port (8080) in server Service'
+  exit 1
+fi
+if ! echo "$server_default" | grep -q 'diverge-agenttask-tokens'; then
+  echo 'FAIL: Expected diverge-agenttask-tokens Secret rule when sandbox.enabled=true'
+  exit 1
+fi
+server_no_sandbox=$(helm template diverge charts/diverge/ --set server.enabled=true --set sandbox.enabled=false)
+if echo "$server_no_sandbox" | grep -q 'diverge-agenttask-tokens'; then
+  echo 'FAIL: Expected diverge-agenttask-tokens Secret rule to be omitted when sandbox.enabled=false'
+  exit 1
+fi
+
 echo '✅ All Helm tests passed'
+
