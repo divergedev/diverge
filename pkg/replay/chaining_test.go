@@ -45,6 +45,13 @@ func TestInterpolateAndExtractResponseVars(t *testing.T) {
 	assert.Equal(t, "true", extracted["active"])
 	assert.Equal(t, "sess-42", extracted["session_id"])
 	assert.Equal(t, "201", extracted["http_code"])
+
+	masked := maskExtractedVars(map[string]string{
+		" order_id ":   "$.id",
+		" session_id ": " header:X-Session-Id ",
+	}, extracted)
+	assert.Equal(t, "ord-777", masked["order_id"])
+	assert.Equal(t, RedactedPlaceholder, masked["session_id"])
 }
 
 func TestRunner_StatefulMultiStepChainingWithDivergentIDs(t *testing.T) {
