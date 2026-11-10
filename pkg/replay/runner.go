@@ -804,15 +804,20 @@ func maskExtractedVars(rules, vars map[string]string) map[string]string {
 	if len(vars) == 0 {
 		return vars
 	}
-	trimmedRules := make(map[string]string, len(rules))
+	headerVars := make(map[string]bool, len(rules))
 	for rk, rv := range rules {
-		if tk := strings.TrimSpace(rk); tk != "" {
-			trimmedRules[tk] = strings.TrimSpace(rv)
+		tk := strings.TrimSpace(rk)
+		tv := strings.TrimSpace(rv)
+		if tk == "" || tv == "" {
+			continue
+		}
+		if _, isHeader := parseHeaderSelector(tv); isHeader {
+			headerVars[tk] = true
 		}
 	}
 	out := make(map[string]string, len(vars))
 	for k, v := range vars {
-		if _, isHeader := parseHeaderSelector(trimmedRules[strings.TrimSpace(k)]); isHeader {
+		if headerVars[strings.TrimSpace(k)] {
 			out[k] = RedactedPlaceholder
 			continue
 		}

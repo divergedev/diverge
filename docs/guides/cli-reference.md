@@ -348,7 +348,7 @@ Start a local reverse-proxy recorder (accepting HTTP/1.1 and HTTP/2 cleartext `h
 - `--strip-header` — Additional request header name to strip before recording (repeatable)
 - `--redact-query` — Additional query parameter name to redact with `[REDACTED]` (repeatable)
 - `--redact-body-field` — JSON request body field name or dot-path to redact with `[REDACTED]` (repeatable, e.g., `password,$.user.ssn`)
-- `--auto-chain` — Automatically extract top-level `id` or `uuid` fields from `2xx` `POST`/`PUT` JSON responses (nested fields such as `data.id` are not auto-detected) and parameterize subsequent request paths with `{{stepN_id}}`
+- `--auto-chain` — Automatically extract top-level `id` or `uuid` fields from `2xx` `POST`/`PUT` JSON responses (nested fields such as `data.id` are not auto-detected) and parameterize subsequent request paths with `{{stepN_id}}` (for `id`) or `{{stepN_uuid}}` (for `uuid`)
 - `--max-requests` — Stop recording automatically after capturing `N` requests (`0` = unlimited)
 - `-d, --duration` — Stop recording automatically after this duration (e.g., `30s`)
 
