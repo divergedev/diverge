@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
@@ -21,6 +22,10 @@ type GitLabStatusReporter struct {
 
 // NewGitLabStatusReporter creates a reporter that updates GitLab commit statuses via the Commits API.
 func NewGitLabStatusReporter(baseURL, token string) *GitLabStatusReporter {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		baseURL = "https://gitlab.com"
+	}
 	return &GitLabStatusReporter{
 		BaseURL: baseURL,
 		Token:   token,

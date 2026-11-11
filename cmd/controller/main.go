@@ -380,11 +380,13 @@ func main() {
 	var glConfigFetcher webhook.ConfigFetcher
 	var glCommenter webhook.CommentPoster
 	if notifierProvider == "gitlab" && notifierToken != "" {
+		glBaseURL := notifier.ResolveGitLabBaseURL()
 		glConfigFetcher = &webhook.GitLabConfigFetcher{
+			BaseURL:    glBaseURL,
 			Token:      notifierToken,
 			HTTPClient: &http.Client{Timeout: 15 * time.Second},
 		}
-		glCommenter = notifier.NewGitLabNotifier(firstNonEmpty(os.Getenv("DIVERGE_BASE_URL"), os.Getenv("GITLAB_API_URL")), notifierToken)
+		glCommenter = notifier.NewGitLabNotifier(glBaseURL, notifierToken)
 	}
 	if len(gitlabAllowedUsers) == 0 {
 		setupLog.Info("WARNING: GitLab MR slash commands are disabled because no allowed user IDs are configured; set --gitlab-allowed-users or DIVERGE_GITLAB_ALLOWED_USERS")
@@ -410,11 +412,16 @@ func main() {
 	var ghConfigFetcher webhook.ConfigFetcher
 	var ghCommenter webhook.CommentPoster
 	if notifierProvider == "github" && notifierToken != "" {
+		ghBaseURL := notifier.ResolveGitHubBaseURL()
 		ghConfigFetcher = &webhook.GitHubConfigFetcher{
+			BaseURL:    ghBaseURL,
 			Token:      notifierToken,
 			HTTPClient: &http.Client{Timeout: 15 * time.Second},
 		}
-		ghCommenter = notifier.NewGitHubNotifier(firstNonEmpty(os.Getenv("DIVERGE_BASE_URL"), os.Getenv("GITHUB_API_URL")), notifierToken)
+		ghCommenter = notifier.NewGitHubNotifier(ghBaseURL, notifierToken)
+	}
+	if skipWithoutConfig && glConfigFetcher == nil && ghConfigFetcher == nil {
+		setupLog.Info("WARNING: direct serviceconfig deployer requires .diverge.yaml, but no Git provider token is configured; set --notifier-provider (gitlab|github) and DIVERGE_NOTIFIER_TOKEN so webhooks can fetch .diverge.yaml")
 	}
 	mgr.GetWebhookServer().Register("/github-webhook", &webhook.GitHubWebhookHandler{
 		Client:            mgr.GetClient(),
@@ -446,13 +453,13 @@ func resolveAgentTaskNotifier(provider, explicitToken string, k8sClient client.C
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "github":
 		token = firstNonEmpty(explicitToken, os.Getenv("DIVERGE_NOTIFIER_TOKEN"), os.Getenv("GITHUB_TOKEN"))
-		baseURL = firstNonEmpty(os.Getenv("DIVERGE_BASE_URL"), os.Getenv("GITHUB_API_URL"))
+		baseURL = notifier.ResolveGitHubBaseURL()
 	case "gitlab":
 		token = firstNonEmpty(explicitToken, os.Getenv("DIVERGE_NOTIFIER_TOKEN"), os.Getenv("DIVERGE_GITLAB_TOKEN"), os.Getenv("GITLAB_TOKEN"))
-		baseURL = firstNonEmpty(os.Getenv("DIVERGE_BASE_URL"), os.Getenv("GITLAB_API_URL"))
+		baseURL = notifier.ResolveGitLabBaseURL()
 	default:
 		token = explicitToken
-		baseURL = os.Getenv("DIVERGE_BASE_URL")
+		baseURL = strings.TrimSpace(os.Getenv("DIVERGE_NOTIFIER_BASE_URL"))
 	}
 	if tn := notifier.NewTaskNotifier(provider, token, baseURL, k8sClient); tn != nil {
 		return tn

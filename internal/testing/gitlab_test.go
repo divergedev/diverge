@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/pkg/registry"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -155,4 +156,30 @@ func TestGitLabPipelineRunner_Status_Scenarios(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unexpected status 500")
 	})
+}
+
+func TestTestRunnerProvidersHonorBaseURLEnv(t *testing.T) {
+	r := &GitLabPipelineRunner{}
+	assert.Equal(t, "https://gitlab.com", r.baseURL())
+
+	t.Setenv("DIVERGE_NOTIFIER_TOKEN", "test-token")
+	t.Setenv("DIVERGE_NOTIFIER_BASE_URL", "https://scm.example.com/")
+	t.Setenv("DIVERGE_BASE_URL", "https://staging.app.example.com")
+
+	glRunner, err := Providers.Create("gitlab", registry.Deps{})
+	require.NoError(t, err)
+	assert.Equal(t, "https://scm.example.com", glRunner.(*GitLabPipelineRunner).baseURL())
+
+	ghRunner, err := Providers.Create("github", registry.Deps{})
+	require.NoError(t, err)
+	assert.Equal(t, "https://scm.example.com", ghRunner.(*GitHubActionsRunner).baseURL())
+
+	t.Setenv("DIVERGE_NOTIFIER_BASE_URL", "")
+	glDefault, err := Providers.Create("gitlab", registry.Deps{})
+	require.NoError(t, err)
+	assert.Equal(t, "https://gitlab.com", glDefault.(*GitLabPipelineRunner).baseURL())
+
+	ghDefault, err := Providers.Create("github", registry.Deps{})
+	require.NoError(t, err)
+	assert.Equal(t, "https://api.github.com", ghDefault.(*GitHubActionsRunner).baseURL())
 }

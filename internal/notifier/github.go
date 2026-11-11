@@ -30,6 +30,7 @@ type GitHubNotifier struct {
 // comments on GitHub pull requests via the GitHub REST API. If baseURL is empty,
 // it defaults to https://api.github.com.
 func NewGitHubNotifier(baseURL, token string) *GitHubNotifier {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
 		baseURL = "https://api.github.com"
 	}
@@ -242,6 +243,7 @@ type GitHubPreviewGroupNotifier struct {
 
 // NewGitHubPreviewGroupNotifier creates a GitHub-backed notifier that posts preview group status to pull request comments using the GitHub API.
 func NewGitHubPreviewGroupNotifier(baseURL, token string) *GitHubPreviewGroupNotifier {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
 		baseURL = "https://api.github.com"
 	}

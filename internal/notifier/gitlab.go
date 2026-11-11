@@ -28,6 +28,7 @@ type GitLabNotifier struct {
 // NewGitLabNotifier creates a Notifier that posts and updates deployment status
 // notes on GitLab merge requests via the GitLab REST API v4.
 func NewGitLabNotifier(baseURL, token string) *GitLabNotifier {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
 		baseURL = "https://gitlab.com"
 	}

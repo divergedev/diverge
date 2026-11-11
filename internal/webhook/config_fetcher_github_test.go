@@ -114,4 +114,25 @@ func TestGitHubConfigFetcher_FetchConfig(t *testing.T) {
 		_, err := fetcher.FetchConfig(ctx, "github", "org/repo", "main")
 		require.ErrorContains(t, err, "exceeds maximum size")
 	})
+
+	t.Run("custom BaseURL is used directly and trims trailing slash", func(t *testing.T) {
+		var gotPath string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("serviceName: enterprise\n"))
+		}))
+		defer srv.Close()
+
+		fetcher := &GitHubConfigFetcher{
+			BaseURL:    srv.URL + "/api/v3/",
+			Token:      "ghp_ent",
+			HTTPClient: srv.Client(),
+		}
+
+		data, err := fetcher.FetchConfig(ctx, "github", "org/repo", "main")
+		require.NoError(t, err)
+		assert.Equal(t, "serviceName: enterprise\n", string(data))
+		assert.Equal(t, "/api/v3/repos/org/repo/contents/.diverge.yaml", gotPath)
+	})
 }

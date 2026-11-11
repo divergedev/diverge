@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/divergedev/diverge/pkg/registry"
 )
@@ -13,6 +14,19 @@ var (
 	gitlabURLFlag   = flag.String("gitlab-url", "", "GitLab URL for preview group notifier")
 )
 
+// ResolveGitLabBaseURL returns the configured GitLab API base URL from --gitlab-url,
+// DIVERGE_NOTIFIER_BASE_URL, or GITLAB_API_URL without colliding with DIVERGE_BASE_URL
+// (which configures the application preview/replay baseline URL).
+func ResolveGitLabBaseURL() string {
+	if v := strings.TrimSpace(*gitlabURLFlag); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(os.Getenv("DIVERGE_NOTIFIER_BASE_URL")); v != "" {
+		return v
+	}
+	return strings.TrimSpace(os.Getenv("GITLAB_API_URL"))
+}
+
 func init() {
 	Providers.Register("gitlab", registry.Provider[Notifier]{
 		Create: func(deps registry.Deps) (Notifier, error) {
@@ -20,7 +34,7 @@ func init() {
 			if token == "" {
 				return nil, fmt.Errorf("DIVERGE_NOTIFIER_TOKEN is required for --notifier-provider=gitlab")
 			}
-			return NewGitLabNotifier("", token), nil
+			return NewGitLabNotifier(ResolveGitLabBaseURL(), token), nil
 		},
 		Description: "GitLab MR notes and pipeline statuses",
 	})
@@ -31,21 +45,27 @@ func init() {
 			if token == "" {
 				return nil, fmt.Errorf("DIVERGE_NOTIFIER_TOKEN is required for --notifier-provider=gitlab")
 			}
-			return NewGitLabStatusReporter("", token), nil
+			return NewGitLabStatusReporter(ResolveGitLabBaseURL(), token), nil
 		},
 		Description: "GitLab status reporting",
 	})
 
 	GroupProviders.Register("gitlab", registry.Provider[PreviewGroupNotifier]{
 		Create: func(deps registry.Deps) (PreviewGroupNotifier, error) {
-			token := *gitlabTokenFlag
+			token := strings.TrimSpace(*gitlabTokenFlag)
 			if token == "" {
-				token = os.Getenv("DIVERGE_GITLAB_TOKEN")
+				token = strings.TrimSpace(os.Getenv("DIVERGE_GITLAB_TOKEN"))
 			}
-			url := *gitlabURLFlag
+			if token == "" {
+				token = strings.TrimSpace(os.Getenv("DIVERGE_NOTIFIER_TOKEN"))
+			}
+			url := ResolveGitLabBaseURL()
 
-			if (token != "" && url == "") || (token == "" && url != "") {
-				return nil, fmt.Errorf("both --gitlab-token and --gitlab-url must be set together")
+			if strings.TrimSpace(*gitlabURLFlag) != "" && token == "" {
+				return nil, fmt.Errorf("gitlab token is required when --gitlab-url is set")
+			}
+			if token == "" {
+				return &NoopPreviewGroupNotifier{}, nil
 			}
 			return NewGitLabPreviewGroupNotifier(url, token), nil
 		},

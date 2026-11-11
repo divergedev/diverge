@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/pkg/registry"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -225,4 +226,45 @@ func TestFormatPreviewGroupComment_TemplatesAndNoop(t *testing.T) {
 func TestNewGitLabNotifierDefaultsBaseURL(t *testing.T) {
 	assert.Equal(t, "https://gitlab.com", NewGitLabNotifier("", "token").BaseURL)
 	assert.Equal(t, "https://gitlab.example.com", NewGitLabNotifier("https://gitlab.example.com", "token").BaseURL)
+	assert.Equal(t, "https://gitlab.example.com", NewGitLabNotifier("https://gitlab.example.com/", "token").BaseURL)
+}
+
+func TestGitLabRegistryProvidersHonorBaseURLEnv(t *testing.T) {
+	t.Setenv("DIVERGE_NOTIFIER_TOKEN", "glpat-test")
+	t.Setenv("DIVERGE_NOTIFIER_BASE_URL", "https://gitlab.internal.example.com/")
+	t.Setenv("GITLAB_API_URL", "https://fallback.example.com")
+	t.Setenv("DIVERGE_BASE_URL", "https://staging.app.example.com")
+
+	n, err := Providers.Create("gitlab", registry.Deps{})
+	require.NoError(t, err)
+	assert.Equal(t, "https://gitlab.internal.example.com", n.(*GitLabNotifier).BaseURL)
+
+	sr, err := StatusProviders.Create("gitlab", registry.Deps{})
+	require.NoError(t, err)
+	assert.Equal(t, "https://gitlab.internal.example.com", sr.(*GitLabStatusReporter).BaseURL)
+
+	pgn, err := GroupProviders.Create("gitlab", registry.Deps{})
+	require.NoError(t, err)
+	assert.Equal(t, "https://gitlab.internal.example.com", pgn.(*GitLabPreviewGroupNotifier).BaseURL)
+}
+
+func TestGitLabRegistryProvidersFallbackAndDefaults(t *testing.T) {
+	t.Setenv("DIVERGE_NOTIFIER_TOKEN", "glpat-test")
+	t.Setenv("DIVERGE_NOTIFIER_BASE_URL", "")
+	t.Setenv("GITLAB_API_URL", "")
+	t.Setenv("DIVERGE_GITLAB_TOKEN", "")
+	// Ensure DIVERGE_BASE_URL (application replay baseline) does not override GitLab API default.
+	t.Setenv("DIVERGE_BASE_URL", "https://staging.app.example.com")
+
+	n, err := Providers.Create("gitlab", registry.Deps{})
+	require.NoError(t, err)
+	assert.Equal(t, "https://gitlab.com", n.(*GitLabNotifier).BaseURL)
+
+	sr, err := StatusProviders.Create("gitlab", registry.Deps{})
+	require.NoError(t, err)
+	assert.Equal(t, "https://gitlab.com", sr.(*GitLabStatusReporter).BaseURL)
+
+	pgn, err := GroupProviders.Create("gitlab", registry.Deps{})
+	require.NoError(t, err)
+	assert.Equal(t, "https://gitlab.com", pgn.(*GitLabPreviewGroupNotifier).BaseURL)
 }
