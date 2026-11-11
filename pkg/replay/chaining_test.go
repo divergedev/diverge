@@ -45,6 +45,53 @@ func TestInterpolateAndExtractResponseVars(t *testing.T) {
 	assert.Equal(t, "true", extracted["active"])
 	assert.Equal(t, "sess-42", extracted["session_id"])
 	assert.Equal(t, "201", extracted["http_code"])
+
+	masked := maskExtractedVars(map[string]string{
+		" order_id ":   "$.id",
+		" session_id ": " header:X-Session-Id ",
+	}, extracted)
+	assert.Equal(t, "ord-777", masked["order_id"])
+	assert.Equal(t, RedactedPlaceholder, masked["session_id"])
+}
+
+func TestRunner_CollidingExtractKeysMaskHeaderCredentials(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Set-Cookie", "sid=super-secret-cookie")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	runner := NewRunner(Config{
+		Environment: "pr-42",
+		BaseURL:     srv.URL,
+		HeaderKey:   "x-diverge-env",
+		HeaderValue: "pr-42",
+		HTTPClient:  srv.Client(),
+	})
+
+	// Repeat multiple runs to defeat Go map iteration order non-determinism when keys collide after trimming.
+	for i := 0; i < 25; i++ {
+		report, err := runner.Run(context.Background(), []RequestEntry{
+			{
+				ID:     "login",
+				Method: http.MethodPost,
+				Path:   "/api/login",
+				Extract: map[string]string{
+					"token":   "$header.Set-Cookie",
+					" token ": "   ",
+				},
+			},
+		})
+		require.NoError(t, err)
+		require.Len(t, report.Results, 1)
+		assert.Equal(t, RedactedPlaceholder, report.Results[0].ExtractedVars["token"])
+
+		var md bytes.Buffer
+		require.NoError(t, FormatMarkdown(&md, report))
+		assert.NotContains(t, md.String(), "super-secret-cookie")
+	}
 }
 
 func TestRunner_StatefulMultiStepChainingWithDivergentIDs(t *testing.T) {
