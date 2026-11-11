@@ -231,8 +231,9 @@ func TestNewGitLabNotifierDefaultsBaseURL(t *testing.T) {
 
 func TestGitLabRegistryProvidersHonorBaseURLEnv(t *testing.T) {
 	t.Setenv("DIVERGE_NOTIFIER_TOKEN", "glpat-test")
-	t.Setenv("DIVERGE_BASE_URL", "https://gitlab.internal.example.com/")
+	t.Setenv("DIVERGE_NOTIFIER_BASE_URL", "https://gitlab.internal.example.com/")
 	t.Setenv("GITLAB_API_URL", "https://fallback.example.com")
+	t.Setenv("DIVERGE_BASE_URL", "https://staging.app.example.com")
 
 	n, err := Providers.Create("gitlab", registry.Deps{})
 	require.NoError(t, err)
@@ -249,9 +250,11 @@ func TestGitLabRegistryProvidersHonorBaseURLEnv(t *testing.T) {
 
 func TestGitLabRegistryProvidersFallbackAndDefaults(t *testing.T) {
 	t.Setenv("DIVERGE_NOTIFIER_TOKEN", "glpat-test")
-	t.Setenv("DIVERGE_BASE_URL", "")
+	t.Setenv("DIVERGE_NOTIFIER_BASE_URL", "")
 	t.Setenv("GITLAB_API_URL", "")
 	t.Setenv("DIVERGE_GITLAB_TOKEN", "")
+	// Ensure DIVERGE_BASE_URL (application replay baseline) does not override GitLab API default.
+	t.Setenv("DIVERGE_BASE_URL", "https://staging.app.example.com")
 
 	n, err := Providers.Create("gitlab", registry.Deps{})
 	require.NoError(t, err)

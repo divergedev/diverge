@@ -13,7 +13,7 @@ func init() {
 	Providers.Register("gitlab", registry.Provider[TestRunner]{
 		Create: func(deps registry.Deps) (TestRunner, error) {
 			token := os.Getenv("DIVERGE_NOTIFIER_TOKEN")
-			baseURL := strings.TrimSpace(os.Getenv("DIVERGE_BASE_URL"))
+			baseURL := strings.TrimSpace(os.Getenv("DIVERGE_NOTIFIER_BASE_URL"))
 			if baseURL == "" {
 				baseURL = strings.TrimSpace(os.Getenv("GITLAB_API_URL"))
 			}

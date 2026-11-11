@@ -178,7 +178,7 @@ spec:
         {{- end }}
         {{- with .Values.notifier }}
         {{- if .baseUrl }}
-        - name: DIVERGE_BASE_URL
+        - name: DIVERGE_NOTIFIER_BASE_URL
           value: {{ .baseUrl | quote }}
         {{- end }}
         {{- if and .tokenSecretRef .tokenSecretRef.name }}

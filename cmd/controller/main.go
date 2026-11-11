@@ -380,7 +380,7 @@ func main() {
 	var glConfigFetcher webhook.ConfigFetcher
 	var glCommenter webhook.CommentPoster
 	if notifierProvider == "gitlab" && notifierToken != "" {
-		glBaseURL := firstNonEmpty(os.Getenv("DIVERGE_BASE_URL"), os.Getenv("GITLAB_API_URL"))
+		glBaseURL := notifier.ResolveGitLabBaseURL()
 		glConfigFetcher = &webhook.GitLabConfigFetcher{
 			BaseURL:    glBaseURL,
 			Token:      notifierToken,
@@ -412,7 +412,7 @@ func main() {
 	var ghConfigFetcher webhook.ConfigFetcher
 	var ghCommenter webhook.CommentPoster
 	if notifierProvider == "github" && notifierToken != "" {
-		ghBaseURL := firstNonEmpty(os.Getenv("DIVERGE_BASE_URL"), os.Getenv("GITHUB_API_URL"))
+		ghBaseURL := notifier.ResolveGitHubBaseURL()
 		ghConfigFetcher = &webhook.GitHubConfigFetcher{
 			BaseURL:    ghBaseURL,
 			Token:      notifierToken,
@@ -453,13 +453,13 @@ func resolveAgentTaskNotifier(provider, explicitToken string, k8sClient client.C
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "github":
 		token = firstNonEmpty(explicitToken, os.Getenv("DIVERGE_NOTIFIER_TOKEN"), os.Getenv("GITHUB_TOKEN"))
-		baseURL = firstNonEmpty(os.Getenv("DIVERGE_BASE_URL"), os.Getenv("GITHUB_API_URL"))
+		baseURL = notifier.ResolveGitHubBaseURL()
 	case "gitlab":
 		token = firstNonEmpty(explicitToken, os.Getenv("DIVERGE_NOTIFIER_TOKEN"), os.Getenv("DIVERGE_GITLAB_TOKEN"), os.Getenv("GITLAB_TOKEN"))
-		baseURL = firstNonEmpty(os.Getenv("DIVERGE_BASE_URL"), os.Getenv("GITLAB_API_URL"))
+		baseURL = notifier.ResolveGitLabBaseURL()
 	default:
 		token = explicitToken
-		baseURL = os.Getenv("DIVERGE_BASE_URL")
+		baseURL = strings.TrimSpace(os.Getenv("DIVERGE_NOTIFIER_BASE_URL"))
 	}
 	if tn := notifier.NewTaskNotifier(provider, token, baseURL, k8sClient); tn != nil {
 		return tn

@@ -163,7 +163,8 @@ func TestTestRunnerProvidersHonorBaseURLEnv(t *testing.T) {
 	assert.Equal(t, "https://gitlab.com", r.baseURL())
 
 	t.Setenv("DIVERGE_NOTIFIER_TOKEN", "test-token")
-	t.Setenv("DIVERGE_BASE_URL", "https://scm.example.com/")
+	t.Setenv("DIVERGE_NOTIFIER_BASE_URL", "https://scm.example.com/")
+	t.Setenv("DIVERGE_BASE_URL", "https://staging.app.example.com")
 
 	glRunner, err := Providers.Create("gitlab", registry.Deps{})
 	require.NoError(t, err)
@@ -172,4 +173,13 @@ func TestTestRunnerProvidersHonorBaseURLEnv(t *testing.T) {
 	ghRunner, err := Providers.Create("github", registry.Deps{})
 	require.NoError(t, err)
 	assert.Equal(t, "https://scm.example.com", ghRunner.(*GitHubActionsRunner).baseURL())
+
+	t.Setenv("DIVERGE_NOTIFIER_BASE_URL", "")
+	glDefault, err := Providers.Create("gitlab", registry.Deps{})
+	require.NoError(t, err)
+	assert.Equal(t, "https://gitlab.com", glDefault.(*GitLabPipelineRunner).baseURL())
+
+	ghDefault, err := Providers.Create("github", registry.Deps{})
+	require.NoError(t, err)
+	assert.Equal(t, "https://api.github.com", ghDefault.(*GitHubActionsRunner).baseURL())
 }

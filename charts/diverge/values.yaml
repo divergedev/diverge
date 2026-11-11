@@ -64,7 +64,7 @@ defaultNamespace: ""
 # MR/PR notifier: posts preview comments and reads .diverge.yaml from the source branch.
 notifier:
   provider: "noop"  # gitlab | github | noop
-  # -- API base URL for self-hosted GitLab or GitHub Enterprise (defaults to https://gitlab.com or https://api.github.com when empty).
+  # -- API base URL for self-hosted GitLab or GitHub Enterprise (defaults to https://gitlab.com or https://api.github.com when empty). Sets DIVERGE_NOTIFIER_BASE_URL.
   baseUrl: ""
   # -- Secret holding the API token (GitLab: `api` scope). Sets DIVERGE_NOTIFIER_TOKEN.
   tokenSecretRef:

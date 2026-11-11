@@ -75,8 +75,7 @@ func init() {
 	TaskProviders.Register("github", registry.Provider[TaskPhaseNotifier]{
 		Create: func(deps registry.Deps) (TaskPhaseNotifier, error) {
 			token := firstNonEmptyEnv("DIVERGE_NOTIFIER_TOKEN", "GITHUB_TOKEN")
-			baseURL := firstNonEmptyEnv("DIVERGE_BASE_URL", "GITHUB_API_URL")
-			if tn := NewTaskNotifier("github", token, baseURL, deps.Client); tn != nil {
+			if tn := NewTaskNotifier("github", token, ResolveGitHubBaseURL(), deps.Client); tn != nil {
 				return tn, nil
 			}
 			return &NoopTaskPhaseNotifier{}, nil
@@ -87,8 +86,7 @@ func init() {
 	TaskProviders.Register("gitlab", registry.Provider[TaskPhaseNotifier]{
 		Create: func(deps registry.Deps) (TaskPhaseNotifier, error) {
 			token := firstNonEmptyEnv("DIVERGE_NOTIFIER_TOKEN", "DIVERGE_GITLAB_TOKEN", "GITLAB_TOKEN")
-			baseURL := firstNonEmptyEnv("DIVERGE_BASE_URL", "GITLAB_API_URL")
-			if tn := NewTaskNotifier("gitlab", token, baseURL, deps.Client); tn != nil {
+			if tn := NewTaskNotifier("gitlab", token, ResolveGitLabBaseURL(), deps.Client); tn != nil {
 				return tn, nil
 			}
 			return &NoopTaskPhaseNotifier{}, nil

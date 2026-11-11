@@ -179,8 +179,9 @@ func TestGitHubPreviewGroupNotifier_RateLimitBackoff(t *testing.T) {
 
 func TestGitHubRegistryProvidersHonorBaseURLEnv(t *testing.T) {
 	t.Setenv("DIVERGE_NOTIFIER_TOKEN", "ghp_test")
-	t.Setenv("DIVERGE_BASE_URL", "https://ghe.example.com/api/v3/")
+	t.Setenv("DIVERGE_NOTIFIER_BASE_URL", "https://ghe.example.com/api/v3/")
 	t.Setenv("GITHUB_API_URL", "https://fallback.example.com/api/v3")
+	t.Setenv("DIVERGE_BASE_URL", "https://staging.app.example.com")
 
 	n, err := Providers.Create("github", registry.Deps{})
 	require.NoError(t, err)
@@ -193,4 +194,11 @@ func TestGitHubRegistryProvidersHonorBaseURLEnv(t *testing.T) {
 	pgn, err := GroupProviders.Create("github", registry.Deps{})
 	require.NoError(t, err)
 	assert.Equal(t, "https://ghe.example.com/api/v3", pgn.(*GitHubPreviewGroupNotifier).BaseURL)
+
+	// Verify DIVERGE_BASE_URL (application replay baseline) never hijacks GitHub API requests.
+	t.Setenv("DIVERGE_NOTIFIER_BASE_URL", "")
+	t.Setenv("GITHUB_API_URL", "")
+	nDefault, err := Providers.Create("github", registry.Deps{})
+	require.NoError(t, err)
+	assert.Equal(t, "https://api.github.com", nDefault.(*GitHubNotifier).BaseURL)
 }
