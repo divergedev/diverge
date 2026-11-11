@@ -14,12 +14,19 @@ import (
 
 // GitLabPipelineRunner triggers and polls GitLab CI pipelines.
 type GitLabPipelineRunner struct {
-	BaseURL    string
+	BaseURL    string // defaults to https://gitlab.com
 	Token      string
 	HTTPClient *http.Client
 }
 
 var _ TestRunner = (*GitLabPipelineRunner)(nil)
+
+func (r *GitLabPipelineRunner) baseURL() string {
+	if trimmed := strings.TrimRight(strings.TrimSpace(r.BaseURL), "/"); trimmed != "" {
+		return trimmed
+	}
+	return "https://gitlab.com"
+}
 
 func (r *GitLabPipelineRunner) Trigger(ctx context.Context, env *v1alpha1.Environment) (string, error) {
 	if env.Spec.Testing == nil {
@@ -37,7 +44,7 @@ func (r *GitLabPipelineRunner) Trigger(ctx context.Context, env *v1alpha1.Enviro
 
 	// Build trigger request
 	apiURL := fmt.Sprintf("%s/api/v4/projects/%s/pipeline",
-		strings.TrimRight(r.BaseURL, "/"),
+		r.baseURL(),
 		url.PathEscape(project),
 	)
 
@@ -91,7 +98,7 @@ func (r *GitLabPipelineRunner) Status(ctx context.Context, env *v1alpha1.Environ
 	}
 
 	apiURL := fmt.Sprintf("%s/api/v4/projects/%s/pipelines/%s",
-		strings.TrimRight(r.BaseURL, "/"),
+		r.baseURL(),
 		url.PathEscape(project),
 		url.PathEscape(runID),
 	)

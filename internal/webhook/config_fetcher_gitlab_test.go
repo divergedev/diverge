@@ -25,7 +25,7 @@ func TestGitLabConfigFetcher_FetchConfig(t *testing.T) {
 		defer srv.Close()
 
 		fetcher := &GitLabConfigFetcher{
-			BaseURL:    srv.URL,
+			BaseURL:    srv.URL + "/",
 			Token:      "glpat-123",
 			HTTPClient: srv.Client(),
 		}

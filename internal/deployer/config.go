@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
 	"gopkg.in/yaml.v3"
@@ -109,14 +110,21 @@ func ParseDotDivergeConfig(data []byte) (*DotDivergeConfig, error) {
 	return &cfg, nil
 }
 
-// validateImageRepository rejects a repository that already carries a tag or
-// digest, since the preview tag is always derived from the commit.
+// validateImageRepository rejects a repository that already carries a tag,
+// digest, URL scheme, leading/trailing slash, or whitespace, since the preview
+// tag is always derived from the commit.
 func validateImageRepository(repo string) error {
 	if repo == "" {
 		return nil
 	}
-	if strings.ContainsAny(repo, "@ \t") {
+	if strings.ContainsRune(repo, '@') || strings.IndexFunc(repo, unicode.IsSpace) != -1 {
 		return fmt.Errorf(".diverge.yaml: spec.image.repository %q must not contain a digest or whitespace", repo)
+	}
+	if strings.Contains(repo, "://") {
+		return fmt.Errorf(".diverge.yaml: spec.image.repository %q must not contain a URL scheme", repo)
+	}
+	if strings.HasPrefix(repo, "/") || strings.HasSuffix(repo, "/") {
+		return fmt.Errorf(".diverge.yaml: spec.image.repository %q must not start or end with '/'", repo)
 	}
 	lastSegment := repo[strings.LastIndex(repo, "/")+1:]
 	if strings.Contains(lastSegment, ":") {

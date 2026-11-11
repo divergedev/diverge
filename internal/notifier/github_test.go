@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/pkg/registry"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -173,4 +175,22 @@ func TestGitHubPreviewGroupNotifier_RateLimitBackoff(t *testing.T) {
 	assert.Equal(t, 2, callCount)
 	assert.Equal(t, int64(1111), pg.Status.CommentID)
 	assert.True(t, duration >= time.Second, "expected backoff delay of at least 1 second, got %v", duration)
+}
+
+func TestGitHubRegistryProvidersHonorBaseURLEnv(t *testing.T) {
+	t.Setenv("DIVERGE_NOTIFIER_TOKEN", "ghp_test")
+	t.Setenv("DIVERGE_BASE_URL", "https://ghe.example.com/api/v3/")
+	t.Setenv("GITHUB_API_URL", "https://fallback.example.com/api/v3")
+
+	n, err := Providers.Create("github", registry.Deps{})
+	require.NoError(t, err)
+	assert.Equal(t, "https://ghe.example.com/api/v3", n.(*GitHubNotifier).BaseURL)
+
+	sr, err := StatusProviders.Create("github", registry.Deps{})
+	require.NoError(t, err)
+	assert.Equal(t, "https://ghe.example.com/api/v3", sr.(*GitHubStatusReporter).BaseURL)
+
+	pgn, err := GroupProviders.Create("github", registry.Deps{})
+	require.NoError(t, err)
+	assert.Equal(t, "https://ghe.example.com/api/v3", pgn.(*GitHubPreviewGroupNotifier).BaseURL)
 }

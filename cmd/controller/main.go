@@ -380,11 +380,13 @@ func main() {
 	var glConfigFetcher webhook.ConfigFetcher
 	var glCommenter webhook.CommentPoster
 	if notifierProvider == "gitlab" && notifierToken != "" {
+		glBaseURL := firstNonEmpty(os.Getenv("DIVERGE_BASE_URL"), os.Getenv("GITLAB_API_URL"))
 		glConfigFetcher = &webhook.GitLabConfigFetcher{
+			BaseURL:    glBaseURL,
 			Token:      notifierToken,
 			HTTPClient: &http.Client{Timeout: 15 * time.Second},
 		}
-		glCommenter = notifier.NewGitLabNotifier(firstNonEmpty(os.Getenv("DIVERGE_BASE_URL"), os.Getenv("GITLAB_API_URL")), notifierToken)
+		glCommenter = notifier.NewGitLabNotifier(glBaseURL, notifierToken)
 	}
 	if len(gitlabAllowedUsers) == 0 {
 		setupLog.Info("WARNING: GitLab MR slash commands are disabled because no allowed user IDs are configured; set --gitlab-allowed-users or DIVERGE_GITLAB_ALLOWED_USERS")
@@ -410,11 +412,16 @@ func main() {
 	var ghConfigFetcher webhook.ConfigFetcher
 	var ghCommenter webhook.CommentPoster
 	if notifierProvider == "github" && notifierToken != "" {
+		ghBaseURL := firstNonEmpty(os.Getenv("DIVERGE_BASE_URL"), os.Getenv("GITHUB_API_URL"))
 		ghConfigFetcher = &webhook.GitHubConfigFetcher{
+			BaseURL:    ghBaseURL,
 			Token:      notifierToken,
 			HTTPClient: &http.Client{Timeout: 15 * time.Second},
 		}
-		ghCommenter = notifier.NewGitHubNotifier(firstNonEmpty(os.Getenv("DIVERGE_BASE_URL"), os.Getenv("GITHUB_API_URL")), notifierToken)
+		ghCommenter = notifier.NewGitHubNotifier(ghBaseURL, notifierToken)
+	}
+	if skipWithoutConfig && glConfigFetcher == nil && ghConfigFetcher == nil {
+		setupLog.Info("WARNING: direct serviceconfig deployer requires .diverge.yaml, but no Git provider token is configured; set --notifier-provider (gitlab|github) and DIVERGE_NOTIFIER_TOKEN so webhooks can fetch .diverge.yaml")
 	}
 	mgr.GetWebhookServer().Register("/github-webhook", &webhook.GitHubWebhookHandler{
 		Client:            mgr.GetClient(),

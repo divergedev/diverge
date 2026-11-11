@@ -138,4 +138,9 @@ func TestGitLabStatusReporter_PostCommitStatus(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "gitlab API returned status: 400")
 	})
+
+	t.Run("defaults empty baseURL to gitlab.com and trims trailing slash", func(t *testing.T) {
+		assert.Equal(t, "https://gitlab.com", NewGitLabStatusReporter("", "gl-secret").BaseURL)
+		assert.Equal(t, "https://gitlab.example.com", NewGitLabStatusReporter("https://gitlab.example.com/", "gl-secret").BaseURL)
+	})
 }

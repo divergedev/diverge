@@ -6,20 +6,27 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/divergedev/diverge/internal/config"
 )
 
 // GitHubConfigFetcher fetches .diverge.yaml from the GitHub API.
 type GitHubConfigFetcher struct {
+	BaseURL    string
 	Token      string
 	HTTPClient *http.Client
 }
 
 func (f *GitHubConfigFetcher) FetchConfig(ctx context.Context, provider, project, ref string) ([]byte, error) {
+	baseURL := strings.TrimRight(strings.TrimSpace(f.BaseURL), "/")
+	if baseURL == "" {
+		baseURL = "https://api.github.com"
+	}
+
 	// GET /repos/:owner/:repo/contents/.diverge.yaml?ref=:ref
-	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/contents/.diverge.yaml?ref=%s",
-		project, url.QueryEscape(ref))
+	apiURL := fmt.Sprintf("%s/repos/%s/contents/.diverge.yaml?ref=%s",
+		baseURL, project, url.QueryEscape(ref))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {

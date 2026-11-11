@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/divergedev/diverge/internal/config"
 )
@@ -18,7 +19,7 @@ type GitLabConfigFetcher struct {
 }
 
 func (f *GitLabConfigFetcher) FetchConfig(ctx context.Context, provider, project, ref string) ([]byte, error) {
-	baseURL := f.BaseURL
+	baseURL := strings.TrimRight(strings.TrimSpace(f.BaseURL), "/")
 	if baseURL == "" {
 		baseURL = "https://gitlab.com"
 	}

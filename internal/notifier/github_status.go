@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
@@ -21,6 +22,7 @@ type GitHubStatusReporter struct {
 
 // NewGitHubStatusReporter creates a reporter that updates GitHub commit statuses via the Statuses API.
 func NewGitHubStatusReporter(baseURL, token string) *GitHubStatusReporter {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
 		baseURL = "https://api.github.com"
 	}

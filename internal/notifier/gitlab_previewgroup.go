@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
@@ -22,6 +23,10 @@ type GitLabPreviewGroupNotifier struct {
 
 // NewGitLabPreviewGroupNotifier performs its designated operation.
 func NewGitLabPreviewGroupNotifier(baseURL, token string) *GitLabPreviewGroupNotifier {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		baseURL = "https://gitlab.com"
+	}
 	return &GitLabPreviewGroupNotifier{
 		BaseURL: baseURL,
 		Token:   token,
