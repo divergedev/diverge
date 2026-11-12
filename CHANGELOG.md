@@ -1,5 +1,22 @@
 # Changelog
 
+## [v0.24.0] - 2026-11-11
+
+### 🚀 Highlights & New Features
+
+#### ☸️ Helm Chart Operator Customization & Native Notifier Config
+- **Native Notifier Token & Base URL Configuration (`charts/diverge/templates/deployment.yaml`, `charts/diverge/values.yaml`) (#336, #338)**: Added `notifier.baseUrl` and `notifier.tokenSecretRef` to Helm chart values, wiring them to `DIVERGE_NOTIFIER_BASE_URL` and `DIVERGE_NOTIFIER_TOKEN` environment variables on the controller deployment.
+- **Operator `extraArgs` & `extraEnv` Support (`charts/diverge/templates/deployment.yaml`, `charts/diverge/values.yaml`) (#336)**: Enabled configuring arbitrary command-line arguments and environment variables (such as flags, proxies, or secret references) directly on the controller container via Helm values without requiring custom manifests or manual patches.
+
+#### 🪝 Webhook Image Repository Overrides & Auto-Discovery
+- **Per-Project Preview Image Repository in `.diverge.yaml` (`internal/deployer/config.go`, `internal/deployer/config_test.go`) (#335, #338)**: Added `image.repository` field support to repository-level `.diverge.yaml` manifests, allowing repositories using alternate container registries (e.g., self-hosted Harbor, GitLab Container Registry, or custom AWS ECR / GCP Artifact Registry paths) to override the webhook's global `--image-repo` default while preserving and validating safe OCI repository naming conventions.
+- **Automatic Non-Diverge Repository Skipping under ServiceConfig (`internal/webhook/config_fetcher_github.go`, `internal/webhook/config_fetcher_gitlab.go`) (#337, #338)**: In `serviceconfig` webhook mode, repositories without a `.diverge.yaml` configuration file are now cleanly skipped with an informational log rather than triggering preview deployments or throwing configuration errors, preventing unconfigured repositories from scheduling unnecessary preview workloads.
+
+#### 🔔 Notifier Base URL Decoupling & Provider Resilience
+- **Decoupled Notifier Base URL (`DIVERGE_NOTIFIER_BASE_URL`) (`cmd/controller/main.go`, `internal/notifier/`, `internal/testing/`) (#338)**: Separated SCM notifier API endpoints from the application replay baseline (`DIVERGE_BASE_URL`) by introducing `DIVERGE_NOTIFIER_BASE_URL` with structured fallback to `--gitlab-url`, `GITLAB_API_URL`, and `GITHUB_API_URL`. This ensures replay traffic probes target application services while status comments and PR notifications reach self-hosted GitLab/GitHub Enterprise instances without credential leakage.
+
+---
+
 ## [v0.23.0] - 2026-11-10
 
 ### 🚀 Highlights & New Features
