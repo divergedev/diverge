@@ -36,11 +36,15 @@ const (
 	// ClusterServiceGetClusterInfoProcedure is the fully-qualified name of the ClusterService's
 	// GetClusterInfo RPC.
 	ClusterServiceGetClusterInfoProcedure = "/diverge.v1alpha1.ClusterService/GetClusterInfo"
+	// ClusterServiceGetCostSummaryProcedure is the fully-qualified name of the ClusterService's
+	// GetCostSummary RPC.
+	ClusterServiceGetCostSummaryProcedure = "/diverge.v1alpha1.ClusterService/GetCostSummary"
 )
 
 // ClusterServiceClient is a client for the diverge.v1alpha1.ClusterService service.
 type ClusterServiceClient interface {
 	GetClusterInfo(context.Context, *connect.Request[v1alpha1.GetClusterInfoRequest]) (*connect.Response[v1alpha1.GetClusterInfoResponse], error)
+	GetCostSummary(context.Context, *connect.Request[v1alpha1.GetCostSummaryRequest]) (*connect.Response[v1alpha1.GetCostSummaryResponse], error)
 }
 
 // NewClusterServiceClient constructs a client for the diverge.v1alpha1.ClusterService service. By
@@ -60,12 +64,19 @@ func NewClusterServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(clusterServiceMethods.ByName("GetClusterInfo")),
 			connect.WithClientOptions(opts...),
 		),
+		getCostSummary: connect.NewClient[v1alpha1.GetCostSummaryRequest, v1alpha1.GetCostSummaryResponse](
+			httpClient,
+			baseURL+ClusterServiceGetCostSummaryProcedure,
+			connect.WithSchema(clusterServiceMethods.ByName("GetCostSummary")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // clusterServiceClient implements ClusterServiceClient.
 type clusterServiceClient struct {
 	getClusterInfo *connect.Client[v1alpha1.GetClusterInfoRequest, v1alpha1.GetClusterInfoResponse]
+	getCostSummary *connect.Client[v1alpha1.GetCostSummaryRequest, v1alpha1.GetCostSummaryResponse]
 }
 
 // GetClusterInfo calls diverge.v1alpha1.ClusterService.GetClusterInfo.
@@ -73,9 +84,15 @@ func (c *clusterServiceClient) GetClusterInfo(ctx context.Context, req *connect.
 	return c.getClusterInfo.CallUnary(ctx, req)
 }
 
+// GetCostSummary calls diverge.v1alpha1.ClusterService.GetCostSummary.
+func (c *clusterServiceClient) GetCostSummary(ctx context.Context, req *connect.Request[v1alpha1.GetCostSummaryRequest]) (*connect.Response[v1alpha1.GetCostSummaryResponse], error) {
+	return c.getCostSummary.CallUnary(ctx, req)
+}
+
 // ClusterServiceHandler is an implementation of the diverge.v1alpha1.ClusterService service.
 type ClusterServiceHandler interface {
 	GetClusterInfo(context.Context, *connect.Request[v1alpha1.GetClusterInfoRequest]) (*connect.Response[v1alpha1.GetClusterInfoResponse], error)
+	GetCostSummary(context.Context, *connect.Request[v1alpha1.GetCostSummaryRequest]) (*connect.Response[v1alpha1.GetCostSummaryResponse], error)
 }
 
 // NewClusterServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -91,10 +108,18 @@ func NewClusterServiceHandler(svc ClusterServiceHandler, opts ...connect.Handler
 		connect.WithSchema(clusterServiceMethods.ByName("GetClusterInfo")),
 		connect.WithHandlerOptions(opts...),
 	)
+	clusterServiceGetCostSummaryHandler := connect.NewUnaryHandler(
+		ClusterServiceGetCostSummaryProcedure,
+		svc.GetCostSummary,
+		connect.WithSchema(clusterServiceMethods.ByName("GetCostSummary")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/diverge.v1alpha1.ClusterService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case ClusterServiceGetClusterInfoProcedure:
 			clusterServiceGetClusterInfoHandler.ServeHTTP(w, r)
+		case ClusterServiceGetCostSummaryProcedure:
+			clusterServiceGetCostSummaryHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -106,4 +131,8 @@ type UnimplementedClusterServiceHandler struct{}
 
 func (UnimplementedClusterServiceHandler) GetClusterInfo(context.Context, *connect.Request[v1alpha1.GetClusterInfoRequest]) (*connect.Response[v1alpha1.GetClusterInfoResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("diverge.v1alpha1.ClusterService.GetClusterInfo is not implemented"))
+}
+
+func (UnimplementedClusterServiceHandler) GetCostSummary(context.Context, *connect.Request[v1alpha1.GetCostSummaryRequest]) (*connect.Response[v1alpha1.GetCostSummaryResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("diverge.v1alpha1.ClusterService.GetCostSummary is not implemented"))
 }

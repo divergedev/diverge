@@ -9,6 +9,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
@@ -47,8 +48,19 @@ func (r *EnvironmentReconciler) reconcileLifecycle(ctx context.Context, env *div
 	}
 
 	now := time.Now()
+	if env.Annotations[metrics.AnnotationHibernated] != "true" && env.Annotations[metrics.AnnotationHibernatedAt] != "" {
+		patchTarget := env.DeepCopy()
+		base := patchTarget.DeepCopy()
+		patchTarget.Annotations = metrics.RecordEnvironmentWake(patchTarget.Annotations, now)
+		if err := r.Patch(ctx, patchTarget, client.MergeFrom(base)); err != nil {
+			logger.Error(err, "failed to record environment wake transition")
+		} else {
+			env.Annotations = patchTarget.Annotations
+			env.ResourceVersion = patchTarget.ResourceVersion
+		}
+	}
 	if metrics.ShouldHibernateIdleEnvironment(env, time.Time{}, now, 0) && env.Annotations[metrics.AnnotationHibernated] != "true" {
-		if err := r.hibernateEnvironment(ctx, env, now, metrics.DefaultCostRateCard()); err != nil {
+		if err := r.hibernateEnvironment(ctx, env, now, metrics.CostRateCardFromEnv()); err != nil {
 			logger.Error(err, "failed to hibernate idle environment")
 		} else if r.Recorder != nil {
 			r.Recorder.Event(env, "Normal", "Hibernated", "Environment idle threshold exceeded; marked for scale-to-zero hibernation")

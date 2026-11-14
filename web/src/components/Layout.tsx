@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
-import { Home, GitBranch, Bot, Server, Moon, Sun, LogOut, Menu } from 'lucide-react'
+import { Home, GitBranch, Bot, BarChart3, Server, Moon, Sun, LogOut, Menu } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/useAuth'
 import { useTheme } from '@/components/ThemeProvider'
@@ -10,6 +10,7 @@ const navItems = [
   { to: '/', icon: Home, label: 'Environments' },
   { to: '/preview-groups', icon: GitBranch, label: 'Preview Groups' },
   { to: '/tasks', icon: Bot, label: 'Agent Tasks' },
+  { to: '/usage', icon: BarChart3, label: 'Cost & Usage' },
   { to: '/cluster', icon: Server, label: 'Cluster' },
 ]
 
@@ -33,7 +34,7 @@ export function Layout() {
           <div className="text-xs text-muted-foreground mt-0.5">Dashboard</div>
         </div>
 
-        <nav className="flex-1 p-2 space-y-1">
+        <nav aria-label="Primary" className="flex-1 p-2 space-y-1">
           {navItems.map(({ to, icon: Icon, label }) => (
             <NavLink key={to} to={to} end={to === '/'} onClick={() => setSidebarOpen(false)}
               className={({ isActive }) => cn(

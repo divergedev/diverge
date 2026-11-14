@@ -19,6 +19,7 @@ import (
 	"github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
 	"github.com/divergedev/diverge/api/v1alpha1"
 
+	"github.com/divergedev/diverge/internal/metrics"
 	"github.com/divergedev/diverge/internal/server/streaming"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -247,9 +248,14 @@ func (s *EnvironmentService) UpdateEnvironment(ctx context.Context, req *connect
 		return nil, connect.NewError(connect.CodeInternal, errors.New("internal server error"))
 	}
 
+	wasHibernated := existingCrd.Annotations[metrics.AnnotationHibernated] == "true"
+	priorHibAt := existingCrd.Annotations[metrics.AnnotationHibernatedAt]
+	priorHibSec := existingCrd.Annotations[metrics.AnnotationHibernatedSeconds]
+
 	// NOTE: FieldMask currently supports top-level paths only (spec, labels, annotations).
 	// Nested paths like "spec.source" are not supported and will be rejected.
 	// Full sub-field updates require replacing the entire parent (e.g., path="spec").
+	annotationsUpdated := false
 	if msg.UpdateMask != nil && len(msg.UpdateMask.Paths) > 0 {
 		allowedPaths := map[string]bool{
 			"spec":                    true,
@@ -284,12 +290,41 @@ func (s *EnvironmentService) UpdateEnvironment(ctx context.Context, req *connect
 				existingCrd.Labels = newCrd.Labels
 			case "annotations":
 				existingCrd.Annotations = newCrd.Annotations
+				annotationsUpdated = true
 			}
 		}
 	} else {
 		existingCrd.Spec = newCrd.Spec
 		existingCrd.Labels = newCrd.Labels
 		existingCrd.Annotations = newCrd.Annotations
+		annotationsUpdated = true
+	}
+
+	if annotationsUpdated {
+		nowUTC := time.Now().UTC()
+		isNowHibernated := existingCrd.Annotations[metrics.AnnotationHibernated] == "true"
+		if priorHibSec != "" && (existingCrd.Annotations == nil || existingCrd.Annotations[metrics.AnnotationHibernatedSeconds] == "") {
+			if existingCrd.Annotations == nil {
+				existingCrd.Annotations = make(map[string]string)
+			}
+			existingCrd.Annotations[metrics.AnnotationHibernatedSeconds] = priorHibSec
+		}
+		switch {
+		case !wasHibernated && isNowHibernated:
+			existingCrd.Annotations = metrics.RecordEnvironmentHibernated(existingCrd.Annotations, nowUTC)
+		case wasHibernated && !isNowHibernated:
+			if priorHibAt != "" {
+				if existingCrd.Annotations == nil {
+					existingCrd.Annotations = make(map[string]string)
+				}
+				if existingCrd.Annotations[metrics.AnnotationHibernatedAt] == "" {
+					existingCrd.Annotations[metrics.AnnotationHibernatedAt] = priorHibAt
+				}
+			}
+			existingCrd.Annotations = metrics.RecordEnvironmentWake(existingCrd.Annotations, nowUTC)
+		case wasHibernated && isNowHibernated && priorHibAt != "" && existingCrd.Annotations[metrics.AnnotationHibernatedAt] == "":
+			existingCrd.Annotations[metrics.AnnotationHibernatedAt] = priorHibAt
+		}
 	}
 
 	if err := s.client.Update(ctx, &existingCrd); err != nil {

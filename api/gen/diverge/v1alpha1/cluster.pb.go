@@ -217,6 +217,702 @@ func (x *GetClusterInfoResponse) GetNamespaceQuota() *NamespaceQuotaInfo {
 	return nil
 }
 
+type GetCostSummaryRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Namespace     string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetCostSummaryRequest) Reset() {
+	*x = GetCostSummaryRequest{}
+	mi := &file_diverge_v1alpha1_cluster_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetCostSummaryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetCostSummaryRequest) ProtoMessage() {}
+
+func (x *GetCostSummaryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_cluster_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetCostSummaryRequest.ProtoReflect.Descriptor instead.
+func (*GetCostSummaryRequest) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_cluster_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *GetCostSummaryRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+type CostRateCardInfo struct {
+	state                    protoimpl.MessageState `protogen:"open.v1"`
+	VcpuHourUsd              float64                `protobuf:"fixed64,1,opt,name=vcpu_hour_usd,json=vcpuHourUsd,proto3" json:"vcpu_hour_usd,omitempty"`
+	MemoryGibHourUsd         float64                `protobuf:"fixed64,2,opt,name=memory_gib_hour_usd,json=memoryGibHourUsd,proto3" json:"memory_gib_hour_usd,omitempty"`
+	DatabaseSchemaHourUsd    float64                `protobuf:"fixed64,3,opt,name=database_schema_hour_usd,json=databaseSchemaHourUsd,proto3" json:"database_schema_hour_usd,omitempty"`
+	DatabaseDedicatedHourUsd float64                `protobuf:"fixed64,4,opt,name=database_dedicated_hour_usd,json=databaseDedicatedHourUsd,proto3" json:"database_dedicated_hour_usd,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
+}
+
+func (x *CostRateCardInfo) Reset() {
+	*x = CostRateCardInfo{}
+	mi := &file_diverge_v1alpha1_cluster_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CostRateCardInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CostRateCardInfo) ProtoMessage() {}
+
+func (x *CostRateCardInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_cluster_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CostRateCardInfo.ProtoReflect.Descriptor instead.
+func (*CostRateCardInfo) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_cluster_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *CostRateCardInfo) GetVcpuHourUsd() float64 {
+	if x != nil {
+		return x.VcpuHourUsd
+	}
+	return 0
+}
+
+func (x *CostRateCardInfo) GetMemoryGibHourUsd() float64 {
+	if x != nil {
+		return x.MemoryGibHourUsd
+	}
+	return 0
+}
+
+func (x *CostRateCardInfo) GetDatabaseSchemaHourUsd() float64 {
+	if x != nil {
+		return x.DatabaseSchemaHourUsd
+	}
+	return 0
+}
+
+func (x *CostRateCardInfo) GetDatabaseDedicatedHourUsd() float64 {
+	if x != nil {
+		return x.DatabaseDedicatedHourUsd
+	}
+	return 0
+}
+
+type NamespaceCostBreakdown struct {
+	state                       protoimpl.MessageState `protogen:"open.v1"`
+	Namespace                   string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	TotalEnvironments           int32                  `protobuf:"varint,2,opt,name=total_environments,json=totalEnvironments,proto3" json:"total_environments,omitempty"`
+	ActiveEnvironments          int32                  `protobuf:"varint,3,opt,name=active_environments,json=activeEnvironments,proto3" json:"active_environments,omitempty"`
+	HibernatedEnvironments      int32                  `protobuf:"varint,4,opt,name=hibernated_environments,json=hibernatedEnvironments,proto3" json:"hibernated_environments,omitempty"`
+	HourlyCostUsd               float64                `protobuf:"fixed64,5,opt,name=hourly_cost_usd,json=hourlyCostUsd,proto3" json:"hourly_cost_usd,omitempty"`
+	HibernationSavingsHourlyUsd float64                `protobuf:"fixed64,6,opt,name=hibernation_savings_hourly_usd,json=hibernationSavingsHourlyUsd,proto3" json:"hibernation_savings_hourly_usd,omitempty"`
+	AccruedCostUsd              float64                `protobuf:"fixed64,7,opt,name=accrued_cost_usd,json=accruedCostUsd,proto3" json:"accrued_cost_usd,omitempty"`
+	ComputeHours                float64                `protobuf:"fixed64,8,opt,name=compute_hours,json=computeHours,proto3" json:"compute_hours,omitempty"`
+	CpuCores                    float64                `protobuf:"fixed64,9,opt,name=cpu_cores,json=cpuCores,proto3" json:"cpu_cores,omitempty"`
+	MemoryGib                   float64                `protobuf:"fixed64,10,opt,name=memory_gib,json=memoryGib,proto3" json:"memory_gib,omitempty"`
+	Quota                       *NamespaceQuotaInfo    `protobuf:"bytes,11,opt,name=quota,proto3" json:"quota,omitempty"`
+	BudgetUtilizationPercent    float64                `protobuf:"fixed64,12,opt,name=budget_utilization_percent,json=budgetUtilizationPercent,proto3" json:"budget_utilization_percent,omitempty"`
+	BudgetWarning               bool                   `protobuf:"varint,13,opt,name=budget_warning,json=budgetWarning,proto3" json:"budget_warning,omitempty"`
+	WarningReason               string                 `protobuf:"bytes,14,opt,name=warning_reason,json=warningReason,proto3" json:"warning_reason,omitempty"`
+	unknownFields               protoimpl.UnknownFields
+	sizeCache                   protoimpl.SizeCache
+}
+
+func (x *NamespaceCostBreakdown) Reset() {
+	*x = NamespaceCostBreakdown{}
+	mi := &file_diverge_v1alpha1_cluster_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NamespaceCostBreakdown) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NamespaceCostBreakdown) ProtoMessage() {}
+
+func (x *NamespaceCostBreakdown) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_cluster_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NamespaceCostBreakdown.ProtoReflect.Descriptor instead.
+func (*NamespaceCostBreakdown) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_cluster_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *NamespaceCostBreakdown) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *NamespaceCostBreakdown) GetTotalEnvironments() int32 {
+	if x != nil {
+		return x.TotalEnvironments
+	}
+	return 0
+}
+
+func (x *NamespaceCostBreakdown) GetActiveEnvironments() int32 {
+	if x != nil {
+		return x.ActiveEnvironments
+	}
+	return 0
+}
+
+func (x *NamespaceCostBreakdown) GetHibernatedEnvironments() int32 {
+	if x != nil {
+		return x.HibernatedEnvironments
+	}
+	return 0
+}
+
+func (x *NamespaceCostBreakdown) GetHourlyCostUsd() float64 {
+	if x != nil {
+		return x.HourlyCostUsd
+	}
+	return 0
+}
+
+func (x *NamespaceCostBreakdown) GetHibernationSavingsHourlyUsd() float64 {
+	if x != nil {
+		return x.HibernationSavingsHourlyUsd
+	}
+	return 0
+}
+
+func (x *NamespaceCostBreakdown) GetAccruedCostUsd() float64 {
+	if x != nil {
+		return x.AccruedCostUsd
+	}
+	return 0
+}
+
+func (x *NamespaceCostBreakdown) GetComputeHours() float64 {
+	if x != nil {
+		return x.ComputeHours
+	}
+	return 0
+}
+
+func (x *NamespaceCostBreakdown) GetCpuCores() float64 {
+	if x != nil {
+		return x.CpuCores
+	}
+	return 0
+}
+
+func (x *NamespaceCostBreakdown) GetMemoryGib() float64 {
+	if x != nil {
+		return x.MemoryGib
+	}
+	return 0
+}
+
+func (x *NamespaceCostBreakdown) GetQuota() *NamespaceQuotaInfo {
+	if x != nil {
+		return x.Quota
+	}
+	return nil
+}
+
+func (x *NamespaceCostBreakdown) GetBudgetUtilizationPercent() float64 {
+	if x != nil {
+		return x.BudgetUtilizationPercent
+	}
+	return 0
+}
+
+func (x *NamespaceCostBreakdown) GetBudgetWarning() bool {
+	if x != nil {
+		return x.BudgetWarning
+	}
+	return false
+}
+
+func (x *NamespaceCostBreakdown) GetWarningReason() string {
+	if x != nil {
+		return x.WarningReason
+	}
+	return ""
+}
+
+type ServiceCostBreakdown struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	ServiceName      string                 `protobuf:"bytes,1,opt,name=service_name,json=serviceName,proto3" json:"service_name,omitempty"`
+	EnvironmentCount int32                  `protobuf:"varint,2,opt,name=environment_count,json=environmentCount,proto3" json:"environment_count,omitempty"`
+	ActiveCount      int32                  `protobuf:"varint,3,opt,name=active_count,json=activeCount,proto3" json:"active_count,omitempty"`
+	HibernatedCount  int32                  `protobuf:"varint,4,opt,name=hibernated_count,json=hibernatedCount,proto3" json:"hibernated_count,omitempty"`
+	HourlyCostUsd    float64                `protobuf:"fixed64,5,opt,name=hourly_cost_usd,json=hourlyCostUsd,proto3" json:"hourly_cost_usd,omitempty"`
+	CpuCores         float64                `protobuf:"fixed64,6,opt,name=cpu_cores,json=cpuCores,proto3" json:"cpu_cores,omitempty"`
+	MemoryGib        float64                `protobuf:"fixed64,7,opt,name=memory_gib,json=memoryGib,proto3" json:"memory_gib,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ServiceCostBreakdown) Reset() {
+	*x = ServiceCostBreakdown{}
+	mi := &file_diverge_v1alpha1_cluster_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ServiceCostBreakdown) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ServiceCostBreakdown) ProtoMessage() {}
+
+func (x *ServiceCostBreakdown) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_cluster_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ServiceCostBreakdown.ProtoReflect.Descriptor instead.
+func (*ServiceCostBreakdown) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_cluster_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ServiceCostBreakdown) GetServiceName() string {
+	if x != nil {
+		return x.ServiceName
+	}
+	return ""
+}
+
+func (x *ServiceCostBreakdown) GetEnvironmentCount() int32 {
+	if x != nil {
+		return x.EnvironmentCount
+	}
+	return 0
+}
+
+func (x *ServiceCostBreakdown) GetActiveCount() int32 {
+	if x != nil {
+		return x.ActiveCount
+	}
+	return 0
+}
+
+func (x *ServiceCostBreakdown) GetHibernatedCount() int32 {
+	if x != nil {
+		return x.HibernatedCount
+	}
+	return 0
+}
+
+func (x *ServiceCostBreakdown) GetHourlyCostUsd() float64 {
+	if x != nil {
+		return x.HourlyCostUsd
+	}
+	return 0
+}
+
+func (x *ServiceCostBreakdown) GetCpuCores() float64 {
+	if x != nil {
+		return x.CpuCores
+	}
+	return 0
+}
+
+func (x *ServiceCostBreakdown) GetMemoryGib() float64 {
+	if x != nil {
+		return x.MemoryGib
+	}
+	return 0
+}
+
+type EnvironmentCostItem struct {
+	state                       protoimpl.MessageState `protogen:"open.v1"`
+	Name                        string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Namespace                   string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Project                     string                 `protobuf:"bytes,3,opt,name=project,proto3" json:"project,omitempty"`
+	Mr                          string                 `protobuf:"bytes,4,opt,name=mr,proto3" json:"mr,omitempty"`
+	Branch                      string                 `protobuf:"bytes,5,opt,name=branch,proto3" json:"branch,omitempty"`
+	Phase                       string                 `protobuf:"bytes,6,opt,name=phase,proto3" json:"phase,omitempty"`
+	Hibernated                  bool                   `protobuf:"varint,7,opt,name=hibernated,proto3" json:"hibernated,omitempty"`
+	HourlyCostUsd               float64                `protobuf:"fixed64,8,opt,name=hourly_cost_usd,json=hourlyCostUsd,proto3" json:"hourly_cost_usd,omitempty"`
+	HibernationSavingsHourlyUsd float64                `protobuf:"fixed64,9,opt,name=hibernation_savings_hourly_usd,json=hibernationSavingsHourlyUsd,proto3" json:"hibernation_savings_hourly_usd,omitempty"`
+	AccruedCostUsd              float64                `protobuf:"fixed64,10,opt,name=accrued_cost_usd,json=accruedCostUsd,proto3" json:"accrued_cost_usd,omitempty"`
+	ProjectedTtlCostUsd         float64                `protobuf:"fixed64,11,opt,name=projected_ttl_cost_usd,json=projectedTtlCostUsd,proto3" json:"projected_ttl_cost_usd,omitempty"`
+	UptimeHours                 float64                `protobuf:"fixed64,12,opt,name=uptime_hours,json=uptimeHours,proto3" json:"uptime_hours,omitempty"`
+	CpuCores                    float64                `protobuf:"fixed64,13,opt,name=cpu_cores,json=cpuCores,proto3" json:"cpu_cores,omitempty"`
+	MemoryGib                   float64                `protobuf:"fixed64,14,opt,name=memory_gib,json=memoryGib,proto3" json:"memory_gib,omitempty"`
+	ServiceCount                int32                  `protobuf:"varint,15,opt,name=service_count,json=serviceCount,proto3" json:"service_count,omitempty"`
+	DatabaseMode                string                 `protobuf:"bytes,16,opt,name=database_mode,json=databaseMode,proto3" json:"database_mode,omitempty"`
+	TtlWarning                  bool                   `protobuf:"varint,17,opt,name=ttl_warning,json=ttlWarning,proto3" json:"ttl_warning,omitempty"`
+	TtlWarningReason            string                 `protobuf:"bytes,18,opt,name=ttl_warning_reason,json=ttlWarningReason,proto3" json:"ttl_warning_reason,omitempty"`
+	unknownFields               protoimpl.UnknownFields
+	sizeCache                   protoimpl.SizeCache
+}
+
+func (x *EnvironmentCostItem) Reset() {
+	*x = EnvironmentCostItem{}
+	mi := &file_diverge_v1alpha1_cluster_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EnvironmentCostItem) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EnvironmentCostItem) ProtoMessage() {}
+
+func (x *EnvironmentCostItem) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_cluster_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EnvironmentCostItem.ProtoReflect.Descriptor instead.
+func (*EnvironmentCostItem) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_cluster_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *EnvironmentCostItem) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *EnvironmentCostItem) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *EnvironmentCostItem) GetProject() string {
+	if x != nil {
+		return x.Project
+	}
+	return ""
+}
+
+func (x *EnvironmentCostItem) GetMr() string {
+	if x != nil {
+		return x.Mr
+	}
+	return ""
+}
+
+func (x *EnvironmentCostItem) GetBranch() string {
+	if x != nil {
+		return x.Branch
+	}
+	return ""
+}
+
+func (x *EnvironmentCostItem) GetPhase() string {
+	if x != nil {
+		return x.Phase
+	}
+	return ""
+}
+
+func (x *EnvironmentCostItem) GetHibernated() bool {
+	if x != nil {
+		return x.Hibernated
+	}
+	return false
+}
+
+func (x *EnvironmentCostItem) GetHourlyCostUsd() float64 {
+	if x != nil {
+		return x.HourlyCostUsd
+	}
+	return 0
+}
+
+func (x *EnvironmentCostItem) GetHibernationSavingsHourlyUsd() float64 {
+	if x != nil {
+		return x.HibernationSavingsHourlyUsd
+	}
+	return 0
+}
+
+func (x *EnvironmentCostItem) GetAccruedCostUsd() float64 {
+	if x != nil {
+		return x.AccruedCostUsd
+	}
+	return 0
+}
+
+func (x *EnvironmentCostItem) GetProjectedTtlCostUsd() float64 {
+	if x != nil {
+		return x.ProjectedTtlCostUsd
+	}
+	return 0
+}
+
+func (x *EnvironmentCostItem) GetUptimeHours() float64 {
+	if x != nil {
+		return x.UptimeHours
+	}
+	return 0
+}
+
+func (x *EnvironmentCostItem) GetCpuCores() float64 {
+	if x != nil {
+		return x.CpuCores
+	}
+	return 0
+}
+
+func (x *EnvironmentCostItem) GetMemoryGib() float64 {
+	if x != nil {
+		return x.MemoryGib
+	}
+	return 0
+}
+
+func (x *EnvironmentCostItem) GetServiceCount() int32 {
+	if x != nil {
+		return x.ServiceCount
+	}
+	return 0
+}
+
+func (x *EnvironmentCostItem) GetDatabaseMode() string {
+	if x != nil {
+		return x.DatabaseMode
+	}
+	return ""
+}
+
+func (x *EnvironmentCostItem) GetTtlWarning() bool {
+	if x != nil {
+		return x.TtlWarning
+	}
+	return false
+}
+
+func (x *EnvironmentCostItem) GetTtlWarningReason() string {
+	if x != nil {
+		return x.TtlWarningReason
+	}
+	return ""
+}
+
+type GetCostSummaryResponse struct {
+	state                        protoimpl.MessageState    `protogen:"open.v1"`
+	TotalHourlyCostUsd           float64                   `protobuf:"fixed64,1,opt,name=total_hourly_cost_usd,json=totalHourlyCostUsd,proto3" json:"total_hourly_cost_usd,omitempty"`
+	MonthlyRunRateUsd            float64                   `protobuf:"fixed64,2,opt,name=monthly_run_rate_usd,json=monthlyRunRateUsd,proto3" json:"monthly_run_rate_usd,omitempty"`
+	HibernationSavingsHourlyUsd  float64                   `protobuf:"fixed64,3,opt,name=hibernation_savings_hourly_usd,json=hibernationSavingsHourlyUsd,proto3" json:"hibernation_savings_hourly_usd,omitempty"`
+	DeltaRoutingSavingsHourlyUsd float64                   `protobuf:"fixed64,4,opt,name=delta_routing_savings_hourly_usd,json=deltaRoutingSavingsHourlyUsd,proto3" json:"delta_routing_savings_hourly_usd,omitempty"`
+	TotalAccruedCostUsd          float64                   `protobuf:"fixed64,5,opt,name=total_accrued_cost_usd,json=totalAccruedCostUsd,proto3" json:"total_accrued_cost_usd,omitempty"`
+	AgentTaskCostUsd             float64                   `protobuf:"fixed64,6,opt,name=agent_task_cost_usd,json=agentTaskCostUsd,proto3" json:"agent_task_cost_usd,omitempty"`
+	TotalComputeHours            float64                   `protobuf:"fixed64,7,opt,name=total_compute_hours,json=totalComputeHours,proto3" json:"total_compute_hours,omitempty"`
+	TotalCpuCores                float64                   `protobuf:"fixed64,8,opt,name=total_cpu_cores,json=totalCpuCores,proto3" json:"total_cpu_cores,omitempty"`
+	TotalMemoryGib               float64                   `protobuf:"fixed64,9,opt,name=total_memory_gib,json=totalMemoryGib,proto3" json:"total_memory_gib,omitempty"`
+	TotalEnvironments            int32                     `protobuf:"varint,10,opt,name=total_environments,json=totalEnvironments,proto3" json:"total_environments,omitempty"`
+	ActiveEnvironments           int32                     `protobuf:"varint,11,opt,name=active_environments,json=activeEnvironments,proto3" json:"active_environments,omitempty"`
+	HibernatedEnvironments       int32                     `protobuf:"varint,12,opt,name=hibernated_environments,json=hibernatedEnvironments,proto3" json:"hibernated_environments,omitempty"`
+	ByNamespace                  []*NamespaceCostBreakdown `protobuf:"bytes,13,rep,name=by_namespace,json=byNamespace,proto3" json:"by_namespace,omitempty"`
+	ByService                    []*ServiceCostBreakdown   `protobuf:"bytes,14,rep,name=by_service,json=byService,proto3" json:"by_service,omitempty"`
+	TopConsumers                 []*EnvironmentCostItem    `protobuf:"bytes,15,rep,name=top_consumers,json=topConsumers,proto3" json:"top_consumers,omitempty"`
+	RateCard                     *CostRateCardInfo         `protobuf:"bytes,16,opt,name=rate_card,json=rateCard,proto3" json:"rate_card,omitempty"`
+	unknownFields                protoimpl.UnknownFields
+	sizeCache                    protoimpl.SizeCache
+}
+
+func (x *GetCostSummaryResponse) Reset() {
+	*x = GetCostSummaryResponse{}
+	mi := &file_diverge_v1alpha1_cluster_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetCostSummaryResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetCostSummaryResponse) ProtoMessage() {}
+
+func (x *GetCostSummaryResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_cluster_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetCostSummaryResponse.ProtoReflect.Descriptor instead.
+func (*GetCostSummaryResponse) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_cluster_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *GetCostSummaryResponse) GetTotalHourlyCostUsd() float64 {
+	if x != nil {
+		return x.TotalHourlyCostUsd
+	}
+	return 0
+}
+
+func (x *GetCostSummaryResponse) GetMonthlyRunRateUsd() float64 {
+	if x != nil {
+		return x.MonthlyRunRateUsd
+	}
+	return 0
+}
+
+func (x *GetCostSummaryResponse) GetHibernationSavingsHourlyUsd() float64 {
+	if x != nil {
+		return x.HibernationSavingsHourlyUsd
+	}
+	return 0
+}
+
+func (x *GetCostSummaryResponse) GetDeltaRoutingSavingsHourlyUsd() float64 {
+	if x != nil {
+		return x.DeltaRoutingSavingsHourlyUsd
+	}
+	return 0
+}
+
+func (x *GetCostSummaryResponse) GetTotalAccruedCostUsd() float64 {
+	if x != nil {
+		return x.TotalAccruedCostUsd
+	}
+	return 0
+}
+
+func (x *GetCostSummaryResponse) GetAgentTaskCostUsd() float64 {
+	if x != nil {
+		return x.AgentTaskCostUsd
+	}
+	return 0
+}
+
+func (x *GetCostSummaryResponse) GetTotalComputeHours() float64 {
+	if x != nil {
+		return x.TotalComputeHours
+	}
+	return 0
+}
+
+func (x *GetCostSummaryResponse) GetTotalCpuCores() float64 {
+	if x != nil {
+		return x.TotalCpuCores
+	}
+	return 0
+}
+
+func (x *GetCostSummaryResponse) GetTotalMemoryGib() float64 {
+	if x != nil {
+		return x.TotalMemoryGib
+	}
+	return 0
+}
+
+func (x *GetCostSummaryResponse) GetTotalEnvironments() int32 {
+	if x != nil {
+		return x.TotalEnvironments
+	}
+	return 0
+}
+
+func (x *GetCostSummaryResponse) GetActiveEnvironments() int32 {
+	if x != nil {
+		return x.ActiveEnvironments
+	}
+	return 0
+}
+
+func (x *GetCostSummaryResponse) GetHibernatedEnvironments() int32 {
+	if x != nil {
+		return x.HibernatedEnvironments
+	}
+	return 0
+}
+
+func (x *GetCostSummaryResponse) GetByNamespace() []*NamespaceCostBreakdown {
+	if x != nil {
+		return x.ByNamespace
+	}
+	return nil
+}
+
+func (x *GetCostSummaryResponse) GetByService() []*ServiceCostBreakdown {
+	if x != nil {
+		return x.ByService
+	}
+	return nil
+}
+
+func (x *GetCostSummaryResponse) GetTopConsumers() []*EnvironmentCostItem {
+	if x != nil {
+		return x.TopConsumers
+	}
+	return nil
+}
+
+func (x *GetCostSummaryResponse) GetRateCard() *CostRateCardInfo {
+	if x != nil {
+		return x.RateCard
+	}
+	return nil
+}
+
 var File_diverge_v1alpha1_cluster_proto protoreflect.FileDescriptor
 
 const file_diverge_v1alpha1_cluster_proto_rawDesc = "" +
@@ -237,9 +933,86 @@ const file_diverge_v1alpha1_cluster_proto_rawDesc = "" +
 	"namespaces\x18\x04 \x03(\tR\n" +
 	"namespaces\x12-\n" +
 	"\x12controller_healthy\x18\x05 \x01(\bR\x11controllerHealthy\x12M\n" +
-	"\x0fnamespace_quota\x18\x06 \x01(\v2$.diverge.v1alpha1.NamespaceQuotaInfoR\x0enamespaceQuota2u\n" +
+	"\x0fnamespace_quota\x18\x06 \x01(\v2$.diverge.v1alpha1.NamespaceQuotaInfoR\x0enamespaceQuota\"5\n" +
+	"\x15GetCostSummaryRequest\x12\x1c\n" +
+	"\tnamespace\x18\x01 \x01(\tR\tnamespace\"\xdd\x01\n" +
+	"\x10CostRateCardInfo\x12\"\n" +
+	"\rvcpu_hour_usd\x18\x01 \x01(\x01R\vvcpuHourUsd\x12-\n" +
+	"\x13memory_gib_hour_usd\x18\x02 \x01(\x01R\x10memoryGibHourUsd\x127\n" +
+	"\x18database_schema_hour_usd\x18\x03 \x01(\x01R\x15databaseSchemaHourUsd\x12=\n" +
+	"\x1bdatabase_dedicated_hour_usd\x18\x04 \x01(\x01R\x18databaseDedicatedHourUsd\"\x8f\x05\n" +
+	"\x16NamespaceCostBreakdown\x12\x1c\n" +
+	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12-\n" +
+	"\x12total_environments\x18\x02 \x01(\x05R\x11totalEnvironments\x12/\n" +
+	"\x13active_environments\x18\x03 \x01(\x05R\x12activeEnvironments\x127\n" +
+	"\x17hibernated_environments\x18\x04 \x01(\x05R\x16hibernatedEnvironments\x12&\n" +
+	"\x0fhourly_cost_usd\x18\x05 \x01(\x01R\rhourlyCostUsd\x12C\n" +
+	"\x1ehibernation_savings_hourly_usd\x18\x06 \x01(\x01R\x1bhibernationSavingsHourlyUsd\x12(\n" +
+	"\x10accrued_cost_usd\x18\a \x01(\x01R\x0eaccruedCostUsd\x12#\n" +
+	"\rcompute_hours\x18\b \x01(\x01R\fcomputeHours\x12\x1b\n" +
+	"\tcpu_cores\x18\t \x01(\x01R\bcpuCores\x12\x1d\n" +
+	"\n" +
+	"memory_gib\x18\n" +
+	" \x01(\x01R\tmemoryGib\x12:\n" +
+	"\x05quota\x18\v \x01(\v2$.diverge.v1alpha1.NamespaceQuotaInfoR\x05quota\x12<\n" +
+	"\x1abudget_utilization_percent\x18\f \x01(\x01R\x18budgetUtilizationPercent\x12%\n" +
+	"\x0ebudget_warning\x18\r \x01(\bR\rbudgetWarning\x12%\n" +
+	"\x0ewarning_reason\x18\x0e \x01(\tR\rwarningReason\"\x98\x02\n" +
+	"\x14ServiceCostBreakdown\x12!\n" +
+	"\fservice_name\x18\x01 \x01(\tR\vserviceName\x12+\n" +
+	"\x11environment_count\x18\x02 \x01(\x05R\x10environmentCount\x12!\n" +
+	"\factive_count\x18\x03 \x01(\x05R\vactiveCount\x12)\n" +
+	"\x10hibernated_count\x18\x04 \x01(\x05R\x0fhibernatedCount\x12&\n" +
+	"\x0fhourly_cost_usd\x18\x05 \x01(\x01R\rhourlyCostUsd\x12\x1b\n" +
+	"\tcpu_cores\x18\x06 \x01(\x01R\bcpuCores\x12\x1d\n" +
+	"\n" +
+	"memory_gib\x18\a \x01(\x01R\tmemoryGib\"\x83\x05\n" +
+	"\x13EnvironmentCostItem\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
+	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12\x18\n" +
+	"\aproject\x18\x03 \x01(\tR\aproject\x12\x0e\n" +
+	"\x02mr\x18\x04 \x01(\tR\x02mr\x12\x16\n" +
+	"\x06branch\x18\x05 \x01(\tR\x06branch\x12\x14\n" +
+	"\x05phase\x18\x06 \x01(\tR\x05phase\x12\x1e\n" +
+	"\n" +
+	"hibernated\x18\a \x01(\bR\n" +
+	"hibernated\x12&\n" +
+	"\x0fhourly_cost_usd\x18\b \x01(\x01R\rhourlyCostUsd\x12C\n" +
+	"\x1ehibernation_savings_hourly_usd\x18\t \x01(\x01R\x1bhibernationSavingsHourlyUsd\x12(\n" +
+	"\x10accrued_cost_usd\x18\n" +
+	" \x01(\x01R\x0eaccruedCostUsd\x123\n" +
+	"\x16projected_ttl_cost_usd\x18\v \x01(\x01R\x13projectedTtlCostUsd\x12!\n" +
+	"\fuptime_hours\x18\f \x01(\x01R\vuptimeHours\x12\x1b\n" +
+	"\tcpu_cores\x18\r \x01(\x01R\bcpuCores\x12\x1d\n" +
+	"\n" +
+	"memory_gib\x18\x0e \x01(\x01R\tmemoryGib\x12#\n" +
+	"\rservice_count\x18\x0f \x01(\x05R\fserviceCount\x12#\n" +
+	"\rdatabase_mode\x18\x10 \x01(\tR\fdatabaseMode\x12\x1f\n" +
+	"\vttl_warning\x18\x11 \x01(\bR\n" +
+	"ttlWarning\x12,\n" +
+	"\x12ttl_warning_reason\x18\x12 \x01(\tR\x10ttlWarningReason\"\xa9\a\n" +
+	"\x16GetCostSummaryResponse\x121\n" +
+	"\x15total_hourly_cost_usd\x18\x01 \x01(\x01R\x12totalHourlyCostUsd\x12/\n" +
+	"\x14monthly_run_rate_usd\x18\x02 \x01(\x01R\x11monthlyRunRateUsd\x12C\n" +
+	"\x1ehibernation_savings_hourly_usd\x18\x03 \x01(\x01R\x1bhibernationSavingsHourlyUsd\x12F\n" +
+	" delta_routing_savings_hourly_usd\x18\x04 \x01(\x01R\x1cdeltaRoutingSavingsHourlyUsd\x123\n" +
+	"\x16total_accrued_cost_usd\x18\x05 \x01(\x01R\x13totalAccruedCostUsd\x12-\n" +
+	"\x13agent_task_cost_usd\x18\x06 \x01(\x01R\x10agentTaskCostUsd\x12.\n" +
+	"\x13total_compute_hours\x18\a \x01(\x01R\x11totalComputeHours\x12&\n" +
+	"\x0ftotal_cpu_cores\x18\b \x01(\x01R\rtotalCpuCores\x12(\n" +
+	"\x10total_memory_gib\x18\t \x01(\x01R\x0etotalMemoryGib\x12-\n" +
+	"\x12total_environments\x18\n" +
+	" \x01(\x05R\x11totalEnvironments\x12/\n" +
+	"\x13active_environments\x18\v \x01(\x05R\x12activeEnvironments\x127\n" +
+	"\x17hibernated_environments\x18\f \x01(\x05R\x16hibernatedEnvironments\x12K\n" +
+	"\fby_namespace\x18\r \x03(\v2(.diverge.v1alpha1.NamespaceCostBreakdownR\vbyNamespace\x12E\n" +
+	"\n" +
+	"by_service\x18\x0e \x03(\v2&.diverge.v1alpha1.ServiceCostBreakdownR\tbyService\x12J\n" +
+	"\rtop_consumers\x18\x0f \x03(\v2%.diverge.v1alpha1.EnvironmentCostItemR\ftopConsumers\x12?\n" +
+	"\trate_card\x18\x10 \x01(\v2\".diverge.v1alpha1.CostRateCardInfoR\brateCard2\xda\x01\n" +
 	"\x0eClusterService\x12c\n" +
-	"\x0eGetClusterInfo\x12'.diverge.v1alpha1.GetClusterInfoRequest\x1a(.diverge.v1alpha1.GetClusterInfoResponseBHZFgithub.com/divergedev/diverge/api/gen/diverge/v1alpha1;divergev1alpha1b\x06proto3"
+	"\x0eGetClusterInfo\x12'.diverge.v1alpha1.GetClusterInfoRequest\x1a(.diverge.v1alpha1.GetClusterInfoResponse\x12c\n" +
+	"\x0eGetCostSummary\x12'.diverge.v1alpha1.GetCostSummaryRequest\x1a(.diverge.v1alpha1.GetCostSummaryResponseBHZFgithub.com/divergedev/diverge/api/gen/diverge/v1alpha1;divergev1alpha1b\x06proto3"
 
 var (
 	file_diverge_v1alpha1_cluster_proto_rawDescOnce sync.Once
@@ -253,21 +1026,34 @@ func file_diverge_v1alpha1_cluster_proto_rawDescGZIP() []byte {
 	return file_diverge_v1alpha1_cluster_proto_rawDescData
 }
 
-var file_diverge_v1alpha1_cluster_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_diverge_v1alpha1_cluster_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_diverge_v1alpha1_cluster_proto_goTypes = []any{
 	(*GetClusterInfoRequest)(nil),  // 0: diverge.v1alpha1.GetClusterInfoRequest
 	(*NamespaceQuotaInfo)(nil),     // 1: diverge.v1alpha1.NamespaceQuotaInfo
 	(*GetClusterInfoResponse)(nil), // 2: diverge.v1alpha1.GetClusterInfoResponse
+	(*GetCostSummaryRequest)(nil),  // 3: diverge.v1alpha1.GetCostSummaryRequest
+	(*CostRateCardInfo)(nil),       // 4: diverge.v1alpha1.CostRateCardInfo
+	(*NamespaceCostBreakdown)(nil), // 5: diverge.v1alpha1.NamespaceCostBreakdown
+	(*ServiceCostBreakdown)(nil),   // 6: diverge.v1alpha1.ServiceCostBreakdown
+	(*EnvironmentCostItem)(nil),    // 7: diverge.v1alpha1.EnvironmentCostItem
+	(*GetCostSummaryResponse)(nil), // 8: diverge.v1alpha1.GetCostSummaryResponse
 }
 var file_diverge_v1alpha1_cluster_proto_depIdxs = []int32{
 	1, // 0: diverge.v1alpha1.GetClusterInfoResponse.namespace_quota:type_name -> diverge.v1alpha1.NamespaceQuotaInfo
-	0, // 1: diverge.v1alpha1.ClusterService.GetClusterInfo:input_type -> diverge.v1alpha1.GetClusterInfoRequest
-	2, // 2: diverge.v1alpha1.ClusterService.GetClusterInfo:output_type -> diverge.v1alpha1.GetClusterInfoResponse
-	2, // [2:3] is the sub-list for method output_type
-	1, // [1:2] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	1, // 1: diverge.v1alpha1.NamespaceCostBreakdown.quota:type_name -> diverge.v1alpha1.NamespaceQuotaInfo
+	5, // 2: diverge.v1alpha1.GetCostSummaryResponse.by_namespace:type_name -> diverge.v1alpha1.NamespaceCostBreakdown
+	6, // 3: diverge.v1alpha1.GetCostSummaryResponse.by_service:type_name -> diverge.v1alpha1.ServiceCostBreakdown
+	7, // 4: diverge.v1alpha1.GetCostSummaryResponse.top_consumers:type_name -> diverge.v1alpha1.EnvironmentCostItem
+	4, // 5: diverge.v1alpha1.GetCostSummaryResponse.rate_card:type_name -> diverge.v1alpha1.CostRateCardInfo
+	0, // 6: diverge.v1alpha1.ClusterService.GetClusterInfo:input_type -> diverge.v1alpha1.GetClusterInfoRequest
+	3, // 7: diverge.v1alpha1.ClusterService.GetCostSummary:input_type -> diverge.v1alpha1.GetCostSummaryRequest
+	2, // 8: diverge.v1alpha1.ClusterService.GetClusterInfo:output_type -> diverge.v1alpha1.GetClusterInfoResponse
+	8, // 9: diverge.v1alpha1.ClusterService.GetCostSummary:output_type -> diverge.v1alpha1.GetCostSummaryResponse
+	8, // [8:10] is the sub-list for method output_type
+	6, // [6:8] is the sub-list for method input_type
+	6, // [6:6] is the sub-list for extension type_name
+	6, // [6:6] is the sub-list for extension extendee
+	0, // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_diverge_v1alpha1_cluster_proto_init() }
@@ -281,7 +1067,7 @@ func file_diverge_v1alpha1_cluster_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_diverge_v1alpha1_cluster_proto_rawDesc), len(file_diverge_v1alpha1_cluster_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

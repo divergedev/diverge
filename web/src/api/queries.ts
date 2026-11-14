@@ -12,6 +12,7 @@ export const queryKeys = {
   agentTask: (ns: string, name: string) => ['agentTask', ns, name] as const,
   hookJobs: (ns: string, envName: string) => ['hookJobs', ns, envName] as const,
   clusterInfo: ['clusterInfo'] as const,
+  costSummary: (ns?: string) => ['costSummary', ns || null] as const,
   currentUser: ['currentUser'] as const,
   permissions: (ns?: string) => ['permissions', ns ?? 'all'] as const,
 }
@@ -55,6 +56,14 @@ export function useGetClusterInfo(namespace?: string) {
   return useQuery({
     queryKey: [...queryKeys.clusterInfo, namespace ?? ''] as const,
     queryFn: () => clusterClient.getClusterInfo({ namespace: namespace ?? '' }),
+  })
+}
+
+export function useGetCostSummary(namespace?: string) {
+  return useQuery({
+    queryKey: queryKeys.costSummary(namespace),
+    queryFn: () => clusterClient.getCostSummary({ namespace: namespace ?? '' }),
+    refetchInterval: 10000,
   })
 }
 

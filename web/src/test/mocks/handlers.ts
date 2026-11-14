@@ -81,4 +81,29 @@ export const handlers = [
       namespaces: ['default', 'staging'],
     })
   }),
+  http.post('*/diverge.v1alpha1.ClusterService/GetCostSummary', () => {
+    return HttpResponse.json({
+      totalHourlyCostUsd: 0.024,
+      monthlyRunRateUsd: 17.52,
+      hibernationSavingsHourlyUsd: 0,
+      deltaRoutingSavingsHourlyUsd: 0,
+      totalAccruedCostUsd: 0.048,
+      agentTaskCostUsd: 0,
+      totalComputeHours: 4,
+      totalCpuCores: 0.5,
+      totalMemoryGib: 1,
+      totalEnvironments: 2,
+      activeEnvironments: 2,
+      hibernatedEnvironments: 0,
+      byNamespace: [],
+      byService: [],
+      topConsumers: [],
+      rateCard: {
+        vcpuHourUsd: 0.04,
+        memoryGibHourUsd: 0.004,
+        databaseSchemaHourUsd: 0.01,
+        databaseDedicatedHourUsd: 0.08,
+      },
+    })
+  }),
 ]

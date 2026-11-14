@@ -8,6 +8,7 @@ import PreviewGroups from '@/pages/PreviewGroups'
 import PreviewGroupDetail from '@/pages/PreviewGroupDetail'
 import AgentTasks from '@/pages/AgentTasks'
 import AgentTaskDetail from '@/pages/AgentTaskDetail'
+import CostAnalytics from '@/pages/CostAnalytics'
 import ClusterInfo from '@/pages/ClusterInfo'
 
 export default function App() {
@@ -21,6 +22,7 @@ export default function App() {
         <Route path="preview-groups/:namespace/:name" element={<PreviewGroupDetail />} />
         <Route path="tasks" element={<AgentTasks />} />
         <Route path="tasks/:namespace/:name" element={<AgentTaskDetail />} />
+        <Route path="usage" element={<CostAnalytics />} />
         <Route path="cluster" element={<ClusterInfo />} />
       </Route>
     </Routes>

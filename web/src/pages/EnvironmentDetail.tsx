@@ -17,7 +17,12 @@ import { VerifyReplayTab } from '@/components/VerifyReplayTab'
 import { ArrowLeft, ExternalLink, Copy, Trash2, Clock, AlertCircle, CheckCircle, Wand2, Moon, Sun } from 'lucide-react'
 import {
   estimateEnvironmentHourlyCostUSD,
+  estimateEnvironmentHibernationSavingsUSD,
+  estimateEnvironmentAccruedCostUSD,
+  estimateEnvironmentServiceCount,
+  hasRecordedHibernationHistory,
   formatHourlyCostUSD,
+  formatCurrencyUSD,
   isEnvironmentHibernated,
   buildMagicPreviewUrl,
 } from '@/lib/finops'
@@ -77,6 +82,10 @@ export default function EnvironmentDetail() {
   const hibernated = isEnvironmentHibernated(env)
   const magicUrl = buildMagicPreviewUrl(env)
   const estimatedCost = formatHourlyCostUSD(estimateEnvironmentHourlyCostUSD(env))
+  const hibernationSavings = estimateEnvironmentHibernationSavingsUSD(env)
+  const accruedSpend = estimateEnvironmentAccruedCostUSD(env)
+  const hasDurationHistory = hasRecordedHibernationHistory(env)
+  const serviceCount = estimateEnvironmentServiceCount(env)
   const hibernationLabel = hibernated
     ? 'Hibernated (0 replicas)'
     : annotations['divergedev.com/hibernate-after']
@@ -336,6 +345,28 @@ export default function EnvironmentDetail() {
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">Estimated Cost</span>
                   <span className="font-mono font-medium">{estimatedCost}</span>
+                </div>
+                {accruedSpend > 0 && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">
+                      {hasDurationHistory ? 'Accrued Spend' : 'Projected Lifetime Spend'}
+                    </span>
+                    <span className="font-mono font-medium">{formatCurrencyUSD(accruedSpend)}</span>
+                  </div>
+                )}
+                {hibernationSavings > 0 && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Hibernation Savings</span>
+                    <span className="font-mono font-medium text-emerald-600 dark:text-emerald-400">
+                      {formatHourlyCostUSD(hibernationSavings)}
+                    </span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Preview Services</span>
+                  <span className="font-mono font-medium">
+                    {serviceCount} {serviceCount === 1 ? 'service' : 'services'}
+                  </span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">Hibernation</span>
