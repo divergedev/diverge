@@ -170,9 +170,21 @@ Diverge includes an OpenFeature-compatible feature flags engine. For details and
 ### `Environment` Annotations
 | Annotation | Example | Description |
 |---|---|---|
-| `divergedev.com/hibernate-after` | `"30m"` | Idle duration after which `diverge-controller` scales the environment's preview Deployment to `0` replicas (`Phase: Hibernating`). |
+| `divergedev.com/hibernate-after` | `"30m"` | Idle duration after which `diverge-controller` scales the environment's preview Deployment to `0` replicas (defaults to `30m`; set `"0"` or `"off"` to disable). |
 | `divergedev.com/last-traffic-at` | `"2026-10-12T01:30:00Z"` | RFC 3339 timestamp of the last observed HTTP/gRPC traffic (falls back to `status.createdAt` when unset). |
+| `divergedev.com/hibernated` | `"true"` | Marks the environment as scaled-to-zero / hibernated (`"true"` or `"false"`). |
+| `divergedev.com/hibernated-at` | `"2026-11-13T15:00:00Z"` | RFC 3339 timestamp recorded when the current hibernation window began (cleared upon wake). |
+| `divergedev.com/hibernated-seconds` | `"3600"` | Cumulative seconds spent hibernated across completed sleep/wake cycles for accurate active-hour cost accrual. |
+| `divergedev.com/terminated-at` | `"2026-11-13T18:00:00Z"` | Optional RFC 3339 timestamp capping billable accrual upon terminal teardown. |
 | `divergedev.com/pr-number` | `"42"` | Pull Request / Merge Request number associated with the environment. |
+
+### `Namespace` FinOps Quota Annotations
+| Annotation | Example | Description |
+|---|---|---|
+| `divergedev.com/max-active-environments` | `"10"` | Maximum concurrent active (non-hibernated) preview `Environment`s in the namespace. |
+| `divergedev.com/max-hourly-cost-usd` | `"0.50"` | Maximum hourly USD burn rate across preview `Environment`s in the namespace. |
+| `divergedev.com/max-cnpg-clusters` | `"3"` | Maximum concurrent dedicated CloudNativePG (`cnpg`) preview clusters in the namespace. |
+| `divergedev.com/quota-exceed-policy` | `"hibernate-oldest"` | Enforcement policy when namespace quotas are exceeded (`hibernate-oldest` or `reject`). |
 
 ### `AgentTask` Preview Annotations
 When `spec.repository.url` is set on an `AgentTask`, the controller automatically provisions a linked preview `Environment` (`agent-preview-<taskName>`):
@@ -254,3 +266,7 @@ The Diverge controller can be configured via environment variables (usually inje
 - `DIVERGE_WEBHOOK_SECRET`: The secret token used to validate incoming webhooks from GitLab/GitHub.
 - `DIVERGE_LOG_LEVEL`: Logging verbosity (`debug`, `info`, `warn`, `error`).
 - `DIVERGE_DEFAULT_BASELINE`: The default baseline environment name (e.g., `staging`).
+- `DIVERGE_COST_VCPU_HOUR_USD`: Unit compute rate per requested vCPU-hour (default: `0.04`).
+- `DIVERGE_COST_MEMORY_GIB_HOUR_USD`: Unit memory rate per requested GiB-hour (default: `0.004`).
+- `DIVERGE_COST_DB_SCHEMA_HOUR_USD`: Hourly database rate for `schema` isolation mode (default: `0.01`).
+- `DIVERGE_COST_DB_DEDICATED_HOUR_USD`: Hourly database rate for dedicated/isolated database modes (`cnpg`, `neon`, `snapshot`, `fresh`; default: `0.08`).
