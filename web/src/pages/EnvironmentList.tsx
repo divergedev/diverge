@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useListEnvironments, useGetClusterInfo } from '@/api/queries'
 import { useWatchEnvironments } from '@/hooks/useWatch'
 import { EnvironmentTable } from '@/components/EnvironmentTable'
@@ -7,13 +8,20 @@ import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { Plus, Search, Layers, DollarSign, Moon } from 'lucide-react'
-import { estimateEnvironmentHourlyCostUSD, formatHourlyCostUSD, isEnvironmentHibernated } from '@/lib/finops'
+import { Plus, Search, Layers, DollarSign, Moon, AlertTriangle, BarChart3 } from 'lucide-react'
+import {
+  estimateEnvironmentHourlyCostUSD,
+  estimateEnvironmentHibernationSavingsUSD,
+  formatHourlyCostUSD,
+  isEnvironmentHibernated,
+} from '@/lib/finops'
+import { cn } from '@/lib/utils'
 
 export default function EnvironmentList() {
   const [namespace] = useState<string | undefined>(undefined)
   const [search, setSearch] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
+  const budgetLabelId = useId()
   const { data, isLoading } = useListEnvironments({ namespace })
   const { data: clusterInfo } = useGetClusterInfo(namespace)
   useWatchEnvironments(namespace)
@@ -24,6 +32,7 @@ export default function EnvironmentList() {
     : environments
 
   const totalHourlyCost = environments.reduce((sum, e) => sum + estimateEnvironmentHourlyCostUSD(e), 0)
+  const hibernationSavings = environments.reduce((sum, e) => sum + estimateEnvironmentHibernationSavingsUSD(e), 0)
   const monthlyRunRate = totalHourlyCost * 730
   const hibernatedCount = environments.filter(isEnvironmentHibernated).length
   const activeCount = environments.length - hibernatedCount
@@ -34,6 +43,10 @@ export default function EnvironmentList() {
   const hasCnpgQuota = (quota?.maxCnpgClusters ?? 0) > 0
   const hasAnyQuota = hasCostQuota || hasActiveQuota || hasCnpgQuota
   const quotaPolicy = quota?.quotaExceedPolicy || 'hibernate-oldest'
+  const costUtilPct = hasCostQuota ? (totalHourlyCost / quota!.maxHourlyCostUsd) * 100 : 0
+  const activeUtilPct = hasActiveQuota ? (activeCount / quota!.maxActiveEnvironments) * 100 : 0
+  const maxQuotaPct = Math.max(costUtilPct, activeUtilPct)
+  const showQuotaWarning = maxQuotaPct >= 80
   const cnpgCount = environments.filter((e) => {
     const metadataAnnotations = (e as { metadata?: { annotations?: Record<string, string> } }).metadata?.annotations
     return [
@@ -49,19 +62,39 @@ export default function EnvironmentList() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold">Environments</h1>
           <p className="text-muted-foreground">Manage your preview environments</p>
         </div>
-        <Button onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4 mr-2" />Create Environment</Button>
+        <div className="flex items-center gap-2">
+          <Link to="/usage">
+            <Button variant="outline"><BarChart3 className="h-4 w-4 mr-2" aria-hidden="true" />Cost &amp; Usage</Button>
+          </Link>
+          <Button onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4 mr-2" aria-hidden="true" />Create Environment</Button>
+        </div>
       </div>
+
+      {showQuotaWarning && (
+        <div className="bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-400 px-4 py-3 rounded-md flex items-center justify-between gap-4 text-sm" role="status">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
+            <span>
+              <strong>Namespace Budget Warning:</strong>{' '}
+              Utilization is at {Math.round(maxQuotaPct)}% of configured quota (policy: <code className="font-mono">{quotaPolicy}</code>).
+            </span>
+          </div>
+          <Link to="/usage" className="underline hover:no-underline font-medium whitespace-nowrap">
+            View Cost &amp; Usage →
+          </Link>
+        </div>
+      )}
 
       <div className="grid gap-4 md:grid-cols-3">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Estimated Hourly Spend</CardTitle>
-            <DollarSign className="h-4 w-4 text-muted-foreground" />
+            <CardTitle id={budgetLabelId} className="text-sm font-medium">Estimated Hourly Spend</CardTitle>
+            <DollarSign className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold font-mono">{formatHourlyCostUSD(totalHourlyCost)}</div>
@@ -69,23 +102,40 @@ export default function EnvironmentList() {
               ~${monthlyRunRate.toFixed(2)}/mo projected run-rate
             </p>
             {hasCostQuota && (
-              <p className="text-xs font-mono text-muted-foreground mt-1">
-                ${totalHourlyCost.toFixed(3)} / ${quota!.maxHourlyCostUsd.toFixed(3)}/hr budget
-              </p>
+              <div className="mt-2 space-y-1">
+                <p className="text-xs font-mono text-muted-foreground">
+                  ${totalHourlyCost.toFixed(3)} / ${quota!.maxHourlyCostUsd.toFixed(3)}/hr budget
+                </p>
+                <progress
+                  value={Math.min(Math.max(costUtilPct, 0), 100)}
+                  max={100}
+                  aria-labelledby={budgetLabelId}
+                  className={cn(
+                    'budget-progress',
+                    costUtilPct >= 100
+                      ? 'budget-progress--critical'
+                      : costUtilPct >= 80
+                        ? 'budget-progress--warning'
+                        : undefined,
+                  )}
+                />
+              </div>
             )}
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Compute State</CardTitle>
-            <Moon className="h-4 w-4 text-muted-foreground" />
+            <Moon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
               {activeCount} Active · {hibernatedCount} Hibernated
             </div>
             <p className="text-xs text-muted-foreground mt-1">
-              Scale-to-zero idle hibernation
+              {hibernationSavings > 0
+                ? `Saving ${formatHourlyCostUSD(hibernationSavings)} via scale-to-zero hibernation`
+                : 'Scale-to-zero idle hibernation'}
             </p>
             {hasAnyQuota && (
               <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground mt-1">

@@ -10,12 +10,18 @@ import (
 
 type ClusterServiceMCPHandler interface {
 	GetClusterInfo(ctx context.Context, req *GetClusterInfoRequest) (*GetClusterInfoResponse, error)
+	GetCostSummary(ctx context.Context, req *GetCostSummaryRequest) (*GetCostSummaryResponse, error)
 }
 
 const ClusterService_GetClusterInfoName = "ClusterService_GetClusterInfo"
 const ClusterService_GetClusterInfoDescription = ""
 
 var ClusterService_GetClusterInfoSchema = []byte("{\"type\":\"object\",\"properties\":{\"namespace\":{\"type\":\"string\"}},\"additionalProperties\":false}")
+
+const ClusterService_GetCostSummaryName = "ClusterService_GetCostSummary"
+const ClusterService_GetCostSummaryDescription = ""
+
+var ClusterService_GetCostSummarySchema = []byte("{\"type\":\"object\",\"properties\":{\"namespace\":{\"type\":\"string\"}},\"additionalProperties\":false}")
 
 func RegisterClusterServiceMCP(registry mcpruntime.Registry, handler ClusterServiceMCPHandler, opts ...mcpruntime.Option) {
 	if tr, ok := registry.(*mcpruntime.ToolRegistry); ok {
@@ -33,6 +39,21 @@ func RegisterClusterServiceMCP(registry mcpruntime.Registry, handler ClusterServ
 			return mcpruntime.InvalidParamsError(err), nil
 		}
 		resp, err := handler.GetClusterInfo(ctx, &input)
+		if err != nil {
+			return connectbridge.MapConnectError(err), nil
+		}
+		return mcpruntime.MarshalToolResult(resp)
+	}))
+	registry.Register(mcpruntime.ToolDefinition{
+		Description: ClusterService_GetCostSummaryDescription,
+		InputSchema: json.RawMessage(ClusterService_GetCostSummarySchema),
+		Name:        ClusterService_GetCostSummaryName,
+	}, cfg.WrapHandler(ClusterService_GetCostSummaryName, func(ctx context.Context, req mcpruntime.ToolRequest) (*mcpruntime.CallToolResult, error) {
+		var input GetCostSummaryRequest
+		if err := mcpruntime.UnmarshalToolInput(req, &input); err != nil {
+			return mcpruntime.InvalidParamsError(err), nil
+		}
+		resp, err := handler.GetCostSummary(ctx, &input)
 		if err != nil {
 			return connectbridge.MapConnectError(err), nil
 		}

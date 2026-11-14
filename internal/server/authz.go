@@ -55,7 +55,7 @@ func candidateToolsForAction(verb, resource string) []string {
 		case "get":
 			return []string{"diverge_get_environment", "diverge_wait_for_ready", "diverge_fetch_errors", "diverge_list_hook_jobs", "diverge_doctor"}
 		case "list", "watch":
-			return []string{"diverge_list_environments", "diverge_watch_environments"}
+			return []string{"diverge_list_environments", "diverge_watch_environments", "diverge_get_cost_summary"}
 		case "create":
 			return []string{"diverge_create_environment"}
 		case "update":

@@ -170,6 +170,7 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, fmt.Errorf("failed to remove finalizer: %w", err)
 		}
 
+		metrics.ObserveEnvironmentLifetime(env, time.Now())
 		metrics.EnvironmentsActive.Dec()
 		for _, route := range env.Spec.Routing.AsyncRoutes {
 			asyncActiveRoutes.WithLabelValues(string(route.Protocol)).Dec()

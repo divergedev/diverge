@@ -206,7 +206,7 @@ func (r *EnvironmentReconciler) reconcileNamespaceQuota(ctx context.Context, env
 	})
 
 	now := time.Now()
-	rateCard := metrics.DefaultCostRateCard()
+	rateCard := metrics.CostRateCardFromEnv()
 	selfCost := metrics.EstimateEnvironmentCost(env, now, rateCard).HourlyUSD
 
 	sumHourlyCost := func(others []*divergeiov1alpha1.Environment) float64 {

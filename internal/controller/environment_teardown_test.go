@@ -15,11 +15,13 @@ import (
 )
 
 func TestHandleTeardown_Success(t *testing.T) {
+	created := metav1.NewTime(time.Now().Add(-30 * time.Minute))
 	now := metav1.Now()
 	env := &divergeiov1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              "test-env",
 			Namespace:         "default",
+			CreationTimestamp: created,
 			Finalizers:        []string{environmentFinalizer},
 			DeletionTimestamp: &now,
 		},

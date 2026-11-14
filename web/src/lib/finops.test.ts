@@ -2,7 +2,11 @@ import { describe, it, expect } from 'vitest'
 import {
   isEnvironmentHibernated,
   estimateEnvironmentHourlyCostUSD,
+  estimateEnvironmentServiceCount,
+  estimateEnvironmentHibernationSavingsUSD,
+  estimateEnvironmentAccruedCostUSD,
   formatHourlyCostUSD,
+  formatCurrencyUSD,
   buildMagicPreviewUrl,
   parseCpuCores,
   parseMemoryGiB,
@@ -151,6 +155,34 @@ describe('finops utilities', () => {
           status: { phase: 'Terminating' },
         }),
       ).toBe(0)
+    })
+
+    it('multiplies compute cost across multi-service previews and computes hibernation savings and accrued spend', () => {
+      const twoHourAgoSec = BigInt(Math.floor((Date.now() - 2 * 3600 * 1000) / 1000))
+      const activeMulti = {
+        name: 'pr-multi',
+        createdAt: { seconds: twoHourAgoSec, toDate: () => new Date(Number(twoHourAgoSec) * 1000) } as never,
+        spec: {
+          deploy: {
+            changedServices: ['api', 'worker'],
+          },
+          database: { mode: 'schema' },
+        },
+        status: { phase: 'Ready' },
+      }
+      expect(estimateEnvironmentServiceCount(activeMulti)).toBe(2)
+      // 2 * $0.012 + $0.010 schema = $0.034/hr
+      expect(estimateEnvironmentHourlyCostUSD(activeMulti)).toBeCloseTo(0.034, 6)
+      expect(estimateEnvironmentHibernationSavingsUSD(activeMulti)).toBe(0)
+      expect(estimateEnvironmentAccruedCostUSD(activeMulti, Number(twoHourAgoSec) * 1000 + 2 * 3600 * 1000)).toBeCloseTo(0.068, 5)
+      expect(formatCurrencyUSD(0.068)).toBe('$0.07')
+      expect(formatCurrencyUSD(0.004)).toBe('$0.004')
+
+      const hibernatedMulti = {
+        ...activeMulti,
+        annotations: { 'divergedev.com/hibernated': 'true' },
+      }
+      expect(estimateEnvironmentHibernationSavingsUSD(hibernatedMulti)).toBeCloseTo(0.024, 6)
     })
   })
 

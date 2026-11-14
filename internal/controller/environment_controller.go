@@ -107,7 +107,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		// Update TTL and cost gauges if applicable.
 		// Skip on deletion path — handleTeardown already deleted the series.
 		if env.DeletionTimestamp.IsZero() {
-			metrics.EstimateEnvironmentCost(&env, time.Now(), metrics.DefaultCostRateCard())
+			metrics.EstimateEnvironmentCost(&env, time.Now(), metrics.CostRateCardFromEnv())
 			if env.Status.ExpiresAt != nil {
 				remaining := time.Until(env.Status.ExpiresAt.Time).Seconds()
 				if remaining < 0 && (env.Status.Phase == divergeiov1alpha1.PhaseTerminating || env.Status.Phase == divergeiov1alpha1.EnvironmentPhase("Expired")) {

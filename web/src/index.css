@@ -52,3 +52,132 @@
   * { @apply border-border; }
   body { @apply bg-background text-foreground; }
 }
+
+/* Visually hidden utility keeping live announcements and table captions accessible to screen readers */
+.visually-hidden:where(:not(:focus-within, :active)) {
+  position: absolute !important;
+  clip-path: inset(50%) !important;
+  overflow: hidden !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: -1px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  white-space: nowrap !important;
+}
+
+/* Native <progress> styling for quota/budget bars (WebKit and Firefox pseudo-elements kept strictly separate) */
+progress.budget-progress {
+  --progress-bar-radius: 1e5px;
+  --progress-bar-track: hsl(var(--muted));
+  --progress-bar-fill: hsl(var(--primary));
+  appearance: none;
+  border: 0 solid;
+  overflow: clip;
+  inline-size: 100%;
+  block-size: 0.5rem;
+  border-radius: var(--progress-bar-radius);
+  background: var(--progress-bar-track);
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.1);
+}
+
+progress.budget-progress.budget-progress--warning {
+  --progress-bar-fill: #f59e0b;
+}
+
+progress.budget-progress.budget-progress--critical {
+  --progress-bar-fill: hsl(var(--destructive));
+}
+
+progress.budget-progress::-webkit-progress-bar {
+  background: transparent;
+}
+
+progress.budget-progress::-webkit-progress-value {
+  background: var(--progress-bar-fill);
+  border-radius: var(--progress-bar-radius);
+  transition: inline-size 0.3s;
+}
+
+progress.budget-progress::-moz-progress-bar {
+  background: var(--progress-bar-fill);
+  border-radius: var(--progress-bar-radius);
+  transition: inline-size 0.3s;
+}
+
+/* Responsive & sortable FinOps data tables */
+.finops-table-wrapper {
+  overflow-x: auto;
+  max-inline-size: 100%;
+  container-type: inline-size;
+}
+
+.finops-table-wrapper table {
+  min-inline-size: 40rem;
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.finops-table-wrapper thead {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 2;
+  background: hsl(var(--card));
+}
+
+.finops-table-wrapper tbody th {
+  position: sticky;
+  inset-inline-start: 0;
+  z-index: 1;
+  background: hsl(var(--card));
+}
+
+.finops-table-wrapper th:has(> button) {
+  padding: 0;
+}
+
+.finops-table-wrapper th > button {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  inline-size: 100%;
+  min-block-size: 2.5rem;
+  padding: 0.5rem 0.75rem;
+  font: inherit;
+  color: inherit;
+  text-align: inherit;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.finops-table-wrapper th > button:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: -2px;
+}
+
+.finops-table-wrapper th .sort-icon {
+  opacity: 0.35;
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+
+.finops-table-wrapper th[aria-sort] .sort-icon {
+  opacity: 1;
+}
+
+.finops-table-wrapper th[aria-sort="ascending"] .sort-icon {
+  transform: rotate(180deg);
+}
+
+.finops-table-wrapper tbody tr {
+  view-transition-name: match-element;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none;
+  }
+}

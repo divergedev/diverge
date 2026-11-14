@@ -106,15 +106,69 @@ func TestEstimateEnvironmentCost_ResourceOverridesAndHibernated(t *testing.T) {
 	est := EstimateEnvironmentCost(env, now, DefaultCostRateCard())
 	// 1 vCPU * 0.04 + 2 GiB * 0.004 = 0.048/hr
 	assert.InDelta(t, 0.048, est.HourlyUSD, 1e-6)
+	assert.InDelta(t, 0.0, est.HibernationSavingsHourlyUSD, 1e-6)
+	assert.InDelta(t, 1.0, est.CPUCores, 1e-6)
+	assert.InDelta(t, 2.0, est.MemoryGiB, 1e-6)
 
-	// Mark hibernated -> hourlyUSD should be 0
+	// Mark hibernated -> hourlyUSD should be 0 and hibernation savings should capture avoided compute burn
 	env.Annotations = map[string]string{
 		AnnotationHibernated: "true",
 	}
 	estHibernated := EstimateEnvironmentCost(env, now, DefaultCostRateCard())
 	assert.Equal(t, 0.0, estHibernated.HourlyUSD)
+	assert.InDelta(t, 0.048, estHibernated.HibernationSavingsHourlyUSD, 1e-6)
+	assert.Equal(t, 0.0, estHibernated.CPUCores)
+	assert.Equal(t, 0.0, estHibernated.MemoryGiB)
+	assert.True(t, estHibernated.Hibernated)
 
 	DeleteEnvironmentCostMetric("pr-resources", "default")
+	assert.Equal(t, 0, testutil.CollectAndCount(EnvironmentHibernationSavingsHourlyUSD))
+	assert.Equal(t, 0, testutil.CollectAndCount(EnvironmentCPUCoresRequested))
+	assert.Equal(t, 0, testutil.CollectAndCount(EnvironmentMemoryGiBRequested))
+}
+
+func TestCostRateCardFromEnv_AndDedicatedDBAndLifetime(t *testing.T) {
+	t.Setenv(EnvCostVCPUHourUSD, "$0.05")
+	t.Setenv(EnvCostMemoryGiBHourUSD, "0.006")
+	t.Setenv(EnvCostDBSchemaHourUSD, "0.015")
+	t.Setenv(EnvCostDBDedicatedHourUSD, "0.12")
+
+	card := CostRateCardFromEnv()
+	assert.InDelta(t, 0.05, card.VCPUHourUSD, 1e-6)
+	assert.InDelta(t, 0.006, card.MemoryGiBHourUSD, 1e-6)
+	assert.InDelta(t, 0.015, card.DatabaseSchemaHrUSD, 1e-6)
+	assert.InDelta(t, 0.12, card.DatabaseDedicatedHrUSD, 1e-6)
+
+	created := time.Date(2026, 10, 11, 10, 0, 0, 0, time.UTC)
+	now := created.Add(90 * time.Minute)
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "pr-cnpg",
+			Namespace:         "team-finops",
+			CreationTimestamp: metav1.NewTime(created),
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Database: v1alpha1.EnvironmentDatabase{
+				Mode: "cnpg",
+			},
+		},
+		Status: v1alpha1.EnvironmentStatus{
+			Phase: v1alpha1.PhaseRunning,
+		},
+	}
+
+	est := EstimateEnvironmentCost(env, now, card)
+	// 1 service * (0.25*0.05 + 0.5*0.006) = 0.0125 + 0.003 = 0.0155 + 0.12 dedicated DB = 0.1355/hr
+	assert.InDelta(t, 0.1355, est.HourlyUSD, 1e-6)
+	assert.InDelta(t, 0.0155, est.ComputeHourlyUSD, 1e-6)
+	assert.InDelta(t, 0.12, est.DatabaseHourlyUSD, 1e-6)
+	assert.InDelta(t, 1.5, est.UptimeHours, 1e-6)
+
+	beforeCount := testutil.CollectAndCount(EnvironmentLifetimeSeconds)
+	ObserveEnvironmentLifetime(env, now)
+	assert.GreaterOrEqual(t, testutil.CollectAndCount(EnvironmentLifetimeSeconds), beforeCount)
+
+	DeleteEnvironmentCostMetric("pr-cnpg", "team-finops")
 }
 
 func TestEstimateEnvironmentCost_PropertyMonotonicity(t *testing.T) {

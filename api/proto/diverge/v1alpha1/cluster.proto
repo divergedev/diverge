@@ -6,6 +6,7 @@ option go_package = "github.com/divergedev/diverge/api/gen/diverge/v1alpha1;dive
 
 service ClusterService {
   rpc GetClusterInfo(GetClusterInfoRequest) returns (GetClusterInfoResponse);
+  rpc GetCostSummary(GetCostSummaryRequest) returns (GetCostSummaryResponse);
 }
 
 message GetClusterInfoRequest {
@@ -26,4 +27,82 @@ message GetClusterInfoResponse {
   repeated string namespaces = 4;
   bool controller_healthy = 5;
   NamespaceQuotaInfo namespace_quota = 6;
+}
+
+message GetCostSummaryRequest {
+  string namespace = 1;
+}
+
+message CostRateCardInfo {
+  double vcpu_hour_usd = 1;
+  double memory_gib_hour_usd = 2;
+  double database_schema_hour_usd = 3;
+  double database_dedicated_hour_usd = 4;
+}
+
+message NamespaceCostBreakdown {
+  string namespace = 1;
+  int32 total_environments = 2;
+  int32 active_environments = 3;
+  int32 hibernated_environments = 4;
+  double hourly_cost_usd = 5;
+  double hibernation_savings_hourly_usd = 6;
+  double accrued_cost_usd = 7;
+  double compute_hours = 8;
+  double cpu_cores = 9;
+  double memory_gib = 10;
+  NamespaceQuotaInfo quota = 11;
+  double budget_utilization_percent = 12;
+  bool budget_warning = 13;
+  string warning_reason = 14;
+}
+
+message ServiceCostBreakdown {
+  string service_name = 1;
+  int32 environment_count = 2;
+  int32 active_count = 3;
+  int32 hibernated_count = 4;
+  double hourly_cost_usd = 5;
+  double cpu_cores = 6;
+  double memory_gib = 7;
+}
+
+message EnvironmentCostItem {
+  string name = 1;
+  string namespace = 2;
+  string project = 3;
+  string mr = 4;
+  string branch = 5;
+  string phase = 6;
+  bool hibernated = 7;
+  double hourly_cost_usd = 8;
+  double hibernation_savings_hourly_usd = 9;
+  double accrued_cost_usd = 10;
+  double projected_ttl_cost_usd = 11;
+  double uptime_hours = 12;
+  double cpu_cores = 13;
+  double memory_gib = 14;
+  int32 service_count = 15;
+  string database_mode = 16;
+  bool ttl_warning = 17;
+  string ttl_warning_reason = 18;
+}
+
+message GetCostSummaryResponse {
+  double total_hourly_cost_usd = 1;
+  double monthly_run_rate_usd = 2;
+  double hibernation_savings_hourly_usd = 3;
+  double delta_routing_savings_hourly_usd = 4;
+  double total_accrued_cost_usd = 5;
+  double agent_task_cost_usd = 6;
+  double total_compute_hours = 7;
+  double total_cpu_cores = 8;
+  double total_memory_gib = 9;
+  int32 total_environments = 10;
+  int32 active_environments = 11;
+  int32 hibernated_environments = 12;
+  repeated NamespaceCostBreakdown by_namespace = 13;
+  repeated ServiceCostBreakdown by_service = 14;
+  repeated EnvironmentCostItem top_consumers = 15;
+  CostRateCardInfo rate_card = 16;
 }
