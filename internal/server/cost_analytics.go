@@ -12,6 +12,7 @@ import (
 	"connectrpc.com/connect"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -48,7 +49,7 @@ func (s *ClusterService) GetCostSummary(ctx context.Context, req *connect.Reques
 	}
 
 	sarCtx, sarCancel := context.WithTimeout(ctx, apiTimeout)
-	err := AuthorizeAction(sarCtx, s.k8sClient, s.auditLogger, "list", reqNS, "environments")
+	err := AuthorizeCostSummary(sarCtx, s.k8sClient, s.auditLogger, reqNS)
 	sarCancel()
 	if err != nil {
 		return nil, err
@@ -67,7 +68,10 @@ func (s *ClusterService) GetCostSummary(ctx context.Context, req *connect.Reques
 	}
 
 	pgBaselineByNS := s.collectPreviewGroupBaselineCounts(ctx, reqNS, apiTimeout)
-	agentTaskSpendUSD := s.collectAgentTaskSpendUSD(ctx, reqNS, listOpts, apiTimeout)
+	agentTaskSpendUSD, err := s.collectAgentTaskSpendUSD(ctx, reqNS, listOpts, apiTimeout)
+	if err != nil {
+		return nil, SanitizeK8sError(s.logger, err)
+	}
 
 	now := time.Now().UTC()
 	rateCard := metrics.CostRateCardFromEnv()
@@ -94,6 +98,14 @@ func (s *ClusterService) GetCostSummary(ctx context.Context, req *connect.Reques
 		baselineServiceCache[ns] = count
 		return count
 	}
+
+	type previewGroupDeltaState struct {
+		deployedServices int
+		computeHourlyUSD float64
+		baselineCount    int
+	}
+	pgDeltaByKey := make(map[string]*previewGroupDeltaState)
+	cnpgCountsByNS := make(map[string]int32)
 
 	topConsumers := make([]*pb.EnvironmentCostItem, 0, len(envList.Items))
 
@@ -127,12 +139,16 @@ func (s *ClusterService) GetCostSummary(ctx context.Context, req *connect.Reques
 			string(env.Status.Phase) == "Expired"
 
 		totalEnvironments++
-		var activeComputeHours float64
 		if est.Hibernated {
 			hibernatedEnvironments++
 		} else if !terminal {
 			activeEnvironments++
-			activeComputeHours = est.UptimeHours * float64(est.ServiceCount)
+		}
+		activeComputeHours := est.ActiveHours * float64(est.ServiceCount)
+
+		dbMode := metrics.ResolveEnvironmentDatabaseMode(env)
+		if !terminal && (dbMode == "cnpg" || dbMode == "fresh" || dbMode == "snapshot") {
+			cnpgCountsByNS[ns]++
 		}
 
 		totalHourlyUSD += est.HourlyUSD
@@ -143,9 +159,23 @@ func (s *ClusterService) GetCostSummary(ctx context.Context, req *connect.Reques
 		totalMemoryGiB += est.MemoryGiB
 
 		// Delta routing savings: shared baseline microservices that did NOT need to be duplicated.
+		// Group PreviewGroup child Environments so baseline savings are counted once per PreviewGroup.
 		if !terminal && !est.Hibernated && env.Spec.Deploy.Namespace != "create" && est.ServiceCount > 0 {
 			baselineCount := resolveBaselineServices(ns, env)
-			if baselineCount > est.ServiceCount {
+			pgName := strings.TrimSpace(env.Labels["divergedev.com/preview-group"])
+			if pgName != "" {
+				pgKey := ns + "/" + pgName
+				state, exists := pgDeltaByKey[pgKey]
+				if !exists {
+					state = &previewGroupDeltaState{}
+					pgDeltaByKey[pgKey] = state
+				}
+				state.deployedServices += est.ServiceCount
+				state.computeHourlyUSD += est.ComputeHourlyUSD
+				if baselineCount > state.baselineCount {
+					state.baselineCount = baselineCount
+				}
+			} else if baselineCount > est.ServiceCount {
 				perServiceComputeHourly := est.ComputeHourlyUSD / float64(est.ServiceCount)
 				totalDeltaSavingsUSD += float64(baselineCount-est.ServiceCount) * perServiceComputeHourly
 			}
@@ -221,10 +251,17 @@ func (s *ClusterService) GetCostSummary(ctx context.Context, req *connect.Reques
 			CpuCores:                    est.CPUCores,
 			MemoryGib:                   est.MemoryGiB,
 			ServiceCount:                int32(est.ServiceCount),
-			DatabaseMode:                metrics.ResolveEnvironmentDatabaseMode(env),
+			DatabaseMode:                dbMode,
 			TtlWarning:                  ttlWarn,
 			TtlWarningReason:            ttlReason,
 		})
+	}
+
+	for _, state := range pgDeltaByKey {
+		if state.deployedServices > 0 && state.baselineCount > state.deployedServices {
+			perServiceComputeHourly := state.computeHourlyUSD / float64(state.deployedServices)
+			totalDeltaSavingsUSD += float64(state.baselineCount-state.deployedServices) * perServiceComputeHourly
+		}
 	}
 
 	// Ensure an explicitly requested namespace with configured quotas appears even when empty.
@@ -244,7 +281,7 @@ func (s *ClusterService) GetCostSummary(ctx context.Context, req *connect.Reques
 		if entry.Quota == nil {
 			entry.Quota = s.getNamespaceQuota(ctx, ns, apiTimeout)
 		}
-		populateNamespaceBudgetWarning(entry)
+		populateNamespaceBudgetWarning(entry, cnpgCountsByNS[ns])
 		byNamespace = append(byNamespace, entry)
 	}
 	sort.Slice(byNamespace, func(i, j int) bool {
@@ -418,25 +455,25 @@ func (s *ClusterService) countBaselineDeployments(ctx context.Context, namespace
 	return 0
 }
 
-func (s *ClusterService) collectAgentTaskSpendUSD(ctx context.Context, reqNS string, listOpts []client.ListOption, timeout time.Duration) float64 {
+func (s *ClusterService) collectAgentTaskSpendUSD(ctx context.Context, reqNS string, listOpts []client.ListOption, timeout time.Duration) (float64, error) {
 	if s == nil || s.client == nil {
-		return 0
+		return 0, nil
 	}
 	sarCtx, sarCancel := context.WithTimeout(ctx, timeout)
 	err := AuthorizeAction(sarCtx, s.k8sClient, nil, "list", reqNS, "agenttasks")
 	sarCancel()
 	if err != nil {
-		return 0
+		return 0, nil
 	}
 
 	taskCtx, taskCancel := context.WithTimeout(ctx, timeout)
 	defer taskCancel()
 	var taskList v1alpha1.AgentTaskList
 	if err := s.client.List(taskCtx, &taskList, listOpts...); err != nil {
-		if meta.IsNoMatchError(err) || runtime.IsNotRegisteredError(err) {
-			return 0
+		if meta.IsNoMatchError(err) || runtime.IsNotRegisteredError(err) || apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
+			return 0, nil
 		}
-		return 0
+		return 0, err
 	}
 
 	var total float64
@@ -445,11 +482,11 @@ func (s *ClusterService) collectAgentTaskSpendUSD(ctx context.Context, reqNS str
 		if raw == "" {
 			continue
 		}
-		if parsed, parseErr := strconv.ParseFloat(raw, 64); parseErr == nil && parsed > 0 {
+		if parsed, parseErr := strconv.ParseFloat(raw, 64); parseErr == nil && !math.IsNaN(parsed) && !math.IsInf(parsed, 0) && parsed > 0 {
 			total += parsed
 		}
 	}
-	return total
+	return total, nil
 }
 
 func extractEnvironmentServiceNames(env *v1alpha1.Environment) []string {
@@ -501,14 +538,15 @@ func evaluateEnvironmentTTLWarning(env *v1alpha1.Environment, hibernated, termin
 	}
 
 	if !hibernated && env.Spec.Lifecycle.TTL != nil && env.Spec.Lifecycle.TTL.Duration > longTTLWarningThreshold {
-		if strings.TrimSpace(env.Annotations[metrics.AnnotationHibernateAfter]) == "" {
-			return true, "Long TTL (>72h) without idle hibernation"
+		threshold, enabled := metrics.EffectiveIdleHibernateThreshold(env, 0)
+		if !enabled || threshold > longTTLWarningThreshold || threshold >= env.Spec.Lifecycle.TTL.Duration {
+			return true, "Long TTL (>72h) without effective idle hibernation"
 		}
 	}
 	return false, ""
 }
 
-func populateNamespaceBudgetWarning(entry *pb.NamespaceCostBreakdown) {
+func populateNamespaceBudgetWarning(entry *pb.NamespaceCostBreakdown, cnpgCount int32) {
 	if entry == nil || entry.Quota == nil {
 		return
 	}
@@ -532,6 +570,16 @@ func populateNamespaceBudgetWarning(entry *pb.NamespaceCostBreakdown) {
 		}
 		if activePct >= budgetWarningThresholdPercent {
 			reasons = append(reasons, fmt.Sprintf("Active environments at %d/%d (%.0f%% of quota)", entry.ActiveEnvironments, entry.Quota.MaxActiveEnvironments, activePct))
+		}
+	}
+
+	if entry.Quota.MaxCnpgClusters > 0 {
+		cnpgPct := (float64(cnpgCount) / float64(entry.Quota.MaxCnpgClusters)) * 100.0
+		if cnpgPct > maxUtil {
+			maxUtil = cnpgPct
+		}
+		if cnpgPct >= budgetWarningThresholdPercent {
+			reasons = append(reasons, fmt.Sprintf("CNPG clusters at %d/%d (%.0f%% of quota)", cnpgCount, entry.Quota.MaxCnpgClusters, cnpgPct))
 		}
 	}
 

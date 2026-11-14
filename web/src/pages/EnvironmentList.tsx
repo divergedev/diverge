@@ -43,10 +43,6 @@ export default function EnvironmentList() {
   const hasCnpgQuota = (quota?.maxCnpgClusters ?? 0) > 0
   const hasAnyQuota = hasCostQuota || hasActiveQuota || hasCnpgQuota
   const quotaPolicy = quota?.quotaExceedPolicy || 'hibernate-oldest'
-  const costUtilPct = hasCostQuota ? (totalHourlyCost / quota!.maxHourlyCostUsd) * 100 : 0
-  const activeUtilPct = hasActiveQuota ? (activeCount / quota!.maxActiveEnvironments) * 100 : 0
-  const maxQuotaPct = Math.max(costUtilPct, activeUtilPct)
-  const showQuotaWarning = maxQuotaPct >= 80
   const cnpgCount = environments.filter((e) => {
     const metadataAnnotations = (e as { metadata?: { annotations?: Record<string, string> } }).metadata?.annotations
     return [
@@ -59,6 +55,11 @@ export default function EnvironmentList() {
       return normalized === 'cnpg' || normalized === 'fresh' || normalized === 'snapshot'
     })
   }).length
+  const costUtilPct = hasCostQuota ? (totalHourlyCost / quota!.maxHourlyCostUsd) * 100 : 0
+  const activeUtilPct = hasActiveQuota ? (activeCount / quota!.maxActiveEnvironments) * 100 : 0
+  const cnpgUtilPct = hasCnpgQuota ? (cnpgCount / quota!.maxCnpgClusters) * 100 : 0
+  const maxQuotaPct = Math.max(costUtilPct, activeUtilPct, cnpgUtilPct)
+  const showQuotaWarning = maxQuotaPct >= 80
 
   return (
     <div className="space-y-6">

@@ -5,6 +5,7 @@ import {
   estimateEnvironmentServiceCount,
   estimateEnvironmentHibernationSavingsUSD,
   estimateEnvironmentAccruedCostUSD,
+  hasRecordedHibernationHistory,
   formatHourlyCostUSD,
   formatCurrencyUSD,
   buildMagicPreviewUrl,
@@ -183,6 +184,40 @@ describe('finops utilities', () => {
         annotations: { 'divergedev.com/hibernated': 'true' },
       }
       expect(estimateEnvironmentHibernationSavingsUSD(hibernatedMulti)).toBeCloseTo(0.024, 6)
+    })
+
+    it('uses recorded hibernation and termination annotations for exact active-hour spend accrual', () => {
+      const baseMs = Date.UTC(2026, 10, 13, 12, 0, 0) // 12:00Z
+      const createdSec = BigInt(Math.floor(baseMs / 1000))
+      // Created at 12:00Z, slept 1h previously (3600s), re-hibernated at 15:00Z, evaluated at 16:00Z (4h total, 2h slept, 2h active)
+      const sleepingEnv = {
+        name: 'pr-sleep-cycle',
+        createdAt: { seconds: createdSec, toDate: () => new Date(baseMs) } as never,
+        annotations: {
+          'divergedev.com/hibernated': 'true',
+          'divergedev.com/hibernated-seconds': '3600',
+          'divergedev.com/hibernated-at': '2026-11-13T15:00:00Z',
+        },
+        spec: {
+          database: { mode: 'cnpg' },
+        },
+        status: { phase: 'Hibernated' },
+      }
+      expect(hasRecordedHibernationHistory(sleepingEnv)).toBe(true)
+      // 2h active compute ($0.012 * 2 = $0.024) + 4h dedicated DB ($0.080 * 4 = $0.320) = $0.344
+      expect(estimateEnvironmentAccruedCostUSD(sleepingEnv, baseMs + 4 * 3600 * 1000)).toBeCloseTo(0.344, 6)
+
+      // Terminated at 14:00Z, evaluated at 18:00Z -> frozen at 2h billable window
+      const terminatedEnv = {
+        name: 'pr-terminated',
+        createdAt: { seconds: createdSec, toDate: () => new Date(baseMs) } as never,
+        annotations: {
+          'divergedev.com/terminated-at': '2026-11-13T14:00:00Z',
+        },
+        status: { phase: 'Expired' },
+      }
+      expect(hasRecordedHibernationHistory(terminatedEnv)).toBe(true)
+      expect(estimateEnvironmentAccruedCostUSD(terminatedEnv, baseMs + 6 * 3600 * 1000)).toBeCloseTo(0.024, 6)
     })
   })
 

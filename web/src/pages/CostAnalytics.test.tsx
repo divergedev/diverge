@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@/test/utils'
+import { render, screen, fireEvent, within } from '@/test/utils'
 import { server } from '@/test/mocks/server'
 import { http, HttpResponse } from 'msw'
 import { describe, it, expect } from 'vitest'
@@ -118,7 +118,7 @@ describe('CostAnalytics', () => {
     render(<CostAnalytics />)
 
     expect(await screen.findByRole('heading', { level: 1, name: 'Cost & Usage Analytics' })).toBeInTheDocument()
-    expect(screen.getByText('$0.072/hr')).toBeInTheDocument() // $0.012 hibernation + $0.060 delta savings
+    expect(await screen.findByText('$0.072/hr')).toBeInTheDocument() // $0.012 hibernation + $0.060 delta savings
     expect(screen.getByText(/AgentTask LLM spend: \$1\.75/)).toBeInTheDocument()
     expect(screen.getByText(/FinOps Budget & Lifecycle Warnings \(2\)/)).toBeInTheDocument()
     expect(screen.getByText('payments-api')).toBeInTheDocument()
@@ -126,10 +126,60 @@ describe('CostAnalytics', () => {
 
     // Verify DOM row sorting on Uptime header button
     const uptimeSortBtn = screen.getByRole('button', { name: 'Uptime' })
+    const consumersTable = uptimeSortBtn.closest('table')!
     fireEvent.click(uptimeSortBtn)
     expect(uptimeSortBtn.closest('th')).toHaveAttribute('aria-sort', 'ascending')
+    const ascRowHeaders = within(consumersTable).getAllByRole('rowheader')
+    expect(ascRowHeaders[0]).toHaveTextContent('pr-101')
+    expect(ascRowHeaders[1]).toHaveTextContent('pr-88-idle')
 
     fireEvent.click(uptimeSortBtn)
     expect(uptimeSortBtn.closest('th')).toHaveAttribute('aria-sort', 'descending')
+    const descRowHeaders = within(consumersTable).getAllByRole('rowheader')
+    expect(descRowHeaders[0]).toHaveTextContent('pr-88-idle')
+    expect(descRowHeaders[1]).toHaveTextContent('pr-101')
+  })
+
+  it('keeps the namespace selector interactive when a scoped cost query fails so users can recover', async () => {
+    server.use(
+      http.post('*/diverge.v1alpha1.ClusterService/GetClusterInfo', () =>
+        HttpResponse.json({
+          controllerVersion: 'v0.24.0',
+          environmentCount: 1,
+          previewGroupCount: 0,
+          controllerHealthy: true,
+          namespaces: ['payments', 'restricted'],
+        }),
+      ),
+      http.post('*/diverge.v1alpha1.ClusterService/GetCostSummary', async ({ request }) => {
+        const body = (await request.json().catch(() => ({}))) as { namespace?: string }
+        if (body.namespace === 'restricted') {
+          return HttpResponse.json({ code: 'permission_denied', message: 'forbidden namespace' }, { status: 403 })
+        }
+        return HttpResponse.json({
+          totalHourlyCostUsd: 0.012,
+          monthlyRunRateUsd: 8.76,
+          totalEnvironments: 1,
+          activeEnvironments: 1,
+          byNamespace: [],
+          byService: [],
+          topConsumers: [],
+        })
+      }),
+    )
+
+    render(<CostAnalytics />)
+    expect(await screen.findByRole('heading', { level: 1, name: 'Cost & Usage Analytics' })).toBeInTheDocument()
+
+    const nsSelect = await screen.findByLabelText('Namespace scope')
+    await screen.findByRole('option', { name: 'restricted' })
+
+    fireEvent.change(nsSelect, { target: { value: 'restricted' } })
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Failed to load cost analytics/)
+
+    // Selector remains mounted so user can recover back to all namespaces
+    expect(screen.getByLabelText('Namespace scope')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Namespace scope'), { target: { value: '' } })
+    expect(await screen.findByText('No preview usage recorded yet')).toBeInTheDocument()
   })
 })

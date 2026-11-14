@@ -164,11 +164,72 @@ func TestCostRateCardFromEnv_AndDedicatedDBAndLifetime(t *testing.T) {
 	assert.InDelta(t, 0.12, est.DatabaseHourlyUSD, 1e-6)
 	assert.InDelta(t, 1.5, est.UptimeHours, 1e-6)
 
+	// Hibernating a dedicated DB environment stops compute ($0.0155 saved/hr) while retaining DB burn ($0.12/hr)
+	// and preserving accrued compute cost up to hibernation start.
+	hibAt := created.Add(60 * time.Minute)
+	env.Annotations = RecordEnvironmentHibernated(env.Annotations, hibAt)
+	estHib := ComputeEnvironmentCost(env, now, card)
+	assert.InDelta(t, 0.12, estHib.HourlyUSD, 1e-6)
+	assert.InDelta(t, 0.12, estHib.DatabaseHourlyUSD, 1e-6)
+	assert.InDelta(t, 0.0155, estHib.HibernationSavingsHourlyUSD, 1e-6)
+	assert.InDelta(t, 1.0, estHib.ActiveHours, 1e-6)
+	assert.InDelta(t, 0.5, estHib.HibernatedHours, 1e-6)
+	// 1.0h active compute ($0.0155) + 1.5h dedicated DB ($0.18) = $0.1955
+	assert.InDelta(t, 0.1955, estHib.AccruedUSD, 1e-6)
+
+	// Waking at 90m and running until 120m preserves the 30m hibernation window (1.5h active, 0.5h hibernated).
+	env.Annotations[AnnotationHibernated] = "false"
+	env.Annotations = RecordEnvironmentWake(env.Annotations, now)
+	estWoken := ComputeEnvironmentCost(env, created.Add(2*time.Hour), card)
+	assert.InDelta(t, 1.5, estWoken.ActiveHours, 1e-6)
+	assert.InDelta(t, 0.5, estWoken.HibernatedHours, 1e-6)
+
+	// Terminal environment stops future charges while retaining prior accrued cost up to transition time.
+	termAt := created.Add(2 * time.Hour)
+	env.Status.Phase = v1alpha1.PhaseFailed
+	env.Status.Conditions = []metav1.Condition{{
+		Type:               "Ready",
+		Status:             metav1.ConditionFalse,
+		LastTransitionTime: metav1.NewTime(termAt),
+	}}
+	estTerm := ComputeEnvironmentCost(env, created.Add(5*time.Hour), card)
+	assert.Equal(t, 0.0, estTerm.HourlyUSD)
+	assert.InDelta(t, estWoken.AccruedUSD, estTerm.AccruedUSD, 1e-6)
+
 	beforeCount := testutil.CollectAndCount(EnvironmentLifetimeSeconds)
 	ObserveEnvironmentLifetime(env, now)
 	assert.GreaterOrEqual(t, testutil.CollectAndCount(EnvironmentLifetimeSeconds), beforeCount)
 
 	DeleteEnvironmentCostMetric("pr-cnpg", "team-finops")
+}
+
+func TestCostRateCardFromEnv_NonFiniteAndZeroOverrides(t *testing.T) {
+	// Reject NaN, Inf, and negatives -> retain defaults
+	t.Setenv(EnvCostVCPUHourUSD, "NaN")
+	t.Setenv(EnvCostMemoryGiBHourUSD, "+Inf")
+	t.Setenv(EnvCostDBSchemaHourUSD, "-0.05")
+	t.Setenv(EnvCostDBDedicatedHourUSD, "0")
+
+	card := CostRateCardFromEnv()
+	defaults := DefaultCostRateCard()
+	assert.InDelta(t, defaults.VCPUHourUSD, card.VCPUHourUSD, 1e-9)
+	assert.InDelta(t, defaults.MemoryGiBHourUSD, card.MemoryGiBHourUSD, 1e-9)
+	assert.InDelta(t, defaults.DatabaseSchemaHrUSD, card.DatabaseSchemaHrUSD, 1e-9)
+	assert.Equal(t, 0.0, card.DatabaseDedicatedHrUSD)
+
+	// Explicit all-zero rate card must stay zero rather than reverting to defaults
+	t.Setenv(EnvCostVCPUHourUSD, "0")
+	t.Setenv(EnvCostMemoryGiBHourUSD, "0")
+	t.Setenv(EnvCostDBSchemaHourUSD, "0")
+	t.Setenv(EnvCostDBDedicatedHourUSD, "0")
+	allZero := CostRateCardFromEnv()
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "zero-rate", Namespace: "default"},
+		Spec:       v1alpha1.EnvironmentSpec{Database: v1alpha1.EnvironmentDatabase{Mode: "cnpg"}},
+		Status:     v1alpha1.EnvironmentStatus{Phase: v1alpha1.PhaseRunning},
+	}
+	est := ComputeEnvironmentCost(env, time.Now(), allZero)
+	assert.Equal(t, 0.0, est.HourlyUSD)
 }
 
 func TestEstimateEnvironmentCost_PropertyMonotonicity(t *testing.T) {

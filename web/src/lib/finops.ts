@@ -166,13 +166,66 @@ export function estimateEnvironmentUptimeHours(env?: FinOpsEnvironment | null, n
   return (nowMs - startMs) / (1000 * 60 * 60)
 }
 
+function getEnvironmentAnnotation(env: FinOpsEnvironment | null | undefined, key: string): string | undefined {
+  if (!env) return undefined
+  const metadataAnnotations = (env as { metadata?: { annotations?: Record<string, string> } }).metadata?.annotations
+  return env.annotations?.[key] ?? metadataAnnotations?.[key]
+}
+
 /**
- * Estimates total accrued infrastructure spend in USD over an environment's lifetime.
+ * Reports whether the environment carries recorded hibernation or termination transition metadata
+ * (`divergedev.com/hibernated-at`, `divergedev.com/hibernated-seconds`, or `divergedev.com/terminated-at`)
+ * for exact active-duration accrual.
+ */
+export function hasRecordedHibernationHistory(env?: FinOpsEnvironment | null): boolean {
+  const hibAt = getEnvironmentAnnotation(env, 'divergedev.com/hibernated-at')?.trim()
+  const hibSec = getEnvironmentAnnotation(env, 'divergedev.com/hibernated-seconds')?.trim()
+  const termAt = getEnvironmentAnnotation(env, 'divergedev.com/terminated-at')?.trim()
+  return Boolean(hibAt || hibSec || termAt)
+}
+
+/**
+ * Estimates total infrastructure spend in USD over an environment's lifetime.
+ * Uses recorded active and hibernated durations when transition annotations are present;
+ * otherwise projects lifetime spend from the current hourly rate and elapsed uptime.
  */
 export function estimateEnvironmentAccruedCostUSD(env?: FinOpsEnvironment | null, nowMs = Date.now()): number {
-  const hourly = estimateEnvironmentHourlyCostUSD(env)
-  const uptimeHours = estimateEnvironmentUptimeHours(env, nowMs)
-  return hourly * uptimeHours
+  if (!env) return 0
+  let effectiveEndMs = nowMs
+  const termAtRaw = getEnvironmentAnnotation(env, 'divergedev.com/terminated-at')?.trim()
+  if (termAtRaw) {
+    const termAtMs = Date.parse(termAtRaw)
+    if (Number.isFinite(termAtMs) && termAtMs > 0) {
+      effectiveEndMs = Math.min(nowMs, termAtMs)
+    }
+  }
+  const uptimeHours = estimateEnvironmentUptimeHours(env, effectiveEndMs)
+  if (uptimeHours <= 0) return 0
+
+  if (!hasRecordedHibernationHistory(env)) {
+    return estimateEnvironmentHourlyCostUSD(env) * uptimeHours
+  }
+
+  const hibSecRaw = getEnvironmentAnnotation(env, 'divergedev.com/hibernated-seconds')?.trim()
+  const priorHibSec = hibSecRaw ? Number(hibSecRaw) : 0
+  const safePriorHours = Number.isFinite(priorHibSec) && priorHibSec > 0 ? priorHibSec / 3600 : 0
+
+  let currentHibHours = 0
+  if (isEnvironmentHibernated(env)) {
+    const hibAtRaw = getEnvironmentAnnotation(env, 'divergedev.com/hibernated-at')?.trim()
+    if (hibAtRaw) {
+      const hibAtMs = Date.parse(hibAtRaw)
+      if (Number.isFinite(hibAtMs) && effectiveEndMs > hibAtMs) {
+        currentHibHours = (effectiveEndMs - hibAtMs) / (1000 * 60 * 60)
+      }
+    }
+  }
+
+  const totalHibHours = Math.min(uptimeHours, Math.max(0, safePriorHours + currentHibHours))
+  const activeHours = Math.max(0, uptimeHours - totalHibHours)
+  const computeHourly = computeActiveEnvironmentHourlyComputeUSD(env)
+  const dbHourly = estimateDatabaseHourlyCost(env.spec?.database?.mode || env.status?.databaseProvider)
+  return computeHourly * activeHours + dbHourly * uptimeHours
 }
 
 /**

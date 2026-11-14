@@ -55,7 +55,9 @@ func candidateToolsForAction(verb, resource string) []string {
 		case "get":
 			return []string{"diverge_get_environment", "diverge_wait_for_ready", "diverge_fetch_errors", "diverge_list_hook_jobs", "diverge_doctor"}
 		case "list", "watch":
-			return []string{"diverge_list_environments", "diverge_watch_environments", "diverge_get_cost_summary"}
+			return []string{"diverge_list_environments", "diverge_watch_environments"}
+		case "cost-summary":
+			return []string{"diverge_get_cost_summary"}
 		case "create":
 			return []string{"diverge_create_environment"}
 		case "update":
@@ -233,6 +235,21 @@ func AuthorizeAction(ctx context.Context, k8sClient kubernetes.Interface, auditL
 		Group:     v1alpha1.GroupVersion.Group,
 		Resource:  resource,
 	}, "permission denied")
+}
+
+// AuthorizeCostSummary checks authorization for reading cost and usage analytics.
+// Macaroon capability tokens must explicitly carry the diverge_get_cost_summary tool capability
+// in their bound namespace (without granting list/watch access to Environment resources);
+// Kubernetes RBAC principals require environments/list permission.
+func AuthorizeCostSummary(ctx context.Context, k8sClient kubernetes.Interface, auditLogger *AuditLogger, namespace string) error {
+	user, ok := auth.UserInfoFromContext(ctx)
+	if !ok {
+		return connect.NewError(connect.CodeUnauthenticated, errors.New("not authenticated"))
+	}
+	if isMacaroonUser(user) {
+		return authorizeMacaroon(ctx, auditLogger, user, "cost-summary", namespace, "environments", "permission denied")
+	}
+	return AuthorizeAction(ctx, k8sClient, auditLogger, "list", namespace, "environments")
 }
 
 // AuthorizeRetryHook checks authorization for retrying a hook Job. For Macaroon capability tokens,

@@ -1,5 +1,7 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { Link } from 'react-router-dom'
+import type { EnvironmentCostItem } from '@/api/gen/diverge/v1alpha1/cluster_pb'
 import { useGetClusterInfo, useGetCostSummary } from '@/api/queries'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select } from '@/components/ui/select'
@@ -43,8 +45,16 @@ function reorderTableRows(tbody: HTMLTableSectionElement, orderedRows: HTMLTable
   }
 }
 
-function reorderWithTransition(table: HTMLTableElement, tbody: HTMLTableSectionElement, orderedRows: HTMLTableRowElement[]) {
-  const update = () => reorderTableRows(tbody, orderedRows)
+function reorderWithTransition(
+  table: HTMLTableElement,
+  tbody: HTMLTableSectionElement,
+  orderedRows: HTMLTableRowElement[],
+  onCommitState: () => void,
+) {
+  const update = () => {
+    reorderTableRows(tbody, orderedRows)
+    flushSync(onCommitState)
+  }
   if (orderedRows.length > 200 || typeof document === 'undefined') {
     update()
     return
@@ -60,8 +70,34 @@ function reorderWithTransition(table: HTMLTableElement, tbody: HTMLTableSectionE
   }
 }
 
+type SortKey = 'name' | 'hourly' | 'accrued' | 'uptime'
+type SortDirection = 'ascending' | 'descending'
+
+function compareConsumerItems(
+  a: EnvironmentCostItem,
+  b: EnvironmentCostItem,
+  key: SortKey,
+  direction: SortDirection,
+): number {
+  const factor = direction === 'ascending' ? 1 : -1
+  switch (key) {
+    case 'name':
+      return factor * textCollator.compare(a.name, b.name)
+    case 'hourly':
+      return factor * (a.hourlyCostUsd - b.hourlyCostUsd)
+    case 'accrued':
+      return factor * (a.accruedCostUsd - b.accruedCostUsd)
+    case 'uptime':
+      return factor * (a.uptimeHours - b.uptimeHours)
+  }
+}
+
 export default function CostAnalytics() {
   const [selectedNamespace, setSelectedNamespace] = useState('')
+  const [sortState, setSortState] = useState<{ key: SortKey; direction: SortDirection }>({
+    key: 'hourly',
+    direction: 'descending',
+  })
   const nsFilterId = useId()
   const nsTableCaptionId = useId()
   const svcTableCaptionId = useId()
@@ -83,11 +119,9 @@ export default function CostAnalytics() {
     const th = sourceButton.closest('th')
     if (!th || !table.tHead?.rows[0]) return
 
-    const direction = th.getAttribute('aria-sort') === 'ascending' ? 'descending' : 'ascending'
-    for (const header of Array.from(table.tHead.rows[0].cells)) {
-      header.removeAttribute('aria-sort')
-    }
-    th.setAttribute('aria-sort', direction)
+    const nextKey = ((th.dataset.sortKey as SortKey | undefined) ?? 'hourly')
+    const direction: SortDirection =
+      sortState.key === nextKey && sortState.direction === 'ascending' ? 'descending' : 'ascending'
 
     const colIndex = th.cellIndex
     const colType = th.dataset.type ?? 'text'
@@ -108,13 +142,18 @@ export default function CostAnalytics() {
     })
 
     const orderedRows = rowsWithValues.map((entry) => entry.row)
-    reorderWithTransition(table, tbody, orderedRows)
+    reorderWithTransition(table, tbody, orderedRows, () => {
+      setSortState({ key: nextKey, direction })
+    })
 
     if (sortStatusRef.current) {
       const colLabel = sourceButton.textContent?.trim() ?? 'column'
       sortStatusRef.current.textContent = `Sorted by ${colLabel}, ${direction}, ${orderedRows.length} rows`
     }
   }
+
+  const performSortRef = useRef(performColumnSort)
+  performSortRef.current = performColumnSort
 
   useEffect(() => {
     const table = tableRef.current
@@ -123,12 +162,12 @@ export default function CostAnalytics() {
       const cmdEvent = event as Event & { command?: string; source?: Element | null }
       if (cmdEvent.command !== '--sort') return
       if (cmdEvent.source instanceof HTMLButtonElement) {
-        performColumnSort(cmdEvent.source)
+        performSortRef.current(cmdEvent.source)
       }
     }
     table.addEventListener('command', handleCommand)
     return () => table.removeEventListener('command', handleCommand)
-  }, [summary])
+  }, [Boolean(summary), isLoading, Boolean(error)])
 
   const handleSortButtonClick = (e: React.MouseEvent<HTMLButtonElement>) => {
     // Fallback for browsers where Invoker Commands (CommandEvent) are not supported
@@ -138,27 +177,14 @@ export default function CostAnalytics() {
     performColumnSort(e.currentTarget)
   }
 
-  if (isLoading) {
-    return (
-      <div className="flex justify-center py-16">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
-      </div>
-    )
-  }
-
-  if (error) {
-    return (
-      <div className="text-center py-16 space-y-2" role="alert">
-        <h1 className="text-xl font-semibold">Failed to load cost analytics</h1>
-        <p className="text-muted-foreground text-sm">{error.message}</p>
-      </div>
-    )
-  }
-
   const namespaces = clusterInfo?.namespaces ?? []
   const byNamespace = summary?.byNamespace ?? []
   const byService = summary?.byService ?? []
   const topConsumers = summary?.topConsumers ?? []
+  const sortedConsumers = useMemo(
+    () => [...topConsumers].sort((a, b) => compareConsumerItems(a, b, sortState.key, sortState.direction)),
+    [topConsumers, sortState],
+  )
   const rateCard = summary?.rateCard
 
   const totalSavingsHourly = (summary?.hibernationSavingsHourlyUsd ?? 0) + (summary?.deltaRoutingSavingsHourlyUsd ?? 0)
@@ -190,6 +216,18 @@ export default function CostAnalytics() {
           </Select>
         </div>
       </div>
+
+      {isLoading ? (
+        <div className="flex justify-center py-16">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+        </div>
+      ) : error ? (
+        <div className="text-center py-16 space-y-2" role="alert">
+          <h2 className="text-xl font-semibold">Failed to load cost analytics</h2>
+          <p className="text-muted-foreground text-sm">{error.message}</p>
+        </div>
+      ) : (
+        <>
 
       {(budgetWarnings.length > 0 || ttlWarnings.length > 0) && (
         <div className="bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-400 px-4 py-3 rounded-md space-y-1 text-sm" role="status">
@@ -310,7 +348,11 @@ export default function CostAnalytics() {
                       {byNamespace.map((ns) => {
                         const pct = Math.max(ns.budgetUtilizationPercent, 0)
                         const hasQuota = Boolean(
-                          ns.quota && (ns.quota.maxHourlyCostUsd > 0 || ns.quota.maxActiveEnvironments > 0),
+                          ns.quota && (
+                            ns.quota.maxHourlyCostUsd > 0 ||
+                            ns.quota.maxActiveEnvironments > 0 ||
+                            ns.quota.maxCnpgClusters > 0
+                          ),
                         )
                         const progLabelId = `ns-prog-${ns.namespace}`
                         return (
@@ -423,7 +465,13 @@ export default function CostAnalytics() {
                   </caption>
                   <thead>
                     <tr className="border-b text-left text-muted-foreground">
-                      <th scope="col" data-type="text" className="font-medium">
+                      <th
+                        scope="col"
+                        data-type="text"
+                        data-sort-key="name"
+                        aria-sort={sortState.key === 'name' ? sortState.direction : undefined}
+                        className="font-medium"
+                      >
                         <button
                           type="button"
                           onClick={handleSortButtonClick}
@@ -437,7 +485,13 @@ export default function CostAnalytics() {
                       <th scope="col" className="py-2 px-3 font-medium">PR / Branch</th>
                       <th scope="col" className="py-2 px-3 font-medium">State</th>
                       <th scope="col" className="py-2 px-3 font-medium">Resources</th>
-                      <th scope="col" data-type="number" aria-sort="descending" className="font-medium">
+                      <th
+                        scope="col"
+                        data-type="number"
+                        data-sort-key="hourly"
+                        aria-sort={sortState.key === 'hourly' ? sortState.direction : undefined}
+                        className="font-medium"
+                      >
                         <button
                           type="button"
                           onClick={handleSortButtonClick}
@@ -447,7 +501,13 @@ export default function CostAnalytics() {
                           <ChevronDown className="h-3.5 w-3.5 sort-icon" aria-hidden="true" />
                         </button>
                       </th>
-                      <th scope="col" data-type="number" className="font-medium">
+                      <th
+                        scope="col"
+                        data-type="number"
+                        data-sort-key="accrued"
+                        aria-sort={sortState.key === 'accrued' ? sortState.direction : undefined}
+                        className="font-medium"
+                      >
                         <button
                           type="button"
                           onClick={handleSortButtonClick}
@@ -457,7 +517,13 @@ export default function CostAnalytics() {
                           <ChevronDown className="h-3.5 w-3.5 sort-icon" aria-hidden="true" />
                         </button>
                       </th>
-                      <th scope="col" data-type="number" className="font-medium">
+                      <th
+                        scope="col"
+                        data-type="number"
+                        data-sort-key="uptime"
+                        aria-sort={sortState.key === 'uptime' ? sortState.direction : undefined}
+                        className="font-medium"
+                      >
                         <button
                           type="button"
                           onClick={handleSortButtonClick}
@@ -470,7 +536,7 @@ export default function CostAnalytics() {
                     </tr>
                   </thead>
                   <tbody ref={tbodyRef}>
-                    {topConsumers.map((item) => (
+                    {sortedConsumers.map((item) => (
                       <tr key={`${item.namespace}/${item.name}`} className="border-b last:border-0">
                         <th scope="row" data-value={item.name} className="py-2.5 px-3 font-medium text-left">
                           <Link
@@ -520,6 +586,8 @@ export default function CostAnalytics() {
               </div>
             </CardContent>
           </Card>
+            </>
+          )}
         </>
       )}
     </div>

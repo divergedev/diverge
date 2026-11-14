@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -13,10 +14,13 @@ import (
 )
 
 const (
-	AnnotationHibernateAfter   = "divergedev.com/hibernate-after"
-	AnnotationLastTrafficAt    = "divergedev.com/last-traffic-at"
-	AnnotationHibernated       = "divergedev.com/hibernated"
-	AnnotationDatabaseProvider = "divergedev.com/database-provider"
+	AnnotationHibernateAfter    = "divergedev.com/hibernate-after"
+	AnnotationLastTrafficAt     = "divergedev.com/last-traffic-at"
+	AnnotationHibernated        = "divergedev.com/hibernated"
+	AnnotationHibernatedAt      = "divergedev.com/hibernated-at"
+	AnnotationHibernatedSeconds = "divergedev.com/hibernated-seconds"
+	AnnotationTerminatedAt      = "divergedev.com/terminated-at"
+	AnnotationDatabaseProvider  = "divergedev.com/database-provider"
 
 	EnvCostVCPUHourUSD        = "DIVERGE_COST_VCPU_HOUR_USD"
 	EnvCostMemoryGiBHourUSD   = "DIVERGE_COST_MEMORY_GIB_HOUR_USD"
@@ -101,6 +105,7 @@ type CostRateCard struct {
 	MemoryGiBHourUSD       float64
 	DatabaseSchemaHrUSD    float64
 	DatabaseDedicatedHrUSD float64
+	configured             bool
 }
 
 // DefaultCostRateCard returns the standard unit rate card ($0.04/vCPU-hr, $0.004/GiB-hr, $0.01/schema-hr, $0.08/dedicated-db-hr).
@@ -110,11 +115,12 @@ func DefaultCostRateCard() CostRateCard {
 		MemoryGiBHourUSD:       0.004,
 		DatabaseSchemaHrUSD:    0.01,
 		DatabaseDedicatedHrUSD: 0.08,
+		configured:             true,
 	}
 }
 
 // CostRateCardFromEnv loads unit pricing from DIVERGE_COST_* environment variables,
-// falling back to DefaultCostRateCard values for unset or invalid entries.
+// falling back to DefaultCostRateCard values for unset or invalid entries while preserving explicit zero overrides.
 func CostRateCardFromEnv() CostRateCard {
 	card := DefaultCostRateCard()
 	if v, ok := parseNonNegativeEnvFloat(EnvCostVCPUHourUSD); ok {
@@ -132,13 +138,17 @@ func CostRateCardFromEnv() CostRateCard {
 	return card
 }
 
+func isValidNonNegativeFloat(v float64) bool {
+	return !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0
+}
+
 func parseNonNegativeEnvFloat(key string) (float64, bool) {
 	raw := strings.TrimPrefix(strings.TrimSpace(os.Getenv(key)), "$")
 	if raw == "" {
 		return 0, false
 	}
 	v, err := strconv.ParseFloat(raw, 64)
-	if err != nil || v < 0 {
+	if err != nil || !isValidNonNegativeFloat(v) {
 		return 0, false
 	}
 	return v, true
@@ -146,24 +156,65 @@ func parseNonNegativeEnvFloat(key string) (float64, bool) {
 
 func normalizeRateCard(rate CostRateCard) CostRateCard {
 	defaults := DefaultCostRateCard()
-	if rate.VCPUHourUSD == 0 && rate.MemoryGiBHourUSD == 0 && rate.DatabaseSchemaHrUSD == 0 && rate.DatabaseDedicatedHrUSD == 0 {
+	if !rate.configured &&
+		rate.VCPUHourUSD == 0 &&
+		rate.MemoryGiBHourUSD == 0 &&
+		rate.DatabaseSchemaHrUSD == 0 &&
+		rate.DatabaseDedicatedHrUSD == 0 {
 		return defaults
 	}
-	if rate.VCPUHourUSD < 0 {
-		rate.VCPUHourUSD = 0
+	if !isValidNonNegativeFloat(rate.VCPUHourUSD) {
+		rate.VCPUHourUSD = defaults.VCPUHourUSD
 	}
-	if rate.MemoryGiBHourUSD < 0 {
-		rate.MemoryGiBHourUSD = 0
+	if !isValidNonNegativeFloat(rate.MemoryGiBHourUSD) {
+		rate.MemoryGiBHourUSD = defaults.MemoryGiBHourUSD
 	}
-	if rate.DatabaseSchemaHrUSD < 0 {
-		rate.DatabaseSchemaHrUSD = 0
+	if !isValidNonNegativeFloat(rate.DatabaseSchemaHrUSD) {
+		rate.DatabaseSchemaHrUSD = defaults.DatabaseSchemaHrUSD
 	}
-	if rate.DatabaseDedicatedHrUSD < 0 {
-		rate.DatabaseDedicatedHrUSD = 0
-	} else if rate.DatabaseDedicatedHrUSD == 0 && (rate.VCPUHourUSD > 0 || rate.MemoryGiBHourUSD > 0 || rate.DatabaseSchemaHrUSD > 0) {
+	if !isValidNonNegativeFloat(rate.DatabaseDedicatedHrUSD) {
 		rate.DatabaseDedicatedHrUSD = defaults.DatabaseDedicatedHrUSD
 	}
+	rate.configured = true
 	return rate
+}
+
+// RecordEnvironmentHibernated updates environment annotations when entering hibernation,
+// recording the hibernation start timestamp if not already set.
+func RecordEnvironmentHibernated(annotations map[string]string, now time.Time) map[string]string {
+	if annotations == nil {
+		annotations = make(map[string]string)
+	}
+	alreadyHibernated := annotations[AnnotationHibernated] == "true"
+	annotations[AnnotationHibernated] = "true"
+	if !alreadyHibernated || strings.TrimSpace(annotations[AnnotationHibernatedAt]) == "" {
+		annotations[AnnotationHibernatedAt] = now.UTC().Format(time.RFC3339)
+	}
+	return annotations
+}
+
+// RecordEnvironmentWake updates environment annotations when waking from hibernation,
+// accumulating elapsed sleep duration into AnnotationHibernatedSeconds.
+func RecordEnvironmentWake(annotations map[string]string, now time.Time) map[string]string {
+	if annotations == nil {
+		return nil
+	}
+	var priorSeconds float64
+	if raw := strings.TrimSpace(annotations[AnnotationHibernatedSeconds]); raw != "" {
+		if parsed, err := strconv.ParseFloat(raw, 64); err == nil && isValidNonNegativeFloat(parsed) {
+			priorSeconds = parsed
+		}
+	}
+	if rawAt := strings.TrimSpace(annotations[AnnotationHibernatedAt]); rawAt != "" {
+		if parsedAt, err := time.Parse(time.RFC3339, rawAt); err == nil && now.After(parsedAt) {
+			priorSeconds += now.Sub(parsedAt).Seconds()
+		}
+		delete(annotations, AnnotationHibernatedAt)
+	}
+	if priorSeconds > 0 {
+		annotations[AnnotationHibernatedSeconds] = strconv.FormatFloat(priorSeconds, 'f', 0, 64)
+	}
+	return annotations
 }
 
 // ResolveEnvironmentDatabaseMode returns the normalized database isolation mode for an Environment.
@@ -216,12 +267,104 @@ type EnvironmentCostEstimate struct {
 	AccruedUSD                  float64
 	ProjectedTTLUSD             float64
 	UptimeHours                 float64
+	ActiveHours                 float64
+	HibernatedHours             float64
 	CPUCores                    float64
 	MemoryGiB                   float64
 	ServiceCount                int
 	Hibernated                  bool
 	IdleDuration                time.Duration
 	ShouldHibernate             bool
+}
+
+func resolveBillableEndTime(env *v1alpha1.Environment, startTime, now time.Time, terminal bool) time.Time {
+	if !terminal {
+		return now
+	}
+	clampEnd := func(t time.Time) time.Time {
+		if t.Before(startTime) {
+			return startTime
+		}
+		if t.After(now) {
+			return now
+		}
+		return t
+	}
+	if raw := strings.TrimSpace(env.Annotations[AnnotationTerminatedAt]); raw != "" {
+		if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
+			return clampEnd(parsed)
+		}
+	}
+	if string(env.Status.Phase) == "Expired" && env.Status.ExpiresAt != nil && !env.Status.ExpiresAt.IsZero() {
+		return clampEnd(env.Status.ExpiresAt.Time)
+	}
+	if !env.DeletionTimestamp.IsZero() {
+		return clampEnd(env.DeletionTimestamp.Time)
+	}
+	var latestTransition time.Time
+	for i := range env.Status.Conditions {
+		ts := env.Status.Conditions[i].LastTransitionTime.Time
+		if !ts.IsZero() && ts.After(latestTransition) {
+			latestTransition = ts
+		}
+	}
+	if !latestTransition.IsZero() {
+		return clampEnd(latestTransition)
+	}
+	return startTime
+}
+
+func computeActiveAndHibernatedHours(env *v1alpha1.Environment, startTime, billableEnd time.Time, hibernated bool) (activeHours, hibernatedHours float64) {
+	if startTime.IsZero() || !billableEnd.After(startTime) {
+		return 0, 0
+	}
+	billableHours := billableEnd.Sub(startTime).Hours()
+
+	var priorHibSeconds float64
+	hasPriorHib := false
+	if raw := strings.TrimSpace(env.Annotations[AnnotationHibernatedSeconds]); raw != "" {
+		if parsed, err := strconv.ParseFloat(raw, 64); err == nil && isValidNonNegativeFloat(parsed) {
+			priorHibSeconds = parsed
+			hasPriorHib = true
+		}
+	}
+
+	var currentHibHours float64
+	if hibernated {
+		if rawAt := strings.TrimSpace(env.Annotations[AnnotationHibernatedAt]); rawAt != "" {
+			if parsedAt, err := time.Parse(time.RFC3339, rawAt); err == nil {
+				if parsedAt.Before(startTime) {
+					parsedAt = startTime
+				}
+				if billableEnd.After(parsedAt) {
+					currentHibHours = billableEnd.Sub(parsedAt).Hours()
+				}
+			}
+		} else if !hasPriorHib {
+			if rawTraffic := strings.TrimSpace(env.Annotations[AnnotationLastTrafficAt]); rawTraffic != "" {
+				if parsedTraffic, err := time.Parse(time.RFC3339, rawTraffic); err == nil && parsedTraffic.After(startTime) && billableEnd.After(parsedTraffic) {
+					currentHibHours = billableEnd.Sub(parsedTraffic).Hours()
+				} else {
+					currentHibHours = billableHours
+				}
+			} else {
+				currentHibHours = billableHours
+			}
+		}
+	}
+
+	hibernatedHours = (priorHibSeconds / 3600.0) + currentHibHours
+	if hibernatedHours < 0 {
+		hibernatedHours = 0
+	}
+	if hibernatedHours > billableHours {
+		hibernatedHours = billableHours
+	}
+	activeHours = billableHours - hibernatedHours
+	if activeHours < 0 {
+		activeHours = 0
+	}
+	return activeHours, hibernatedHours
 }
 
 // ComputeEnvironmentCost is the pure, side-effect-free cost calculation for a preview Environment.
@@ -245,14 +388,14 @@ func ComputeEnvironmentCost(env *v1alpha1.Environment, now time.Time, rate CostR
 	if env.Spec.ServiceConfig != nil && env.Spec.ServiceConfig.Resources != nil {
 		if env.Spec.ServiceConfig.Resources.CPURequest != "" {
 			if q, err := resource.ParseQuantity(env.Spec.ServiceConfig.Resources.CPURequest); err == nil {
-				if cores := q.AsApproximateFloat64(); cores > 0 {
+				if cores := q.AsApproximateFloat64(); isValidNonNegativeFloat(cores) && cores > 0 {
 					cpuCores = cores
 				}
 			}
 		}
 		if env.Spec.ServiceConfig.Resources.MemoryRequest != "" {
 			if q, err := resource.ParseQuantity(env.Spec.ServiceConfig.Resources.MemoryRequest); err == nil {
-				if gib := float64(q.Value()) / (1024 * 1024 * 1024); gib > 0 {
+				if gib := float64(q.Value()) / (1024 * 1024 * 1024); isValidNonNegativeFloat(gib) && gib > 0 {
 					memoryGiB = gib
 				}
 			}
@@ -282,8 +425,11 @@ func ComputeEnvironmentCost(env *v1alpha1.Environment, now time.Time, rate CostR
 	var hourlyUSD, computeHourlyUSD, databaseHourlyUSD, hibernationSavingsUSD, activeCPU, activeMemory float64
 	switch {
 	case terminal:
-		// Terminal environments consume no active preview resources.
+		// Terminal environments stop incurring new hourly charges while retaining historical accrued spend below.
 	case hibernated:
+		// hibernateEnvironment scales preview workloads to zero while isolated database resources remain provisioned.
+		databaseHourlyUSD = dbHourly
+		hourlyUSD = databaseHourlyUSD
 		if baseComputeHourly > 0 {
 			hibernationSavingsUSD = baseComputeHourly
 		}
@@ -307,7 +453,17 @@ func ComputeEnvironmentCost(env *v1alpha1.Environment, now time.Time, rate CostR
 	if !startTime.IsZero() && now.After(startTime) {
 		runtimeHours = now.Sub(startTime).Hours()
 	}
-	accruedUSD := hourlyUSD * runtimeHours
+
+	billableEnd := resolveBillableEndTime(env, startTime, now, terminal)
+	var billableHours float64
+	if !startTime.IsZero() && billableEnd.After(startTime) {
+		billableHours = billableEnd.Sub(startTime).Hours()
+	}
+	activeHours, hibernatedHours := computeActiveAndHibernatedHours(env, startTime, billableEnd, hibernated)
+	accruedUSD := baseComputeHourly*activeHours + dbHourly*billableHours
+	if accruedUSD < 0 || !isValidNonNegativeFloat(accruedUSD) {
+		accruedUSD = 0
+	}
 
 	ttl := defaultPreviewTTL
 	if env.Spec.Lifecycle.TTL != nil && env.Spec.Lifecycle.TTL.Duration > 0 {
@@ -340,6 +496,8 @@ func ComputeEnvironmentCost(env *v1alpha1.Environment, now time.Time, rate CostR
 		AccruedUSD:                  accruedUSD,
 		ProjectedTTLUSD:             projectedTTLUSD,
 		UptimeHours:                 runtimeHours,
+		ActiveHours:                 activeHours,
+		HibernatedHours:             hibernatedHours,
 		CPUCores:                    activeCPU,
 		MemoryGiB:                   activeMemory,
 		ServiceCount:                serviceCount,
@@ -363,6 +521,36 @@ func EstimateEnvironmentCost(env *v1alpha1.Environment, now time.Time, rate Cost
 	return est
 }
 
+// EffectiveIdleHibernateThreshold resolves the effective idle-hibernation duration for an Environment
+// and reports whether automatic idle hibernation is enabled. When AnnotationHibernateAfter is absent,
+// idleThreshold (or the 30-minute controller default) applies; values such as "0", "off", "false",
+// "never", "disabled", or non-positive durations explicitly disable idle hibernation.
+func EffectiveIdleHibernateThreshold(env *v1alpha1.Environment, idleThreshold time.Duration) (time.Duration, bool) {
+	fallback := idleThreshold
+	if fallback <= 0 {
+		fallback = defaultIdleThreshold
+	}
+	if env == nil {
+		return fallback, true
+	}
+	raw := strings.ToLower(strings.TrimSpace(env.Annotations[AnnotationHibernateAfter]))
+	if raw == "" {
+		return fallback, true
+	}
+	switch raw {
+	case "0", "off", "false", "never", "disabled", "none":
+		return 0, false
+	}
+	parsed, err := time.ParseDuration(raw)
+	if err != nil {
+		return fallback, true
+	}
+	if parsed <= 0 {
+		return 0, false
+	}
+	return parsed, true
+}
+
 // ShouldHibernateIdleEnvironment returns true when the Environment is in Running phase
 // and has been idle longer than its configured hibernate-after annotation (or idleThreshold).
 func ShouldHibernateIdleEnvironment(env *v1alpha1.Environment, lastTrafficAt time.Time, now time.Time, idleThreshold time.Duration) bool {
@@ -370,14 +558,9 @@ func ShouldHibernateIdleEnvironment(env *v1alpha1.Environment, lastTrafficAt tim
 		return false
 	}
 
-	threshold := idleThreshold
-	if raw, ok := env.Annotations[AnnotationHibernateAfter]; ok && raw != "" {
-		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
-			threshold = parsed
-		}
-	}
-	if threshold <= 0 {
-		threshold = defaultIdleThreshold
+	threshold, enabled := EffectiveIdleHibernateThreshold(env, idleThreshold)
+	if !enabled {
+		return false
 	}
 
 	refTime := lastTrafficAt

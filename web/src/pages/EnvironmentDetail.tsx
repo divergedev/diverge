@@ -20,6 +20,7 @@ import {
   estimateEnvironmentHibernationSavingsUSD,
   estimateEnvironmentAccruedCostUSD,
   estimateEnvironmentServiceCount,
+  hasRecordedHibernationHistory,
   formatHourlyCostUSD,
   formatCurrencyUSD,
   isEnvironmentHibernated,
@@ -83,6 +84,7 @@ export default function EnvironmentDetail() {
   const estimatedCost = formatHourlyCostUSD(estimateEnvironmentHourlyCostUSD(env))
   const hibernationSavings = estimateEnvironmentHibernationSavingsUSD(env)
   const accruedSpend = estimateEnvironmentAccruedCostUSD(env)
+  const hasDurationHistory = hasRecordedHibernationHistory(env)
   const serviceCount = estimateEnvironmentServiceCount(env)
   const hibernationLabel = hibernated
     ? 'Hibernated (0 replicas)'
@@ -346,7 +348,9 @@ export default function EnvironmentDetail() {
                 </div>
                 {accruedSpend > 0 && (
                   <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">Accrued Spend</span>
+                    <span className="text-muted-foreground">
+                      {hasDurationHistory ? 'Accrued Spend' : 'Projected Lifetime Spend'}
+                    </span>
                     <span className="font-mono font-medium">{formatCurrencyUSD(accruedSpend)}</span>
                   </div>
                 )}

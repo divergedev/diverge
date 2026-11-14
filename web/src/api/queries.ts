@@ -12,7 +12,7 @@ export const queryKeys = {
   agentTask: (ns: string, name: string) => ['agentTask', ns, name] as const,
   hookJobs: (ns: string, envName: string) => ['hookJobs', ns, envName] as const,
   clusterInfo: ['clusterInfo'] as const,
-  costSummary: (ns?: string) => ['costSummary', ns ?? 'all'] as const,
+  costSummary: (ns?: string) => ['costSummary', ns || null] as const,
   currentUser: ['currentUser'] as const,
   permissions: (ns?: string) => ['permissions', ns ?? 'all'] as const,
 }

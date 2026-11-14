@@ -352,19 +352,13 @@ func (r *EnvironmentReconciler) hibernateEnvironment(ctx context.Context, target
 
 		patchTarget := targetEnv.DeepCopy()
 		base := patchTarget.DeepCopy()
-		if patchTarget.Annotations == nil {
-			patchTarget.Annotations = make(map[string]string)
-		}
-		patchTarget.Annotations[metrics.AnnotationHibernated] = "true"
+		patchTarget.Annotations = metrics.RecordEnvironmentHibernated(patchTarget.Annotations, now)
 		if err := r.Patch(ctx, patchTarget, client.MergeFrom(base)); err != nil {
 			return err
 		}
 		targetEnv.ResourceVersion = patchTarget.ResourceVersion
 	}
-	if targetEnv.Annotations == nil {
-		targetEnv.Annotations = make(map[string]string)
-	}
-	targetEnv.Annotations[metrics.AnnotationHibernated] = "true"
+	targetEnv.Annotations = metrics.RecordEnvironmentHibernated(targetEnv.Annotations, now)
 
 	// EstimateEnvironmentCost publishes the updated Prometheus cost gauge ($0 active compute while hibernated) as a side effect.
 	metrics.EstimateEnvironmentCost(targetEnv, now, rateCard)

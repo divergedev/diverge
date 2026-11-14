@@ -17,10 +17,16 @@ import (
 
 	pb "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/metrics"
 	"github.com/divergedev/diverge/internal/server/auth"
 )
 
 func TestClusterService_GetCostSummary_EndToEndAttribution(t *testing.T) {
+	t.Setenv(metrics.EnvCostVCPUHourUSD, "0.04")
+	t.Setenv(metrics.EnvCostMemoryGiBHourUSD, "0.004")
+	t.Setenv(metrics.EnvCostDBSchemaHourUSD, "0.01")
+	t.Setenv(metrics.EnvCostDBDedicatedHourUSD, "0.08")
+
 	c, k8s, logger, audit := setupClusterAuthTest(t)
 	k8s.PrependReactor("create", "subjectaccessreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		sar := action.(k8stesting.CreateAction).GetObject().(*authorizationv1.SubjectAccessReview)
@@ -243,4 +249,65 @@ func TestClusterService_GetCostSummary_NamespaceFilterAndRBAC(t *testing.T) {
 	assert.Equal(t, int32(1), res.Msg.TotalEnvironments)
 	require.Len(t, res.Msg.TopConsumers, 1)
 	assert.Equal(t, "pr-a", res.Msg.TopConsumers[0].Name)
+}
+
+func TestClusterService_GetCostSummary_MacaroonScopeAndPreviewGroupDelta(t *testing.T) {
+	t.Setenv(metrics.EnvCostVCPUHourUSD, "0.04")
+	t.Setenv(metrics.EnvCostMemoryGiBHourUSD, "0.004")
+	t.Setenv(metrics.EnvCostDBSchemaHourUSD, "0.01")
+	t.Setenv(metrics.EnvCostDBDedicatedHourUSD, "0.08")
+
+	c, k8s, logger, audit := setupClusterAuthTest(t)
+	ctx := auth.ContextWithUserInfo(context.Background(), &auth.UserInfo{
+		Username: "sandbox-agent",
+		Extra: map[string]authorizationv1.ExtraValue{
+			auth.ExtraKeyAuthType:     {"macaroon"},
+			auth.ExtraKeyNamespace:    {"team-pg"},
+			auth.ExtraKeyAllowedTools: {"diverge_get_cost_summary"},
+		},
+	})
+
+	// A token with only diverge_get_cost_summary must NOT gain environments list/watch access.
+	err := AuthorizeAction(ctx, k8s, audit, "list", "team-pg", "environments")
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+
+	now := time.Now().UTC()
+	// 4 baseline deployments in "team-pg"
+	for _, depName := range []string{"svc-a", "svc-b", "svc-c", "svc-d"} {
+		_, depErr := k8s.AppsV1().Deployments("team-pg").Create(ctx, &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: depName, Namespace: "team-pg"},
+		}, metav1.CreateOptions{})
+		require.NoError(t, depErr)
+	}
+
+	// Two child Environments belonging to the same PreviewGroup "pg-42" (deploying 2 of 4 services total).
+	// Avoided baseline services for the group should be (4 - 2) = 2 services ($0.024/hr), NOT (4-1)+(4-1) = 6!
+	for _, svcName := range []string{"svc-a", "svc-b"} {
+		require.NoError(t, c.Create(ctx, &v1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "pg-42-" + svcName,
+				Namespace:         "team-pg",
+				CreationTimestamp: metav1.NewTime(now.Add(-1 * time.Hour)),
+				Labels: map[string]string{
+					"divergedev.com/preview-group": "pg-42",
+				},
+			},
+			Spec: v1alpha1.EnvironmentSpec{
+				Deploy: v1alpha1.EnvironmentDeploy{ChangedServices: []string{svcName}},
+				Lifecycle: v1alpha1.EnvironmentLifecycle{
+					TTL: &metav1.Duration{Duration: 96 * time.Hour}, // >72h, but default 30m idle hibernation applies -> no warning
+				},
+			},
+			Status: v1alpha1.EnvironmentStatus{Phase: v1alpha1.PhaseRunning},
+		}))
+	}
+
+	svc := NewClusterService(c, k8s, logger, audit, "v0.24.0")
+	res, err := svc.GetCostSummary(ctx, connect.NewRequest(&pb.GetCostSummaryRequest{Namespace: "team-pg"}))
+	require.NoError(t, err)
+	assert.InDelta(t, 0.024, res.Msg.DeltaRoutingSavingsHourlyUsd, 1e-6)
+	for _, item := range res.Msg.TopConsumers {
+		assert.False(t, item.TtlWarning, "default 30m idle hibernation should prevent >72h TTL warning")
+	}
 }
