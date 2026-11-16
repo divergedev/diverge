@@ -28,6 +28,7 @@ import (
 	"github.com/divergedev/diverge/internal/changeset"
 	"github.com/divergedev/diverge/internal/deployer"
 	"github.com/divergedev/diverge/internal/events"
+	"github.com/divergedev/diverge/internal/finops"
 	"github.com/divergedev/diverge/internal/metrics"
 	"github.com/divergedev/diverge/internal/notifier"
 	"github.com/divergedev/diverge/internal/routing"
@@ -53,6 +54,7 @@ type EnvironmentReconciler struct {
 	TestRunner       divtesting.TestRunner
 	AsyncProvisioner async.Provisioner
 	FeatureProvider  features.FeatureProvider
+	BudgetAlerter    *finops.BudgetAlertDispatcher
 	SetupJobImage    string
 	SetupRunner      SetupRunner
 }

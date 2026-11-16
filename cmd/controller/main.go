@@ -34,6 +34,7 @@ import (
 	_ "github.com/divergedev/diverge/internal/database/cnpg"
 	"github.com/divergedev/diverge/internal/deployer"
 	"github.com/divergedev/diverge/internal/events"
+	"github.com/divergedev/diverge/internal/finops"
 	_ "github.com/divergedev/diverge/internal/metrics"
 	"github.com/divergedev/diverge/internal/notifier"
 	"github.com/divergedev/diverge/internal/observability"
@@ -302,6 +303,7 @@ func main() {
 		TestRunner:       testRunnerImpl,
 		AsyncProvisioner: asyncProviderImpl,
 		FeatureProvider:  featureProviderImpl,
+		BudgetAlerter:    finops.NewBudgetAlertDispatcher("", nil),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Environment")
 		os.Exit(1)

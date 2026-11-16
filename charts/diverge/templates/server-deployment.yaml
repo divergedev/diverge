@@ -97,6 +97,34 @@ spec:
                   name: {{ .Values.sandbox.macaroonSecretRef.name }}
                   key: {{ .Values.sandbox.macaroonSecretRef.key | default "root-key" }}
             {{- end }}
+            {{- with .Values.finops }}
+            {{- if .openCostUrl }}
+            - name: DIVERGE_OPENCOST_URL
+              value: {{ .openCostUrl | quote }}
+            {{- end }}
+            {{- if .budgetAlertThreshold }}
+            - name: DIVERGE_BUDGET_ALERT_THRESHOLD
+              value: {{ .budgetAlertThreshold | quote }}
+            {{- end }}
+            {{- with .rates }}
+            {{- if ne (toString .vcpuHourUsd) "" }}
+            - name: DIVERGE_COST_VCPU_HOUR_USD
+              value: {{ .vcpuHourUsd | quote }}
+            {{- end }}
+            {{- if ne (toString .memoryGibHourUsd) "" }}
+            - name: DIVERGE_COST_MEMORY_GIB_HOUR_USD
+              value: {{ .memoryGibHourUsd | quote }}
+            {{- end }}
+            {{- if ne (toString .databaseSchemaHourUsd) "" }}
+            - name: DIVERGE_COST_DB_SCHEMA_HOUR_USD
+              value: {{ .databaseSchemaHourUsd | quote }}
+            {{- end }}
+            {{- if ne (toString .databaseDedicatedHourUsd) "" }}
+            - name: DIVERGE_COST_DB_DEDICATED_HOUR_USD
+              value: {{ .databaseDedicatedHourUsd | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
           ports:
             - name: grpc
               containerPort: {{ .Values.server.service.port }}

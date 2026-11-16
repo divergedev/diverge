@@ -18,8 +18,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/finops"
 	"github.com/divergedev/diverge/internal/metrics"
 )
 
@@ -146,24 +148,41 @@ func (r *EnvironmentReconciler) reconcileNamespaceQuota(ctx context.Context, env
 		return ctrl.Result{}, false, fmt.Errorf("failed to list environments in namespace %s: %w", env.Namespace, err)
 	}
 
-	if maxCNPG > 0 && usesCNPGCluster(env) {
-		otherCNPGCount := 0
-		for i := range envList.Items {
-			item := &envList.Items[i]
-			if item.Name == env.Name || !item.DeletionTimestamp.IsZero() {
-				continue
-			}
-			if item.Status.Phase == divergeiov1alpha1.PhaseFailed ||
-				item.Status.Phase == divergeiov1alpha1.EnvironmentPhase("Expired") ||
-				item.Status.Phase == divergeiov1alpha1.PhaseTerminating {
-				continue
-			}
-			if usesCNPGCluster(item) {
-				otherCNPGCount++
-			}
+	otherCNPGCount := 0
+	for i := range envList.Items {
+		item := &envList.Items[i]
+		if item.Name == env.Name || !item.DeletionTimestamp.IsZero() {
+			continue
 		}
-		if otherCNPGCount+1 > maxCNPG {
+		if item.Status.Phase == divergeiov1alpha1.PhaseFailed ||
+			item.Status.Phase == divergeiov1alpha1.EnvironmentPhase("Expired") ||
+			item.Status.Phase == divergeiov1alpha1.PhaseTerminating {
+			continue
+		}
+		if usesCNPGCluster(item) {
+			otherCNPGCount++
+		}
+	}
+	totalCNPG := otherCNPGCount
+	if usesCNPGCluster(env) {
+		totalCNPG++
+	}
+
+	if maxCNPG > 0 && usesCNPGCluster(env) {
+		if totalCNPG > maxCNPG {
 			msg := fmt.Sprintf("namespace %s quota exceeded: max-cnpg-clusters=%d", env.Namespace, maxCNPG)
+			r.dispatchQuotaBudgetAlert(ctx, reader, finops.BudgetAlertInput{
+				Namespace:             env.Namespace,
+				Environment:           env.Name,
+				MaxHourlyCostUSD:      maxHourlyCost,
+				MaxActiveEnvironments: maxActive,
+				CNPGClusters:          totalCNPG,
+				MaxCNPGClusters:       maxCNPG,
+				Policy:                policy,
+				Exceeded:              true,
+				Reason:                msg,
+				NamespaceAnnotations:  ns.Annotations,
+			}, env)
 			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 				Type:    ConditionQuotaReady,
 				Status:  metav1.ConditionFalse,
@@ -238,6 +257,20 @@ func (r *EnvironmentReconciler) reconcileNamespaceQuota(ctx context.Context, env
 			break
 		}
 		if policy == QuotaPolicyReject || len(remainingActive) == 0 {
+			r.dispatchQuotaBudgetAlert(ctx, reader, finops.BudgetAlertInput{
+				Namespace:             env.Namespace,
+				Environment:           env.Name,
+				HourlyCostUSD:         sumHourlyCost(remainingActive) + selfCost,
+				MaxHourlyCostUSD:      maxHourlyCost,
+				ActiveEnvironments:    len(remainingActive) + 1,
+				MaxActiveEnvironments: maxActive,
+				CNPGClusters:          totalCNPG,
+				MaxCNPGClusters:       maxCNPG,
+				Policy:                policy,
+				Exceeded:              true,
+				Reason:                reasonMsg,
+				NamespaceAnnotations:  ns.Annotations,
+			}, env)
 			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 				Type:    ConditionQuotaReady,
 				Status:  metav1.ConditionFalse,
@@ -282,6 +315,19 @@ func (r *EnvironmentReconciler) reconcileNamespaceQuota(ctx context.Context, env
 		}
 	}
 
+	r.dispatchQuotaBudgetAlert(ctx, reader, finops.BudgetAlertInput{
+		Namespace:             env.Namespace,
+		Environment:           env.Name,
+		HourlyCostUSD:         sumHourlyCost(remainingActive) + selfCost,
+		MaxHourlyCostUSD:      maxHourlyCost,
+		ActiveEnvironments:    len(remainingActive) + 1,
+		MaxActiveEnvironments: maxActive,
+		CNPGClusters:          totalCNPG,
+		MaxCNPGClusters:       maxCNPG,
+		Policy:                policy,
+		NamespaceAnnotations:  ns.Annotations,
+	}, env)
+
 	meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 		Type:    ConditionQuotaReady,
 		Status:  metav1.ConditionTrue,
@@ -289,6 +335,23 @@ func (r *EnvironmentReconciler) reconcileNamespaceQuota(ctx context.Context, env
 		Message: "Namespace FinOps and concurrency quotas satisfied",
 	})
 	return ctrl.Result{}, false, nil
+}
+
+func (r *EnvironmentReconciler) dispatchQuotaBudgetAlert(ctx context.Context, reader client.Reader, in finops.BudgetAlertInput, env *divergeiov1alpha1.Environment) {
+	if r == nil || r.BudgetAlerter == nil {
+		return
+	}
+	sent, sev, alertReason, err := r.BudgetAlerter.EvaluateAndNotify(ctx, reader, in)
+	if err != nil {
+		log.FromContext(ctx).Info("FinOps budget alert webhook delivery failed", "namespace", in.Namespace, "severity", sev, "error", err.Error())
+		if r.Recorder != nil && r.Recorder.EventRecorder != nil && env != nil {
+			r.Recorder.Event(env, "Warning", "NotificationFailed", err.Error())
+		}
+		return
+	}
+	if sent && sev == finops.SeverityWarning && !in.Exceeded && r.Recorder != nil && r.Recorder.EventRecorder != nil && env != nil {
+		r.Recorder.Event(env, "Warning", "BudgetThresholdReached", alertReason)
+	}
 }
 
 func (r *EnvironmentReconciler) hibernateEnvironment(ctx context.Context, targetEnv *divergeiov1alpha1.Environment, now time.Time, rateCard metrics.CostRateCard) error {

@@ -656,6 +656,11 @@ func customTools() []mcpruntime.ToolDefinition {
 			Description: "Replay recorded HTTP, ConnectRPC, and Protobuf/gRPC traffic (.jsonl, .har, .json, or inline requests) against baseline and a preview environment. Compares status code parity, p50/p95 latency, JSON structural schemas, and binary Protobuf wire tags/descriptors. Executes requests against baseline and attempts preview only when baseline execution completes without error (including passing the 10 MiB response-size check, whereas baseline HTTP or gRPC status does not determine whether preview is attempted). Automatically strips recorded diverge_env sticky-routing cookies, diverge.env baggage items, and routing headers from baseline requests; supports filter_hosts to retain only matching hostnames, strip_auth to remove Authorization/Proxy-Authorization/Cookie/X-Api-Key headers and URL userinfo, and strip_headers to remove custom headers before replay.",
 			InputSchema: replaySchema,
 		},
+		{
+			Name:        "diverge_get_cost_summary",
+			Description: "Get FinOps hourly burn, monthly run-rate, hibernation and delta-routing savings, AgentTask LLM spend, namespace quota utilization, and top PR/environment consumers.",
+			InputSchema: costSummarySchema,
+		},
 	}
 }
 

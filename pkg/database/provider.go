@@ -1,9 +1,8 @@
 // Package database defines the public API for Diverge database providers.
 //
-// This package contains the interfaces and types that third-party and
-// Pro/Enterprise providers implement to integrate with the Diverge controller.
-// OSS implementations live in internal/database; Pro implementations live in
-// the diverge-enterprise repository.
+// This package contains the interfaces and types that built-in and custom
+// third-party providers implement to integrate with the Diverge controller.
+// Built-in implementations live in internal/database.
 //
 // # Implementing a custom provider
 //
