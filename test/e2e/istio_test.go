@@ -55,7 +55,7 @@ func TestIstio_HeaderRouting(t *testing.T) {
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "orders-svc",
 				Port:        5678,
-				Image:       "hashicorp/http-echo:0.2.3",
+				Image:       "hashicorp/http-echo:1.0.0",
 				Env:         []v1alpha1.EnvVar{{Name: "ECHO_TEXT", Value: "preview"}},
 			},
 		},
@@ -136,7 +136,7 @@ func TestIstio_HeaderPropagation(t *testing.T) {
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "header-svc",
 				Port:        5678,
-				Image:       "hashicorp/http-echo:0.2.3",
+				Image:       "hashicorp/http-echo:1.0.0",
 				Env:         []v1alpha1.EnvVar{{Name: "ECHO_TEXT", Value: "preview"}},
 			},
 		},
@@ -213,7 +213,7 @@ func TestIstio_RouteCleanup(t *testing.T) {
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "cleanup-svc",
 				Port:        5678,
-				Image:       "hashicorp/http-echo:0.2.3",
+				Image:       "hashicorp/http-echo:1.0.0",
 				Env:         []v1alpha1.EnvVar{{Name: "ECHO_TEXT", Value: "preview"}},
 			},
 		},

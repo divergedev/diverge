@@ -8,8 +8,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -1385,7 +1387,7 @@ func TestGatewayRouter_Reconcile_ServiceConfigFallbackAndDefaultGatewayLookup(t 
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "orders-svc",
 				Port:        5678,
-				Image:       "hashicorp/http-echo:0.2.3",
+				Image:       "hashicorp/http-echo:1.0.0",
 			},
 		},
 	}
@@ -1460,11 +1462,194 @@ func TestGatewayRouter_DefaultGatewayTLSAndDiscoverySafety(t *testing.T) {
 		cert := &unstructured.Unstructured{}
 		cert.SetAPIVersion("cert-manager.io/v1")
 		cert.SetKind("Certificate")
-		require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "mesh-env-tls", Namespace: "default"}, cert))
+		require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "team-orders-mesh-env-tls", Namespace: "default"}, cert))
+		assert.Equal(t, "team-orders", cert.GetLabels()["divergedev.com/environment-namespace"])
 
 		require.NoError(t, r.Teardown(context.Background(), env))
-		err := c.Get(context.Background(), client.ObjectKey{Name: "mesh-env-tls", Namespace: "default"}, cert)
+		err := c.Get(context.Background(), client.ObjectKey{Name: "team-orders-mesh-env-tls", Namespace: "default"}, cert)
 		assert.Error(t, err, "Certificate in default namespace should be cleaned up on Teardown")
+	})
+
+	t.Run("isolates cross-namespace Certificates across source namespaces sharing env name", func(t *testing.T) {
+		gw := &unstructured.Unstructured{}
+		gw.SetAPIVersion("gateway.networking.k8s.io/v1")
+		gw.SetKind("Gateway")
+		gw.SetName("public")
+		gw.SetNamespace("default")
+
+		c := fake.NewClientBuilder().WithObjects(gw).Build()
+		r := &GatewayRouter{Client: c}
+
+		makeEnv := func(ns, host string) *v1alpha1.Environment {
+			return &v1alpha1.Environment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pr-42",
+					Namespace: ns,
+					Annotations: map[string]string{
+						AnnotationClusterIssuer: "letsencrypt-prod",
+					},
+				},
+				Spec: v1alpha1.EnvironmentSpec{
+					Routing: v1alpha1.EnvironmentRouting{
+						Mode:       "subdomain",
+						BaseDomain: host,
+					},
+					ServiceConfig: &v1alpha1.ServicePreviewConfig{
+						ServiceName: "orders-svc",
+						ParentRef:   "public",
+						Port:        5678,
+					},
+				},
+			}
+		}
+
+		envA := makeEnv("team-a", "a.preview.example.com")
+		envB := makeEnv("team-b", "b.preview.example.com")
+		require.NoError(t, r.Reconcile(context.Background(), envA))
+		require.NoError(t, r.Reconcile(context.Background(), envB))
+
+		certA := &unstructured.Unstructured{}
+		certA.SetAPIVersion("cert-manager.io/v1")
+		certA.SetKind("Certificate")
+		require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "team-a-pr-42-tls", Namespace: "default"}, certA))
+
+		certB := &unstructured.Unstructured{}
+		certB.SetAPIVersion("cert-manager.io/v1")
+		certB.SetKind("Certificate")
+		require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "team-b-pr-42-tls", Namespace: "default"}, certB))
+
+		require.NoError(t, r.Teardown(context.Background(), envA))
+		assert.True(t, apierrors.IsNotFound(c.Get(context.Background(), client.ObjectKey{Name: "team-a-pr-42-tls", Namespace: "default"}, certA)))
+		require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "team-b-pr-42-tls", Namespace: "default"}, certB), "team-b Certificate must remain intact")
+	})
+
+	t.Run("resolves baseline Service port for GAMMA parentRef when different from preview container port", func(t *testing.T) {
+		baselineSvc := &unstructured.Unstructured{}
+		baselineSvc.SetAPIVersion("v1")
+		baselineSvc.SetKind("Service")
+		baselineSvc.SetName("orders-svc")
+		baselineSvc.SetNamespace("team-orders")
+		baselineSvc.Object["spec"] = map[string]interface{}{
+			"ports": []interface{}{
+				map[string]interface{}{
+					"port":       int64(80),
+					"targetPort": int64(8080),
+				},
+			},
+		}
+
+		c := fake.NewClientBuilder().WithObjects(baselineSvc).Build()
+		r := &GatewayRouter{Client: c}
+
+		env := &v1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "mesh-port-env",
+				Namespace: "team-orders",
+			},
+			Spec: v1alpha1.EnvironmentSpec{
+				ServiceConfig: &v1alpha1.ServicePreviewConfig{
+					ServiceName: "orders-svc",
+					Port:        8080,
+				},
+			},
+		}
+
+		require.NoError(t, r.Reconcile(context.Background(), env))
+
+		meshRoute := &unstructured.Unstructured{}
+		meshRoute.SetAPIVersion("gateway.networking.k8s.io/v1")
+		meshRoute.SetKind("HTTPRoute")
+		require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "mesh-port-env-orders-svc-mesh", Namespace: "team-orders"}, meshRoute))
+
+		parents, _, _ := unstructured.NestedSlice(meshRoute.Object, "spec", "parentRefs")
+		require.Len(t, parents, 1)
+		assert.Equal(t, int64(80), parents[0].(map[string]interface{})["port"])
+
+		rules, _, _ := unstructured.NestedSlice(meshRoute.Object, "spec", "rules")
+		backends, _, _ := unstructured.NestedSlice(rules[0].(map[string]interface{}), "backendRefs")
+		assert.Equal(t, int64(8080), backends[0].(map[string]interface{})["port"])
+	})
+
+	t.Run("preserves existing Gateway route when default Gateway lookup returns Forbidden", func(t *testing.T) {
+		gw := &unstructured.Unstructured{}
+		gw.SetAPIVersion("gateway.networking.k8s.io/v1")
+		gw.SetKind("Gateway")
+		gw.SetName("public")
+		gw.SetNamespace("default")
+
+		forbidDefaultGW := false
+		c := fake.NewClientBuilder().WithObjects(gw).WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if forbidDefaultGW && obj.GetObjectKind().GroupVersionKind().Kind == "Gateway" && key.Namespace == "default" {
+					return apierrors.NewForbidden(schema.GroupResource{Group: "gateway.networking.k8s.io", Resource: "gateways"}, key.Name, errors.New("forbidden"))
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).Build()
+		r := &GatewayRouter{Client: c}
+
+		env := &v1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "mesh-env",
+				Namespace: "team-orders",
+			},
+			Spec: v1alpha1.EnvironmentSpec{
+				Deploy: v1alpha1.EnvironmentDeploy{ChangedServices: []string{"orders"}},
+				ServiceConfig: &v1alpha1.ServicePreviewConfig{
+					ParentRef: "public",
+					Port:      5678,
+				},
+			},
+		}
+
+		require.NoError(t, r.Reconcile(context.Background(), env))
+
+		forbidDefaultGW = true
+		require.NoError(t, r.Reconcile(context.Background(), env))
+
+		edgeRoute := &unstructured.Unstructured{}
+		edgeRoute.SetAPIVersion("gateway.networking.k8s.io/v1")
+		edgeRoute.SetKind("HTTPRoute")
+		require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "mesh-env-orders", Namespace: "team-orders"}, edgeRoute))
+		parents, _, _ := unstructured.NestedSlice(edgeRoute.Object, "spec", "parentRefs")
+		require.Len(t, parents, 1)
+		assert.Nil(t, parents[0].(map[string]interface{})["kind"], "existing Gateway parentRef must not flip to Service on Forbidden")
+		assert.Equal(t, "default", parents[0].(map[string]interface{})["namespace"])
+	})
+
+	t.Run("propagates Gateway discovery error on Teardown retry after routes are deleted", func(t *testing.T) {
+		gw := &unstructured.Unstructured{}
+		gw.SetAPIVersion("gateway.networking.k8s.io/v1")
+		gw.SetKind("Gateway")
+		gw.SetName("diverge-gateway")
+		gw.SetNamespace("default")
+
+		failGatewayLookup := false
+		c := fake.NewClientBuilder().WithObjects(gw).WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if failGatewayLookup && obj.GetObjectKind().GroupVersionKind().Kind == "Gateway" {
+					return errors.New("transient apiserver timeout")
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).Build()
+		r := &GatewayRouter{Client: c}
+
+		env := &v1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "retry-env",
+				Namespace: "team-orders",
+			},
+			Spec: v1alpha1.EnvironmentSpec{
+				Deploy: v1alpha1.EnvironmentDeploy{ChangedServices: []string{"orders"}},
+			},
+		}
+
+		// Simulate retry where routes were already removed in a prior partial teardown
+		failGatewayLookup = true
+		err := r.Teardown(context.Background(), env)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "transient apiserver timeout")
 	})
 
 	t.Run("preserves local Service route when unqualified ParentRef matches both local Service and default Gateway", func(t *testing.T) {

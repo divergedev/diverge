@@ -255,8 +255,8 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 		client.InNamespace(targetNS),
 		client.MatchingLabelsSelector{Selector: selector},
 	}
-	delOpts := []client.DeleteOption{
-		client.PropagationPolicy(metav1.DeletePropagationBackground),
+	fgDelOpts := []client.DeleteOption{
+		client.PropagationPolicy(metav1.DeletePropagationForeground),
 	}
 
 	var deployList appsv1.DeploymentList
@@ -264,7 +264,7 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 		return fmt.Errorf("failed to list deployments for teardown: %w", err)
 	}
 	for i := range deployList.Items {
-		if err := d.Client.Delete(ctx, &deployList.Items[i], delOpts...); client.IgnoreNotFound(err) != nil {
+		if err := d.Client.Delete(ctx, &deployList.Items[i], fgDelOpts...); client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("failed to delete deployment %s/%s: %w", targetNS, deployList.Items[i].Name, err)
 		}
 	}
@@ -274,7 +274,7 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 		return fmt.Errorf("failed to list statefulsets for teardown: %w", err)
 	}
 	for i := range stsList.Items {
-		if err := d.Client.Delete(ctx, &stsList.Items[i], delOpts...); client.IgnoreNotFound(err) != nil {
+		if err := d.Client.Delete(ctx, &stsList.Items[i], fgDelOpts...); client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("failed to delete statefulset %s/%s: %w", targetNS, stsList.Items[i].Name, err)
 		}
 	}
@@ -284,7 +284,7 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 		return fmt.Errorf("failed to list jobs for teardown: %w", err)
 	}
 	for i := range jobList.Items {
-		if err := d.Client.Delete(ctx, &jobList.Items[i], delOpts...); client.IgnoreNotFound(err) != nil {
+		if err := d.Client.Delete(ctx, &jobList.Items[i], fgDelOpts...); client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("failed to delete job %s/%s: %w", targetNS, jobList.Items[i].Name, err)
 		}
 	}
@@ -348,6 +348,49 @@ func (d *DirectDeployer) Status(ctx context.Context, env *v1alpha1.Environment) 
 			SyncStatus: "Applied",
 			Health:     statefulSetHealth(&sts),
 		})
+	}
+
+	// During teardown, keep the drain gate closed while managed Jobs or preview Pods
+	// are still terminating so database Secrets and feature ConfigMaps are not deleted
+	// out from under active containers.
+	if !env.DeletionTimestamp.IsZero() {
+		var jobList batchv1.JobList
+		if err := d.Client.List(ctx, &jobList,
+			client.InNamespace(targetNS),
+			client.MatchingLabelsSelector{Selector: selector},
+		); err != nil {
+			return nil, fmt.Errorf("failed to list jobs: %w", err)
+		}
+		for _, job := range jobList.Items {
+			result = append(result, ServiceStatus{
+				Name:       job.Name,
+				Service:    job.Labels["divergedev.com/service"],
+				SyncStatus: "Terminating",
+				Health:     "Progressing",
+			})
+		}
+
+		podSelector := labels.SelectorFromSet(map[string]string{
+			"divergedev.com/environment": env.Name,
+		})
+		var podList corev1.PodList
+		if err := d.Client.List(ctx, &podList,
+			client.InNamespace(targetNS),
+			client.MatchingLabelsSelector{Selector: podSelector},
+		); err != nil {
+			return nil, fmt.Errorf("failed to list pods: %w", err)
+		}
+		for _, pod := range podList.Items {
+			if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+				continue
+			}
+			result = append(result, ServiceStatus{
+				Name:       pod.Name,
+				Service:    pod.Labels["divergedev.com/service"],
+				SyncStatus: "Terminating",
+				Health:     "Progressing",
+			})
+		}
 	}
 
 	return result, nil

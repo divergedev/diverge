@@ -5,13 +5,6 @@ networking:
   kubeProxyMode: "none"
 nodes:
   - role: control-plane
-    extraPortMappings:
-      - containerPort: 8080
-        hostPort: 8880
-        protocol: TCP
-      - containerPort: 443
-        hostPort: 8443
-        protocol: TCP
     kubeadmConfigPatches:
       - |
         kind: InitConfiguration

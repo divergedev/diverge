@@ -21,26 +21,27 @@ import (
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
 
-const ciliumGatewayFallbackURL = "http://localhost:8880"
-
 func resolveCiliumGatewayURL(ctx context.Context, f *Framework) string {
+	f.T.Helper()
 	if override := strings.TrimSpace(os.Getenv("CILIUM_GATEWAY_URL")); override != "" {
 		return override
 	}
 	svc, err := f.Clientset.CoreV1().Services("default").Get(ctx, "cilium-gateway-diverge-gateway", metav1.GetOptions{})
-	if err == nil && len(svc.Spec.Ports) > 0 && svc.Spec.Ports[0].NodePort > 0 {
-		nodes, nErr := f.Clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-		if nErr == nil {
-			for _, node := range nodes.Items {
-				for _, addr := range node.Status.Addresses {
-					if addr.Type == corev1.NodeInternalIP && addr.Address != "" {
-						return fmt.Sprintf("http://%s:%d", addr.Address, svc.Spec.Ports[0].NodePort)
-					}
-				}
+	require.NoError(f.T, err, "failed to get default/cilium-gateway-diverge-gateway Service; set CILIUM_GATEWAY_URL or ensure Cilium Gateway is programmed")
+	require.NotEmpty(f.T, svc.Spec.Ports, "default/cilium-gateway-diverge-gateway Service has no ports")
+	require.Greater(f.T, svc.Spec.Ports[0].NodePort, int32(0), "default/cilium-gateway-diverge-gateway Service has no NodePort")
+
+	nodes, err := f.Clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	require.NoError(f.T, err, "failed to list cluster nodes to resolve Cilium Gateway InternalIP")
+	for _, node := range nodes.Items {
+		for _, addr := range node.Status.Addresses {
+			if addr.Type == corev1.NodeInternalIP && addr.Address != "" {
+				return fmt.Sprintf("http://%s:%d", addr.Address, svc.Spec.Ports[0].NodePort)
 			}
 		}
 	}
-	return ciliumGatewayFallbackURL
+	f.T.Fatalf("no NodeInternalIP found on cluster nodes; set CILIUM_GATEWAY_URL explicitly")
+	return ""
 }
 
 // TestCilium_HeaderRouting verifies that Cilium routes requests to preview
@@ -78,7 +79,7 @@ func TestCilium_HeaderRouting(t *testing.T) {
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "api-svc",
 				Port:        5678,
-				Image:       "hashicorp/http-echo:0.2.3",
+				Image:       "hashicorp/http-echo:1.0.0",
 				Env:         []v1alpha1.EnvVar{{Name: "ECHO_TEXT", Value: "preview"}},
 			},
 		},
@@ -150,7 +151,7 @@ func TestCilium_SubdomainRouting(t *testing.T) {
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "web-svc",
 				Port:        5678,
-				Image:       "hashicorp/http-echo:0.2.3",
+				Image:       "hashicorp/http-echo:1.0.0",
 				Env:         []v1alpha1.EnvVar{{Name: "ECHO_TEXT", Value: "preview"}},
 			},
 			Routing: v1alpha1.EnvironmentRouting{
@@ -233,7 +234,7 @@ func TestCilium_GAMMAMeshRouting(t *testing.T) {
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "payments-svc",
 				Port:        5678,
-				Image:       "hashicorp/http-echo:0.2.3",
+				Image:       "hashicorp/http-echo:1.0.0",
 				Env:         []v1alpha1.EnvVar{{Name: "ECHO_TEXT", Value: "preview"}},
 			},
 		},
@@ -310,7 +311,7 @@ func TestCilium_CrossNamespaceGrant(t *testing.T) {
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "external-svc",
 				Port:        5678,
-				Image:       "hashicorp/http-echo:0.2.3",
+				Image:       "hashicorp/http-echo:1.0.0",
 				Env:         []v1alpha1.EnvVar{{Name: "ECHO_TEXT", Value: "preview"}},
 			},
 		},
@@ -331,8 +332,8 @@ func TestCilium_CrossNamespaceGrant(t *testing.T) {
 		return len(grants.Items) > 0
 	}, 2*time.Minute, 2*time.Second, "ReferenceGrant not created in preview namespace")
 
-	_ = f.Client.Delete(ctx, env)
-	_ = f.WaitForEnvironmentDeleted(ctx, env.Name, 2*time.Minute)
+	require.NoError(t, f.Client.Delete(ctx, env))
+	require.NoError(t, f.WaitForEnvironmentDeleted(ctx, env.Name, 2*time.Minute))
 }
 
 // TestCilium_RouteCleanup verifies that HTTPRoute resources are garbage
@@ -368,7 +369,7 @@ func TestCilium_RouteCleanup(t *testing.T) {
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "cleanup-svc",
 				Port:        5678,
-				Image:       "hashicorp/http-echo:0.2.3",
+				Image:       "hashicorp/http-echo:1.0.0",
 				Env:         []v1alpha1.EnvVar{{Name: "ECHO_TEXT", Value: "preview"}},
 			},
 		},
@@ -440,7 +441,7 @@ func TestCilium_CookieRouting(t *testing.T) {
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "payments-svc",
 				Port:        5678,
-				Image:       "hashicorp/http-echo:0.2.3",
+				Image:       "hashicorp/http-echo:1.0.0",
 				Env:         []v1alpha1.EnvVar{{Name: "ECHO_TEXT", Value: "preview"}},
 			},
 		},
@@ -532,7 +533,7 @@ func TestCilium_PathPrefixRouting(t *testing.T) {
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "payments-svc",
 				Port:        5678,
-				Image:       "hashicorp/http-echo:0.2.3",
+				Image:       "hashicorp/http-echo:1.0.0",
 				Env:         []v1alpha1.EnvVar{{Name: "ECHO_TEXT", Value: "preview"}},
 				PathPrefix:  "/api",
 			},
@@ -605,9 +606,12 @@ func TestCilium_GRPCRouteCreation(t *testing.T) {
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "grpc-svc",
 				Port:        50051,
-				Image:       "hashicorp/http-echo:0.2.3",
-				Env:         []v1alpha1.EnvVar{{Name: "ECHO_TEXT", Value: "preview"}},
-				Protocol:    "grpc",
+				Image:       "hashicorp/http-echo:1.0.0",
+				Env: []v1alpha1.EnvVar{
+					{Name: "ECHO_TEXT", Value: "preview"},
+					{Name: "LISTEN_ADDR", Value: ":50051"},
+				},
+				Protocol: "grpc",
 			},
 		},
 	}

@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,7 +57,7 @@ func TestLinkerd_GAMMARouting(t *testing.T) {
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "orders-svc",
 				Port:        5678,
-				Image:       "hashicorp/http-echo:0.2.3",
+				Image:       "hashicorp/http-echo:1.0.0",
 				Env:         []v1alpha1.EnvVar{{Name: "ECHO_TEXT", Value: "preview"}},
 			},
 		},
@@ -93,9 +94,8 @@ func TestLinkerd_GAMMARouting(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		// A successful connection through the mesh with a non-empty response
-		// proves the east-west GAMMA route is programmed correctly.
-		return len(out) > 0
+		// Verify the GAMMA route reaches the preview pod rather than baseline orders-svc.
+		return strings.TrimSpace(out) == "preview"
 	}, 2*time.Minute, 2*time.Second, "Mesh route not reachable or not routing to preview pod")
 }
 
@@ -137,7 +137,7 @@ func TestLinkerd_HeaderPropagation(t *testing.T) {
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "header-svc",
 				Port:        5678,
-				Image:       "hashicorp/http-echo:0.2.3",
+				Image:       "hashicorp/http-echo:1.0.0",
 				Env:         []v1alpha1.EnvVar{{Name: "ECHO_TEXT", Value: "preview"}},
 			},
 		},
@@ -210,7 +210,7 @@ func TestLinkerd_CrossNamespaceRouting(t *testing.T) {
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "remote-svc",
 				Port:        5678,
-				Image:       "hashicorp/http-echo:0.2.3",
+				Image:       "hashicorp/http-echo:1.0.0",
 				Env:         []v1alpha1.EnvVar{{Name: "ECHO_TEXT", Value: "preview"}},
 			},
 		},
@@ -231,8 +231,8 @@ func TestLinkerd_CrossNamespaceRouting(t *testing.T) {
 		return len(grants.Items) > 0
 	}, 2*time.Minute, 2*time.Second, "ReferenceGrant not created in preview namespace")
 
-	_ = f.Client.Delete(ctx, env)
-	_ = f.WaitForEnvironmentDeleted(ctx, env.Name, 2*time.Minute)
+	require.NoError(t, f.Client.Delete(ctx, env))
+	require.NoError(t, f.WaitForEnvironmentDeleted(ctx, env.Name, 2*time.Minute))
 }
 
 // TestLinkerd_RouteCleanup verifies that HTTPRoute resources are garbage
@@ -273,7 +273,7 @@ func TestLinkerd_RouteCleanup(t *testing.T) {
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "cleanup-svc",
 				Port:        5678,
-				Image:       "hashicorp/http-echo:0.2.3",
+				Image:       "hashicorp/http-echo:1.0.0",
 				Env:         []v1alpha1.EnvVar{{Name: "ECHO_TEXT", Value: "preview"}},
 			},
 		},
