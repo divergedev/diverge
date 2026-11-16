@@ -43,6 +43,25 @@ prometheus:
   alerts:
     enabled: false  # requires Prometheus Operator CRDs (monitoring.coreos.com)
 
+# FinOps cost attribution, OpenCost live allocation enrichment, and namespace budget alerts
+finops:
+  # -- Optional OpenCost / Kubecost Allocation API base URL (sets DIVERGE_OPENCOST_URL on server)
+  openCostUrl: ""
+  # -- Default namespace quota utilization warning threshold percentage (1-100; sets DIVERGE_BUDGET_ALERT_THRESHOLD)
+  budgetAlertThreshold: ""
+  # -- Cooldown duration between repeated alerts of the same severity per namespace (sets DIVERGE_BUDGET_ALERT_COOLDOWN, default 1h)
+  budgetAlertCooldown: ""
+  # -- Kubernetes Secret containing the Slack / generic HTTP webhook URL (sets DIVERGE_BUDGET_WEBHOOK_URL on controller)
+  budgetWebhookSecretRef:
+    name: ""
+    key: "webhook-url"
+  # -- Optional unit rate card overrides (empty uses built-in defaults: $0.04/vCPU-hr, $0.004/GiB-hr, $0.01/schema-hr, $0.08/dedicated-db-hr)
+  rates:
+    vcpuHourUsd: ""
+    memoryGibHourUsd: ""
+    databaseSchemaHourUsd: ""
+    databaseDedicatedHourUsd: ""
+
 webhook:
   port: 9443
   secretName: diverge-webhook-token

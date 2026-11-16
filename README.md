@@ -190,6 +190,7 @@ spec:
 
 The `diverge` CLI helps you manage environments efficiently:
 *   `diverge init` - Initialize a `.diverge.yaml` config (with automatic Postgres/Redis/S3/Kafka/Temporal stack detection) or local Kubernetes playground
+*   `diverge cost` - Inspect FinOps preview spend, hibernation & delta-routing savings, namespace quotas, OpenCost live allocations, and CSV/JSON chargeback reports (`--fail-on-budget-warning`)
 *   `diverge create` - Create a new environment
 *   `diverge curl` - Send HTTP requests to a preview environment and compare against baseline (`--compare-baseline`)
 *   `diverge replay` - Replay recorded HTTP, ConnectRPC, and Protobuf/gRPC traffic traces (`.jsonl`, `.har`, `.json`) against baseline and preview (`--filter-host`, `--strip-auth`, `--github-summary`)

@@ -189,6 +189,41 @@ spec:
               key: {{ .tokenSecretRef.key | default "token" }}
         {{- end }}
         {{- end }}
+        {{- with .Values.finops }}
+        {{- if .budgetAlertThreshold }}
+        - name: DIVERGE_BUDGET_ALERT_THRESHOLD
+          value: {{ .budgetAlertThreshold | quote }}
+        {{- end }}
+        {{- if .budgetAlertCooldown }}
+        - name: DIVERGE_BUDGET_ALERT_COOLDOWN
+          value: {{ .budgetAlertCooldown | quote }}
+        {{- end }}
+        {{- if and .budgetWebhookSecretRef .budgetWebhookSecretRef.name }}
+        - name: DIVERGE_BUDGET_WEBHOOK_URL
+          valueFrom:
+            secretKeyRef:
+              name: {{ .budgetWebhookSecretRef.name }}
+              key: {{ .budgetWebhookSecretRef.key | default "webhook-url" }}
+        {{- end }}
+        {{- with .rates }}
+        {{- if ne (toString .vcpuHourUsd) "" }}
+        - name: DIVERGE_COST_VCPU_HOUR_USD
+          value: {{ .vcpuHourUsd | quote }}
+        {{- end }}
+        {{- if ne (toString .memoryGibHourUsd) "" }}
+        - name: DIVERGE_COST_MEMORY_GIB_HOUR_USD
+          value: {{ .memoryGibHourUsd | quote }}
+        {{- end }}
+        {{- if ne (toString .databaseSchemaHourUsd) "" }}
+        - name: DIVERGE_COST_DB_SCHEMA_HOUR_USD
+          value: {{ .databaseSchemaHourUsd | quote }}
+        {{- end }}
+        {{- if ne (toString .databaseDedicatedHourUsd) "" }}
+        - name: DIVERGE_COST_DB_DEDICATED_HOUR_USD
+          value: {{ .databaseDedicatedHourUsd | quote }}
+        {{- end }}
+        {{- end }}
+        {{- end }}
         {{- with .Values.extraEnv }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

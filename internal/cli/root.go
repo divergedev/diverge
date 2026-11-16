@@ -39,8 +39,8 @@ type App struct {
 var lazyRootCmd *cobra.Command
 var lazyApp *App
 
-// RootCmd returns the root cobra command. External modules (e.g.,
-// diverge-enterprise) use this to add enterprise subcommands.
+// RootCmd returns the root cobra command. External modules can use this
+// to register custom subcommands or extensions.
 func RootCmd() *cobra.Command {
 	if lazyRootCmd == nil {
 		lazyApp = &App{}
@@ -98,7 +98,7 @@ func NewRootCmd(app *App) *cobra.Command {
 func cmdRequiresKube(cmd *cobra.Command) bool {
 	for c := cmd; c != nil; c = c.Parent() {
 		switch c.Name() {
-		case "loadtest", "test", "version", "diff", "completion", "init", "validate", "curl", "verify", "replay", "record", "setup", "mcp":
+		case "loadtest", "test", "version", "diff", "completion", "init", "validate", "curl", "verify", "replay", "record", "setup", "mcp", "cost":
 			return false
 		}
 	}
@@ -107,6 +107,7 @@ func cmdRequiresKube(cmd *cobra.Command) bool {
 
 func addCommands(root *cobra.Command, app *App) {
 	root.AddCommand(newCompletionCmd(app))
+	root.AddCommand(newCostCmd(app))
 	root.AddCommand(newCreateCmd(app))
 	root.AddCommand(newCurlCmd(app))
 	root.AddCommand(newDeleteCmd(app))

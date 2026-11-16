@@ -185,6 +185,8 @@ Diverge includes an OpenFeature-compatible feature flags engine. For details and
 | `divergedev.com/max-hourly-cost-usd` | `"0.50"` | Maximum hourly USD burn rate across preview `Environment`s in the namespace. |
 | `divergedev.com/max-cnpg-clusters` | `"3"` | Maximum concurrent dedicated CloudNativePG (`cnpg`) preview clusters in the namespace. |
 | `divergedev.com/quota-exceed-policy` | `"hibernate-oldest"` | Enforcement policy when namespace quotas are exceeded (`hibernate-oldest` or `reject`). |
+| `divergedev.com/budget-alert-secret` | `"finops-slack/webhook-url"` | Optional `<secret-name>` or `<secret-name>/<key>` in the namespace holding a Slack / HTTP webhook URL for FinOps budget alerts (default key: `webhook-url`; overrides global `DIVERGE_BUDGET_WEBHOOK_URL`). |
+| `divergedev.com/budget-alert-threshold` | `"80"` | Optional namespace-specific warning threshold percentage (`1`–`100`) overriding `DIVERGE_BUDGET_ALERT_THRESHOLD` (`80` default). |
 
 ### `AgentTask` Preview Annotations
 When `spec.repository.url` is set on an `AgentTask`, the controller automatically provisions a linked preview `Environment` (`agent-preview-<taskName>`):
@@ -270,3 +272,7 @@ The Diverge controller can be configured via environment variables (usually inje
 - `DIVERGE_COST_MEMORY_GIB_HOUR_USD`: Unit memory rate per requested GiB-hour (default: `0.004`).
 - `DIVERGE_COST_DB_SCHEMA_HOUR_USD`: Hourly database rate for `schema` isolation mode (default: `0.01`).
 - `DIVERGE_COST_DB_DEDICATED_HOUR_USD`: Hourly database rate for dedicated/isolated database modes (`cnpg`, `neon`, `snapshot`, `fresh`; default: `0.08`).
+- `DIVERGE_OPENCOST_URL`: Optional OpenCost / Kubecost Allocation API base URL (`http://opencost.opencost.svc.cluster.local:9003`) used by `diverge-server` and `diverge cost` for live preview allocation enrichment.
+- `DIVERGE_BUDGET_WEBHOOK_URL`: Optional Slack Incoming Webhook or generic HTTP POST URL for FinOps namespace budget alerts.
+- `DIVERGE_BUDGET_ALERT_THRESHOLD`: Warning utilization percentage threshold (`1`–`100`, default: `80`).
+- `DIVERGE_BUDGET_ALERT_COOLDOWN`: Minimum duration between repeated alerts of the same severity per namespace (default: `1h`).

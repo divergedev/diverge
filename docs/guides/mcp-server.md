@@ -41,8 +41,8 @@ All MCP tools are named using the `diverge_<snake_case_method>` pattern derived 
 ### Security Scoping
 
 The MCP server enforces strict security boundaries:
-- **Exposed Services**: Only `EnvironmentService` and `PreviewGroupService` operations are exposed.
-- **Excluded Services**: Sensitive internal services such as `AuthService`, `ClusterService`, and `TunnelService` are **never** exposed to AI agents over MCP.
+- **Exposed Services**: `EnvironmentService`, `PreviewGroupService`, `AgentTaskService`, and the read-only FinOps summary tool `diverge_get_cost_summary` (scoped to `diverge_get_cost_summary` Macaroon capability without granting `Environment` list/watch access).
+- **Excluded Services**: Sensitive internal services and RPCs such as `AuthService`, `ClusterService.GetClusterInfo`, and `TunnelService` are **never** exposed to AI agents over MCP.
 - **Safe by Default**: Destructive operations (`delete`) are disabled by default and require explicit user opt-in via `--allow-destructive`.
 
 ### Streaming RPC Handling
@@ -129,6 +129,7 @@ The MCP server provides the following tools grouped by service:
 | `diverge_loadtest` | Run a bounded HTTP/gRPC load test against a preview environment and return latency/error percentiles. |
 | `diverge_replay` | Replay a recorded HTTP, ConnectRPC, or Protobuf/gRPC traffic trace (`.jsonl`, `.har`, `.json`, or inline `requests`) against baseline and a preview environment, returning status parity, p50/p95 latency, JSON schema diffs, and Protobuf wire/descriptor contract diffs. Supports stateful multi-step variable chaining (`extract` rules and `{{var}}` interpolation with isolated baseline/preview variable stores and `sequential` execution), host filtering (`filter_hosts`), header sanitization (`strip_headers`, `strip_auth`), query parameter redaction (`redact_query_params`), and recursive JSON request body field redaction (`redact_body_fields`), and automatically strips recorded `diverge_env` sticky-routing cookies from both baseline and preview requests. **Warning:** `strip_auth` defaults to `false`, so recorded `Authorization` headers, non-routing `Cookie` headers, and unredacted request bodies are forwarded to both baseline and preview unless sanitized—always sanitize traces beforehand (`diverge replay sanitize`) or enable `strip_auth`, `strip_headers`, `redact_query_params`, and `redact_body_fields` before replay. |
 | `diverge_visual_test` | Compare baseline and preview PNG screenshots (`baseline_path`/`preview_path` or batch `baseline_dir`/`preview_dir`) and return pixel-diff pass/fail metrics (writing diff PNGs when `diff_output_path` is set and diff data exists). |
+| `diverge_get_cost_summary` | Retrieve FinOps hourly burn, monthly run-rate, hibernation and delta-routing savings, `AgentTask` LLM spend, namespace quota utilization, and top PR/environment consumers (supports optional `namespace` filter and `top_limit`). |
 
 ### Autonomous AgentTask Tools
 

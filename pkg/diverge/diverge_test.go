@@ -20,13 +20,13 @@ func TestNewRootCmdReturnsFreshInstance(t *testing.T) {
 }
 
 func TestRootCmdAllowsAddingCommands(t *testing.T) {
-	// Simulate what diverge-enterprise does
+	// Verify external callers can register custom subcommands
 	app := NewApp("dev", "none", "unknown")
 	root := app.NewRootCmd()
 	before := len(root.Commands())
 
 	root.AddCommand(&cobra.Command{
-		Use:   "test-enterprise-cmd",
+		Use:   "test-custom-cmd",
 		Short: "test",
 	})
 

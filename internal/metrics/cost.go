@@ -14,18 +14,24 @@ import (
 )
 
 const (
-	AnnotationHibernateAfter    = "divergedev.com/hibernate-after"
-	AnnotationLastTrafficAt     = "divergedev.com/last-traffic-at"
-	AnnotationHibernated        = "divergedev.com/hibernated"
-	AnnotationHibernatedAt      = "divergedev.com/hibernated-at"
-	AnnotationHibernatedSeconds = "divergedev.com/hibernated-seconds"
-	AnnotationTerminatedAt      = "divergedev.com/terminated-at"
-	AnnotationDatabaseProvider  = "divergedev.com/database-provider"
+	AnnotationHibernateAfter       = "divergedev.com/hibernate-after"
+	AnnotationLastTrafficAt        = "divergedev.com/last-traffic-at"
+	AnnotationHibernated           = "divergedev.com/hibernated"
+	AnnotationHibernatedAt         = "divergedev.com/hibernated-at"
+	AnnotationHibernatedSeconds    = "divergedev.com/hibernated-seconds"
+	AnnotationTerminatedAt         = "divergedev.com/terminated-at"
+	AnnotationDatabaseProvider     = "divergedev.com/database-provider"
+	AnnotationBudgetAlertSecret    = "divergedev.com/budget-alert-secret"
+	AnnotationBudgetAlertThreshold = "divergedev.com/budget-alert-threshold"
 
 	EnvCostVCPUHourUSD        = "DIVERGE_COST_VCPU_HOUR_USD"
 	EnvCostMemoryGiBHourUSD   = "DIVERGE_COST_MEMORY_GIB_HOUR_USD"
 	EnvCostDBSchemaHourUSD    = "DIVERGE_COST_DB_SCHEMA_HOUR_USD"
 	EnvCostDBDedicatedHourUSD = "DIVERGE_COST_DB_DEDICATED_HOUR_USD"
+	EnvOpenCostURL            = "DIVERGE_OPENCOST_URL"
+	EnvBudgetWebhookURL       = "DIVERGE_BUDGET_WEBHOOK_URL"
+	EnvBudgetAlertThreshold   = "DIVERGE_BUDGET_ALERT_THRESHOLD"
+	EnvBudgetAlertCooldown    = "DIVERGE_BUDGET_ALERT_COOLDOWN"
 
 	DefaultServiceCPUCores  = 0.25
 	DefaultServiceMemoryGiB = 0.5
@@ -79,6 +85,15 @@ var (
 		},
 		[]string{"namespace", "database_mode"},
 	)
+
+	// FinOpsBudgetAlertsTotal counts outbound FinOps namespace budget webhook alerts by severity and delivery result.
+	FinOpsBudgetAlertsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "diverge_finops_budget_alerts_total",
+			Help: "Total FinOps namespace budget webhook alerts dispatched by severity and result",
+		},
+		[]string{"namespace", "severity", "result"},
+	)
 )
 
 func init() {
@@ -88,6 +103,7 @@ func init() {
 		EnvironmentCPUCoresRequested,
 		EnvironmentMemoryGiBRequested,
 		EnvironmentLifetimeSeconds,
+		FinOpsBudgetAlertsTotal,
 	)
 }
 

@@ -305,9 +305,23 @@ var agentTaskToolMetadata = map[string]mcpToolMeta{
 			OpenWorldHint:   mcp.ToBoolPtr(false),
 		},
 	},
+	"diverge_get_cost_summary": {
+		description: "Get FinOps hourly burn, monthly run-rate, hibernation and delta-routing savings, AgentTask LLM spend, namespace quota utilization, and top PR/environment consumers.",
+		annotations: mcp.ToolAnnotation{
+			Title:           "Get FinOps Cost Summary",
+			ReadOnlyHint:    mcp.ToBoolPtr(true),
+			DestructiveHint: mcp.ToBoolPtr(false),
+			IdempotentHint:  mcp.ToBoolPtr(true),
+			OpenWorldHint:   mcp.ToBoolPtr(false),
+		},
+	},
 }
 
 func newMCPServer(envClient divergev1alpha1connect.EnvironmentServiceClient, pgClient divergev1alpha1connect.PreviewGroupServiceClient, taskClient divergev1alpha1connect.AgentTaskServiceClient, allowDestructive bool, diagnoser ...*doctor.Diagnoser) *server.MCPServer {
+	return newMCPServerWithCluster(envClient, pgClient, taskClient, nil, allowDestructive, diagnoser...)
+}
+
+func newMCPServerWithCluster(envClient divergev1alpha1connect.EnvironmentServiceClient, pgClient divergev1alpha1connect.PreviewGroupServiceClient, taskClient divergev1alpha1connect.AgentTaskServiceClient, clusterClient divergev1alpha1connect.ClusterServiceClient, allowDestructive bool, diagnoser ...*doctor.Diagnoser) *server.MCPServer {
 	registry := mcpruntime.NewToolRegistry()
 
 	envHandler := &mcpEnvHandler{client: envClient}
@@ -322,6 +336,7 @@ func newMCPServer(envClient divergev1alpha1connect.EnvironmentServiceClient, pgC
 	}
 
 	registerCustomTools(registry, envClient, diagnoser...)
+	registerCostSummaryTool(registry, clusterClient)
 
 	mcpServer := server.NewMCPServer("diverge", "1.0.0")
 
@@ -531,13 +546,14 @@ func runMCP(ctx context.Context, app *App, serverURL string, allowDestructive bo
 	envClient := divergev1alpha1connect.NewEnvironmentServiceClient(httpClient, serverURL)
 	pgClient := divergev1alpha1connect.NewPreviewGroupServiceClient(httpClient, serverURL)
 	taskClient := divergev1alpha1connect.NewAgentTaskServiceClient(httpClient, serverURL)
+	clusterClient := divergev1alpha1connect.NewClusterServiceClient(httpClient, serverURL)
 
 	var diagnoser *doctor.Diagnoser
 	if c, _, err := app.KubeClient(); err == nil && c != nil {
 		diagnoser = doctor.NewDiagnoser(c)
 	}
 
-	mcpServer := newMCPServer(envClient, pgClient, taskClient, allowDestructive, diagnoser)
+	mcpServer := newMCPServerWithCluster(envClient, pgClient, taskClient, clusterClient, allowDestructive, diagnoser)
 
 	return server.ServeStdio(mcpServer)
 }
