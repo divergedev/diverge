@@ -45,13 +45,20 @@ kind load docker-image divergedev/diverge:latest --name "${CLUSTER_NAME}"
 echo "==> Deploying Diverge CRDs and controller..."
 kubectl apply -f config/crd/bases/ --context "kind-${CLUSTER_NAME}"
 kubectl create namespace diverge-system --dry-run=client -o yaml | kubectl apply --context "kind-${CLUSTER_NAME}" -f -
+TLS_DIR="$(mktemp -d)"
+cleanup() {
+  local rc=$?
+  rm -rf "${TLS_DIR}"
+  exit "${rc}"
+}
+trap cleanup EXIT
 openssl req -x509 -newkey rsa:2048 -nodes \
-  -keyout /tmp/diverge-istio-tls.key -out /tmp/diverge-istio-tls.crt \
+  -keyout "${TLS_DIR}/tls.key" -out "${TLS_DIR}/tls.crt" \
   -days 1 -subj "/CN=diverge-webhook.diverge-system.svc" 2>/dev/null
 kubectl -n diverge-system create secret tls diverge-webhook-tls \
-  --cert=/tmp/diverge-istio-tls.crt --key=/tmp/diverge-istio-tls.key \
+  --cert="${TLS_DIR}/tls.crt" --key="${TLS_DIR}/tls.key" \
   --dry-run=client -o yaml | kubectl apply --context "kind-${CLUSTER_NAME}" -f -
-rm -f /tmp/diverge-istio-tls.key /tmp/diverge-istio-tls.crt
+rm -rf "${TLS_DIR}"
 
 helm upgrade --install diverge charts/diverge --namespace diverge-system \
   --skip-crds \

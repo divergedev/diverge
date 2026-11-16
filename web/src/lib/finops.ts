@@ -273,7 +273,9 @@ export function buildMagicPreviewUrl(env?: FinOpsEnvironment | null): string | u
 }
 
 function escapeCsvCell(raw: string): string {
-  const safeFormula = /^[=+@\t\r]/.test(raw) ? `'${raw}` : raw
+  const isNumericLiteral = raw.trim() !== '' && Number.isFinite(Number(raw))
+  const leadsWithFormula = /^[=+@\t\r]/.test(raw) || (raw.startsWith('-') && !isNumericLiteral)
+  const safeFormula = leadsWithFormula ? `'${raw}` : raw
   if (/[",\n\r]/.test(safeFormula)) {
     return `"${safeFormula.replace(/"/g, '""')}"`
   }

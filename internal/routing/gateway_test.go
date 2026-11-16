@@ -1411,3 +1411,148 @@ func TestGatewayRouter_Reconcile_ServiceConfigFallbackAndDefaultGatewayLookup(t 
 	assert.Equal(t, "Service", meshParents[0].(map[string]interface{})["kind"])
 	assert.Equal(t, "orders-svc", meshParents[0].(map[string]interface{})["name"])
 }
+
+func TestGatewayRouter_DefaultGatewayTLSAndDiscoverySafety(t *testing.T) {
+	t.Run("reconciles and tears down Certificate in resolved default Gateway namespace", func(t *testing.T) {
+		gw := &unstructured.Unstructured{}
+		gw.SetAPIVersion("gateway.networking.k8s.io/v1")
+		gw.SetKind("Gateway")
+		gw.SetName("public")
+		gw.SetNamespace("default")
+
+		c := fake.NewClientBuilder().WithObjects(gw).Build()
+		r := &GatewayRouter{Client: c}
+
+		env := &v1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "mesh-env",
+				Namespace: "team-orders",
+				Annotations: map[string]string{
+					AnnotationClusterIssuer: "letsencrypt-prod",
+				},
+			},
+			Spec: v1alpha1.EnvironmentSpec{
+				Routing: v1alpha1.EnvironmentRouting{
+					Mode:       "subdomain",
+					BaseDomain: "preview.example.com",
+				},
+				ServiceConfig: &v1alpha1.ServicePreviewConfig{
+					ServiceName: "orders-svc",
+					ParentRef:   "public",
+					Port:        5678,
+				},
+			},
+		}
+
+		require.NoError(t, r.Reconcile(context.Background(), env))
+
+		edgeRoute := &unstructured.Unstructured{}
+		edgeRoute.SetAPIVersion("gateway.networking.k8s.io/v1")
+		edgeRoute.SetKind("HTTPRoute")
+		require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "mesh-env-orders-svc", Namespace: "team-orders"}, edgeRoute))
+		parents, _, _ := unstructured.NestedSlice(edgeRoute.Object, "spec", "parentRefs")
+		require.Len(t, parents, 1)
+		assert.Equal(t, "public", parents[0].(map[string]interface{})["name"])
+		assert.Equal(t, "default", parents[0].(map[string]interface{})["namespace"])
+		assert.Nil(t, parents[0].(map[string]interface{})["kind"])
+
+		cert := &unstructured.Unstructured{}
+		cert.SetAPIVersion("cert-manager.io/v1")
+		cert.SetKind("Certificate")
+		require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "mesh-env-tls", Namespace: "default"}, cert))
+
+		require.NoError(t, r.Teardown(context.Background(), env))
+		err := c.Get(context.Background(), client.ObjectKey{Name: "mesh-env-tls", Namespace: "default"}, cert)
+		assert.Error(t, err, "Certificate in default namespace should be cleaned up on Teardown")
+	})
+
+	t.Run("preserves local Service route when unqualified ParentRef matches both local Service and default Gateway", func(t *testing.T) {
+		gw := &unstructured.Unstructured{}
+		gw.SetAPIVersion("gateway.networking.k8s.io/v1")
+		gw.SetKind("Gateway")
+		gw.SetName("public")
+		gw.SetNamespace("default")
+
+		svc := &unstructured.Unstructured{}
+		svc.SetAPIVersion("v1")
+		svc.SetKind("Service")
+		svc.SetName("public")
+		svc.SetNamespace("team-orders")
+
+		c := fake.NewClientBuilder().WithObjects(gw, svc).Build()
+		r := &GatewayRouter{Client: c}
+
+		env := &v1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "mesh-env",
+				Namespace: "team-orders",
+			},
+			Spec: v1alpha1.EnvironmentSpec{
+				Deploy: v1alpha1.EnvironmentDeploy{
+					ChangedServices: []string{"orders"},
+				},
+				ServiceConfig: &v1alpha1.ServicePreviewConfig{
+					ParentRef: "public",
+					Port:      5678,
+				},
+			},
+		}
+
+		require.NoError(t, r.Reconcile(context.Background(), env))
+
+		route := &unstructured.Unstructured{}
+		route.SetAPIVersion("gateway.networking.k8s.io/v1")
+		route.SetKind("HTTPRoute")
+		require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "mesh-env-orders", Namespace: "team-orders"}, route))
+		parents, _, _ := unstructured.NestedSlice(route.Object, "spec", "parentRefs")
+		require.Len(t, parents, 1)
+		assert.Equal(t, "Service", parents[0].(map[string]interface{})["kind"])
+		assert.Nil(t, parents[0].(map[string]interface{})["namespace"])
+	})
+
+	t.Run("propagates transient Gateway lookup error without overwriting existing parentRef.namespace", func(t *testing.T) {
+		gw := &unstructured.Unstructured{}
+		gw.SetAPIVersion("gateway.networking.k8s.io/v1")
+		gw.SetKind("Gateway")
+		gw.SetName("diverge-gateway")
+		gw.SetNamespace("default")
+
+		failGatewayLookup := false
+		c := fake.NewClientBuilder().WithObjects(gw).WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if failGatewayLookup && obj.GetObjectKind().GroupVersionKind().Kind == "Gateway" {
+					return errors.New("transient apiserver timeout")
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).Build()
+		r := &GatewayRouter{Client: c}
+
+		env := &v1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "mesh-env",
+				Namespace: "team-orders",
+			},
+			Spec: v1alpha1.EnvironmentSpec{
+				Deploy: v1alpha1.EnvironmentDeploy{
+					ChangedServices: []string{"orders"},
+				},
+			},
+		}
+
+		require.NoError(t, r.Reconcile(context.Background(), env))
+
+		failGatewayLookup = true
+		err := r.Reconcile(context.Background(), env)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "transient apiserver timeout")
+
+		edgeRoute := &unstructured.Unstructured{}
+		edgeRoute.SetAPIVersion("gateway.networking.k8s.io/v1")
+		edgeRoute.SetKind("HTTPRoute")
+		require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "mesh-env-orders", Namespace: "team-orders"}, edgeRoute))
+		parents, _, _ := unstructured.NestedSlice(edgeRoute.Object, "spec", "parentRefs")
+		require.Len(t, parents, 1)
+		assert.Equal(t, "default", parents[0].(map[string]interface{})["namespace"])
+	})
+}

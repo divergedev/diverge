@@ -56,6 +56,7 @@ func TestCilium_HeaderRouting(t *testing.T) {
 				ServiceName: "api-svc",
 				Port:        5678,
 				Image:       "hashicorp/http-echo:0.2.3",
+				Env:         []v1alpha1.EnvVar{{Name: "ECHO_TEXT", Value: "preview"}},
 			},
 		},
 	}
@@ -127,6 +128,7 @@ func TestCilium_SubdomainRouting(t *testing.T) {
 				ServiceName: "web-svc",
 				Port:        5678,
 				Image:       "hashicorp/http-echo:0.2.3",
+				Env:         []v1alpha1.EnvVar{{Name: "ECHO_TEXT", Value: "preview"}},
 			},
 			Routing: v1alpha1.EnvironmentRouting{
 				Mode:       "subdomain",
@@ -209,6 +211,7 @@ func TestCilium_GAMMAMeshRouting(t *testing.T) {
 				ServiceName: "payments-svc",
 				Port:        5678,
 				Image:       "hashicorp/http-echo:0.2.3",
+				Env:         []v1alpha1.EnvVar{{Name: "ECHO_TEXT", Value: "preview"}},
 			},
 		},
 	}
@@ -285,6 +288,7 @@ func TestCilium_CrossNamespaceGrant(t *testing.T) {
 				ServiceName: "external-svc",
 				Port:        5678,
 				Image:       "hashicorp/http-echo:0.2.3",
+				Env:         []v1alpha1.EnvVar{{Name: "ECHO_TEXT", Value: "preview"}},
 			},
 		},
 	}
@@ -342,6 +346,7 @@ func TestCilium_RouteCleanup(t *testing.T) {
 				ServiceName: "cleanup-svc",
 				Port:        5678,
 				Image:       "hashicorp/http-echo:0.2.3",
+				Env:         []v1alpha1.EnvVar{{Name: "ECHO_TEXT", Value: "preview"}},
 			},
 		},
 	}
@@ -413,6 +418,7 @@ func TestCilium_CookieRouting(t *testing.T) {
 				ServiceName: "payments-svc",
 				Port:        5678,
 				Image:       "hashicorp/http-echo:0.2.3",
+				Env:         []v1alpha1.EnvVar{{Name: "ECHO_TEXT", Value: "preview"}},
 			},
 		},
 	}
@@ -432,19 +438,31 @@ func TestCilium_CookieRouting(t *testing.T) {
 	var routes gatewayv1.HTTPRouteList
 	err = f.Client.List(ctx, &routes, client.InNamespace(f.Namespace))
 	require.NoError(t, err)
-	route := routes.Items[0]
+	// Verify Cookie header match across OR match entries on the Gateway HTTPRoute
+	var route gatewayv1.HTTPRoute
+	for _, item := range routes.Items {
+		if !strings.HasSuffix(item.Name, "-mesh") {
+			route = item
+			break
+		}
+	}
+	if route.Name == "" {
+		route = routes.Items[0]
+	}
 
-	// Verify Cookie header match
 	require.NotEmpty(t, route.Spec.Rules)
 	require.NotEmpty(t, route.Spec.Rules[0].Matches)
-	match := route.Spec.Rules[0].Matches[0]
-	require.NotEmpty(t, match.Headers)
 
 	var cookieMatch *gatewayv1.HTTPHeaderMatch
-	for _, h := range match.Headers {
-		if strings.EqualFold(string(h.Name), "cookie") {
-			m := h
-			cookieMatch = &m
+	for _, m := range route.Spec.Rules[0].Matches {
+		for _, h := range m.Headers {
+			if strings.EqualFold(string(h.Name), "cookie") {
+				hdr := h
+				cookieMatch = &hdr
+				break
+			}
+		}
+		if cookieMatch != nil {
 			break
 		}
 	}
@@ -492,6 +510,7 @@ func TestCilium_PathPrefixRouting(t *testing.T) {
 				ServiceName: "payments-svc",
 				Port:        5678,
 				Image:       "hashicorp/http-echo:0.2.3",
+				Env:         []v1alpha1.EnvVar{{Name: "ECHO_TEXT", Value: "preview"}},
 				PathPrefix:  "/api",
 			},
 		},
@@ -564,6 +583,7 @@ func TestCilium_GRPCRouteCreation(t *testing.T) {
 				ServiceName: "grpc-svc",
 				Port:        50051,
 				Image:       "hashicorp/http-echo:0.2.3",
+				Env:         []v1alpha1.EnvVar{{Name: "ECHO_TEXT", Value: "preview"}},
 				Protocol:    "grpc",
 			},
 		},

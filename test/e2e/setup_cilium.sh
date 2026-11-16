@@ -44,7 +44,7 @@ kubectl -n kube-system rollout status daemonset/cilium \
 kubectl -n kube-system rollout status deployment/cilium-operator \
   --context "kind-${CLUSTER_NAME}" --timeout=180s
 kubectl -n kube-system rollout status daemonset/cilium-envoy \
-  --context "kind-${CLUSTER_NAME}" --timeout=180s || true
+  --context "kind-${CLUSTER_NAME}" --timeout=180s
 
 echo "==> Creating diverge-gateway Gateway..."
 kubectl apply --context "kind-${CLUSTER_NAME}" -f - <<'EOF'
@@ -58,15 +58,15 @@ spec:
   listeners:
     - name: http
       protocol: HTTP
-      port: 80
+      port: 8080
       allowedRoutes:
         namespaces:
           from: All
 EOF
 
-echo "==> Waiting for Gateway to be accepted..."
-kubectl wait gateway/diverge-gateway --for=condition=Accepted \
-  --context "kind-${CLUSTER_NAME}" --timeout=120s || true
+echo "==> Waiting for Gateway to be programmed..."
+kubectl wait gateway/diverge-gateway --for=condition=Programmed \
+  --context "kind-${CLUSTER_NAME}" --timeout=120s
 
 echo "==> Building and loading controller image..."
 make docker-build
@@ -75,13 +75,20 @@ kind load docker-image divergedev/diverge:latest --name "${CLUSTER_NAME}"
 echo "==> Deploying Diverge CRDs and controller..."
 kubectl apply -f config/crd/bases/ --context "kind-${CLUSTER_NAME}"
 kubectl create namespace diverge-system --dry-run=client -o yaml | kubectl apply --context "kind-${CLUSTER_NAME}" -f -
+TLS_DIR="$(mktemp -d)"
+cleanup() {
+  local rc=$?
+  rm -rf "${TLS_DIR}"
+  exit "${rc}"
+}
+trap cleanup EXIT
 openssl req -x509 -newkey rsa:2048 -nodes \
-  -keyout /tmp/diverge-cilium-tls.key -out /tmp/diverge-cilium-tls.crt \
+  -keyout "${TLS_DIR}/tls.key" -out "${TLS_DIR}/tls.crt" \
   -days 1 -subj "/CN=diverge-webhook.diverge-system.svc" 2>/dev/null
 kubectl -n diverge-system create secret tls diverge-webhook-tls \
-  --cert=/tmp/diverge-cilium-tls.crt --key=/tmp/diverge-cilium-tls.key \
+  --cert="${TLS_DIR}/tls.crt" --key="${TLS_DIR}/tls.key" \
   --dry-run=client -o yaml | kubectl apply --context "kind-${CLUSTER_NAME}" -f -
-rm -f /tmp/diverge-cilium-tls.key /tmp/diverge-cilium-tls.crt
+rm -rf "${TLS_DIR}"
 
 helm upgrade --install diverge charts/diverge --namespace diverge-system \
   --skip-crds \

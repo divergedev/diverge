@@ -306,17 +306,35 @@ func TestDirectDeployer_Status_EmptyWhenNoResources(t *testing.T) {
 	assert.Len(t, status, 0)
 }
 
-func TestDirectDeployer_Teardown_IsNoop(t *testing.T) {
-	s := testScheme()
-	c := fake.NewClientBuilder().WithScheme(s).Build()
+func TestDirectDeployer_Teardown_DeletesManagedWorkloads(t *testing.T) {
+	for _, nsMode := range []string{"same", "create"} {
+		t.Run(nsMode, func(t *testing.T) {
+			s := testScheme()
+			c := fake.NewClientBuilder().WithScheme(s).Build()
 
-	d := &DirectDeployer{
-		Client: c,
+			d := &DirectDeployer{
+				Client: c,
+				Fetcher: &mockFetcher{
+					objects: []unstructured.Unstructured{
+						testDeploymentUnstructured("dep1", ""),
+					},
+				},
+			}
+
+			env := testEnv("test-env", "test-ns", nsMode)
+			require.NoError(t, d.Deploy(context.Background(), env))
+
+			statusBefore, err := d.Status(context.Background(), env)
+			require.NoError(t, err)
+			require.Len(t, statusBefore, 1)
+
+			require.NoError(t, d.Teardown(context.Background(), env))
+
+			statusAfter, err := d.Status(context.Background(), env)
+			require.NoError(t, err)
+			assert.Empty(t, statusAfter)
+		})
 	}
-
-	env := testEnv("test-env", "test-ns", "same")
-	err := d.Teardown(context.Background(), env)
-	require.NoError(t, err)
 }
 
 // CR2: Cross-namespace manifests should be rejected

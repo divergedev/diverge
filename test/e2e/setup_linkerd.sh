@@ -40,8 +40,14 @@ if [ ! -f "${LINKERD_BIN}" ]; then
 fi
 
 echo "==> Generating Linkerd mTLS trust anchor and issuer certificates..."
-CERT_DIR="/tmp/linkerd-certs"
-rm -rf "${CERT_DIR}" && mkdir -p "${CERT_DIR}"
+CERT_DIR="$(mktemp -d)"
+TLS_DIR="$(mktemp -d)"
+cleanup() {
+  local rc=$?
+  rm -rf "${CERT_DIR}" "${TLS_DIR}"
+  exit "${rc}"
+}
+trap cleanup EXIT
 openssl ecparam -name prime256v1 -genkey -noout -out "${CERT_DIR}/ca.key"
 openssl req -x509 -new -nodes -key "${CERT_DIR}/ca.key" -sha256 -days 365 \
   -subj "/CN=root.linkerd.cluster.local" \
@@ -87,12 +93,12 @@ echo "==> Deploying Diverge CRDs and controller..."
 kubectl apply -f config/crd/bases/ --context "kind-${CLUSTER_NAME}"
 kubectl create namespace diverge-system --dry-run=client -o yaml | kubectl apply --context "kind-${CLUSTER_NAME}" -f -
 openssl req -x509 -newkey rsa:2048 -nodes \
-  -keyout /tmp/diverge-linkerd-tls.key -out /tmp/diverge-linkerd-tls.crt \
+  -keyout "${TLS_DIR}/tls.key" -out "${TLS_DIR}/tls.crt" \
   -days 1 -subj "/CN=diverge-webhook.diverge-system.svc" 2>/dev/null
 kubectl -n diverge-system create secret tls diverge-webhook-tls \
-  --cert=/tmp/diverge-linkerd-tls.crt --key=/tmp/diverge-linkerd-tls.key \
+  --cert="${TLS_DIR}/tls.crt" --key="${TLS_DIR}/tls.key" \
   --dry-run=client -o yaml | kubectl apply --context "kind-${CLUSTER_NAME}" -f -
-rm -f /tmp/diverge-linkerd-tls.key /tmp/diverge-linkerd-tls.crt
+rm -rf "${TLS_DIR}"
 
 helm upgrade --install diverge charts/diverge --namespace diverge-system \
   --skip-crds \

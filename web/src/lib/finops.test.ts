@@ -310,6 +310,17 @@ describe('finops utilities', () => {
       }
       expect(parsed.opencostEnabled).toBe(true)
       expect(parsed.topConsumers[0].costSource).toBe('opencost')
+
+      const dashFormulaItem = new EnvironmentCostItem({
+        namespace: 'payments',
+        name: 'pr-102',
+        project: '-1+2',
+        hourlyCostUsd: -0.5,
+      })
+      const dashLines = buildCostSummaryCsv([dashFormulaItem]).trim().split('\n')
+      const dashCells = dashLines[1].split(',')
+      expect(dashCells[2]).toBe("'-1+2")
+      expect(dashCells[7]).toBe('-0.5000')
     })
   })
 })
