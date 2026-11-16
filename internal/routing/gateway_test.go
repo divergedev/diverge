@@ -1410,6 +1410,7 @@ func TestGatewayRouter_Reconcile_ServiceConfigFallbackAndDefaultGatewayLookup(t 
 	require.Len(t, meshParents, 1)
 	assert.Equal(t, "Service", meshParents[0].(map[string]interface{})["kind"])
 	assert.Equal(t, "orders-svc", meshParents[0].(map[string]interface{})["name"])
+	assert.Equal(t, int64(5678), meshParents[0].(map[string]interface{})["port"])
 }
 
 func TestGatewayRouter_DefaultGatewayTLSAndDiscoverySafety(t *testing.T) {

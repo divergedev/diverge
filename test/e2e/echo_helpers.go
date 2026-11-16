@@ -53,6 +53,10 @@ func echoDeployment(name, namespace string, port int32) *appsv1.Deployment {
 
 // echoService returns a ClusterIP Service targeting the echo deployment.
 func echoService(name, namespace string, port int32) *corev1.Service {
+	appProto := "http"
+	if port == 50051 {
+		appProto = "kubernetes.io/h2c"
+	}
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -61,8 +65,10 @@ func echoService(name, namespace string, port int32) *corev1.Service {
 		Spec: corev1.ServiceSpec{
 			Selector: map[string]string{"app": name},
 			Ports: []corev1.ServicePort{{
-				Port:       port,
-				TargetPort: intstr.FromInt32(port),
+				Name:        "http",
+				Port:        port,
+				TargetPort:  intstr.FromInt32(port),
+				AppProtocol: ptr.To(appProto),
 			}},
 		},
 	}

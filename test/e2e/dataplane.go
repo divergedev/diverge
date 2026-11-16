@@ -92,14 +92,20 @@ func (f *Framework) WaitForRouteReachable(ctx context.Context, opts RequestOpts,
 	defer cancel()
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
+	var lastStatus int
+	var lastErr error
 	for {
 		resp, err := f.SendRequest(timeoutCtx, opts)
 		if err == nil && resp.StatusCode < 500 {
 			return nil
 		}
+		lastErr = err
+		if resp != nil {
+			lastStatus = resp.StatusCode
+		}
 		select {
 		case <-timeoutCtx.Done():
-			return fmt.Errorf("route not reachable after %s", timeout)
+			return fmt.Errorf("route not reachable after %s (last status=%d, err=%v)", timeout, lastStatus, lastErr)
 		case <-ticker.C:
 		}
 	}

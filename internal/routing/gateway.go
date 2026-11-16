@@ -239,6 +239,9 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 	if isServiceParent {
 		parentRef["kind"] = "Service"
 		parentRef["group"] = ""
+		if backendPort > 0 {
+			parentRef["port"] = backendPort
+		}
 	} else {
 		gwNS, gwErr := r.resolveGatewayNamespace(ctx, env, ns, resolvedParentName, extractParentRefNamespace(existing))
 		if gwErr != nil {

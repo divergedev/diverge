@@ -29,7 +29,6 @@ helm upgrade --install cilium cilium/cilium \
   --set "k8sServiceHost=${API_SERVER_IP}" \
   --set k8sServicePort=6443 \
   --set gatewayAPI.enabled=true \
-  --set gatewayAPI.hostNetwork.enabled=true \
   --set envoy.enabled=true \
   --set image.pullPolicy=IfNotPresent \
   --set operator.replicas=1 \
@@ -46,8 +45,19 @@ kubectl -n kube-system rollout status deployment/cilium-operator \
 kubectl -n kube-system rollout status daemonset/cilium-envoy \
   --context "kind-${CLUSTER_NAME}" --timeout=180s
 
-echo "==> Creating diverge-gateway Gateway..."
-kubectl apply --context "kind-${CLUSTER_NAME}" -f - <<'EOF'
+LB_POOL_CIDR="$(echo "${API_SERVER_IP}" | cut -d. -f1-2).255.200/29"
+echo "==> Configuring CiliumLoadBalancerIPPool (${LB_POOL_CIDR}) and diverge-gateway..."
+kubectl wait --for=condition=Established crd/ciliumloadbalancerippools.cilium.io \
+  --context "kind-${CLUSTER_NAME}" --timeout=60s
+kubectl apply --context "kind-${CLUSTER_NAME}" -f - <<EOF
+apiVersion: "cilium.io/v2alpha1"
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: diverge-e2e-pool
+spec:
+  blocks:
+    - cidr: "${LB_POOL_CIDR}"
+---
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -58,7 +68,7 @@ spec:
   listeners:
     - name: http
       protocol: HTTP
-      port: 8080
+      port: 80
       allowedRoutes:
         namespaces:
           from: All
@@ -67,6 +77,8 @@ EOF
 echo "==> Waiting for Gateway to be programmed..."
 kubectl wait gateway/diverge-gateway --for=condition=Programmed \
   --context "kind-${CLUSTER_NAME}" --timeout=120s
+GW_NODEPORT="$(kubectl -n default get svc cilium-gateway-diverge-gateway --context "kind-${CLUSTER_NAME}" -o jsonpath='{.spec.ports[0].nodePort}')"
+echo "==> Cilium Gateway NodePort ready at http://${API_SERVER_IP}:${GW_NODEPORT}"
 
 echo "==> Building and loading controller image..."
 make docker-build

@@ -4,12 +4,15 @@ package e2e
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -18,7 +21,27 @@ import (
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
 
-const ciliumGatewayURL = "http://localhost:8880"
+const ciliumGatewayFallbackURL = "http://localhost:8880"
+
+func resolveCiliumGatewayURL(ctx context.Context, f *Framework) string {
+	if override := strings.TrimSpace(os.Getenv("CILIUM_GATEWAY_URL")); override != "" {
+		return override
+	}
+	svc, err := f.Clientset.CoreV1().Services("default").Get(ctx, "cilium-gateway-diverge-gateway", metav1.GetOptions{})
+	if err == nil && len(svc.Spec.Ports) > 0 && svc.Spec.Ports[0].NodePort > 0 {
+		nodes, nErr := f.Clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+		if nErr == nil {
+			for _, node := range nodes.Items {
+				for _, addr := range node.Status.Addresses {
+					if addr.Type == corev1.NodeInternalIP && addr.Address != "" {
+						return fmt.Sprintf("http://%s:%d", addr.Address, svc.Spec.Ports[0].NodePort)
+					}
+				}
+			}
+		}
+	}
+	return ciliumGatewayFallbackURL
+}
 
 // TestCilium_HeaderRouting verifies that Cilium routes requests to preview
 // pods when the x-diverge-env header matches the environment name.
@@ -88,7 +111,7 @@ func TestCilium_HeaderRouting(t *testing.T) {
 
 	// Data-plane: send request with header and verify routing
 	err = f.WaitForRouteReachable(ctx, RequestOpts{
-		GatewayURL: ciliumGatewayURL,
+		GatewayURL: resolveCiliumGatewayURL(ctx, f),
 		Headers:    map[string]string{"x-diverge-env": "cilium-header"},
 	}, 90*time.Second)
 	require.NoError(t, err, "Route not reachable through Cilium gateway")
@@ -171,7 +194,7 @@ func TestCilium_SubdomainRouting(t *testing.T) {
 
 	// Data-plane: verify subdomain routing reaches preview pod
 	err = f.WaitForRouteReachable(ctx, RequestOpts{
-		GatewayURL: ciliumGatewayURL,
+		GatewayURL: resolveCiliumGatewayURL(ctx, f),
 		Host:       "cilium-subdomain.preview.local",
 	}, 90*time.Second)
 	require.NoError(t, err, "Subdomain route not reachable through Cilium gateway")
@@ -471,7 +494,7 @@ func TestCilium_CookieRouting(t *testing.T) {
 
 	// Data-plane: send request with Cookie
 	err = f.WaitForRouteReachable(ctx, RequestOpts{
-		GatewayURL: ciliumGatewayURL,
+		GatewayURL: resolveCiliumGatewayURL(ctx, f),
 		Headers:    map[string]string{"Cookie": "x-diverge-env=cilium-cookie"},
 	}, 90*time.Second)
 	require.NoError(t, err, "Route not reachable through Cilium gateway via Cookie")
@@ -543,7 +566,7 @@ func TestCilium_PathPrefixRouting(t *testing.T) {
 
 	// Data-plane: send request with matching path and header
 	err = f.WaitForRouteReachable(ctx, RequestOpts{
-		GatewayURL: ciliumGatewayURL,
+		GatewayURL: resolveCiliumGatewayURL(ctx, f),
 		Path:       "/api",
 		Headers:    map[string]string{"x-diverge-env": "cilium-path"},
 	}, 90*time.Second)
