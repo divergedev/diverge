@@ -1,5 +1,17 @@
 # Changelog
 
+## [v0.25.0] - 2026-11-13
+
+### 🚀 Highlights & New Features
+
+#### 💰 FinOps Cost Attribution, Hibernation Savings & Usage Analytics (`#341`)
+- **Configurable Preview Cost Engine & Hibernation Transition Tracking (`internal/metrics/cost.go`, `internal/controller/`, `internal/server/environment.go`) (#341)**: Added `CostRateCard` (`DIVERGE_COST_VCPU_HOUR_USD`, `DIVERGE_COST_MEMORY_GIB_HOUR_USD`, `DIVERGE_COST_DB_SCHEMA_HOUR_USD`, `DIVERGE_COST_DB_DEDICATED_HOUR_USD`, honoring explicit `0` overrides and rejecting `NaN`/`Inf`/negative values), multi-service preview attribution, sleep/wake transition tracking (`divergedev.com/hibernated-at` and `divergedev.com/hibernated-seconds`), isolated database burn retention during workload hibernation, and terminal spend preservation (`divergedev.com/terminated-at`).
+- **Prometheus FinOps & Lifecycle Telemetry (`internal/metrics/cost.go`, `internal/controller/environment_finalizer.go`) (#341)**: Added `diverge_environment_hibernation_savings_hourly_usd`, `diverge_environment_cpu_cores_requested`, `diverge_environment_memory_gib_requested`, and `diverge_environment_lifetime_seconds` alongside `diverge_environment_estimated_hourly_cost_usd`.
+- **ConnectRPC `ClusterService.GetCostSummary` & Scoped Macaroon Authorization (`api/proto/diverge/v1alpha1/cluster.proto`, `internal/server/cost_analytics.go`, `internal/server/authz.go`) (#341)**: Added `ClusterService.GetCostSummary` (authorized via dedicated `AuthorizeCostSummary` for the `diverge_get_cost_summary` Macaroon capability without granting `Environment` list/watch access) returning fleet hourly burn, monthly run-rate, hibernation savings, `PreviewGroup`-deduplicated delta-routing savings, active service-hours, `AgentTask` LLM spend, per-namespace quota utilization (including `divergedev.com/max-cnpg-clusters`), per-service footprint, and per-PR/branch top consumers with TTL warnings.
+- **Web Dashboard Cost & Usage Analytics (`/analytics`) (`web/src/pages/CostAnalytics.tsx`, `web/src/pages/EnvironmentDetail.tsx`, `web/src/pages/EnvironmentList.tsx`, `web/src/lib/finops.ts`) (#341)**: Added a first-class **Cost & Usage Analytics** page (`/analytics`) with namespace scope filtering, native `<progress>` quota utilization meters, accessible sortable PR consumer tables with View Transitions, hibernation savings badges, and namespace budget / TTL lifecycle warnings across the Environment list and detail views.
+
+---
+
 ## [v0.24.0] - 2026-11-11
 
 ### 🚀 Highlights & New Features

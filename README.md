@@ -67,14 +67,14 @@ diverge top --once
   <img src="docs/assets/delta-vs-duplicated.svg" alt="Delta Preview vs Traditional Full-Stack Duplication" width="100%">
 </p>
 
-### Turnkey CI/CD (`divergedev/diverge@v0.24.0`)
+### Turnkey CI/CD (`divergedev/diverge@v0.25.0`)
 
 Deploy a delta `PreviewGroup` for only the services modified in a Pull Request, run `diverge verify` health & latency SLO checks (or `diverge replay` contract diffing with `--auto-fix` self-healing), and pass `routing-header-json` directly into Playwright E2E tests:
 
 ```yaml
 - name: Deploy Diverge Delta Preview
   id: diverge
-  uses: divergedev/diverge@v0.24.0
+  uses: divergedev/diverge@v0.25.0
   with:
     kubeconfig: ${{ secrets.PREVIEW_KUBECONFIG }}
     image-registry: ghcr.io/acme
@@ -102,7 +102,7 @@ See [charts/diverge/values.yaml](charts/diverge/values.yaml) for configuration o
 *   **Autonomous Agent Sandboxes (`AgentTask`)**: Run AI coding agents inside isolated Kubernetes sandboxes (`gvisor` / `kata` / `agent-sandbox`) with attenuated **Macaroon capability tokens**, network policy egress lockdowns, automatic linked preview environments (`PreviewEnvironmentReady` condition, `divergedev.com/preview-url` annotation), and live LLM cost/token metering via `POST /api/v1/agenttask/meter`.
 *   **PreviewGroup Orchestration**: Manage multiple child environments and services under a single CR tied directly to an MR/PR. Automatic orphan cleanup and label-based ownership.
 *   **Provider Registry**: Pluggable, extensible architecture — add new routing, deployer, notifier, sandbox, or database providers with a single file. Zero changes to the controller.
-*   **Scale-to-Zero & FinOps Namespace Quotas**: Idle preview environments automatically scale to zero via KEDA HTTP Add-on (`HTTPScaledObject`) or annotation-based idle hibernation (`divergedev.com/hibernate-after`, `divergedev.com/last-traffic-at`). Namespace-level FinOps quotas (`divergedev.com/max-active-environments`, `divergedev.com/max-cnpg-clusters`, `divergedev.com/max-hourly-cost-usd`, `divergedev.com/quota-exceed-policy: hibernate-oldest | reject`) automatically hibernate the oldest idle environment when concurrency or budget caps are reached.
+*   **Scale-to-Zero, FinOps Cost Attribution & Namespace Quotas**: Idle preview environments automatically scale to zero via KEDA HTTP Add-on (`HTTPScaledObject`) or annotation-based idle hibernation (`divergedev.com/hibernate-after`, `divergedev.com/last-traffic-at`, `divergedev.com/hibernated-at`, `divergedev.com/hibernated-seconds`). `ClusterService.GetCostSummary` and the `/analytics` Web Dashboard attribute per-namespace, per-service, and per-PR compute/database spend, hibernation & delta-routing savings, and `AgentTask` LLM spend using configurable unit rates (`DIVERGE_COST_*`), while namespace quotas (`divergedev.com/max-active-environments`, `divergedev.com/max-cnpg-clusters`, `divergedev.com/max-hourly-cost-usd`, `divergedev.com/quota-exceed-policy: hibernate-oldest | reject`) enforce concurrency and budget caps.
 *   **Activator Proxy (`activator-proxy`)**: Smart routing that directs traffic to the pod when ready. Includes `X-Preview-Env` header injection, a shared informer for efficient pod state tracking, and an optional auto-refreshing HTML wake-up splash page (`--wake-splash` flag / `X-Diverge-Wake-Splash: true` header and `GET /-/wakeup-status` readiness endpoint).
 *   **Delta Deployment & Baseline Drift Detection**: Only deploy what changed, falling back to a baseline for unmodified services. Automatically computes a deterministic SHA-256 baseline fingerprint (`divergedev.com/baseline-fingerprint`) across baseline `Deployment`s, `ConfigMap`s, and `Secret`s, surfacing drift warnings (`BaselineDriftDetected=True`, `⚠️ drift` in `diverge top`) or auto-refreshing preview pods (`divergedev.com/drift-policy: sync`).
 *   **Header-Based Routing & Gateway API**: Leverages Gateway API (`HTTPRoute` + `GRPCRoute` + cross-namespace `ReferenceGrant`), Istio (`ambient-mesh` / `waypoint`), Cilium, Linkerd, and the Diverge Proxy to route traffic seamlessly using HTTP/gRPC headers.
@@ -114,7 +114,7 @@ See [charts/diverge/values.yaml](charts/diverge/values.yaml) for configuration o
 *   **Feature Flags & OpenFeature**: Isolated flag evaluation per preview environment. Out-of-the-box support for in-cluster `flagd` ConfigMaps, remote [Flipt](https://flipt.io) ephemeral namespaces, [Flagsmith](https://www.flagsmith.com) ephemeral identities, and [Unleash](https://www.getunleash.io) context-constrained strategies with automated cleanup on MR merge.
 *   **Environment Export**: `diverge env export` extracts environment variables from preview pods for local development (dotenv, JSON, shell formats).
 *   **Test Integration**: CI trigger and polling support to run automated tests against preview environments.
-*   **Prometheus Metrics**: Reconciliation duration, deployment status, route counts, active environments, preview group gauges, per-environment cost estimation (`diverge_environment_estimated_hourly_cost_usd`), and idle hibernation tracking (`divergedev.com/hibernate-after`, `divergedev.com/last-traffic-at`).
+*   **Prometheus Metrics**: Reconciliation duration, deployment status, route counts, active environments, preview group gauges, per-environment FinOps attribution (`diverge_environment_estimated_hourly_cost_usd`, `diverge_environment_hibernation_savings_hourly_usd`, `diverge_environment_cpu_cores_requested`, `diverge_environment_memory_gib_requested`, `diverge_environment_lifetime_seconds`), and idle hibernation tracking (`divergedev.com/hibernate-after`, `divergedev.com/last-traffic-at`).
 *   **Namespace Labels**: Custom labels on preview namespaces (e.g., `istio.io/dataplane-mode: ambient` for zero-trust mTLS).
 *   **Security Hardened**: Macaroon capability tokens, webhook secret constant-time comparison, RFC 7230 header validation, safe SHA handling, ArgoCD namespace bypass prevention, IPv6-safe pod URLs, typed Server-Side Apply (SSA), and strict label validation.
 *   **Finalizer-Based Lifecycle**: Kubernetes finalizers ensure clean teardown of all resources (routing, database, sandboxes, ArgoCD apps) even during force-deletes.
