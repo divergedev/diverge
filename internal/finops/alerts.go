@@ -288,7 +288,7 @@ func (d *BudgetAlertDispatcher) EvaluateAndNotify(ctx context.Context, reader cl
 }
 
 func (d *BudgetAlertDispatcher) resolveWebhookURL(ctx context.Context, reader client.Reader, namespace string, annotations map[string]string) (string, error) {
-	if len(annotations) > 0 && reader != nil {
+	if len(annotations) > 0 {
 		if secretRef := strings.TrimSpace(annotations[metrics.AnnotationBudgetAlertSecret]); secretRef != "" {
 			secretName := secretRef
 			secretKey := defaultSecretWebhookKey
@@ -298,22 +298,27 @@ func (d *BudgetAlertDispatcher) resolveWebhookURL(ctx context.Context, reader cl
 					secretKey = trimmedKey
 				}
 			}
-			if secretName != "" {
-				secCtx, cancel := context.WithTimeout(ctx, defaultWebhookTimeout)
-				var sec corev1.Secret
-				err := reader.Get(secCtx, types.NamespacedName{Namespace: namespace, Name: secretName}, &sec)
-				cancel()
-				if err != nil {
-					return "", fmt.Errorf("resolving budget alert secret %s/%s: %w", namespace, secretName, err)
-				}
-				val := strings.TrimSpace(string(sec.Data[secretKey]))
-				if val == "" && len(sec.StringData) > 0 {
-					val = strings.TrimSpace(sec.StringData[secretKey])
-				}
-				if val != "" {
-					return val, nil
-				}
+			if secretName == "" {
+				return "", fmt.Errorf("invalid budget alert secret annotation %q in namespace %s: secret name is empty", secretRef, namespace)
 			}
+			if reader == nil {
+				return "", fmt.Errorf("resolving budget alert secret %s/%s: Kubernetes reader is not configured", namespace, secretName)
+			}
+			secCtx, cancel := context.WithTimeout(ctx, defaultWebhookTimeout)
+			var sec corev1.Secret
+			err := reader.Get(secCtx, types.NamespacedName{Namespace: namespace, Name: secretName}, &sec)
+			cancel()
+			if err != nil {
+				return "", fmt.Errorf("resolving budget alert secret %s/%s: %w", namespace, secretName, err)
+			}
+			val := strings.TrimSpace(string(sec.Data[secretKey]))
+			if val == "" && len(sec.StringData) > 0 {
+				val = strings.TrimSpace(sec.StringData[secretKey])
+			}
+			if val == "" {
+				return "", fmt.Errorf("budget alert secret %s/%s key %q is missing or empty", namespace, secretName, secretKey)
+			}
+			return val, nil
 		}
 	}
 
@@ -323,9 +328,29 @@ func (d *BudgetAlertDispatcher) resolveWebhookURL(ctx context.Context, reader cl
 	return strings.TrimSpace(os.Getenv(metrics.EnvBudgetWebhookURL)), nil
 }
 
+func sanitizeWebhookValidationError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "prohibited"):
+		return errors.New("invalid budget webhook URL: destination is prohibited")
+	case strings.Contains(msg, "allowed hosts"):
+		return errors.New("invalid budget webhook URL: host is not in the allowed hosts list")
+	case strings.Contains(msg, "valid http or https"):
+		return errors.New("invalid budget webhook URL: scheme must be http or https")
+	case strings.Contains(msg, "host cannot be empty"):
+		return errors.New("invalid budget webhook URL: host cannot be empty")
+	default:
+		// Never wrap or echo raw URL parse errors, which may contain secret tokens in the webhook path.
+		return errors.New("invalid budget webhook URL")
+	}
+}
+
 func (d *BudgetAlertDispatcher) postWebhook(ctx context.Context, targetURL string, payload BudgetAlertPayload) error {
 	if err := loadtest.ValidateTargetURL(targetURL); err != nil {
-		return fmt.Errorf("invalid budget webhook URL: %w", err)
+		return sanitizeWebhookValidationError(err)
 	}
 
 	body, err := json.Marshal(payload)

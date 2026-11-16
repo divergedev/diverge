@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -500,4 +501,104 @@ func TestNamespaceQuota_DispatchesBudgetWebhookAlerts(t *testing.T) {
 	for i := 1; i <= 4; i++ {
 		metrics.DeleteEnvironmentCostMetric(fmt.Sprintf("pr-%d", i), "team-finops")
 	}
+}
+
+func TestNamespaceQuota_CountsHibernatedCNPGAndEmitsFailureEvent(t *testing.T) {
+	ctx := context.Background()
+	scheme := buildQuotaTestScheme(t)
+	now := time.Now().UTC()
+
+	var payloads []finops.BudgetAlertPayload
+	var failWebhook bool
+	hookSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if failWebhook {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		var p finops.BudgetAlertPayload
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&p))
+		payloads = append(payloads, p)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer hookSrv.Close()
+
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "team-cnpg-hib",
+			Annotations: map[string]string{
+				AnnotationMaxCNPGClusters: "5",
+			},
+		},
+	}
+
+	var objs []client.Object
+	objs = append(objs, ns)
+	// 4 hibernated CNPG environments still hold CNPG clusters -> 4/5 = 80% utilization!
+	for i := 1; i <= 4; i++ {
+		objs = append(objs, &divergeiov1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              fmt.Sprintf("pr-hib-cnpg-%d", i),
+				Namespace:         "team-cnpg-hib",
+				CreationTimestamp: metav1.NewTime(now.Add(-time.Duration(i) * time.Hour)),
+				Annotations: map[string]string{
+					metrics.AnnotationHibernated: "true",
+				},
+			},
+			Spec: divergeiov1alpha1.EnvironmentSpec{
+				Database: divergeiov1alpha1.EnvironmentDatabase{Mode: "snapshot"},
+			},
+			Status: divergeiov1alpha1.EnvironmentStatus{Phase: divergeiov1alpha1.PhaseRunning},
+		})
+	}
+
+	nonCNPGEnv := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "pr-stateless",
+			Namespace:         "team-cnpg-hib",
+			CreationTimestamp: metav1.NewTime(now),
+		},
+	}
+	objs = append(objs, nonCNPGEnv)
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&divergeiov1alpha1.Environment{}).
+		WithObjects(objs...).
+		Build()
+
+	fakeEvents := k8sevents.NewFakeRecorder(20)
+	alerter := finops.NewBudgetAlertDispatcher(hookSrv.URL, hookSrv.Client())
+	alerter.Cooldown = 0
+	r := &EnvironmentReconciler{
+		Client:        fakeClient,
+		Scheme:        scheme,
+		Recorder:      events.NewRecorder(fakeEvents),
+		BudgetAlerter: alerter,
+	}
+
+	_, done, err := r.reconcileNamespaceQuota(ctx, nonCNPGEnv, nonCNPGEnv.DeepCopy())
+	require.NoError(t, err)
+	assert.False(t, done)
+	require.Len(t, payloads, 1)
+	assert.Equal(t, 4, payloads[0].CNPGClusters)
+	assert.Equal(t, 80.0, payloads[0].UtilizationPercent)
+
+	// Drain initial events, then simulate webhook delivery failure -> expects Warning NotificationFailed event
+	for len(fakeEvents.Events) > 0 {
+		<-fakeEvents.Events
+	}
+	failWebhook = true
+	_, _, err = r.reconcileNamespaceQuota(ctx, nonCNPGEnv, nonCNPGEnv.DeepCopy())
+	require.NoError(t, err)
+
+	var sawFailureEvent bool
+	for len(fakeEvents.Events) > 0 {
+		ev := <-fakeEvents.Events
+		if strings.Contains(ev, "Warning NotificationFailed") {
+			sawFailureEvent = true
+		}
+	}
+	assert.True(t, sawFailureEvent, "expected Warning NotificationFailed event when budget webhook fails")
+
+	metrics.DeleteEnvironmentCostMetric("pr-stateless", "team-cnpg-hib")
 }

@@ -5,8 +5,11 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -139,9 +142,13 @@ func TestCostCmd_TableJSONCSVAndBudgetGate(t *testing.T) {
 
 type fakeClusterServerHandler struct {
 	divergev1alpha1connect.UnimplementedClusterServiceHandler
+	onRequest func(ns string)
 }
 
 func (f *fakeClusterServerHandler) GetCostSummary(_ context.Context, req *connect.Request[pb.GetCostSummaryRequest]) (*connect.Response[pb.GetCostSummaryResponse], error) {
+	if f.onRequest != nil {
+		f.onRequest(req.Msg.GetNamespace())
+	}
 	return connect.NewResponse(&pb.GetCostSummaryResponse{
 		TotalHourlyCostUsd: 0.125,
 		MonthlyRunRateUsd:  91.25,
@@ -159,13 +166,25 @@ func (f *fakeClusterServerHandler) GetCostSummary(_ context.Context, req *connec
 	}), nil
 }
 
+type errWriter struct{}
+
+func (errWriter) Write([]byte) (int, error) {
+	return 0, errors.New("simulated stdout write error")
+}
+
 func TestCostCmd_ServerURLModeWithoutKubeconfig(t *testing.T) {
+	var seenNamespaces []string
 	mux := http.NewServeMux()
-	path, handler := divergev1alpha1connect.NewClusterServiceHandler(&fakeClusterServerHandler{})
+	path, handler := divergev1alpha1connect.NewClusterServiceHandler(&fakeClusterServerHandler{
+		onRequest: func(ns string) {
+			seenNamespaces = append(seenNamespaces, ns)
+		},
+	})
 	mux.Handle(path, handler)
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
+	// 1. Explicit app.Namespace
 	app := &App{Namespace: "remote-ns"}
 	var outBuf bytes.Buffer
 	root := NewRootCmd(app)
@@ -175,4 +194,55 @@ func TestCostCmd_ServerURLModeWithoutKubeconfig(t *testing.T) {
 
 	assert.Contains(t, outBuf.String(), "remote-pr-55")
 	assert.Contains(t, outBuf.String(), "remote-ns")
+
+	// 2. Kubeconfig context namespace resolved when -n and -A are omitted
+	kubeconfigPath := filepath.Join(t.TempDir(), "kubeconfig")
+	kubeconfigYAML := strings.Join([]string{
+		"apiVersion: v1",
+		"kind: Config",
+		"current-context: dev",
+		"contexts:",
+		"- name: dev",
+		"  context:",
+		"    cluster: c1",
+		"    user: u1",
+		"    namespace: kubeconfig-team-ns",
+		"clusters:",
+		"- name: c1",
+		"  cluster:",
+		"    server: https://127.0.0.1:6443",
+		"users:",
+		"- name: u1",
+		"  user:",
+		"    token: fake",
+		"",
+	}, "\n")
+	require.NoError(t, os.WriteFile(kubeconfigPath, []byte(kubeconfigYAML), 0o600))
+
+	kubeApp := &App{}
+	var kubeBuf bytes.Buffer
+	rootKube := NewRootCmd(kubeApp)
+	rootKube.SetOut(&kubeBuf)
+	rootKube.SetArgs([]string{"cost", "--kubeconfig", kubeconfigPath, "--server-url", srv.URL})
+	require.NoError(t, rootKube.Execute())
+
+	// 3. -A sends empty namespace for cluster-wide report
+	allApp := &App{}
+	var allBuf bytes.Buffer
+	rootAll := NewRootCmd(allApp)
+	rootAll.SetOut(&allBuf)
+	rootAll.SetArgs([]string{"cost", "-A", "--kubeconfig", kubeconfigPath, "--server-url", srv.URL})
+	require.NoError(t, rootAll.Execute())
+
+	assert.Equal(t, []string{"remote-ns", "kubeconfig-team-ns", ""}, seenNamespaces)
+}
+
+func TestRenderCostTable_PropagatesWriteErrors(t *testing.T) {
+	err := renderCostTable(errWriter{}, &pb.GetCostSummaryResponse{}, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "simulated stdout write error")
+
+	err = renderCostTable(errWriter{}, &pb.GetCostSummaryResponse{}, true)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "simulated stdout write error")
 }

@@ -148,30 +148,35 @@ func (r *EnvironmentReconciler) reconcileNamespaceQuota(ctx context.Context, env
 		return ctrl.Result{}, false, fmt.Errorf("failed to list environments in namespace %s: %w", env.Namespace, err)
 	}
 
-	if maxCNPG > 0 && usesCNPGCluster(env) {
-		otherCNPGCount := 0
-		for i := range envList.Items {
-			item := &envList.Items[i]
-			if item.Name == env.Name || !item.DeletionTimestamp.IsZero() {
-				continue
-			}
-			if item.Status.Phase == divergeiov1alpha1.PhaseFailed ||
-				item.Status.Phase == divergeiov1alpha1.EnvironmentPhase("Expired") ||
-				item.Status.Phase == divergeiov1alpha1.PhaseTerminating {
-				continue
-			}
-			if usesCNPGCluster(item) {
-				otherCNPGCount++
-			}
+	otherCNPGCount := 0
+	for i := range envList.Items {
+		item := &envList.Items[i]
+		if item.Name == env.Name || !item.DeletionTimestamp.IsZero() {
+			continue
 		}
-		if otherCNPGCount+1 > maxCNPG {
+		if item.Status.Phase == divergeiov1alpha1.PhaseFailed ||
+			item.Status.Phase == divergeiov1alpha1.EnvironmentPhase("Expired") ||
+			item.Status.Phase == divergeiov1alpha1.PhaseTerminating {
+			continue
+		}
+		if usesCNPGCluster(item) {
+			otherCNPGCount++
+		}
+	}
+	totalCNPG := otherCNPGCount
+	if usesCNPGCluster(env) {
+		totalCNPG++
+	}
+
+	if maxCNPG > 0 && usesCNPGCluster(env) {
+		if totalCNPG > maxCNPG {
 			msg := fmt.Sprintf("namespace %s quota exceeded: max-cnpg-clusters=%d", env.Namespace, maxCNPG)
 			r.dispatchQuotaBudgetAlert(ctx, reader, finops.BudgetAlertInput{
 				Namespace:             env.Namespace,
 				Environment:           env.Name,
 				MaxHourlyCostUSD:      maxHourlyCost,
 				MaxActiveEnvironments: maxActive,
-				CNPGClusters:          otherCNPGCount + 1,
+				CNPGClusters:          totalCNPG,
 				MaxCNPGClusters:       maxCNPG,
 				Policy:                policy,
 				Exceeded:              true,
@@ -259,6 +264,7 @@ func (r *EnvironmentReconciler) reconcileNamespaceQuota(ctx context.Context, env
 				MaxHourlyCostUSD:      maxHourlyCost,
 				ActiveEnvironments:    len(remainingActive) + 1,
 				MaxActiveEnvironments: maxActive,
+				CNPGClusters:          totalCNPG,
 				MaxCNPGClusters:       maxCNPG,
 				Policy:                policy,
 				Exceeded:              true,
@@ -309,15 +315,6 @@ func (r *EnvironmentReconciler) reconcileNamespaceQuota(ctx context.Context, env
 		}
 	}
 
-	finalCNPG := 0
-	if usesCNPGCluster(env) {
-		finalCNPG++
-	}
-	for _, rem := range remainingActive {
-		if usesCNPGCluster(rem) {
-			finalCNPG++
-		}
-	}
 	r.dispatchQuotaBudgetAlert(ctx, reader, finops.BudgetAlertInput{
 		Namespace:             env.Namespace,
 		Environment:           env.Name,
@@ -325,7 +322,7 @@ func (r *EnvironmentReconciler) reconcileNamespaceQuota(ctx context.Context, env
 		MaxHourlyCostUSD:      maxHourlyCost,
 		ActiveEnvironments:    len(remainingActive) + 1,
 		MaxActiveEnvironments: maxActive,
-		CNPGClusters:          finalCNPG,
+		CNPGClusters:          totalCNPG,
 		MaxCNPGClusters:       maxCNPG,
 		Policy:                policy,
 		NamespaceAnnotations:  ns.Annotations,
@@ -347,6 +344,9 @@ func (r *EnvironmentReconciler) dispatchQuotaBudgetAlert(ctx context.Context, re
 	sent, sev, alertReason, err := r.BudgetAlerter.EvaluateAndNotify(ctx, reader, in)
 	if err != nil {
 		log.FromContext(ctx).Info("FinOps budget alert webhook delivery failed", "namespace", in.Namespace, "severity", sev, "error", err.Error())
+		if r.Recorder != nil && r.Recorder.EventRecorder != nil && env != nil {
+			r.Recorder.Event(env, "Warning", "NotificationFailed", err.Error())
+		}
 		return
 	}
 	if sent && sev == finops.SeverityWarning && !in.Exceeded && r.Recorder != nil && r.Recorder.EventRecorder != nil && env != nil {

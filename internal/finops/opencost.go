@@ -84,22 +84,45 @@ type openCostEntryProps struct {
 // FetchEnvironmentAllocations queries OpenCost's /allocation/compute API for a 1h window
 // and returns hourly allocations keyed by "<namespace>/<environment>".
 func (c *OpenCostClient) FetchEnvironmentAllocations(ctx context.Context, namespace string) (map[string]EnvironmentAllocation, error) {
+	var namespaces []string
+	if trimmed := strings.TrimSpace(namespace); trimmed != "" {
+		namespaces = []string{trimmed}
+	}
+	return c.FetchAllocationsForNamespaces(ctx, namespaces)
+}
+
+// FetchAllocationsForNamespaces queries OpenCost's Allocation API for the given workload namespaces
+// (or cluster-wide when namespaces is empty) and returns hourly allocations keyed by "<namespace>/<environment>".
+func (c *OpenCostClient) FetchAllocationsForNamespaces(ctx context.Context, namespaces []string) (map[string]EnvironmentAllocation, error) {
 	if c == nil || c.baseURL == "" {
 		return nil, nil
 	}
 
-	baseEndpoint := c.baseURL
-	if !strings.HasSuffix(baseEndpoint, "/allocation/compute") && !strings.HasSuffix(baseEndpoint, "/allocation") {
-		baseEndpoint += "/allocation/compute"
+	parsedURL, err := url.Parse(c.baseURL)
+	if err != nil {
+		return nil, errors.New("parsing OpenCost URL: malformed URL")
 	}
-	if err := loadtest.ValidateTargetURL(baseEndpoint); err != nil {
-		return nil, fmt.Errorf("invalid OpenCost URL: %w", err)
+	trimmedPath := strings.TrimRight(parsedURL.Path, "/")
+	if !strings.HasSuffix(trimmedPath, "/allocation/compute") && !strings.HasSuffix(trimmedPath, "/allocation") {
+		parsedURL.Path = trimmedPath + "/allocation/compute"
+	} else {
+		parsedURL.Path = trimmedPath
+	}
+	parsedURL.RawPath = ""
+
+	var cleanNamespaces []string
+	seenNS := make(map[string]struct{}, len(namespaces))
+	for _, raw := range namespaces {
+		ns := strings.TrimSpace(raw)
+		if ns == "" {
+			continue
+		}
+		if _, exists := seenNS[ns]; !exists {
+			seenNS[ns] = struct{}{}
+			cleanNamespaces = append(cleanNamespaces, ns)
+		}
 	}
 
-	parsedURL, err := url.Parse(baseEndpoint)
-	if err != nil {
-		return nil, fmt.Errorf("parsing OpenCost URL: %w", err)
-	}
 	q := parsedURL.Query()
 	if q.Get("window") == "" {
 		q.Set("window", "1h")
@@ -107,15 +130,24 @@ func (c *OpenCostClient) FetchEnvironmentAllocations(ctx context.Context, namesp
 	if q.Get("aggregate") == "" {
 		q.Set("aggregate", "namespace,label:divergedev.com/environment")
 	}
-	if ns := strings.TrimSpace(namespace); ns != "" && q.Get("filter") == "" {
-		q.Set("filter", fmt.Sprintf("namespace:%q", ns))
+	if len(cleanNamespaces) > 0 && q.Get("filter") == "" {
+		quoted := make([]string, 0, len(cleanNamespaces))
+		for _, ns := range cleanNamespaces {
+			quoted = append(quoted, fmt.Sprintf("%q", ns))
+		}
+		q.Set("filter", "namespace:"+strings.Join(quoted, ","))
 	}
 	parsedURL.RawQuery = q.Encode()
+
+	finalURL := parsedURL.String()
+	if err := loadtest.ValidateTargetURL(finalURL); err != nil {
+		return nil, fmt.Errorf("invalid OpenCost URL: %w", err)
+	}
 
 	reqCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, parsedURL.String(), nil)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, finalURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("building OpenCost request: %w", err)
 	}
@@ -139,7 +171,11 @@ func (c *OpenCostClient) FetchEnvironmentAllocations(ctx context.Context, namesp
 		return nil, errors.New("OpenCost response exceeded 4 MiB limit")
 	}
 
-	return parseOpenCostPayload(body, strings.TrimSpace(namespace))
+	defaultNS := ""
+	if len(cleanNamespaces) == 1 {
+		defaultNS = cleanNamespaces[0]
+	}
+	return parseOpenCostPayload(body, defaultNS)
 }
 
 func parseOpenCostPayload(body []byte, defaultNamespace string) (map[string]EnvironmentAllocation, error) {

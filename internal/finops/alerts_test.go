@@ -159,6 +159,21 @@ func TestBudgetAlertDispatcher_NamespaceSecretAndCustomThreshold(t *testing.T) {
 	assert.Equal(t, SeverityWarning, sev)
 	assert.Equal(t, 75.0, gotPayload.UtilizationPercent)
 	assert.Equal(t, 70.0, gotPayload.ThresholdPercent)
+	// Missing key in explicitly configured Secret returns configuration error rather than falling back to global webhook
+	badDispatcher := NewBudgetAlertDispatcher(srv.URL, srv.Client())
+	sent, _, _, err = badDispatcher.EvaluateAndNotify(context.Background(), fakeClient, BudgetAlertInput{
+		Namespace:             "checkout",
+		Environment:           "pr-89",
+		ActiveEnvironments:    4,
+		MaxActiveEnvironments: 4,
+		Exceeded:              true,
+		NamespaceAnnotations: map[string]string{
+			metrics.AnnotationBudgetAlertSecret: "slack-finops-hook/missing-key",
+		},
+	})
+	require.Error(t, err)
+	assert.False(t, sent)
+	assert.Contains(t, err.Error(), "missing or empty")
 }
 
 func TestBudgetAlertDispatcher_RedactsWebhookURLOnFailure(t *testing.T) {
@@ -170,6 +185,18 @@ func TestBudgetAlertDispatcher_RedactsWebhookURLOnFailure(t *testing.T) {
 	secretURL := srv.URL + "/services/T123/B456/SUPER_SECRET_SLACK_TOKEN"
 	dispatcher := NewBudgetAlertDispatcher(secretURL, srv.Client())
 	sent, _, _, err := dispatcher.EvaluateAndNotify(context.Background(), nil, BudgetAlertInput{
+		Namespace:        "payments",
+		HourlyCostUSD:    1.0,
+		MaxHourlyCostUSD: 1.0,
+		Exceeded:         true,
+	})
+	require.Error(t, err)
+	assert.False(t, sent)
+	assert.NotContains(t, err.Error(), "SUPER_SECRET_SLACK_TOKEN")
+
+	// Malformed URL escape (#%zz) must also redact secret tokens from validation errors
+	malformedDispatcher := NewBudgetAlertDispatcher("https://hooks.slack.com/services/T123/B456/SUPER_SECRET_SLACK_TOKEN#%zz", srv.Client())
+	sent, _, _, err = malformedDispatcher.EvaluateAndNotify(context.Background(), nil, BudgetAlertInput{
 		Namespace:        "payments",
 		HourlyCostUSD:    1.0,
 		MaxHourlyCostUSD: 1.0,

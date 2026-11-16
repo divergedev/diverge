@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	pb "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 	"github.com/divergedev/diverge/api/v1alpha1"
@@ -101,10 +103,27 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 	if openCost == nil {
 		openCost = OpenCostClientFromEnv()
 	}
-	var liveAllocs map[string]EnvironmentAllocation
+	var (
+		liveAllocs      map[string]EnvironmentAllocation
+		openCostQueried bool
+	)
 	if openCost != nil {
-		if fetched, fetchErr := openCost.FetchEnvironmentAllocations(ctx, reqNS); fetchErr == nil {
+		var openCostNamespaces []string
+		if reqNS != "" {
+			openCostNamespaces = []string{reqNS}
+			for i := range envList.Items {
+				env := &envList.Items[i]
+				if !env.DeletionTimestamp.IsZero() {
+					continue
+				}
+				if wns := resolveWorkloadNamespace(env, reqNS); wns != "" && wns != reqNS {
+					openCostNamespaces = append(openCostNamespaces, wns)
+				}
+			}
+		}
+		if fetched, fetchErr := openCost.FetchAllocationsForNamespaces(ctx, openCostNamespaces); fetchErr == nil {
 			liveAllocs = fetched
+			openCostQueried = true
 		}
 	}
 
@@ -169,9 +188,20 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 			env.Status.Phase == v1alpha1.PhaseTerminating ||
 			string(env.Status.Phase) == "Expired"
 
-		if !terminal && !est.Hibernated && len(liveAllocs) > 0 {
-			if live, ok := liveAllocs[ns+"/"+env.Name]; ok {
+		if !terminal && !est.Hibernated && openCostQueried {
+			workloadNS := resolveWorkloadNamespace(env, ns)
+			if live, ok := liveAllocs[workloadNS+"/"+env.Name]; ok {
 				est = applyLiveAllocation(env, est, live)
+			} else if workloadNS != ns {
+				if live, ok := liveAllocs[ns+"/"+env.Name]; ok {
+					est = applyLiveAllocation(env, est, live)
+				} else {
+					log.FromContext(ctx).V(1).Info("No OpenCost allocation entry matched active environment; using rate-card estimate",
+						"namespace", ns, "workloadNamespace", workloadNS, "environment", env.Name)
+				}
+			} else {
+				log.FromContext(ctx).V(1).Info("No OpenCost allocation entry matched active environment; using rate-card estimate",
+					"namespace", ns, "workloadNamespace", workloadNS, "environment", env.Name)
 			}
 		}
 
@@ -378,23 +408,33 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 	}, nil
 }
 
+func resolveWorkloadNamespace(env *v1alpha1.Environment, defaultNS string) string {
+	if env != nil && env.Spec.Deploy.Namespace == "create" {
+		if pns := strings.TrimSpace(env.PreviewNamespace()); pns != "" {
+			return pns
+		}
+	}
+	return defaultNS
+}
+
 func applyLiveAllocation(env *v1alpha1.Environment, est metrics.EnvironmentCostEstimate, live EnvironmentAllocation) metrics.EnvironmentCostEstimate {
 	if !isFiniteNonNegative(live.HourlyComputeUSD) {
 		return est
 	}
 	est.ComputeHourlyUSD = live.HourlyComputeUSD
 	est.HourlyUSD = est.ComputeHourlyUSD + est.DatabaseHourlyUSD
-	billableHours := est.ActiveHours + est.HibernatedHours
-	accrued := est.ComputeHourlyUSD*est.ActiveHours + est.DatabaseHourlyUSD*billableHours
-	if isFiniteNonNegative(accrued) {
-		est.AccruedUSD = accrued
-	}
+	// Preserve est.AccruedUSD from ComputeEnvironmentCost rather than multiplying the instantaneous
+	// 1h live rate across all historical est.ActiveHours, ensuring hibernation never reduces accrued spend.
 
 	ttlHours := defaultTTLHours
 	if env != nil && env.Spec.Lifecycle.TTL != nil && env.Spec.Lifecycle.TTL.Duration > 0 {
 		ttlHours = env.Spec.Lifecycle.TTL.Hours()
 	}
-	projected := est.HourlyUSD * ttlHours
+	remainingHours := ttlHours - est.UptimeHours
+	if remainingHours < 0 {
+		remainingHours = 0
+	}
+	projected := est.AccruedUSD + est.HourlyUSD*remainingHours
 	if projected < est.AccruedUSD {
 		projected = est.AccruedUSD
 	}
@@ -464,6 +504,11 @@ func resolveNamespaceAlertThreshold(ctx context.Context, reader client.Reader, k
 			if v, err := strconv.ParseFloat(raw, 64); err == nil && !math.IsNaN(v) && !math.IsInf(v, 0) && v > 0 && v <= 100 {
 				return v
 			}
+		}
+	}
+	if raw := strings.TrimSuffix(strings.TrimSpace(os.Getenv(metrics.EnvBudgetAlertThreshold)), "%"); raw != "" {
+		if v, err := strconv.ParseFloat(raw, 64); err == nil && !math.IsNaN(v) && !math.IsInf(v, 0) && v > 0 && v <= 100 {
+			return v
 		}
 	}
 	return BudgetWarningThresholdPercent

@@ -165,6 +165,9 @@ func fetchCostSummary(ctx context.Context, app *App, opts *costOptions) (*pb.Get
 	if explicitServer != "" {
 		ns := ""
 		if !opts.allNamespaces && app != nil {
+			if app.Namespace == "" {
+				_ = app.ResolveNamespace()
+			}
 			ns = strings.TrimSpace(app.Namespace)
 		}
 		return fetchCostSummaryViaServer(ctx, explicitServer, ns)
@@ -320,21 +323,48 @@ func renderCostCSV(w io.Writer, consumers []*pb.EnvironmentCostItem) error {
 }
 
 func renderCostTable(w io.Writer, resp *pb.GetCostSummaryResponse, consumersOnly bool) error {
+	writef := func(dst io.Writer, format string, args ...any) error {
+		_, err := fmt.Fprintf(dst, format, args...)
+		return err
+	}
+	writeln := func(dst io.Writer, args ...any) error {
+		_, err := fmt.Fprintln(dst, args...)
+		return err
+	}
+
 	if !consumersOnly {
-		_, _ = fmt.Fprintf(w, "Diverge FinOps Summary\n")
-		_, _ = fmt.Fprintf(w, "  Hourly Burn:          $%.3f/hr ($%.2f/mo run-rate)\n", resp.GetTotalHourlyCostUsd(), resp.GetMonthlyRunRateUsd())
-		_, _ = fmt.Fprintf(w, "  Hibernation Savings:  $%.3f/hr\n", resp.GetHibernationSavingsHourlyUsd())
-		_, _ = fmt.Fprintf(w, "  Delta Route Savings:  $%.3f/hr\n", resp.GetDeltaRoutingSavingsHourlyUsd())
-		_, _ = fmt.Fprintf(w, "  Accrued Env Spend:    $%.3f (%.2f service-hrs)\n", resp.GetTotalAccruedCostUsd(), resp.GetTotalComputeHours())
-		_, _ = fmt.Fprintf(w, "  AgentTask LLM Spend:  $%.2f\n", resp.GetAgentTaskCostUsd())
-		_, _ = fmt.Fprintf(w, "  Environments:         %d total (%d active, %d hibernated) | %.2f vCPU | %.2f GiB\n",
+		if err := writef(w, "Diverge FinOps Summary\n"); err != nil {
+			return err
+		}
+		if err := writef(w, "  Hourly Burn:          $%.3f/hr ($%.2f/mo run-rate)\n", resp.GetTotalHourlyCostUsd(), resp.GetMonthlyRunRateUsd()); err != nil {
+			return err
+		}
+		if err := writef(w, "  Hibernation Savings:  $%.3f/hr\n", resp.GetHibernationSavingsHourlyUsd()); err != nil {
+			return err
+		}
+		if err := writef(w, "  Delta Route Savings:  $%.3f/hr\n", resp.GetDeltaRoutingSavingsHourlyUsd()); err != nil {
+			return err
+		}
+		if err := writef(w, "  Accrued Env Spend:    $%.3f (%.2f service-hrs)\n", resp.GetTotalAccruedCostUsd(), resp.GetTotalComputeHours()); err != nil {
+			return err
+		}
+		if err := writef(w, "  AgentTask LLM Spend:  $%.2f\n", resp.GetAgentTaskCostUsd()); err != nil {
+			return err
+		}
+		if err := writef(w, "  Environments:         %d total (%d active, %d hibernated) | %.2f vCPU | %.2f GiB\n",
 			resp.GetTotalEnvironments(), resp.GetActiveEnvironments(), resp.GetHibernatedEnvironments(),
-			resp.GetTotalCpuCores(), resp.GetTotalMemoryGib())
+			resp.GetTotalCpuCores(), resp.GetTotalMemoryGib()); err != nil {
+			return err
+		}
 
 		if len(resp.ByNamespace) > 0 {
-			_, _ = fmt.Fprintln(w)
+			if err := writeln(w); err != nil {
+				return err
+			}
 			tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-			_, _ = fmt.Fprintln(tw, "NAMESPACE\tACTIVE/TOTAL\tHOURLY\tACCRUED\tSAVED/HR\tQUOTA UTIL\tSTATUS")
+			if err := writeln(tw, "NAMESPACE\tACTIVE/TOTAL\tHOURLY\tACCRUED\tSAVED/HR\tQUOTA UTIL\tSTATUS"); err != nil {
+				return err
+			}
 			for _, ns := range resp.ByNamespace {
 				utilStr := "-"
 				if ns.GetQuota() != nil && ns.GetBudgetUtilizationPercent() > 0 {
@@ -344,7 +374,7 @@ func renderCostTable(w io.Writer, resp *pb.GetCostSummaryResponse, consumersOnly
 				if ns.GetBudgetWarning() {
 					statusStr = "WARN: " + ns.GetWarningReason()
 				}
-				_, _ = fmt.Fprintf(tw, "%s\t%d/%d\t$%.3f/hr\t$%.3f\t$%.3f/hr\t%s\t%s\n",
+				if err := writef(tw, "%s\t%d/%d\t$%.3f/hr\t$%.3f\t$%.3f/hr\t%s\t%s\n",
 					ns.GetNamespace(),
 					ns.GetActiveEnvironments(),
 					ns.GetTotalEnvironments(),
@@ -353,22 +383,27 @@ func renderCostTable(w io.Writer, resp *pb.GetCostSummaryResponse, consumersOnly
 					ns.GetHibernationSavingsHourlyUsd(),
 					utilStr,
 					statusStr,
-				)
+				); err != nil {
+					return err
+				}
 			}
 			if err := tw.Flush(); err != nil {
 				return err
 			}
 		}
-		_, _ = fmt.Fprintln(w)
+		if err := writeln(w); err != nil {
+			return err
+		}
 	}
 
 	if len(resp.TopConsumers) == 0 {
-		_, _ = fmt.Fprintln(w, "No preview environments found.")
-		return nil
+		return writeln(w, "No preview environments found.")
 	}
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "NAMESPACE\tENVIRONMENT\tMR/BRANCH\tSTATE\tDB\tHOURLY\tACCRUED\tTTL PROJECTED\tNOTES")
+	if err := writeln(tw, "NAMESPACE\tENVIRONMENT\tMR/BRANCH\tSTATE\tDB\tHOURLY\tACCRUED\tTTL PROJECTED\tNOTES"); err != nil {
+		return err
+	}
 	for _, item := range resp.TopConsumers {
 		state := item.GetPhase()
 		if item.GetHibernated() {
@@ -389,7 +424,7 @@ func renderCostTable(w io.Writer, resp *pb.GetCostSummaryResponse, consumersOnly
 		if item.GetTtlWarning() {
 			notes = item.GetTtlWarningReason()
 		}
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t$%.3f/hr\t$%.3f\t$%.3f\t%s\n",
+		if err := writef(tw, "%s\t%s\t%s\t%s\t%s\t$%.3f/hr\t$%.3f\t$%.3f\t%s\n",
 			item.GetNamespace(),
 			item.GetName(),
 			mrBranch,
@@ -399,7 +434,9 @@ func renderCostTable(w io.Writer, resp *pb.GetCostSummaryResponse, consumersOnly
 			item.GetAccruedCostUsd(),
 			item.GetProjectedTtlCostUsd(),
 			notes,
-		)
+		); err != nil {
+			return err
+		}
 	}
 	return tw.Flush()
 }

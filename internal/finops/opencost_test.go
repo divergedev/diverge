@@ -66,6 +66,29 @@ func TestOpenCostClient_FetchEnvironmentAllocations(t *testing.T) {
 	assert.InDelta(t, 0.030, pr101.HourlyComputeUSD, 1e-6)
 	assert.InDelta(t, 0.50, pr101.CPUCores, 1e-6)
 	assert.InDelta(t, 1.0, pr101.MemoryGiB, 1e-6)
+
+	// Verify URLs with existing query parameters preserve query params without corrupting path
+	var seenPath string
+	querySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		seenQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":200,"data":[]}`))
+	}))
+	defer querySrv.Close()
+
+	clientWithAllocationQuery := NewOpenCostClient(querySrv.URL+"/allocation?window=2h", querySrv.Client())
+	_, err = clientWithAllocationQuery.FetchEnvironmentAllocations(context.Background(), "payments")
+	require.NoError(t, err)
+	assert.Equal(t, "/allocation", seenPath)
+	assert.Contains(t, seenQuery, "window=2h")
+	assert.NotContains(t, seenQuery, "/allocation/compute")
+
+	clientWithRootQuery := NewOpenCostClient(querySrv.URL+"?window=2h", querySrv.Client())
+	_, err = clientWithRootQuery.FetchEnvironmentAllocations(context.Background(), "payments")
+	require.NoError(t, err)
+	assert.Equal(t, "/allocation/compute", seenPath)
+	assert.Contains(t, seenQuery, "window=2h")
 }
 
 func TestOpenCostClient_EnvAndProhibitedDestination(t *testing.T) {

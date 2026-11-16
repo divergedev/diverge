@@ -102,6 +102,10 @@ spec:
             - name: DIVERGE_OPENCOST_URL
               value: {{ .openCostUrl | quote }}
             {{- end }}
+            {{- if .budgetAlertThreshold }}
+            - name: DIVERGE_BUDGET_ALERT_THRESHOLD
+              value: {{ .budgetAlertThreshold | quote }}
+            {{- end }}
             {{- with .rates }}
             {{- if ne (toString .vcpuHourUsd) "" }}
             - name: DIVERGE_COST_VCPU_HOUR_USD
