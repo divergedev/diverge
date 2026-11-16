@@ -84,8 +84,9 @@ func (r *GatewayRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment
 	}
 
 	ns := r.namespace(env)
+	services := effectiveChangedServices(env)
 
-	for _, svc := range env.Spec.Deploy.ChangedServices {
+	for _, svc := range services {
 		routeName := fmt.Sprintf("%s-%s", env.Name, svc)
 
 		if protocol == "grpc" {
@@ -116,7 +117,7 @@ func (r *GatewayRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment
 
 	logger.Info("Reconciled routes",
 		"environment", env.Name,
-		"services", len(env.Spec.Deploy.ChangedServices),
+		"services", len(services),
 		"protocol", protocol,
 	)
 	return nil
@@ -228,7 +229,7 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 	if isServiceParent {
 		parentRef["kind"] = "Service"
 		parentRef["group"] = ""
-	} else if gwNS := strings.TrimSpace(env.Annotations["divergedev.com/gateway-namespace"]); gwNS != "" && gwNS != ns {
+	} else if gwNS := r.resolveGatewayNamespace(ctx, env, ns, resolvedParentName); gwNS != "" && gwNS != ns {
 		parentRef["namespace"] = gwNS
 	}
 
@@ -433,8 +434,9 @@ func (r *GatewayRouter) reconcileReferenceGrant(ctx context.Context, env *v1alph
 	apiVersion := "gateway.networking.k8s.io/v1beta1"
 	kind := "ReferenceGrant"
 
-	toEntries := make([]interface{}, 0, len(env.Spec.Deploy.ChangedServices))
-	for _, svc := range env.Spec.Deploy.ChangedServices {
+	services := effectiveChangedServices(env)
+	toEntries := make([]interface{}, 0, len(services))
+	for _, svc := range services {
 		toEntries = append(toEntries, map[string]interface{}{
 			"group": "",
 			"kind":  "Service",
@@ -882,6 +884,43 @@ func (r *GatewayRouter) GetExternalURL(env *v1alpha1.Environment) string {
 		return fmt.Sprintf("https://%s.%s", env.Name, env.Spec.Routing.BaseDomain)
 	}
 	return ""
+}
+
+func effectiveChangedServices(env *v1alpha1.Environment) []string {
+	if env == nil {
+		return nil
+	}
+	if len(env.Spec.Deploy.ChangedServices) > 0 {
+		return env.Spec.Deploy.ChangedServices
+	}
+	if env.Spec.ServiceConfig != nil {
+		if svc := strings.TrimSpace(env.Spec.ServiceConfig.ServiceName); svc != "" {
+			return []string{svc}
+		}
+	}
+	return nil
+}
+
+func (r *GatewayRouter) resolveGatewayNamespace(ctx context.Context, env *v1alpha1.Environment, routeNS, gatewayName string) string {
+	if env != nil {
+		if gwNS := strings.TrimSpace(env.Annotations["divergedev.com/gateway-namespace"]); gwNS != "" {
+			return gwNS
+		}
+	}
+	if r.Client != nil && routeNS != "default" && gatewayName != "" {
+		localGW := &unstructured.Unstructured{}
+		localGW.SetAPIVersion("gateway.networking.k8s.io/v1")
+		localGW.SetKind("Gateway")
+		if err := r.Client.Get(ctx, client.ObjectKey{Name: gatewayName, Namespace: routeNS}, localGW); apierrors.IsNotFound(err) {
+			defaultGW := &unstructured.Unstructured{}
+			defaultGW.SetAPIVersion("gateway.networking.k8s.io/v1")
+			defaultGW.SetKind("Gateway")
+			if defErr := r.Client.Get(ctx, client.ObjectKey{Name: gatewayName, Namespace: "default"}, defaultGW); defErr == nil {
+				return "default"
+			}
+		}
+	}
+	return routeNS
 }
 
 // namespace returns the target namespace for routing resources.

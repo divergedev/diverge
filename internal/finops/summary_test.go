@@ -98,8 +98,12 @@ func TestBuildCostSummary_WithOpenCostEnrichmentAndFallback(t *testing.T) {
 		OpenCost: NewOpenCostClient(openCostSrv.URL, openCostSrv.Client()),
 	})
 	require.NoError(t, err)
+	assert.True(t, summary.OpencostEnabled)
 	assert.Equal(t, int32(2), summary.TotalEnvironments)
 	assert.Equal(t, int32(2), summary.ActiveEnvironments)
+	require.Len(t, summary.TopConsumers, 2)
+	assert.Equal(t, CostSourceOpenCost, summary.TopConsumers[0].CostSource)
+	assert.Equal(t, CostSourceRateCard, summary.TopConsumers[1].CostSource)
 	// Total = $0.065 (pr-101) + $0.012 (pr-102) = $0.077/hr
 	assert.InDelta(t, 0.077, summary.TotalHourlyCostUsd, 1e-6)
 	// Accrued preserves historical rate-card spend so hibernation never shrinks accrued spend:
@@ -203,5 +207,6 @@ func TestBuildCostSummary_IsolatedCreateNamespaceAndEnvThreshold(t *testing.T) {
 	assert.InDelta(t, 1.25, summary.TotalCpuCores, 1e-6)
 	assert.InDelta(t, 2.0, summary.TotalMemoryGib, 1e-6)
 	require.Len(t, summary.ByNamespace, 1)
+	assert.InDelta(t, 60.0, summary.ByNamespace[0].AlertThresholdPercent, 1e-6)
 	assert.True(t, summary.ByNamespace[0].BudgetWarning, "DIVERGE_BUDGET_ALERT_THRESHOLD=60 should trigger warning at 65% utilization")
 }

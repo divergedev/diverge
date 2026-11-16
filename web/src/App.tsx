@@ -23,6 +23,7 @@ export default function App() {
         <Route path="tasks" element={<AgentTasks />} />
         <Route path="tasks/:namespace/:name" element={<AgentTaskDetail />} />
         <Route path="usage" element={<CostAnalytics />} />
+        <Route path="analytics" element={<CostAnalytics />} />
         <Route path="cluster" element={<ClusterInfo />} />
       </Route>
     </Routes>

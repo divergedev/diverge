@@ -55,6 +55,7 @@ message NamespaceCostBreakdown {
   double budget_utilization_percent = 12;
   bool budget_warning = 13;
   string warning_reason = 14;
+  double alert_threshold_percent = 15;
 }
 
 message ServiceCostBreakdown {
@@ -86,6 +87,7 @@ message EnvironmentCostItem {
   string database_mode = 16;
   bool ttl_warning = 17;
   string ttl_warning_reason = 18;
+  string cost_source = 19;
 }
 
 message GetCostSummaryResponse {
@@ -105,4 +107,5 @@ message GetCostSummaryResponse {
   repeated ServiceCostBreakdown by_service = 14;
   repeated EnvironmentCostItem top_consumers = 15;
   CostRateCardInfo rate_card = 16;
+  bool opencost_enabled = 17;
 }

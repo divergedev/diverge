@@ -38,7 +38,7 @@ func TestCilium_HeaderRouting(t *testing.T) {
 	}
 
 	// Deploy baseline echo service
-	f.DeployEchoServer(ctx, "api-svc", f.Namespace, 8080)
+	f.DeployEchoServer(ctx, "api-svc", f.Namespace, 5678)
 
 	// Create Environment with header-mode routing
 	env := &v1alpha1.Environment{
@@ -54,7 +54,7 @@ func TestCilium_HeaderRouting(t *testing.T) {
 			},
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "api-svc",
-				Port:        8080,
+				Port:        5678,
 				Image:       "hashicorp/http-echo:0.2.3",
 			},
 		},
@@ -110,7 +110,7 @@ func TestCilium_SubdomainRouting(t *testing.T) {
 		t.Skip("controller not deployed — skipping data-plane assertions")
 	}
 
-	f.DeployEchoServer(ctx, "web-svc", f.Namespace, 8080)
+	f.DeployEchoServer(ctx, "web-svc", f.Namespace, 5678)
 
 	env := &v1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -125,7 +125,7 @@ func TestCilium_SubdomainRouting(t *testing.T) {
 			},
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "web-svc",
-				Port:        8080,
+				Port:        5678,
 				Image:       "hashicorp/http-echo:0.2.3",
 			},
 			Routing: v1alpha1.EnvironmentRouting{
@@ -192,7 +192,7 @@ func TestCilium_GAMMAMeshRouting(t *testing.T) {
 		t.Skip("controller not deployed — skipping GAMMA assertions")
 	}
 
-	f.DeployEchoServer(ctx, "payments-svc", f.Namespace, 8080)
+	f.DeployEchoServer(ctx, "payments-svc", f.Namespace, 5678)
 
 	env := &v1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -207,7 +207,7 @@ func TestCilium_GAMMAMeshRouting(t *testing.T) {
 			},
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "payments-svc",
-				Port:        8080,
+				Port:        5678,
 				Image:       "hashicorp/http-echo:0.2.3",
 			},
 		},
@@ -238,7 +238,7 @@ func TestCilium_GAMMAMeshRouting(t *testing.T) {
 
 	// Wait for east-west routing to be programmed
 	require.Eventually(t, func() bool {
-		out, err := f.SendMeshRequest(ctx, "gamma-client", f.Namespace, "payments-svc", 8080, map[string]string{
+		out, err := f.SendMeshRequest(ctx, "gamma-client", f.Namespace, "payments-svc", 5678, map[string]string{
 			"x-diverge-env": "cilium-gamma",
 		})
 		if err != nil {
@@ -267,15 +267,6 @@ func TestCilium_CrossNamespaceGrant(t *testing.T) {
 		t.Skip("controller not deployed — skipping cross-namespace assertions")
 	}
 
-	// Create the target namespace that the cross-namespace route will reference
-	targetNS := f.Namespace + "-target"
-	f.CreateNamespaceByName(ctx, targetNS)
-	defer func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cleanupCancel()
-		f.CleanupNamespaceByName(cleanupCtx, targetNS)
-	}()
-
 	env := &v1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "cilium-crossns",
@@ -287,26 +278,34 @@ func TestCilium_CrossNamespaceGrant(t *testing.T) {
 				Project:  "divergedev/test-app",
 				Branch:   "feat/cilium-crossns",
 			},
+			Deploy: v1alpha1.EnvironmentDeploy{
+				Namespace: "create",
+			},
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "external-svc",
-				Namespace:   targetNS,
-				Port:        8080,
+				Port:        5678,
 				Image:       "hashicorp/http-echo:0.2.3",
 			},
 		},
 	}
+	previewNS := env.PreviewNamespace()
 
 	err := f.CreateEnvironment(ctx, env)
 	require.NoError(t, err)
 
-	// Wait for ReferenceGrant in the target namespace
-	var grants gatewayv1.ReferenceGrantList
+	// Wait for ReferenceGrant in the isolated preview namespace
+	var grants unstructured.UnstructuredList
+	grants.SetAPIVersion("gateway.networking.k8s.io/v1beta1")
+	grants.SetKind("ReferenceGrantList")
 	require.Eventually(t, func() bool {
-		if err := f.Client.List(ctx, &grants, client.InNamespace(targetNS)); err != nil {
+		if err := f.Client.List(ctx, &grants, client.InNamespace(previewNS)); err != nil {
 			return false
 		}
 		return len(grants.Items) > 0
-	}, 2*time.Minute, 2*time.Second, "ReferenceGrant not created in target namespace")
+	}, 2*time.Minute, 2*time.Second, "ReferenceGrant not created in preview namespace")
+
+	_ = f.Client.Delete(ctx, env)
+	_ = f.WaitForEnvironmentDeleted(ctx, env.Name, 2*time.Minute)
 }
 
 // TestCilium_RouteCleanup verifies that HTTPRoute resources are garbage
@@ -326,7 +325,7 @@ func TestCilium_RouteCleanup(t *testing.T) {
 		t.Skip("controller not deployed — skipping cleanup assertions")
 	}
 
-	f.DeployEchoServer(ctx, "cleanup-svc", f.Namespace, 8080)
+	f.DeployEchoServer(ctx, "cleanup-svc", f.Namespace, 5678)
 
 	env := &v1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -341,7 +340,7 @@ func TestCilium_RouteCleanup(t *testing.T) {
 			},
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "cleanup-svc",
-				Port:        8080,
+				Port:        5678,
 				Image:       "hashicorp/http-echo:0.2.3",
 			},
 		},
@@ -391,7 +390,7 @@ func TestCilium_CookieRouting(t *testing.T) {
 		t.Skip("controller not deployed — skipping data-plane assertions")
 	}
 
-	f.DeployEchoServer(ctx, "payments-svc", f.Namespace, 8080)
+	f.DeployEchoServer(ctx, "payments-svc", f.Namespace, 5678)
 
 	env := &v1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -412,7 +411,7 @@ func TestCilium_CookieRouting(t *testing.T) {
 			},
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "payments-svc",
-				Port:        8080,
+				Port:        5678,
 				Image:       "hashicorp/http-echo:0.2.3",
 			},
 		},
@@ -476,7 +475,7 @@ func TestCilium_PathPrefixRouting(t *testing.T) {
 		t.Skip("controller not deployed — skipping data-plane assertions")
 	}
 
-	f.DeployEchoServer(ctx, "payments-svc", f.Namespace, 8080)
+	f.DeployEchoServer(ctx, "payments-svc", f.Namespace, 5678)
 
 	env := &v1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -491,7 +490,7 @@ func TestCilium_PathPrefixRouting(t *testing.T) {
 			},
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "payments-svc",
-				Port:        8080,
+				Port:        5678,
 				Image:       "hashicorp/http-echo:0.2.3",
 				PathPrefix:  "/api",
 			},
@@ -576,7 +575,7 @@ func TestCilium_GRPCRouteCreation(t *testing.T) {
 	// Verify GRPCRoute (not HTTPRoute) is created
 	require.Eventually(t, func() bool {
 		var grpcRouteList unstructured.UnstructuredList
-		grpcRouteList.SetAPIVersion("gateway.networking.k8s.io/v1alpha2")
+		grpcRouteList.SetAPIVersion("gateway.networking.k8s.io/v1")
 		grpcRouteList.SetKind("GRPCRouteList")
 		if err := f.Client.List(ctx, &grpcRouteList, client.InNamespace(f.Namespace)); err != nil {
 			return false
@@ -585,7 +584,7 @@ func TestCilium_GRPCRouteCreation(t *testing.T) {
 	}, 2*time.Minute, 2*time.Second, "GRPCRoute not created")
 
 	var grpcRouteList unstructured.UnstructuredList
-	grpcRouteList.SetAPIVersion("gateway.networking.k8s.io/v1alpha2")
+	grpcRouteList.SetAPIVersion("gateway.networking.k8s.io/v1")
 	grpcRouteList.SetKind("GRPCRouteList")
 	err = f.Client.List(ctx, &grpcRouteList, client.InNamespace(f.Namespace))
 	require.NoError(t, err)

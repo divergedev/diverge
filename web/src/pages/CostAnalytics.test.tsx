@@ -1,7 +1,8 @@
 import { render, screen, fireEvent, within } from '@/test/utils'
 import { server } from '@/test/mocks/server'
 import { http, HttpResponse } from 'msw'
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+import * as finopsLib from '@/lib/finops'
 import CostAnalytics from './CostAnalytics'
 
 describe('CostAnalytics', () => {
@@ -30,6 +31,7 @@ describe('CostAnalytics', () => {
           totalEnvironments: 2,
           activeEnvironments: 1,
           hibernatedEnvironments: 1,
+          opencostEnabled: true,
           byNamespace: [
             {
               namespace: 'payments',
@@ -48,6 +50,7 @@ describe('CostAnalytics', () => {
                 quotaExceedPolicy: 'hibernate-oldest',
               },
               budgetUtilizationPercent: 92,
+              alertThresholdPercent: 65,
               budgetWarning: true,
               warningReason: 'Hourly spend at 92% ($0.046 / $0.050/hr)',
             },
@@ -81,6 +84,7 @@ describe('CostAnalytics', () => {
               memoryGib: 1.5,
               serviceCount: 2,
               databaseMode: 'schema',
+              costSource: 'opencost',
               ttlWarning: false,
               ttlWarningReason: '',
             },
@@ -119,10 +123,29 @@ describe('CostAnalytics', () => {
 
     expect(await screen.findByRole('heading', { level: 1, name: 'Cost & Usage Analytics' })).toBeInTheDocument()
     expect(await screen.findByText('$0.072/hr')).toBeInTheDocument() // $0.012 hibernation + $0.060 delta savings
+    expect(screen.getByText('OpenCost Live')).toBeInTheDocument()
+    expect(screen.getByText('Live')).toBeInTheDocument()
+    expect(screen.getByText(/warn @ 65% · hibernate-oldest/)).toBeInTheDocument()
     expect(screen.getByText(/AgentTask LLM spend: \$1\.75/)).toBeInTheDocument()
     expect(screen.getByText(/FinOps Budget & Lifecycle Warnings \(2\)/)).toBeInTheDocument()
     expect(screen.getByText('payments-api')).toBeInTheDocument()
     expect(screen.getByRole('progressbar', { name: 'payments' })).toBeInTheDocument()
+
+    // Verify 1-click CSV & JSON report downloads
+    const downloadSpy = vi.spyOn(finopsLib, 'downloadTextFile').mockImplementation(() => {})
+    fireEvent.click(screen.getByRole('button', { name: 'Export CSV' }))
+    expect(downloadSpy).toHaveBeenCalledWith(
+      'diverge-finops-all-namespaces.csv',
+      expect.stringContaining('pr-101'),
+      'text/csv;charset=utf-8',
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Export JSON' }))
+    expect(downloadSpy).toHaveBeenCalledWith(
+      'diverge-finops-all-namespaces.json',
+      expect.stringContaining('"opencostEnabled": true'),
+      'application/json;charset=utf-8',
+    )
+    downloadSpy.mockRestore()
 
     // Verify DOM row sorting on Uptime header button
     const uptimeSortBtn = screen.getByRole('button', { name: 'Uptime' })
@@ -176,6 +199,7 @@ describe('CostAnalytics', () => {
 
     fireEvent.change(nsSelect, { target: { value: 'restricted' } })
     expect(await screen.findByRole('alert')).toHaveTextContent(/Failed to load cost analytics/)
+    expect(screen.getByRole('button', { name: 'Export CSV' })).toHaveAttribute('aria-disabled', 'true')
 
     // Selector remains mounted so user can recover back to all namespaces
     expect(screen.getByLabelText('Namespace scope')).toBeInTheDocument()

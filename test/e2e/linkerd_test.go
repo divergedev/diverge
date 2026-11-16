@@ -10,8 +10,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
@@ -39,7 +40,7 @@ func TestLinkerd_GAMMARouting(t *testing.T) {
 		"linkerd.io/inject": "enabled",
 	})
 
-	f.DeployEchoServer(ctx, "orders-svc", ns, 8080)
+	f.DeployEchoServer(ctx, "orders-svc", ns, 5678)
 
 	env := &v1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -54,7 +55,7 @@ func TestLinkerd_GAMMARouting(t *testing.T) {
 			},
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "orders-svc",
-				Port:        8080,
+				Port:        5678,
 				Image:       "hashicorp/http-echo:0.2.3",
 			},
 		},
@@ -85,7 +86,7 @@ func TestLinkerd_GAMMARouting(t *testing.T) {
 
 	// Wait for east-west routing to be programmed
 	require.Eventually(t, func() bool {
-		out, err := f.SendMeshRequest(ctx, "gamma-client", ns, "orders-svc", 8080, map[string]string{
+		out, err := f.SendMeshRequest(ctx, "gamma-client", ns, "orders-svc", 5678, map[string]string{
 			"x-diverge-env": "linkerd-gamma",
 		})
 		if err != nil {
@@ -119,7 +120,7 @@ func TestLinkerd_HeaderPropagation(t *testing.T) {
 		"linkerd.io/inject": "enabled",
 	})
 
-	f.DeployEchoServer(ctx, "header-svc", ns, 8080)
+	f.DeployEchoServer(ctx, "header-svc", ns, 5678)
 
 	env := &v1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -134,7 +135,7 @@ func TestLinkerd_HeaderPropagation(t *testing.T) {
 			},
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "header-svc",
-				Port:        8080,
+				Port:        5678,
 				Image:       "hashicorp/http-echo:0.2.3",
 			},
 		},
@@ -190,15 +191,6 @@ func TestLinkerd_CrossNamespaceRouting(t *testing.T) {
 		t.Skip("controller not deployed — skipping cross-namespace assertions")
 	}
 
-	// Create the target namespace for cross-namespace route reference
-	targetNS := f.Namespace + "-target"
-	f.CreateNamespaceByName(ctx, targetNS)
-	defer func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cleanupCancel()
-		f.CleanupNamespaceByName(cleanupCtx, targetNS)
-	}()
-
 	env := &v1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "linkerd-crossns",
@@ -210,26 +202,34 @@ func TestLinkerd_CrossNamespaceRouting(t *testing.T) {
 				Project:  "divergedev/test-app",
 				Branch:   "feat/linkerd-crossns",
 			},
+			Deploy: v1alpha1.EnvironmentDeploy{
+				Namespace: "create",
+			},
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "remote-svc",
-				Namespace:   targetNS,
-				Port:        8080,
+				Port:        5678,
 				Image:       "hashicorp/http-echo:0.2.3",
 			},
 		},
 	}
+	previewNS := env.PreviewNamespace()
 
 	err := f.CreateEnvironment(ctx, env)
 	require.NoError(t, err)
 
-	// Wait for ReferenceGrant in target namespace
-	var grants gatewayv1.ReferenceGrantList
+	// Wait for ReferenceGrant in isolated preview namespace
+	var grants unstructured.UnstructuredList
+	grants.SetAPIVersion("gateway.networking.k8s.io/v1beta1")
+	grants.SetKind("ReferenceGrantList")
 	require.Eventually(t, func() bool {
-		if err := f.Client.List(ctx, &grants, client.InNamespace(targetNS)); err != nil {
+		if err := f.Client.List(ctx, &grants, client.InNamespace(previewNS)); err != nil {
 			return false
 		}
 		return len(grants.Items) > 0
-	}, 2*time.Minute, 2*time.Second, "ReferenceGrant not created in target namespace")
+	}, 2*time.Minute, 2*time.Second, "ReferenceGrant not created in preview namespace")
+
+	_ = f.Client.Delete(ctx, env)
+	_ = f.WaitForEnvironmentDeleted(ctx, env.Name, 2*time.Minute)
 }
 
 // TestLinkerd_RouteCleanup verifies that HTTPRoute resources are garbage
@@ -254,7 +254,7 @@ func TestLinkerd_RouteCleanup(t *testing.T) {
 		"linkerd.io/inject": "enabled",
 	})
 
-	f.DeployEchoServer(ctx, "cleanup-svc", ns, 8080)
+	f.DeployEchoServer(ctx, "cleanup-svc", ns, 5678)
 
 	env := &v1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -269,7 +269,7 @@ func TestLinkerd_RouteCleanup(t *testing.T) {
 			},
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "cleanup-svc",
-				Port:        8080,
+				Port:        5678,
 				Image:       "hashicorp/http-echo:0.2.3",
 			},
 		},

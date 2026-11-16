@@ -333,7 +333,11 @@ func renderCostTable(w io.Writer, resp *pb.GetCostSummaryResponse, consumersOnly
 	}
 
 	if !consumersOnly {
-		if err := writef(w, "Diverge FinOps Summary\n"); err != nil {
+		headerTitle := "Diverge FinOps Summary"
+		if resp.GetOpencostEnabled() {
+			headerTitle = "Diverge FinOps Summary (OpenCost Live)"
+		}
+		if err := writef(w, "%s\n", headerTitle); err != nil {
 			return err
 		}
 		if err := writef(w, "  Hourly Burn:          $%.3f/hr ($%.2f/mo run-rate)\n", resp.GetTotalHourlyCostUsd(), resp.GetMonthlyRunRateUsd()); err != nil {

@@ -67,14 +67,14 @@ diverge top --once
   <img src="docs/assets/delta-vs-duplicated.svg" alt="Delta Preview vs Traditional Full-Stack Duplication" width="100%">
 </p>
 
-### Turnkey CI/CD (`divergedev/diverge@v0.25.0`)
+### Turnkey CI/CD (`divergedev/diverge@v0.26.0`)
 
 Deploy a delta `PreviewGroup` for only the services modified in a Pull Request, run `diverge verify` health & latency SLO checks (or `diverge replay` contract diffing with `--auto-fix` self-healing), and pass `routing-header-json` directly into Playwright E2E tests:
 
 ```yaml
 - name: Deploy Diverge Delta Preview
   id: diverge
-  uses: divergedev/diverge@v0.25.0
+  uses: divergedev/diverge@v0.26.0
   with:
     kubeconfig: ${{ secrets.PREVIEW_KUBECONFIG }}
     image-registry: ghcr.io/acme
@@ -102,7 +102,7 @@ See [charts/diverge/values.yaml](charts/diverge/values.yaml) for configuration o
 *   **Autonomous Agent Sandboxes (`AgentTask`)**: Run AI coding agents inside isolated Kubernetes sandboxes (`gvisor` / `kata` / `agent-sandbox`) with attenuated **Macaroon capability tokens**, network policy egress lockdowns, automatic linked preview environments (`PreviewEnvironmentReady` condition, `divergedev.com/preview-url` annotation), and live LLM cost/token metering via `POST /api/v1/agenttask/meter`.
 *   **PreviewGroup Orchestration**: Manage multiple child environments and services under a single CR tied directly to an MR/PR. Automatic orphan cleanup and label-based ownership.
 *   **Provider Registry**: Pluggable, extensible architecture — add new routing, deployer, notifier, sandbox, or database providers with a single file. Zero changes to the controller.
-*   **Scale-to-Zero, FinOps Cost Attribution & Namespace Quotas**: Idle preview environments automatically scale to zero via KEDA HTTP Add-on (`HTTPScaledObject`) or annotation-based idle hibernation (`divergedev.com/hibernate-after`, `divergedev.com/last-traffic-at`, `divergedev.com/hibernated-at`, `divergedev.com/hibernated-seconds`). `ClusterService.GetCostSummary` and the `/analytics` Web Dashboard attribute per-namespace, per-service, and per-PR compute/database spend, hibernation & delta-routing savings, and `AgentTask` LLM spend using configurable unit rates (`DIVERGE_COST_*`), while namespace quotas (`divergedev.com/max-active-environments`, `divergedev.com/max-cnpg-clusters`, `divergedev.com/max-hourly-cost-usd`, `divergedev.com/quota-exceed-policy: hibernate-oldest | reject`) enforce concurrency and budget caps.
+*   **Scale-to-Zero, FinOps Cost Attribution & Namespace Quotas**: Idle preview environments automatically scale to zero via KEDA HTTP Add-on (`HTTPScaledObject`) or annotation-based idle hibernation (`divergedev.com/hibernate-after`, `divergedev.com/last-traffic-at`, `divergedev.com/hibernated-at`, `divergedev.com/hibernated-seconds`). `ClusterService.GetCostSummary`, `diverge cost` (`--output table|json|csv`, `--fail-on-budget-warning`), the `diverge_get_cost_summary` MCP tool, and the `/analytics` Web Dashboard (with 1-click CSV/JSON chargeback export) attribute per-namespace, per-service, and per-PR compute/database spend, hibernation & delta-routing savings, and `AgentTask` LLM spend using configurable unit rates (`DIVERGE_COST_*`) or live OpenCost / Kubecost allocations (`DIVERGE_OPENCOST_URL`), while namespace quotas (`divergedev.com/max-active-environments`, `divergedev.com/max-cnpg-clusters`, `divergedev.com/max-hourly-cost-usd`, `divergedev.com/quota-exceed-policy: hibernate-oldest | reject`) and Slack/HTTP budget webhooks (`DIVERGE_BUDGET_WEBHOOK_URL`, `divergedev.com/budget-alert-secret`) enforce concurrency and budget guardrails.
 *   **Activator Proxy (`activator-proxy`)**: Smart routing that directs traffic to the pod when ready. Includes `X-Preview-Env` header injection, a shared informer for efficient pod state tracking, and an optional auto-refreshing HTML wake-up splash page (`--wake-splash` flag / `X-Diverge-Wake-Splash: true` header and `GET /-/wakeup-status` readiness endpoint).
 *   **Delta Deployment & Baseline Drift Detection**: Only deploy what changed, falling back to a baseline for unmodified services. Automatically computes a deterministic SHA-256 baseline fingerprint (`divergedev.com/baseline-fingerprint`) across baseline `Deployment`s, `ConfigMap`s, and `Secret`s, surfacing drift warnings (`BaselineDriftDetected=True`, `⚠️ drift` in `diverge top`) or auto-refreshing preview pods (`divergedev.com/drift-policy: sync`).
 *   **Header-Based Routing & Gateway API**: Leverages Gateway API (`HTTPRoute` + `GRPCRoute` + cross-namespace `ReferenceGrant`), Istio (`ambient-mesh` / `waypoint`), Cilium, Linkerd, and the Diverge Proxy to route traffic seamlessly using HTTP/gRPC headers.

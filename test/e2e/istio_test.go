@@ -39,7 +39,7 @@ func TestIstio_HeaderRouting(t *testing.T) {
 		"istio-injection": "enabled",
 	})
 
-	f.DeployEchoServer(ctx, "orders-svc", ns, 8080)
+	f.DeployEchoServer(ctx, "orders-svc", ns, 5678)
 
 	env := &v1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -54,7 +54,7 @@ func TestIstio_HeaderRouting(t *testing.T) {
 			},
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "orders-svc",
-				Port:        8080,
+				Port:        5678,
 				Image:       "hashicorp/http-echo:0.2.3",
 			},
 		},
@@ -85,7 +85,7 @@ func TestIstio_HeaderRouting(t *testing.T) {
 
 	// Wait for east-west routing to be programmed
 	require.Eventually(t, func() bool {
-		out, err := f.SendMeshRequest(ctx, "gamma-client", ns, "orders-svc", 8080, map[string]string{
+		out, err := f.SendMeshRequest(ctx, "gamma-client", ns, "orders-svc", 5678, map[string]string{
 			"x-diverge-env": "istio-routing",
 		})
 		if err != nil {
@@ -119,7 +119,7 @@ func TestIstio_HeaderPropagation(t *testing.T) {
 		"istio-injection": "enabled",
 	})
 
-	f.DeployEchoServer(ctx, "header-svc", ns, 8080)
+	f.DeployEchoServer(ctx, "header-svc", ns, 5678)
 
 	env := &v1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -134,7 +134,7 @@ func TestIstio_HeaderPropagation(t *testing.T) {
 			},
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "header-svc",
-				Port:        8080,
+				Port:        5678,
 				Image:       "hashicorp/http-echo:0.2.3",
 			},
 		},
@@ -195,7 +195,7 @@ func TestIstio_RouteCleanup(t *testing.T) {
 		"istio-injection": "enabled",
 	})
 
-	f.DeployEchoServer(ctx, "cleanup-svc", ns, 8080)
+	f.DeployEchoServer(ctx, "cleanup-svc", ns, 5678)
 
 	env := &v1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -210,7 +210,7 @@ func TestIstio_RouteCleanup(t *testing.T) {
 			},
 			ServiceConfig: &v1alpha1.ServicePreviewConfig{
 				ServiceName: "cleanup-svc",
-				Port:        8080,
+				Port:        5678,
 				Image:       "hashicorp/http-echo:0.2.3",
 			},
 		},

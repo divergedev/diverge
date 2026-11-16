@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import type { EnvironmentCostItem } from '@/api/gen/diverge/v1alpha1/cluster_pb'
 import { useGetClusterInfo, useGetCostSummary } from '@/api/queries'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
 import { Select } from '@/components/ui/select'
 import { StatusBadge } from '@/components/StatusBadge'
 import { EmptyState } from '@/components/EmptyState'
@@ -16,8 +17,16 @@ import {
   Bot,
   Layers,
   ChevronDown,
+  Download,
+  Activity,
 } from 'lucide-react'
-import { formatCurrencyUSD, formatHourlyCostUSD } from '@/lib/finops'
+import {
+  buildCostSummaryCsv,
+  buildCostSummaryJson,
+  downloadTextFile,
+  formatCurrencyUSD,
+  formatHourlyCostUSD,
+} from '@/lib/finops'
 import { cn } from '@/lib/utils'
 
 const textCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
@@ -190,30 +199,93 @@ export default function CostAnalytics() {
   const totalSavingsHourly = (summary?.hibernationSavingsHourlyUsd ?? 0) + (summary?.deltaRoutingSavingsHourlyUsd ?? 0)
   const budgetWarnings = byNamespace.filter((ns) => ns.budgetWarning)
   const ttlWarnings = topConsumers.filter((item) => item.ttlWarning)
+  const exportDisabled = isLoading || Boolean(error) || !summary
+  const scopeSlug = selectedNamespace ? selectedNamespace : 'all-namespaces'
+
+  const announcePolite = (msg: string) => {
+    if (sortStatusRef.current) {
+      sortStatusRef.current.textContent = msg
+    }
+  }
+
+  const handleExportCsv = () => {
+    if (exportDisabled || !summary) return
+    const csvContent = buildCostSummaryCsv(sortedConsumers)
+    downloadTextFile(`diverge-finops-${scopeSlug}.csv`, csvContent, 'text/csv;charset=utf-8')
+    announcePolite(`Exported FinOps report as CSV (${sortedConsumers.length} environments)`)
+  }
+
+  const handleExportJson = () => {
+    if (exportDisabled || !summary) return
+    const jsonContent = buildCostSummaryJson(summary)
+    downloadTextFile(`diverge-finops-${scopeSlug}.json`, jsonContent, 'application/json;charset=utf-8')
+    announcePolite('Exported FinOps report as JSON')
+  }
 
   return (
     <div className="space-y-6">
+      <p ref={sortStatusRef} role="status" className="visually-hidden" />
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold">Cost &amp; Usage Analytics</h1>
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <h1 className="text-2xl font-bold">Cost &amp; Usage Analytics</h1>
+            {summary && (
+              summary.opencostEnabled ? (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-400">
+                  <Activity className="h-3.5 w-3.5" aria-hidden="true" />
+                  OpenCost Live
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
+                  Rate-Card Estimate
+                </span>
+              )
+            )}
+          </div>
           <p className="text-muted-foreground">
             Per-namespace, per-service, and per-PR compute attribution, hibernation savings, and quota health
           </p>
         </div>
-        <div className="flex flex-col gap-1 min-w-[200px]">
-          <label htmlFor={nsFilterId} className="text-xs font-medium text-muted-foreground">
-            Namespace scope
-          </label>
-          <Select
-            id={nsFilterId}
-            value={selectedNamespace}
-            onChange={(e) => setSelectedNamespace(e.target.value)}
-          >
-            <option value="">All namespaces</option>
-            {namespaces.map((ns) => (
-              <option key={ns} value={ns}>{ns}</option>
-            ))}
-          </Select>
+        <div className="flex items-end gap-2 flex-wrap">
+          <div className="flex flex-col gap-1 min-w-[200px]">
+            <label htmlFor={nsFilterId} className="text-xs font-medium text-muted-foreground">
+              Namespace scope
+            </label>
+            <Select
+              id={nsFilterId}
+              value={selectedNamespace}
+              onChange={(e) => setSelectedNamespace(e.target.value)}
+            >
+              <option value="">All namespaces</option>
+              {namespaces.map((ns) => (
+                <option key={ns} value={ns}>{ns}</option>
+              ))}
+            </Select>
+          </div>
+          <div className="flex items-center gap-2" role="group" aria-label="Export FinOps report">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              aria-disabled={exportDisabled ? 'true' : undefined}
+              onClick={handleExportCsv}
+              className={cn('gap-1.5 min-h-9', exportDisabled && 'opacity-50 cursor-not-allowed')}
+            >
+              <Download className="h-3.5 w-3.5" aria-hidden="true" />
+              Export CSV
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              aria-disabled={exportDisabled ? 'true' : undefined}
+              onClick={handleExportJson}
+              className={cn('gap-1.5 min-h-9', exportDisabled && 'opacity-50 cursor-not-allowed')}
+            >
+              <Download className="h-3.5 w-3.5" aria-hidden="true" />
+              Export JSON
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -347,6 +419,10 @@ export default function CostAnalytics() {
                     <tbody>
                       {byNamespace.map((ns) => {
                         const pct = Math.max(ns.budgetUtilizationPercent, 0)
+                        const warnThreshold =
+                          ns.alertThresholdPercent > 0 && ns.alertThresholdPercent <= 100
+                            ? ns.alertThresholdPercent
+                            : 80
                         const hasQuota = Boolean(
                           ns.quota && (
                             ns.quota.maxHourlyCostUsd > 0 ||
@@ -370,9 +446,12 @@ export default function CostAnalytics() {
                             <td className="py-2.5 pl-3">
                               {hasQuota ? (
                                 <div className="space-y-1">
-                                  <div className="flex items-center justify-between text-xs font-mono">
+                                  <div className="flex items-center justify-between gap-2 text-xs font-mono">
                                     <span>{Math.round(pct)}%</span>
-                                    <span className="text-muted-foreground">{ns.quota?.quotaExceedPolicy}</span>
+                                    <span className="text-muted-foreground">
+                                      warn @ {Math.round(warnThreshold)}%
+                                      {ns.quota?.quotaExceedPolicy ? ` · ${ns.quota.quotaExceedPolicy}` : ''}
+                                    </span>
                                   </div>
                                   <progress
                                     value={Math.min(pct, 100)}
@@ -382,7 +461,7 @@ export default function CostAnalytics() {
                                       'budget-progress',
                                       pct >= 100
                                         ? 'budget-progress--critical'
-                                        : pct >= 80
+                                        : pct >= warnThreshold
                                           ? 'budget-progress--warning'
                                           : undefined,
                                     )}
@@ -457,7 +536,6 @@ export default function CostAnalytics() {
               )}
             </CardHeader>
             <CardContent>
-              <p ref={sortStatusRef} role="status" className="visually-hidden" />
               <div tabIndex={0} role="region" aria-labelledby={consumersCaptionId} className="finops-table-wrapper">
                 <table id={consumersTableId} ref={tableRef} className="text-sm">
                   <caption id={consumersCaptionId} className="visually-hidden">
@@ -545,12 +623,16 @@ export default function CostAnalytics() {
                           >
                             {item.name}
                           </Link>
+                          {item.costSource === 'opencost' && (
+                            <span className="ml-2 inline-flex items-center rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-sans font-medium text-emerald-700 dark:text-emerald-400">
+                              Live
+                            </span>
+                          )}
                           {item.ttlWarning && (
                             <span
                               className="ml-2 inline-flex items-center rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-sans font-medium text-amber-600 dark:text-amber-400"
-                              title={item.ttlWarningReason}
                             >
-                              TTL Warning
+                              TTL Warning: {item.ttlWarningReason}
                             </span>
                           )}
                         </th>

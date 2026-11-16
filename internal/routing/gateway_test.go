@@ -1365,3 +1365,49 @@ func TestGatewayRouter_Reconcile_ExternalDNSAndCertManagerAnnotations(t *testing
 	assert.NotContains(t, u.GetAnnotations(), "external-dns.alpha.kubernetes.io/ttl", "stale external-dns ttl annotation should be removed")
 	assert.Equal(t, "keep", u.GetAnnotations()["example.com/custom"], "unrelated user annotations should be preserved")
 }
+
+func TestGatewayRouter_Reconcile_ServiceConfigFallbackAndDefaultGatewayLookup(t *testing.T) {
+	gw := &unstructured.Unstructured{}
+	gw.SetAPIVersion("gateway.networking.k8s.io/v1")
+	gw.SetKind("Gateway")
+	gw.SetName("diverge-gateway")
+	gw.SetNamespace("default")
+
+	c := fake.NewClientBuilder().WithObjects(gw).Build()
+	r := &GatewayRouter{Client: c}
+
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "mesh-env",
+			Namespace: "team-orders",
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			ServiceConfig: &v1alpha1.ServicePreviewConfig{
+				ServiceName: "orders-svc",
+				Port:        5678,
+				Image:       "hashicorp/http-echo:0.2.3",
+			},
+		},
+	}
+
+	require.NoError(t, r.Reconcile(context.Background(), env))
+
+	// North-south HTTPRoute derived from ServiceConfig.ServiceName and bound to default/diverge-gateway
+	edgeRoute := &unstructured.Unstructured{}
+	edgeRoute.SetAPIVersion("gateway.networking.k8s.io/v1")
+	edgeRoute.SetKind("HTTPRoute")
+	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "mesh-env-orders-svc", Namespace: "team-orders"}, edgeRoute))
+	parents, _, _ := unstructured.NestedSlice(edgeRoute.Object, "spec", "parentRefs")
+	require.Len(t, parents, 1)
+	assert.Equal(t, "default", parents[0].(map[string]interface{})["namespace"])
+
+	// East-west GAMMA mesh HTTPRoute targeting Service/orders-svc
+	meshRoute := &unstructured.Unstructured{}
+	meshRoute.SetAPIVersion("gateway.networking.k8s.io/v1")
+	meshRoute.SetKind("HTTPRoute")
+	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "mesh-env-orders-svc-mesh", Namespace: "team-orders"}, meshRoute))
+	meshParents, _, _ := unstructured.NestedSlice(meshRoute.Object, "spec", "parentRefs")
+	require.Len(t, meshParents, 1)
+	assert.Equal(t, "Service", meshParents[0].(map[string]interface{})["kind"])
+	assert.Equal(t, "orders-svc", meshParents[0].(map[string]interface{})["name"])
+}

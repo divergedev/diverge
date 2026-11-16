@@ -5,6 +5,10 @@ import type {
   EnvironmentDeploy,
   ResourceOverride,
 } from '@/api/gen/diverge/v1alpha1/environment_pb'
+import type {
+  EnvironmentCostItem,
+  GetCostSummaryResponse,
+} from '@/api/gen/diverge/v1alpha1/cluster_pb'
 import { isSafeExternalUrl } from '@/lib/utils'
 
 export type FinOpsEnvironment = PartialMessage<Environment> & {
@@ -266,4 +270,168 @@ export function buildMagicPreviewUrl(env?: FinOpsEnvironment | null): string | u
   } catch {
     return undefined
   }
+}
+
+function escapeCsvCell(raw: string): string {
+  const safeFormula = /^[=+@\t\r]/.test(raw) ? `'${raw}` : raw
+  if (/[",\n\r]/.test(safeFormula)) {
+    return `"${safeFormula.replace(/"/g, '""')}"`
+  }
+  return safeFormula
+}
+
+/**
+ * Serializes preview environment cost items into an RFC 4180 CSV chargeback report.
+ */
+export function buildCostSummaryCsv(consumers: readonly EnvironmentCostItem[]): string {
+  const header = [
+    'namespace',
+    'name',
+    'project',
+    'mr',
+    'branch',
+    'phase',
+    'hibernated',
+    'hourly_cost_usd',
+    'hibernation_savings_hourly_usd',
+    'accrued_cost_usd',
+    'projected_ttl_cost_usd',
+    'uptime_hours',
+    'cpu_cores',
+    'memory_gib',
+    'service_count',
+    'database_mode',
+    'cost_source',
+    'ttl_warning',
+    'ttl_warning_reason',
+  ]
+  const lines = [header.join(',')]
+  for (const item of consumers) {
+    const row = [
+      item.namespace,
+      item.name,
+      item.project,
+      item.mr,
+      item.branch,
+      item.phase,
+      String(Boolean(item.hibernated)),
+      item.hourlyCostUsd.toFixed(4),
+      item.hibernationSavingsHourlyUsd.toFixed(4),
+      item.accruedCostUsd.toFixed(4),
+      item.projectedTtlCostUsd.toFixed(4),
+      item.uptimeHours.toFixed(2),
+      item.cpuCores.toFixed(3),
+      item.memoryGib.toFixed(3),
+      String(item.serviceCount),
+      item.databaseMode,
+      item.costSource || 'rate-card',
+      String(Boolean(item.ttlWarning)),
+      item.ttlWarningReason,
+    ]
+    lines.push(row.map(escapeCsvCell).join(','))
+  }
+  return `${lines.join('\n')}\n`
+}
+
+/**
+ * Serializes a GetCostSummaryResponse into pretty-printed JSON for chargeback export.
+ */
+export function buildCostSummaryJson(summary: GetCostSummaryResponse): string {
+  const payload = {
+    totalHourlyCostUsd: summary.totalHourlyCostUsd,
+    monthlyRunRateUsd: summary.monthlyRunRateUsd,
+    hibernationSavingsHourlyUsd: summary.hibernationSavingsHourlyUsd,
+    deltaRoutingSavingsHourlyUsd: summary.deltaRoutingSavingsHourlyUsd,
+    totalAccruedCostUsd: summary.totalAccruedCostUsd,
+    agentTaskCostUsd: summary.agentTaskCostUsd,
+    totalComputeHours: summary.totalComputeHours,
+    totalCpuCores: summary.totalCpuCores,
+    totalMemoryGib: summary.totalMemoryGib,
+    totalEnvironments: summary.totalEnvironments,
+    activeEnvironments: summary.activeEnvironments,
+    hibernatedEnvironments: summary.hibernatedEnvironments,
+    opencostEnabled: Boolean(summary.opencostEnabled),
+    rateCard: summary.rateCard
+      ? {
+          vcpuHourUsd: summary.rateCard.vcpuHourUsd,
+          memoryGibHourUsd: summary.rateCard.memoryGibHourUsd,
+          databaseSchemaHourUsd: summary.rateCard.databaseSchemaHourUsd,
+          databaseDedicatedHourUsd: summary.rateCard.databaseDedicatedHourUsd,
+        }
+      : null,
+    byNamespace: summary.byNamespace.map((ns) => ({
+      namespace: ns.namespace,
+      totalEnvironments: ns.totalEnvironments,
+      activeEnvironments: ns.activeEnvironments,
+      hibernatedEnvironments: ns.hibernatedEnvironments,
+      hourlyCostUsd: ns.hourlyCostUsd,
+      hibernationSavingsHourlyUsd: ns.hibernationSavingsHourlyUsd,
+      accruedCostUsd: ns.accruedCostUsd,
+      computeHours: ns.computeHours,
+      cpuCores: ns.cpuCores,
+      memoryGib: ns.memoryGib,
+      budgetUtilizationPercent: ns.budgetUtilizationPercent,
+      alertThresholdPercent: ns.alertThresholdPercent,
+      budgetWarning: ns.budgetWarning,
+      warningReason: ns.warningReason,
+      quota: ns.quota
+        ? {
+            maxActiveEnvironments: ns.quota.maxActiveEnvironments,
+            maxCnpgClusters: ns.quota.maxCnpgClusters,
+            maxHourlyCostUsd: ns.quota.maxHourlyCostUsd,
+            quotaExceedPolicy: ns.quota.quotaExceedPolicy,
+          }
+        : null,
+    })),
+    byService: summary.byService.map((svc) => ({
+      serviceName: svc.serviceName,
+      environmentCount: svc.environmentCount,
+      activeCount: svc.activeCount,
+      hibernatedCount: svc.hibernatedCount,
+      hourlyCostUsd: svc.hourlyCostUsd,
+      cpuCores: svc.cpuCores,
+      memoryGib: svc.memoryGib,
+    })),
+    topConsumers: summary.topConsumers.map((item) => ({
+      name: item.name,
+      namespace: item.namespace,
+      project: item.project,
+      mr: item.mr,
+      branch: item.branch,
+      phase: item.phase,
+      hibernated: item.hibernated,
+      hourlyCostUsd: item.hourlyCostUsd,
+      hibernationSavingsHourlyUsd: item.hibernationSavingsHourlyUsd,
+      accruedCostUsd: item.accruedCostUsd,
+      projectedTtlCostUsd: item.projectedTtlCostUsd,
+      uptimeHours: item.uptimeHours,
+      cpuCores: item.cpuCores,
+      memoryGib: item.memoryGib,
+      serviceCount: item.serviceCount,
+      databaseMode: item.databaseMode,
+      costSource: item.costSource || 'rate-card',
+      ttlWarning: item.ttlWarning,
+      ttlWarningReason: item.ttlWarningReason,
+    })),
+  }
+  return `${JSON.stringify(payload, null, 2)}\n`
+}
+
+/**
+ * Triggers a client-side file download for text report exports.
+ */
+export function downloadTextFile(filename: string, content: string, mimeType: string): void {
+  if (typeof document === 'undefined' || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
+    return
+  }
+  const blob = new Blob([content], { type: mimeType })
+  const objectUrl = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = objectUrl
+  link.download = filename
+  link.style.display = 'none'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(objectUrl)
 }

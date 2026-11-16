@@ -1,5 +1,22 @@
 # Changelog
 
+## [v0.26.0] - 2026-11-16
+
+### 🚀 Highlights & New Features
+
+#### 💰 FinOps Phase 2: `diverge cost` CLI, MCP Tool, OpenCost Enrichment & Budget Alerts (`#343`, `#344`)
+- **`diverge cost` CLI & Chargeback Export (`internal/cli/cost.go`, `internal/finops/summary.go`) (#343, #344)**: Added `diverge cost` (`--namespace` / `-n`, `--all-namespaces` / `-A`, `--output table|json|csv`, `--top`, `--opencost-url`, `--fail-on-budget-warning`) supporting both `diverge-server` ConnectRPC (`DIVERGE_SERVER_URL` / `--server-url`, requiring no local kubeconfig) and direct Kubernetes API execution, with RFC 4180 CSV chargeback export and CI budget-gate exit codes.
+- **MCP `diverge_get_cost_summary` Tool (`internal/cli/mcp_cost.go`) (#343)**: Exposed `ClusterService.GetCostSummary` over MCP (`diverge mcp` stdio and `diverge-server /mcp`) with `namespace`, `top_limit`, and `output` (`markdown` | `json`) parameters, working automatically with scoped `diverge_get_cost_summary` Macaroon capability tokens.
+- **Live OpenCost / Kubecost Allocation Enrichment (`internal/finops/opencost.go`, `api/proto/diverge/v1alpha1/cluster.proto`) (#343, #344)**: Added optional live allocation queries (`DIVERGE_OPENCOST_URL` / `--opencost-url` / Helm `finops.openCostUrl`, `window=1h`, `aggregate=namespace,label:divergedev.com/environment`) to enrich active preview hourly burn and CPU/RAM usage with actual cloud billing data while falling back per-environment to `CostRateCard` estimates (`cost_source` and `opencost_enabled`).
+- **Automated Slack / HTTP Namespace Budget Webhook Alerts (`internal/finops/alerter.go`, `internal/controller/environment_reconciler.go`) (#343)**: Added deduplicated warning (`>=80%` default or custom `divergedev.com/budget-alert-threshold`) and critical (`>=100%`) budget webhook notifications (`DIVERGE_BUDGET_WEBHOOK_URL` or per-namespace Secret `divergedev.com/budget-alert-secret` in the target namespace, cooldown via `DIVERGE_BUDGET_ALERT_COOLDOWN`) with SSRF validation (`AllowPrivateTargets`) and Prometheus counter `diverge_finops_budget_alerts_total`.
+- **Web Dashboard `/analytics` Chargeback Export & Attribution Upgrade (`web/src/pages/CostAnalytics.tsx`, `web/src/lib/finops.ts`) (#344)**: Added 1-click **Export CSV** (with formula-injection protection) and **Export JSON** toolbar actions, inline **OpenCost Live** / **Rate-Card Estimate** and per-row `Live` attribution badges, dynamic per-namespace `alert_threshold_percent` progress-bar coloring (`warn @ X%`), High Contrast (`forced-colors`) focus-ring fallbacks, and accessible `/analytics` + `/usage` routing.
+
+#### 🌐 Gateway API Routing & Multi-Mesh E2E Conformance (`#344`)
+- **Standalone `ServiceConfig` Routing & Default Gateway Fallback (`internal/routing/gateway.go`) (#344)**: Updated `GatewayRouter` to provision preview `HTTPRoute`s, GAMMA mesh `HTTPRoute`s, and cross-namespace `ReferenceGrant`s when `spec.serviceConfig.serviceName` is set without `spec.deploy.changedServices`, and to fall back to `default/<gatewayName>` when `<env.Namespace>/<gatewayName>` is `NotFound`.
+- **Istio, Linkerd & Cilium Conformance Suites (`test/e2e/`, `.github/workflows/e2e-*.yml`) (#344)**: Restored all three nightly service-mesh E2E conformance workflows with SHA-pinned GitHub Actions, Gateway API experimental CRDs, Linkerd `edge-26.11.2` ECDSA P-256 trust anchors, Cilium Kind `kubeProxyMode: none` host-network Gateway routing, and `gateway,istio` composite routing verification.
+
+---
+
 ## [v0.25.0] - 2026-11-13
 
 ### 🚀 Highlights & New Features
