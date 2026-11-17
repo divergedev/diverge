@@ -10,16 +10,19 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/multicluster"
 )
 
 type mockFetcher struct {
@@ -758,4 +761,212 @@ func TestDirectDeployer_WithAllowedKinds_CustomAllowlist(t *testing.T) {
 	d.WithAllowedKinds(map[string]bool{"Deployment": true})
 	err = d.Deploy(context.Background(), env)
 	require.NoError(t, err)
+}
+
+func TestDirectDeployer_MultiClusterSpokeDeployStatusTeardown(t *testing.T) {
+	ctx := context.Background()
+	s := testScheme()
+	hubClient := fake.NewClientBuilder().WithScheme(s).Build()
+	spokeClient := fake.NewClientBuilder().WithScheme(s).Build()
+
+	resolver := &multicluster.StaticResolver{
+		Hub: &multicluster.Target{Name: "local", IsRemote: false, Client: hubClient},
+		Spokes: map[string]*multicluster.Target{
+			"us-west-burst": {Name: "us-west-burst", IsRemote: true, Client: spokeClient},
+		},
+	}
+
+	dep := testDeploymentUnstructured("orders-preview", "")
+	d := NewDirectDeployer(hubClient, &mockFetcher{objects: []unstructured.Unstructured{dep}}, WithClusterClients(resolver))
+
+	env := testEnv("pr-federated", "team-orders", "same")
+	env.Spec.Deploy.ClusterRef = &v1alpha1.ClusterTargetRef{
+		Name: "us-west-burst",
+		KubeconfigSecretRef: &v1alpha1.SecretRef{
+			Name: "spoke-west-kubeconfig",
+		},
+	}
+
+	require.NoError(t, d.Deploy(ctx, env))
+
+	// Workload must exist on spoke WITHOUT cross-cluster OwnerReferences, and NOT on hub.
+	var hubDep appsv1.Deployment
+	err := hubClient.Get(ctx, client.ObjectKey{Name: "orders-preview", Namespace: "team-orders"}, &hubDep)
+	assert.True(t, apierrors.IsNotFound(err))
+
+	var spokeDep appsv1.Deployment
+	require.NoError(t, spokeClient.Get(ctx, client.ObjectKey{Name: "orders-preview", Namespace: "team-orders"}, &spokeDep))
+	assert.Empty(t, spokeDep.OwnerReferences, "cross-cluster OwnerReferences must not be set on spoke workloads")
+
+	statuses, err := d.Status(ctx, env)
+	require.NoError(t, err)
+	require.Len(t, statuses, 1)
+	assert.Equal(t, "orders-preview", statuses[0].Name)
+
+	require.NoError(t, d.Teardown(ctx, env))
+	err = spokeClient.Get(ctx, client.ObjectKey{Name: "orders-preview", Namespace: "team-orders"}, &spokeDep)
+	assert.True(t, apierrors.IsNotFound(err))
+}
+
+func TestDirectDeployer_Teardown_DeletesAllSupportedSpokeResourceKinds(t *testing.T) {
+	ctx := context.Background()
+	s := testScheme()
+	hubClient := fake.NewClientBuilder().WithScheme(s).Build()
+	spokeClient := fake.NewClientBuilder().WithScheme(s).Build()
+
+	resolver := &multicluster.StaticResolver{
+		Hub: &multicluster.Target{Name: "local", IsRemote: false, Client: hubClient},
+		Spokes: map[string]*multicluster.Target{
+			"spoke-west": {Name: "spoke-west", IsRemote: true, Client: spokeClient},
+		},
+	}
+
+	manifests := []unstructured.Unstructured{
+		{Object: map[string]interface{}{"apiVersion": "apps/v1", "kind": "DaemonSet", "metadata": map[string]interface{}{"name": "agent-ds"}}},
+		{Object: map[string]interface{}{"apiVersion": "batch/v1", "kind": "CronJob", "metadata": map[string]interface{}{"name": "cleanup-cj"}}},
+		{Object: map[string]interface{}{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "app-cm"}}},
+		{Object: map[string]interface{}{"apiVersion": "v1", "kind": "Secret", "metadata": map[string]interface{}{"name": "app-sec"}}},
+		{Object: map[string]interface{}{"apiVersion": "networking.k8s.io/v1", "kind": "Ingress", "metadata": map[string]interface{}{"name": "app-ing"}}},
+		{Object: map[string]interface{}{"apiVersion": "v1", "kind": "ServiceAccount", "metadata": map[string]interface{}{"name": "app-sa"}}},
+	}
+
+	d := NewDirectDeployer(hubClient, &mockFetcher{objects: manifests}, WithClusterClients(resolver))
+	env := testEnv("pr-all-kinds", "team-orders", "same")
+	env.Spec.Deploy.ClusterRef = &v1alpha1.ClusterTargetRef{
+		Name:                "spoke-west",
+		KubeconfigSecretRef: &v1alpha1.SecretRef{Name: "spoke-west-kubeconfig"},
+	}
+
+	require.NoError(t, d.Deploy(ctx, env))
+	require.NoError(t, spokeClient.Get(ctx, client.ObjectKey{Name: "agent-ds", Namespace: "team-orders"}, &appsv1.DaemonSet{}))
+	require.NoError(t, spokeClient.Get(ctx, client.ObjectKey{Name: "cleanup-cj", Namespace: "team-orders"}, &batchv1.CronJob{}))
+	require.NoError(t, spokeClient.Get(ctx, client.ObjectKey{Name: "app-cm", Namespace: "team-orders"}, &corev1.ConfigMap{}))
+	require.NoError(t, spokeClient.Get(ctx, client.ObjectKey{Name: "app-sec", Namespace: "team-orders"}, &corev1.Secret{}))
+	require.NoError(t, spokeClient.Get(ctx, client.ObjectKey{Name: "app-ing", Namespace: "team-orders"}, &networkingv1.Ingress{}))
+	require.NoError(t, spokeClient.Get(ctx, client.ObjectKey{Name: "app-sa", Namespace: "team-orders"}, &corev1.ServiceAccount{}))
+
+	require.NoError(t, d.Teardown(ctx, env))
+	assert.True(t, apierrors.IsNotFound(spokeClient.Get(ctx, client.ObjectKey{Name: "agent-ds", Namespace: "team-orders"}, &appsv1.DaemonSet{})))
+	assert.True(t, apierrors.IsNotFound(spokeClient.Get(ctx, client.ObjectKey{Name: "cleanup-cj", Namespace: "team-orders"}, &batchv1.CronJob{})))
+	assert.True(t, apierrors.IsNotFound(spokeClient.Get(ctx, client.ObjectKey{Name: "app-cm", Namespace: "team-orders"}, &corev1.ConfigMap{})))
+	assert.True(t, apierrors.IsNotFound(spokeClient.Get(ctx, client.ObjectKey{Name: "app-sec", Namespace: "team-orders"}, &corev1.Secret{})))
+	assert.True(t, apierrors.IsNotFound(spokeClient.Get(ctx, client.ObjectKey{Name: "app-ing", Namespace: "team-orders"}, &networkingv1.Ingress{})))
+	assert.True(t, apierrors.IsNotFound(spokeClient.Get(ctx, client.ObjectKey{Name: "app-sa", Namespace: "team-orders"}, &corev1.ServiceAccount{})))
+}
+
+func TestDirectDeployer_Teardown_LeastPrivilegeOptionalKindForbiddenAndExactSecretDeferral(t *testing.T) {
+	ctx := context.Background()
+	s := testScheme()
+
+	// Simulate controller-runtime cached hub client (blocking/failing with cache sync deadline exceeded if
+	// optional kinds like DaemonSet/CronJob/Ingress/PVC are listed!) AND least-privilege spoke RBAC (403 Forbidden).
+	hubClient := fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(interceptor.Funcs{
+		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			switch list.(type) {
+			case *appsv1.DaemonSetList,
+				*appsv1.ReplicaSetList,
+				*batchv1.CronJobList,
+				*networkingv1.IngressList,
+				*corev1.PersistentVolumeClaimList:
+				return context.DeadlineExceeded
+			default:
+				return cl.List(ctx, list, opts...)
+			}
+		},
+	}).Build()
+	spokeClient := fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(interceptor.Funcs{
+		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			switch list.(type) {
+			case *appsv1.DaemonSetList,
+				*appsv1.ReplicaSetList,
+				*batchv1.CronJobList,
+				*networkingv1.IngressList,
+				*corev1.PersistentVolumeClaimList:
+				return apierrors.NewForbidden(schema.GroupResource{Group: "apps", Resource: "daemonsets"}, "", errors.New("forbidden by least-privilege RBAC"))
+			default:
+				return cl.List(ctx, list, opts...)
+			}
+		},
+	}).Build()
+
+	makeManifests := func() []unstructured.Unstructured {
+		return []unstructured.Unstructured{
+			testDeploymentUnstructured("echo-preview", ""),
+			{Object: map[string]interface{}{"apiVersion": "v1", "kind": "Service", "metadata": map[string]interface{}{"name": "echo-preview"}}},
+			// User-supplied Secret sharing the diverge-db- prefix (must NOT be deferred during teardown).
+			{Object: map[string]interface{}{"apiVersion": "v1", "kind": "Secret", "metadata": map[string]interface{}{"name": "diverge-db-cache"}}},
+		}
+	}
+
+	resolver := &multicluster.StaticResolver{
+		Hub: &multicluster.Target{Name: "local", IsRemote: false, Client: hubClient},
+		Spokes: map[string]*multicluster.Target{
+			"spoke-lp": {Name: "spoke-lp", IsRemote: true, Client: spokeClient},
+		},
+	}
+
+	// 1. Hub teardown never lists unauthorized optional kinds on the informer cache client.
+	dHub := NewDirectDeployer(hubClient, &mockFetcher{objects: makeManifests()}, WithClusterClients(resolver))
+	envHub := testEnv("istio-cleanup", "team-orders", "same")
+	require.NoError(t, dHub.Deploy(ctx, envHub))
+	delNow := metav1.Now()
+	envHub.DeletionTimestamp = &delNow
+	require.NoError(t, dHub.Teardown(ctx, envHub))
+	assert.True(t, apierrors.IsNotFound(hubClient.Get(ctx, client.ObjectKey{Name: "echo-preview", Namespace: "team-orders"}, &appsv1.Deployment{})))
+	assert.True(t, apierrors.IsNotFound(hubClient.Get(ctx, client.ObjectKey{Name: "echo-preview", Namespace: "team-orders"}, &corev1.Service{})))
+	assert.True(t, apierrors.IsNotFound(hubClient.Get(ctx, client.ObjectKey{Name: "diverge-db-cache", Namespace: "team-orders"}, &corev1.Secret{})))
+
+	// 2. Spoke teardown ignores 403 Forbidden on unused optional kinds and defers ONLY the exact controller DB Secret.
+	d := NewDirectDeployer(hubClient, &mockFetcher{objects: makeManifests()}, WithClusterClients(resolver))
+	env := testEnv("istio-cleanup-spoke", "team-orders", "same")
+	env.Spec.Deploy.ClusterRef = &v1alpha1.ClusterTargetRef{
+		Name:                "spoke-lp",
+		KubeconfigSecretRef: &v1alpha1.SecretRef{Name: "spoke-lp-sec"},
+	}
+	require.NoError(t, d.Deploy(ctx, env))
+
+	// Also seed the exact controller-generated DB env Secret, which MUST remain deferred until workload drain completes.
+	generatedDBSecretName := controllerDBEnvSecretName(env.Name)
+	genSec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      generatedDBSecretName,
+			Namespace: "team-orders",
+			Labels: map[string]string{
+				"divergedev.com/environment": env.Name,
+				"divergedev.com/managed-by":  "diverge",
+			},
+		},
+	}
+	require.NoError(t, spokeClient.Create(ctx, genSec))
+
+	env.DeletionTimestamp = &delNow
+	require.NoError(t, d.Teardown(ctx, env))
+
+	// Deployment, Service, and user-supplied diverge-db-cache Secret are deleted, while exact generated DB Secret is deferred.
+	assert.True(t, apierrors.IsNotFound(spokeClient.Get(ctx, client.ObjectKey{Name: "echo-preview", Namespace: "team-orders"}, &appsv1.Deployment{})))
+	assert.True(t, apierrors.IsNotFound(spokeClient.Get(ctx, client.ObjectKey{Name: "echo-preview", Namespace: "team-orders"}, &corev1.Service{})))
+	assert.True(t, apierrors.IsNotFound(spokeClient.Get(ctx, client.ObjectKey{Name: "diverge-db-cache", Namespace: "team-orders"}, &corev1.Secret{})))
+	require.NoError(t, spokeClient.Get(ctx, client.ObjectKey{Name: generatedDBSecretName, Namespace: "team-orders"}, &corev1.Secret{}))
+
+	// 3. Unrelated pre-existing same-named Secret without matching ownership labels MUST NOT be deleted by named fallback.
+	unmanagedSec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "shared-baseline-sec",
+			Namespace: "team-orders",
+			Labels:    map[string]string{"app": "baseline"},
+		},
+	}
+	require.NoError(t, hubClient.Create(ctx, unmanagedSec))
+	dUnmanaged := NewDirectDeployer(hubClient, &mockFetcher{objects: []unstructured.Unstructured{
+		{Object: map[string]interface{}{"apiVersion": "v1", "kind": "Secret", "metadata": map[string]interface{}{"name": "shared-baseline-sec"}}},
+	}}, WithClusterClients(resolver))
+	require.NoError(t, dUnmanaged.Teardown(ctx, envHub))
+	require.NoError(t, hubClient.Get(ctx, client.ObjectKey{Name: "shared-baseline-sec", Namespace: "team-orders"}, &corev1.Secret{}),
+		"unmanaged baseline Secret must remain untouched when ownership labels do not match")
+
+	// 4. Remote same-namespace manifest fetch failure must propagate as an error so the finalizer is retained.
+	dFetchFail := NewDirectDeployer(hubClient, &mockFetcher{err: errors.New("manifest URL unreachable")}, WithClusterClients(resolver))
+	errFetch := dFetchFail.Teardown(ctx, env)
+	require.Error(t, errFetch)
+	assert.Contains(t, errFetch.Error(), "failed to fetch manifests for remote teardown")
 }

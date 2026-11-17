@@ -21,7 +21,7 @@ var ClusterService_GetClusterInfoSchema = []byte("{\"type\":\"object\",\"propert
 const ClusterService_GetCostSummaryName = "ClusterService_GetCostSummary"
 const ClusterService_GetCostSummaryDescription = ""
 
-var ClusterService_GetCostSummarySchema = []byte("{\"type\":\"object\",\"properties\":{\"namespace\":{\"type\":\"string\"}},\"additionalProperties\":false}")
+var ClusterService_GetCostSummarySchema = []byte("{\"type\":\"object\",\"properties\":{\"includeHistorical\":{\"type\":\"boolean\"},\"namespace\":{\"type\":\"string\"},\"windowDays\":{\"type\":\"integer\"}},\"additionalProperties\":false}")
 
 func RegisterClusterServiceMCP(registry mcpruntime.Registry, handler ClusterServiceMCPHandler, opts ...mcpruntime.Option) {
 	if tr, ok := registry.(*mcpruntime.ToolRegistry); ok {

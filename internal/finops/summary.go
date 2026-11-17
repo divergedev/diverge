@@ -24,6 +24,7 @@ import (
 	pb "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 	"github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/metrics"
+	"github.com/divergedev/diverge/internal/multicluster"
 )
 
 const (
@@ -58,6 +59,8 @@ type SummaryOptions struct {
 	CanListPreviewGroups func(ctx context.Context) bool
 	CanListAgentTasks    func(ctx context.Context) bool
 	Timeout              time.Duration
+	IncludeHistorical    bool
+	WindowDays           int
 }
 
 // BuildCostSummary computes per-namespace, per-service, and per-PR usage and cost attribution
@@ -132,7 +135,9 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 
 	nsBreakdowns := make(map[string]*pb.NamespaceCostBreakdown)
 	svcBreakdowns := make(map[string]*pb.ServiceCostBreakdown)
+	clusterBreakdowns := make(map[string]*pb.ClusterCostBreakdown)
 	baselineServiceCache := make(map[string]int)
+	var trendSpans []trendSpan
 
 	resolveBaselineServices := func(ns string, env *v1alpha1.Environment) int {
 		if env != nil {
@@ -158,9 +163,27 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 		computeHourlyUSD float64
 		baselineCount    int
 	}
+	type previewGroupTrendLiveTarget struct {
+		spanIdx   int
+		memberKey string
+	}
+	type previewGroupTrendState struct {
+		baselineCount int
+		membersByKey  map[string]pgIntervalMember
+		liveTargets   []previewGroupTrendLiveTarget
+	}
 	pgDeltaByKey := make(map[string]*previewGroupDeltaState)
+	pgTrendByKey := make(map[string]*previewGroupTrendState)
 	cnpgCountsByNS := make(map[string]int32)
 	topConsumers := make([]*pb.EnvironmentCostItem, 0, len(envList.Items))
+
+	windowDays := NormalizeWindowDays(opts.WindowDays)
+	windowStart := startOfUTCDay(now).AddDate(0, 0, -(windowDays - 1))
+	allRetainedRecords := ListHistoricalRecords(ctx, opts.Client, opts.K8sClient, reqNS, now, LedgerRetentionDays, timeout)
+	ledgerKeys := make(map[string]struct{}, len(allRetainedRecords))
+	for _, rec := range allRetainedRecords {
+		ledgerKeys[rec.dedupKey()] = struct{}{}
+	}
 
 	var (
 		totalHourlyUSD             float64
@@ -177,16 +200,78 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 
 	for i := range envList.Items {
 		env := &envList.Items[i]
-		if !env.DeletionTimestamp.IsZero() {
-			continue
-		}
-
 		ns := strings.TrimSpace(env.Namespace)
 		if ns == "" {
 			ns = "default"
 		}
+		if !env.DeletionTimestamp.IsZero() {
+			// Deleting environments stay excluded from live totals, while retaining their historical trend
+			// contribution and PreviewGroup membership interval until their ledger record is written (deduped by UID).
+			envStart := env.CreationTimestamp.UTC()
+			if envStart.IsZero() && env.Status.CreatedAt != nil {
+				envStart = env.Status.CreatedAt.UTC()
+			}
+			if envStart.IsZero() || envStart.After(now) {
+				envStart = now
+			}
+			dedupK := envDedupKey(ns, env, envStart)
+			if _, inLedger := ledgerKeys[dedupK]; !inLedger {
+				delEst := metrics.ComputeEnvironmentCost(env, now, rateCard)
+				delRate := delEst.BaseComputeHourlyUSD
+				billableHours := delEst.ActiveHours + delEst.HibernatedHours
+				spanEnd := now
+				if billableHours >= 0 && (env.Status.Phase == v1alpha1.PhaseFailed || env.Status.Phase == v1alpha1.PhaseTerminating || string(env.Status.Phase) == "Expired") {
+					spanEnd = envStart.Add(time.Duration(billableHours * float64(time.Hour)))
+					if spanEnd.After(now) {
+						spanEnd = now
+					}
+				}
+				delHibSaved := 0.0
+				if delEst.HibernatedHours > 0 && delRate > 0 {
+					delHibSaved = delEst.HibernatedHours * delRate
+				}
+				pgName := previewGroupNameFromEnv(env)
+				delDeltaSaved := 0.0
+				if pgName == "" && env.Spec.Deploy.Namespace != "create" && delEst.ServiceCount > 0 && delRate > 0 && delEst.ActiveHours > 0 {
+					if bc := resolveBaselineServices(ns, env); bc > delEst.ServiceCount {
+						delDeltaSaved = delEst.ActiveHours * float64(bc-delEst.ServiceCount) * (delRate / float64(delEst.ServiceCount))
+					}
+				}
+				spanIdx := len(trendSpans)
+				trendSpans = append(trendSpans, trendSpan{
+					start:        envStart,
+					end:          spanEnd,
+					accruedUSD:   delEst.AccruedUSD,
+					hibSavedUSD:  delHibSaved,
+					deltaSaveUSD: delDeltaSaved,
+					terminated:   false,
+				})
+				if pgName != "" && env.Spec.Deploy.Namespace != "create" && delEst.ServiceCount > 0 {
+					if member, _, ok := buildEnvPGIntervalMember(ns, env, now, rateCard); ok {
+						pgKey := ns + "/" + pgName
+						tState, tExists := pgTrendByKey[pgKey]
+						if !tExists {
+							tState = &previewGroupTrendState{membersByKey: make(map[string]pgIntervalMember)}
+							pgTrendByKey[pgKey] = tState
+						}
+						if bc := resolveBaselineServices(ns, env); bc > tState.baselineCount {
+							tState.baselineCount = bc
+						}
+						tState.membersByKey[member.key] = member
+						tState.liveTargets = append(tState.liveTargets, previewGroupTrendLiveTarget{
+							spanIdx:   spanIdx,
+							memberKey: member.key,
+						})
+					}
+				}
+			}
+			continue
+		}
 
 		est := metrics.ComputeEnvironmentCost(env, now, rateCard)
+		// Capture phase-independent rate-card active compute rate before OpenCost live allocation overrides
+		// est.ComputeHourlyUSD, so instantaneous current-hour rates and terminal phases never distort prior lifetime hours.
+		rateCardActiveComputeRate := est.BaseComputeHourlyUSD
 		terminal := env.Status.Phase == v1alpha1.PhaseFailed ||
 			env.Status.Phase == v1alpha1.PhaseTerminating ||
 			string(env.Status.Phase) == "Expired"
@@ -231,9 +316,9 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 		totalCPUCores += est.CPUCores
 		totalMemoryGiB += est.MemoryGiB
 
+		pgName := previewGroupNameFromEnv(env)
 		if !terminal && !est.Hibernated && env.Spec.Deploy.Namespace != "create" && est.ServiceCount > 0 {
 			baselineCount := resolveBaselineServices(ns, env)
-			pgName := strings.TrimSpace(env.Labels["divergedev.com/preview-group"])
 			if pgName != "" {
 				pgKey := ns + "/" + pgName
 				state, exists := pgDeltaByKey[pgKey]
@@ -269,6 +354,79 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 		nsEntry.ComputeHours += activeComputeHours
 		nsEntry.CpuCores += est.CPUCores
 		nsEntry.MemoryGib += est.MemoryGiB
+
+		clusterName := multicluster.ClusterName(env)
+		clusterEntry, cExists := clusterBreakdowns[clusterName]
+		if !cExists {
+			clusterEntry = &pb.ClusterCostBreakdown{Cluster: clusterName}
+			clusterBreakdowns[clusterName] = clusterEntry
+		}
+		clusterEntry.TotalEnvironments++
+		if est.Hibernated {
+			clusterEntry.HibernatedEnvironments++
+		} else if !terminal {
+			clusterEntry.ActiveEnvironments++
+		}
+		clusterEntry.HourlyCostUsd += est.HourlyUSD
+		clusterEntry.AccruedCostUsd += est.AccruedUSD
+		clusterEntry.CpuCores += est.CPUCores
+		clusterEntry.MemoryGib += est.MemoryGiB
+
+		envStart := env.CreationTimestamp.UTC()
+		if envStart.IsZero() && env.Status.CreatedAt != nil {
+			envStart = env.Status.CreatedAt.UTC()
+		}
+		if envStart.IsZero() || envStart.After(now) {
+			envStart = now
+		}
+		liveHibSavedUSD := 0.0
+		if est.HibernatedHours > 0 && rateCardActiveComputeRate > 0 {
+			liveHibSavedUSD = est.HibernatedHours * rateCardActiveComputeRate
+		}
+		liveDeltaSavedUSD := 0.0
+		if pgName == "" && env.Spec.Deploy.Namespace != "create" && est.ServiceCount > 0 && rateCardActiveComputeRate > 0 && est.ActiveHours > 0 {
+			if bc := resolveBaselineServices(ns, env); bc > est.ServiceCount {
+				liveDeltaSavedUSD = est.ActiveHours * float64(bc-est.ServiceCount) * (rateCardActiveComputeRate / float64(est.ServiceCount))
+			}
+		}
+		dedupK := envDedupKey(ns, env, envStart)
+		if _, inLedger := ledgerKeys[dedupK]; !inLedger {
+			spanEnd := now
+			if terminal {
+				billableHours := est.ActiveHours + est.HibernatedHours
+				spanEnd = envStart.Add(time.Duration(billableHours * float64(time.Hour)))
+				if spanEnd.After(now) {
+					spanEnd = now
+				}
+			}
+			spanIdx := len(trendSpans)
+			trendSpans = append(trendSpans, trendSpan{
+				start:        envStart,
+				end:          spanEnd,
+				accruedUSD:   est.AccruedUSD,
+				hibSavedUSD:  liveHibSavedUSD,
+				deltaSaveUSD: liveDeltaSavedUSD,
+				terminated:   false,
+			})
+			if pgName != "" && env.Spec.Deploy.Namespace != "create" && est.ServiceCount > 0 {
+				if member, _, ok := buildEnvPGIntervalMember(ns, env, now, rateCard); ok {
+					pgKey := ns + "/" + pgName
+					tState, tExists := pgTrendByKey[pgKey]
+					if !tExists {
+						tState = &previewGroupTrendState{membersByKey: make(map[string]pgIntervalMember)}
+						pgTrendByKey[pgKey] = tState
+					}
+					if bc := resolveBaselineServices(ns, env); bc > tState.baselineCount {
+						tState.baselineCount = bc
+					}
+					tState.membersByKey[member.key] = member
+					tState.liveTargets = append(tState.liveTargets, previewGroupTrendLiveTarget{
+						spanIdx:   spanIdx,
+						memberKey: member.key,
+					})
+				}
+			}
+		}
 
 		services := ExtractEnvironmentServiceNames(env)
 		share := float64(len(services))
@@ -326,6 +484,7 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 			TtlWarning:                  ttlWarn,
 			TtlWarningReason:            ttlReason,
 			CostSource:                  costSource,
+			Cluster:                     clusterName,
 		})
 	}
 
@@ -333,6 +492,36 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 		if state.deployedServices > 0 && state.baselineCount > state.deployedServices {
 			perServiceComputeHourly := state.computeHourlyUSD / float64(state.deployedServices)
 			totalDeltaSavingsUSD += float64(state.baselineCount-state.deployedServices) * perServiceComputeHourly
+		}
+	}
+
+	for _, rec := range allRetainedRecords {
+		if rec.PreviewGroup == "" {
+			continue
+		}
+		pgKey := rec.Namespace + "/" + rec.PreviewGroup
+		tState, exists := pgTrendByKey[pgKey]
+		if !exists {
+			continue
+		}
+		if histMember, ok := buildHistoricalPGIntervalMember(rec, rateCard); ok {
+			if _, seen := tState.membersByKey[histMember.key]; !seen {
+				tState.membersByKey[histMember.key] = histMember
+			}
+		}
+	}
+	for _, tState := range pgTrendByKey {
+		if len(tState.liveTargets) == 0 || tState.baselineCount <= 0 {
+			continue
+		}
+		members := make([]pgIntervalMember, 0, len(tState.membersByKey))
+		for _, m := range tState.membersByKey {
+			members = append(members, m)
+		}
+		allocated, intervalsByKey := allocatePreviewGroupIntervalSavings(tState.baselineCount, members)
+		for _, target := range tState.liveTargets {
+			trendSpans[target.spanIdx].deltaSaveUSD = allocated[target.memberKey]
+			trendSpans[target.spanIdx].deltaIntervals = intervalsByKey[target.memberKey]
 		}
 	}
 
@@ -390,6 +579,58 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 		return topConsumers[i].Name < topConsumers[j].Name
 	})
 
+	byCluster := make([]*pb.ClusterCostBreakdown, 0, len(clusterBreakdowns))
+	for _, entry := range clusterBreakdowns {
+		byCluster = append(byCluster, entry)
+	}
+	sort.Slice(byCluster, func(i, j int) bool {
+		if math.Abs(byCluster[i].HourlyCostUsd-byCluster[j].HourlyCostUsd) > 1e-9 {
+			return byCluster[i].HourlyCostUsd > byCluster[j].HourlyCostUsd
+		}
+		if math.Abs(byCluster[i].AccruedCostUsd-byCluster[j].AccruedCostUsd) > 1e-9 {
+			return byCluster[i].AccruedCostUsd > byCluster[j].AccruedCostUsd
+		}
+		return byCluster[i].Cluster < byCluster[j].Cluster
+	})
+
+	historicalRecords := make([]HistoricalEnvironmentRecord, 0, len(allRetainedRecords))
+	for _, rec := range allRetainedRecords {
+		if rec.TerminatedAt.Before(windowStart) {
+			continue
+		}
+		historicalRecords = append(historicalRecords, rec)
+	}
+	var (
+		historicalAccruedUSD float64
+		historicalSavingsUSD float64
+		historicalConsumers  []*pb.EnvironmentCostItem
+	)
+	if opts.IncludeHistorical && len(historicalRecords) > 0 {
+		historicalConsumers = make([]*pb.EnvironmentCostItem, 0, len(historicalRecords))
+	}
+	for _, rec := range historicalRecords {
+		historicalAccruedUSD += rec.AccruedCostUSD
+		historicalSavingsUSD += rec.HibernationSavingsUSD + rec.DeltaRoutingSavingsUSD
+		spanEnd := rec.TerminatedAt
+		if rec.BillableEndAt != nil && !rec.BillableEndAt.IsZero() && !rec.BillableEndAt.Before(rec.CreatedAt) && rec.BillableEndAt.Before(spanEnd) {
+			spanEnd = *rec.BillableEndAt
+		}
+		trendSpans = append(trendSpans, trendSpan{
+			start:          rec.CreatedAt,
+			end:            spanEnd,
+			terminatedAt:   rec.TerminatedAt,
+			accruedUSD:     rec.AccruedCostUSD,
+			hibSavedUSD:    rec.HibernationSavingsUSD,
+			deltaSaveUSD:   rec.DeltaRoutingSavingsUSD,
+			deltaIntervals: rec.DeltaIntervals,
+			terminated:     true,
+		})
+		if opts.IncludeHistorical {
+			historicalConsumers = append(historicalConsumers, HistoricalRecordToCostItem(rec))
+		}
+	}
+	dailyTrend := buildDailyCostTrend(now, windowDays, trendSpans)
+
 	return &pb.GetCostSummaryResponse{
 		TotalHourlyCostUsd:           totalHourlyUSD,
 		MonthlyRunRateUsd:            totalHourlyUSD * HoursPerMonth,
@@ -412,7 +653,13 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 			DatabaseSchemaHourUsd:    rateCard.DatabaseSchemaHrUSD,
 			DatabaseDedicatedHourUsd: rateCard.DatabaseDedicatedHrUSD,
 		},
-		OpencostEnabled: openCostQueried,
+		OpencostEnabled:          openCostQueried,
+		ByCluster:                byCluster,
+		DailyTrend:               dailyTrend,
+		HistoricalAccruedCostUsd: historicalAccruedUSD,
+		HistoricalSavingsUsd:     historicalSavingsUSD,
+		HistoricalEnvironments:   int32(len(historicalRecords)),
+		HistoricalConsumers:      historicalConsumers,
 	}, nil
 }
 

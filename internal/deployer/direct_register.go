@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/divergedev/diverge/internal/multicluster"
 	"github.com/divergedev/diverge/pkg/registry"
 )
 
@@ -34,8 +35,9 @@ func init() {
 				return nil, fmt.Errorf("unsupported manifest source type: %q", *manifestSourceType)
 			}
 			return &DirectDeployer{
-				Client:  deps.Client,
-				Fetcher: fetcher,
+				Client:         deps.Client,
+				Fetcher:        fetcher,
+				ClusterClients: multicluster.NewManager(deps.Client, deps.Clientset, deps.Config, deps.Scheme),
 			}, nil
 		},
 		Description: "Direct deployment (configmap, url, or serviceconfig)",

@@ -36,6 +36,7 @@ import (
 	"github.com/divergedev/diverge/internal/events"
 	"github.com/divergedev/diverge/internal/finops"
 	_ "github.com/divergedev/diverge/internal/metrics"
+	"github.com/divergedev/diverge/internal/multicluster"
 	"github.com/divergedev/diverge/internal/notifier"
 	"github.com/divergedev/diverge/internal/observability"
 	"github.com/divergedev/diverge/internal/routing"
@@ -186,9 +187,11 @@ func main() {
 
 	deps := registry.Deps{
 		Client: mgr.GetClient(),
+		Config: mgr.GetConfig(),
 		Scheme: mgr.GetScheme(),
 		Logger: ctrl.Log,
 	}
+	clusterMgr := multicluster.NewManager(mgr.GetClient(), nil, mgr.GetConfig(), mgr.GetScheme())
 
 	var routerImpl routing.Router
 	routerImpl, err = routing.NewRouter(routingProvider, deps)
@@ -247,8 +250,9 @@ func main() {
 	// Wrap with KEDA Deployer (detects CRD automatically)
 	if deployProvider != "noop" {
 		deployerImpl = &deployer.KEDADeployer{
-			Inner:  deployerImpl,
-			Client: mgr.GetClient(),
+			Inner:          deployerImpl,
+			Client:         mgr.GetClient(),
+			ClusterClients: clusterMgr,
 			Config: deployer.KEDAConfig{
 				MinReplicas: kedaMinReplicas,
 				MaxReplicas: kedaMaxReplicas,
@@ -304,6 +308,7 @@ func main() {
 		AsyncProvisioner: asyncProviderImpl,
 		FeatureProvider:  featureProviderImpl,
 		BudgetAlerter:    finops.NewBudgetAlertDispatcher("", nil),
+		ClusterClients:   clusterMgr,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Environment")
 		os.Exit(1)
@@ -322,6 +327,7 @@ func main() {
 		Notifier:         pgNotifierImpl,
 		StatusReporter:   statusReporterImpl,
 		DatabaseProvider: dbProviderImpl,
+		ClusterClients:   clusterMgr,
 		EnableGAMMA:      enableGAMMA,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PreviewGroup")

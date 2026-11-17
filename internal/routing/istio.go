@@ -15,17 +15,61 @@ import (
 	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/multicluster"
 )
 
 // IstioRouter implements Router using Istio AuthorizationPolicy resources.
 type IstioRouter struct {
-	Client client.Client
+	Client         client.Client
+	ClusterClients multicluster.Resolver
+	scopedRemote   bool
+}
+
+func (r *IstioRouter) routerForEnv(ctx context.Context, env *v1alpha1.Environment) (*IstioRouter, error) {
+	if r.scopedRemote {
+		return r, nil
+	}
+	if pinned, ok := multicluster.TargetFromContext(ctx); ok && pinned != nil {
+		if !pinned.IsRemote {
+			return r, nil
+		}
+		return &IstioRouter{
+			Client:       pinned.Client,
+			scopedRemote: true,
+		}, nil
+	}
+	if !multicluster.IsRemoteEnv(env) {
+		return r, nil
+	}
+	resolver := r.ClusterClients
+	if resolver == nil && r.Client != nil {
+		resolver = multicluster.NewManager(r.Client, nil, nil, r.Client.Scheme())
+	}
+	if resolver == nil {
+		return nil, fmt.Errorf("multi-cluster resolver is not configured")
+	}
+	target, err := resolver.Resolve(ctx, env)
+	if err != nil {
+		return nil, err
+	}
+	return &IstioRouter{
+		Client:       target.Client,
+		scopedRemote: true,
+	}, nil
 }
 
 var _ Router = (*IstioRouter)(nil)
 
 // Reconcile creates or updates an AuthorizationPolicy for the environment.
 func (r *IstioRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment) error {
+	scoped, err := r.routerForEnv(ctx, env)
+	if err != nil {
+		return fmt.Errorf("failed to resolve target cluster for istio routing: %w", err)
+	}
+	if scoped != r {
+		return scoped.Reconcile(ctx, env)
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	logger := log.FromContext(ctx).WithName("istio-router")
@@ -46,9 +90,11 @@ func (r *IstioRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment) 
 	u.SetName(policyName)
 	u.SetNamespace(targetNS)
 
-	u.SetOwnerReferences([]metav1.OwnerReference{
-		*metav1.NewControllerRef(env, v1alpha1.GroupVersion.WithKind("Environment")),
-	})
+	if !r.scopedRemote && targetNS == env.Namespace {
+		u.SetOwnerReferences([]metav1.OwnerReference{
+			*metav1.NewControllerRef(env, v1alpha1.GroupVersion.WithKind("Environment")),
+		})
+	}
 
 	u.SetLabels(map[string]string{
 		"divergedev.com/managed-by":  "diverge",
@@ -119,6 +165,17 @@ func (r *IstioRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment) 
 
 // Teardown deletes AuthorizationPolicy resources by label selector.
 func (r *IstioRouter) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
+	scoped, err := r.routerForEnv(ctx, env)
+	if err != nil {
+		if _, isVal := multicluster.IsValidationError(err); isVal && !multicluster.HasConfirmedRemoteTarget(env) {
+			return nil
+		}
+		return fmt.Errorf("failed to resolve target cluster for istio teardown: %w", err)
+	}
+	if scoped != r {
+		return scoped.Teardown(ctx, env)
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	logger := log.FromContext(ctx).WithName("istio-router")

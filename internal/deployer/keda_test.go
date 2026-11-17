@@ -6,6 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	appsv1 "k8s.io/api/apps/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -14,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/multicluster"
 )
 
 type mockDeployer struct {
@@ -585,4 +588,64 @@ func TestKEDADeployer_EnabledTrue_UsesDefaults(t *testing.T) {
 
 	cooldown, _, _ := unstructured.NestedInt64(hso.Object, "spec", "scaledownPeriod")
 	assert.Equal(t, int64(600), cooldown, "should use CLI Cooldown when only Enabled=true is set")
+}
+
+type rotatingResolver struct {
+	calls   int
+	targetA *multicluster.Target
+	targetB *multicluster.Target
+}
+
+func (r *rotatingResolver) Resolve(ctx context.Context, _ *v1alpha1.Environment) (*multicluster.Target, error) {
+	if pinned, ok := multicluster.TargetFromContext(ctx); ok {
+		return pinned, nil
+	}
+	r.calls++
+	if r.calls == 1 {
+		return r.targetA, nil
+	}
+	return r.targetB, nil
+}
+
+func TestKEDADeployer_SingleTargetResolutionAcrossInnerAndHSO(t *testing.T) {
+	ctx := context.Background()
+	s := testScheme()
+	hubClient := fake.NewClientBuilder().WithScheme(s).Build()
+	spokeA := fake.NewClientBuilder().WithScheme(s).Build()
+	spokeB := fake.NewClientBuilder().WithScheme(s).Build()
+
+	resolver := &rotatingResolver{
+		targetA: &multicluster.Target{Name: "spoke-a", IsRemote: true, Client: spokeA},
+		targetB: &multicluster.Target{Name: "spoke-b", IsRemote: true, Client: spokeB},
+	}
+
+	direct := NewDirectDeployer(hubClient, &mockFetcher{
+		objects: []unstructured.Unstructured{testDeploymentUnstructured("orders-preview", "")},
+	}, WithClusterClients(resolver))
+
+	kd := &KEDADeployer{
+		Inner:          direct,
+		Client:         hubClient,
+		ClusterClients: resolver,
+		Config:         KEDAConfig{MinReplicas: 0, MaxReplicas: 3, Cooldown: 120},
+	}
+
+	env := testEnv("pr-keda", "team-orders", "same")
+	env.Spec.Deploy.ClusterRef = &v1alpha1.ClusterTargetRef{
+		Name:                "spoke-a",
+		KubeconfigSecretRef: &v1alpha1.SecretRef{Name: "spoke-secret"},
+	}
+
+	require.NoError(t, kd.Deploy(ctx, env))
+	assert.Equal(t, 1, resolver.calls, "Deploy must resolve the target cluster only once across Inner and HSO")
+
+	// Both Deployment AND HTTPScaledObject must exist on spokeA, and neither on spokeB.
+	require.NoError(t, spokeA.Get(ctx, client.ObjectKey{Name: "orders-preview", Namespace: "team-orders"}, &appsv1.Deployment{}))
+	hsoA := &unstructured.Unstructured{}
+	hsoA.SetGroupVersionKind(hsoGVK)
+	require.NoError(t, spokeA.Get(ctx, client.ObjectKey{Name: "pr-keda", Namespace: "team-orders"}, hsoA))
+
+	hsoB := &unstructured.Unstructured{}
+	hsoB.SetGroupVersionKind(hsoGVK)
+	assert.True(t, apierrors.IsNotFound(spokeB.Get(ctx, client.ObjectKey{Name: "pr-keda", Namespace: "team-orders"}, hsoB)))
 }

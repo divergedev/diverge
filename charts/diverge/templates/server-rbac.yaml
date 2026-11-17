@@ -77,6 +77,9 @@ rules:
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["get", "list", "delete"]
@@ -85,6 +88,16 @@ rules:
     resources: ["secrets"]
     resourceNames: ["diverge-agenttask-tokens"]
     verbs: ["get", "update", "patch"]
+  {{- end }}
+  {{- if .Values.server.rbac.multiClusterSecretNames }}
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: {{ .Values.server.rbac.multiClusterSecretNames | toJson }}
+    verbs: ["get"]
+  {{- else if .Values.server.rbac.multiClusterSecrets }}
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
   {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -125,6 +138,9 @@ rules:
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["get", "list", "delete"]
@@ -133,6 +149,16 @@ rules:
     resources: ["secrets"]
     resourceNames: ["diverge-agenttask-tokens"]
     verbs: ["get", "update", "patch"]
+  {{- end }}
+  {{- if $.Values.server.rbac.multiClusterSecretNames }}
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: {{ $.Values.server.rbac.multiClusterSecretNames | toJson }}
+    verbs: ["get"]
+  {{- else if $.Values.server.rbac.multiClusterSecrets }}
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
   {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1

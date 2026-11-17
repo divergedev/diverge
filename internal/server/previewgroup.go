@@ -255,6 +255,7 @@ func (s *PreviewGroupService) UpdatePreviewGroup(ctx context.Context, req *conne
 	if err := s.client.Get(ctx, client.ObjectKey{Name: msg.PreviewGroup.Name, Namespace: namespace}, &existingCrd); err != nil {
 		return nil, SanitizeK8sError(s.logger, err)
 	}
+	priorPg := existingCrd.DeepCopy()
 
 	if msg.PreviewGroup.ResourceVersion != "" {
 		existingCrd.ResourceVersion = msg.PreviewGroup.ResourceVersion
@@ -291,6 +292,14 @@ func (s *PreviewGroupService) UpdatePreviewGroup(ctx context.Context, req *conne
 		existingCrd.Spec = newCrd.Spec
 		existingCrd.Labels = newCrd.Labels
 		existingCrd.Annotations = newCrd.Annotations
+	}
+
+	if updateErrs := v1alpha1.ValidatePreviewGroupUpdate(priorPg, &existingCrd); len(updateErrs) > 0 {
+		for _, fe := range updateErrs {
+			if fe.Field != "" && (fe.Field == "spec.clusterRef" || len(fe.Field) >= len("spec.services[") && fe.Field[:len("spec.services[")] == "spec.services[" && len(fe.Field) > 10 && fe.Field[len(fe.Field)-len(".clusterRef"):] == ".clusterRef") {
+				return nil, connect.NewError(connect.CodeInvalidArgument, errors.New(fe.Detail))
+			}
+		}
 	}
 
 	if err := s.client.Update(ctx, &existingCrd); err != nil {

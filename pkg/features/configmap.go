@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -210,7 +211,7 @@ func (p *ConfigMapProvider) Provision(ctx context.Context, env *v1alpha1.Environ
 		},
 	}
 
-	if targetNS == env.Namespace && p.scheme != nil {
+	if !isRemoteClusterTarget(env) && targetNS == env.Namespace && p.scheme != nil {
 		if err := controllerutil.SetControllerReference(env, cm, p.scheme); err != nil {
 			return nil, fmt.Errorf("failed to set owner reference on feature configmap: %w", err)
 		}
@@ -299,4 +300,16 @@ func (p *ConfigMapProvider) Status(ctx context.Context, env *v1alpha1.Environmen
 		Ready:   true,
 		Message: fmt.Sprintf("ConfigMap %s ready", cmName),
 	}, nil
+}
+
+func isRemoteClusterTarget(env *v1alpha1.Environment) bool {
+	if env == nil || env.Spec.Deploy.ClusterRef == nil {
+		return false
+	}
+	ref := env.Spec.Deploy.ClusterRef
+	if ref.KubeconfigSecretRef != nil {
+		return true
+	}
+	name := strings.TrimSpace(ref.Name)
+	return name != "" && name != "local"
 }

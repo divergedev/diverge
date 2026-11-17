@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -18,13 +19,20 @@ func (s *ClusterService) GetCostSummary(ctx context.Context, req *connect.Reques
 	const apiTimeout = 5 * time.Second
 
 	reqNS := ""
+	includeHistorical := false
+	windowDays := 0
 	if req != nil && req.Msg != nil {
 		reqNS = strings.TrimSpace(req.Msg.GetNamespace())
+		includeHistorical = req.Msg.GetIncludeHistorical()
+		windowDays = int(req.Msg.GetWindowDays())
 	}
 	if reqNS != "" {
 		if err := ValidateDNS1123Label(reqNS, "namespace"); err != nil {
 			return nil, err
 		}
+	}
+	if windowDays < 0 || windowDays > finops.LedgerRetentionDays {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("window_days must be between 0 and %d", finops.LedgerRetentionDays))
 	}
 
 	sarCtx, sarCancel := context.WithTimeout(ctx, apiTimeout)
@@ -35,10 +43,12 @@ func (s *ClusterService) GetCostSummary(ctx context.Context, req *connect.Reques
 	}
 
 	resp, err := finops.BuildCostSummary(ctx, finops.SummaryOptions{
-		Namespace: reqNS,
-		Client:    s.client,
-		K8sClient: s.k8sClient,
-		Timeout:   apiTimeout,
+		Namespace:         reqNS,
+		Client:            s.client,
+		K8sClient:         s.k8sClient,
+		Timeout:           apiTimeout,
+		IncludeHistorical: includeHistorical,
+		WindowDays:        windowDays,
 		CanListPreviewGroups: func(authCtx context.Context) bool {
 			return AuthorizeAction(authCtx, s.k8sClient, nil, "list", reqNS, "previewgroups") == nil
 		},

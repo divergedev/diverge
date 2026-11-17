@@ -13,6 +13,7 @@ import (
 	"connectrpc.com/connect"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	pb "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
@@ -20,21 +21,36 @@ import (
 	"github.com/divergedev/diverge/api/v1alpha1"
 
 	"github.com/divergedev/diverge/internal/metrics"
+	"github.com/divergedev/diverge/internal/multicluster"
+	"github.com/divergedev/diverge/internal/server/auth"
 	"github.com/divergedev/diverge/internal/server/streaming"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/util/retry"
 )
 
 type EnvironmentService struct {
-	client      client.Client
-	k8sClient   kubernetes.Interface
-	informerMgr *streaming.InformerManager
-	logStreamer *streaming.LogStreamer
-	limiter     *StreamLimiter
-	logger      *slog.Logger
-	auditLogger *AuditLogger
+	client         client.Client
+	k8sClient      kubernetes.Interface
+	clusterClients multicluster.Resolver
+	informerMgr    *streaming.InformerManager
+	logStreamer    *streaming.LogStreamer
+	limiter        *StreamLimiter
+	logger         *slog.Logger
+	auditLogger    *AuditLogger
+}
+
+func validateClusterRefNamespace(env *v1alpha1.Environment, expectedNamespace string) error {
+	if env == nil || env.Spec.Deploy.ClusterRef == nil || env.Spec.Deploy.ClusterRef.KubeconfigSecretRef == nil {
+		return nil
+	}
+	secNS := strings.TrimSpace(env.Spec.Deploy.ClusterRef.KubeconfigSecretRef.Namespace)
+	if secNS != "" && secNS != expectedNamespace {
+		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("cross-namespace kubeconfigSecretRef %q is forbidden; secret must reside in %q", secNS, expectedNamespace))
+	}
+	return nil
 }
 
 func NewEnvironmentService(c client.Client, k8s kubernetes.Interface, informerMgr *streaming.InformerManager, logStreamer *streaming.LogStreamer, limiter *StreamLimiter, logger *slog.Logger, audit *AuditLogger) divergev1alpha1connect.EnvironmentServiceHandler {
@@ -86,6 +102,9 @@ func (s *EnvironmentService) CreateEnvironment(ctx context.Context, req *connect
 	}
 
 	realCrd.Namespace = namespace
+	if err := validateClusterRefNamespace(realCrd, namespace); err != nil {
+		return nil, err
+	}
 
 	if err := s.client.Create(ctx, realCrd); err != nil {
 		return nil, SanitizeK8sError(s.logger, err)
@@ -251,6 +270,7 @@ func (s *EnvironmentService) UpdateEnvironment(ctx context.Context, req *connect
 	wasHibernated := existingCrd.Annotations[metrics.AnnotationHibernated] == "true"
 	priorHibAt := existingCrd.Annotations[metrics.AnnotationHibernatedAt]
 	priorHibSec := existingCrd.Annotations[metrics.AnnotationHibernatedSeconds]
+	priorClusterRef := existingCrd.Spec.Deploy.ClusterRef.DeepCopy()
 
 	// NOTE: FieldMask currently supports top-level paths only (spec, labels, annotations).
 	// Nested paths like "spec.source" are not supported and will be rejected.
@@ -325,6 +345,15 @@ func (s *EnvironmentService) UpdateEnvironment(ctx context.Context, req *connect
 		case wasHibernated && isNowHibernated && priorHibAt != "" && existingCrd.Annotations[metrics.AnnotationHibernatedAt] == "":
 			existingCrd.Annotations[metrics.AnnotationHibernatedAt] = priorHibAt
 		}
+	}
+
+	if err := validateClusterRefNamespace(&existingCrd, existingCrd.Namespace); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(existingCrd.Status.TargetCluster) != "" &&
+		!v1alpha1.EqualClusterTargetRef(priorClusterRef, existingCrd.Spec.Deploy.ClusterRef, existingCrd.Namespace) {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("spec.deploy.cluster_ref is immutable once target_cluster (%q) has been assigned; recreate the environment to move clusters", existingCrd.Status.TargetCluster))
 	}
 
 	if err := s.client.Update(ctx, &existingCrd); err != nil {
@@ -635,12 +664,83 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 		// Service pods use divergedev.com/ labels (set by deployer)
 		labels["divergedev.com/environment"] = msg.EnvironmentName
 	}
+	podClient := s.client
+	podNamespace := msg.Namespace
+	authzK8sClient := s.k8sClient
+	activeLogStreamer := s.logStreamer
+	isRemoteTarget := false
+
+	var envCRD v1alpha1.Environment
+	// Hook Jobs run on the hub in msg.Namespace (except PreviewGroup postdeploy Jobs on remote children).
+	// Apply PreviewNamespace() and spoke cluster lookup only where the target pods actually run.
+	if getErr := s.client.Get(ctx, client.ObjectKey{Name: msg.EnvironmentName, Namespace: msg.Namespace}, &envCRD); getErr == nil {
+		if msg.HookType == "" && envCRD.Spec.Deploy.Namespace == "create" {
+			podNamespace = envCRD.PreviewNamespace()
+		}
+		if (msg.HookType == "" || msg.HookType == "postdeploy") && multicluster.IsRemoteEnv(&envCRD) {
+			if msg.HookType == "postdeploy" && envCRD.Spec.Deploy.Namespace == "create" {
+				podNamespace = envCRD.PreviewNamespace()
+			}
+			resolver := s.clusterClients
+			if resolver == nil && s.client != nil {
+				resolver = multicluster.NewManager(s.client, s.k8sClient, nil, s.client.Scheme())
+			}
+			if resolver == nil {
+				return connect.NewError(connect.CodeFailedPrecondition, errors.New("multi-cluster resolver is not configured"))
+			}
+			target, resolveErr := resolver.Resolve(ctx, &envCRD)
+			if resolveErr != nil {
+				if ve, ok := multicluster.IsValidationError(resolveErr); ok {
+					return connect.NewError(connect.CodeInvalidArgument, errors.New(ve.Message))
+				}
+				return SanitizeK8sError(s.logger, resolveErr)
+			}
+			isRemoteTarget = target.IsRemote
+			podClient = target.Client
+			authzK8sClient = target.Clientset
+			streamCS := target.Clientset
+			if msg.Follow && target.StreamingClientset != nil {
+				streamCS = target.StreamingClientset
+			} else if msg.Follow && target.RESTConfig != nil {
+				streamCfg := rest.CopyConfig(target.RESTConfig)
+				streamCfg.Timeout = 0
+				if scs, scErr := kubernetes.NewForConfig(streamCfg); scErr == nil {
+					streamCS = scs
+				} else {
+					return SanitizeK8sError(s.logger, scErr)
+				}
+			}
+			if streamCS != nil {
+				activeLogStreamer = streaming.NewLogStreamer(streamCS)
+			}
+		}
+	} else if getErr != nil && !apierrors.IsNotFound(getErr) {
+		return SanitizeK8sError(s.logger, getErr)
+	}
+
+	if isRemoteTarget {
+		if user, ok := auth.UserInfoFromContext(ctx); ok && isMacaroonUser(user) {
+			if s.auditLogger != nil {
+				s.auditLogger.LogAuthz(ctx, "authz.denied", user, "get", "pods/log", podNamespace)
+			}
+			return connect.NewError(connect.CodePermissionDenied, errors.New("capability tokens cannot stream pod logs from remote target clusters"))
+		}
+	}
+	if podNamespace != msg.Namespace || isRemoteTarget {
+		if authzK8sClient == nil {
+			return connect.NewError(connect.CodeFailedPrecondition, errors.New("target cluster kubernetes clientset is not configured"))
+		}
+		if err := AuthorizePodLogs(ctx, authzK8sClient, s.auditLogger, podNamespace); err != nil {
+			return err
+		}
+	}
+
 	opts := []client.ListOption{
-		client.InNamespace(msg.Namespace),
+		client.InNamespace(podNamespace),
 		client.MatchingLabels(labels),
 	}
 	var podList corev1.PodList
-	if err := s.client.List(ctx, &podList, opts...); err != nil {
+	if err := podClient.List(ctx, &podList, opts...); err != nil {
 		return SanitizeK8sError(s.logger, err)
 	}
 
@@ -697,7 +797,7 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 				since = &t
 			}
 
-			logsStream, err := s.logStreamer.StreamPodLogs(streamCtx, p.Namespace, p.Name, containerName, msg.Follow, msg.TailLines, since)
+			logsStream, err := activeLogStreamer.StreamPodLogs(streamCtx, p.Namespace, p.Name, containerName, msg.Follow, msg.TailLines, since)
 			if err != nil {
 				select {
 				case errCh <- fmt.Errorf("failed to open stream for pod %s: %w", p.Name, err):

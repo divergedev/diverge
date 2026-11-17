@@ -2,19 +2,28 @@ package deployer
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"regexp"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/multicluster"
 )
 
 // defaultAllowedKinds is an allowlist of Kubernetes resource kinds permitted in
@@ -55,11 +64,19 @@ func WithAllowedKinds(kinds map[string]bool) DirectDeployerOption {
 	}
 }
 
+// WithClusterClients configures multi-cluster spoke client resolution on a DirectDeployer.
+func WithClusterClients(resolver multicluster.Resolver) DirectDeployerOption {
+	return func(d *DirectDeployer) {
+		d.ClusterClients = resolver
+	}
+}
+
 // DirectDeployer applies pre-rendered Kubernetes manifests directly
 // via Server-Side Apply, without requiring ArgoCD.
 type DirectDeployer struct {
 	Client             client.Client
 	Fetcher            ManifestFetcher
+	ClusterClients     multicluster.Resolver
 	AllowedKinds       map[string]bool
 	customAllowedKinds bool
 }
@@ -91,6 +108,27 @@ func (d *DirectDeployer) isKindPermitted(kind string) bool {
 	return defaultAllowedKinds[kind]
 }
 
+func (d *DirectDeployer) resolveClient(ctx context.Context, env *v1alpha1.Environment) (client.Client, bool, error) {
+	if pinned, ok := multicluster.TargetFromContext(ctx); ok {
+		return pinned.Client, pinned.IsRemote, nil
+	}
+	if !multicluster.IsRemoteEnv(env) {
+		return d.Client, false, nil
+	}
+	resolver := d.ClusterClients
+	if resolver == nil && d.Client != nil {
+		resolver = multicluster.NewManager(d.Client, nil, nil, d.Client.Scheme())
+	}
+	if resolver == nil {
+		return nil, false, fmt.Errorf("multi-cluster resolver is not configured")
+	}
+	target, err := resolver.Resolve(ctx, env)
+	if err != nil {
+		return nil, false, err
+	}
+	return target.Client, target.IsRemote, nil
+}
+
 // Deploy fetches pre-rendered manifests and applies them via Server-Side Apply.
 func (d *DirectDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) error {
 	logger := log.FromContext(ctx).WithName("direct-deployer")
@@ -105,13 +143,18 @@ func (d *DirectDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) 
 		return nil
 	}
 
-	// Determine target namespace
+	// Determine target namespace and cluster client
+	targetClient, isRemote, err := d.resolveClient(ctx, env)
+	if err != nil {
+		return fmt.Errorf("failed to resolve target cluster: %w", err)
+	}
+
 	targetNS := env.Namespace
 	if env.Spec.Deploy.Namespace == "create" {
 		targetNS = env.PreviewNamespace()
 	}
 
-	logger.Info("Deploying manifests", "count", len(objects), "namespace", targetNS)
+	logger.Info("Deploying manifests", "count", len(objects), "namespace", targetNS, "remoteCluster", isRemote)
 
 	for i := range objects {
 		obj := &objects[i]
@@ -179,11 +222,10 @@ func (d *DirectDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) 
 			}
 		}
 
-		// Set OwnerReference for 'same' namespace mode only.
-		// CR2: Only set OwnerReferences when the object is in the same
-		// namespace as the Environment CR (required by K8s GC).
-		// In 'create' mode, namespace deletion handles cleanup.
-		if env.Spec.Deploy.Namespace != "create" && obj.GetNamespace() == env.Namespace {
+		// Set OwnerReference for local 'same' namespace mode only.
+		// CR2: Never set OwnerReferences across namespaces or on remote spoke clusters,
+		// where the hub Environment UID does not exist and K8s GC would delete the workload.
+		if !isRemote && env.Spec.Deploy.Namespace != "create" && obj.GetNamespace() == env.Namespace {
 			ownerRef := metav1.OwnerReference{
 				APIVersion: env.APIVersion,
 				Kind:       env.Kind,
@@ -195,14 +237,14 @@ func (d *DirectDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) 
 
 		// Apply via Server-Side Apply (create-or-patch)
 		existing := obj.DeepCopy()
-		err = d.Client.Get(ctx, client.ObjectKeyFromObject(obj), existing)
+		err = targetClient.Get(ctx, client.ObjectKeyFromObject(obj), existing)
 		if err != nil {
 			if client.IgnoreNotFound(err) != nil {
 				return fmt.Errorf("failed to check existing %s %s/%s: %w",
 					obj.GetKind(), obj.GetNamespace(), obj.GetName(), err)
 			}
 			// Resource doesn't exist, create it
-			if err := d.Client.Create(ctx, obj); err != nil {
+			if err := targetClient.Create(ctx, obj); err != nil {
 				return fmt.Errorf("failed to create %s %s/%s: %w",
 					obj.GetKind(), obj.GetNamespace(), obj.GetName(), err)
 			}
@@ -212,7 +254,7 @@ func (d *DirectDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) 
 				client.FieldOwner("diverge-direct-deployer"),
 				client.ForceOwnership,
 			}
-			if err := d.Client.Apply(ctx, client.ApplyConfigurationFromUnstructured(obj), opts...); err != nil {
+			if err := targetClient.Apply(ctx, client.ApplyConfigurationFromUnstructured(obj), opts...); err != nil {
 				return fmt.Errorf("failed to apply %s %s/%s: %w",
 					obj.GetKind(), obj.GetNamespace(), obj.GetName(), err)
 			}
@@ -238,13 +280,29 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 		"namespace_mode", env.Spec.Deploy.Namespace,
 		"environment", env.Name,
 	)
-	if d.Client == nil {
+	if d.Client == nil && d.ClusterClients == nil {
+		return nil
+	}
+
+	targetClient, isRemote, err := d.resolveClient(ctx, env)
+	if err != nil {
+		if _, isVal := multicluster.IsValidationError(err); isVal && !multicluster.HasConfirmedRemoteTarget(env) {
+			return nil
+		}
+		return fmt.Errorf("failed to resolve target cluster for teardown: %w", err)
+	}
+	if targetClient == nil {
 		return nil
 	}
 
 	targetNS := env.Namespace
 	if env.Spec.Deploy.Namespace == "create" {
 		targetNS = env.PreviewNamespace()
+	}
+
+	deployedByKind, fetchErr := d.fetchedObjectsByKind(ctx, env, targetNS)
+	if isRemote && env.Spec.Deploy.Namespace != "create" && fetchErr != nil {
+		return fmt.Errorf("failed to fetch manifests for remote teardown: %w", fetchErr)
 	}
 
 	selector := labels.SelectorFromSet(map[string]string{
@@ -260,50 +318,372 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 	}
 
 	var deployList appsv1.DeploymentList
-	if err := d.Client.List(ctx, &deployList, listOpts...); err != nil {
+	if err := targetClient.List(ctx, &deployList, listOpts...); err != nil {
 		return fmt.Errorf("failed to list deployments for teardown: %w", err)
 	}
 	for i := range deployList.Items {
-		if err := d.Client.Delete(ctx, &deployList.Items[i], fgDelOpts...); client.IgnoreNotFound(err) != nil {
+		if err := targetClient.Delete(ctx, &deployList.Items[i], fgDelOpts...); client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("failed to delete deployment %s/%s: %w", targetNS, deployList.Items[i].Name, err)
 		}
 	}
 
 	var stsList appsv1.StatefulSetList
-	if err := d.Client.List(ctx, &stsList, listOpts...); err != nil {
+	if err := targetClient.List(ctx, &stsList, listOpts...); err != nil {
 		return fmt.Errorf("failed to list statefulsets for teardown: %w", err)
 	}
 	for i := range stsList.Items {
-		if err := d.Client.Delete(ctx, &stsList.Items[i], fgDelOpts...); client.IgnoreNotFound(err) != nil {
+		if err := targetClient.Delete(ctx, &stsList.Items[i], fgDelOpts...); client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("failed to delete statefulset %s/%s: %w", targetNS, stsList.Items[i].Name, err)
 		}
 	}
 
 	var jobList batchv1.JobList
-	if err := d.Client.List(ctx, &jobList, listOpts...); err != nil {
+	if err := targetClient.List(ctx, &jobList, listOpts...); err != nil {
 		return fmt.Errorf("failed to list jobs for teardown: %w", err)
 	}
 	for i := range jobList.Items {
-		if err := d.Client.Delete(ctx, &jobList.Items[i], fgDelOpts...); client.IgnoreNotFound(err) != nil {
+		if err := targetClient.Delete(ctx, &jobList.Items[i], fgDelOpts...); client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("failed to delete job %s/%s: %w", targetNS, jobList.Items[i].Name, err)
 		}
 	}
 
 	var svcList corev1.ServiceList
-	if err := d.Client.List(ctx, &svcList, listOpts...); err != nil {
+	if err := targetClient.List(ctx, &svcList, listOpts...); err != nil {
 		return fmt.Errorf("failed to list services for teardown: %w", err)
 	}
 	for i := range svcList.Items {
-		if err := d.Client.Delete(ctx, &svcList.Items[i]); client.IgnoreNotFound(err) != nil {
+		if err := targetClient.Delete(ctx, &svcList.Items[i]); client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("failed to delete service %s/%s: %w", targetNS, svcList.Items[i].Name, err)
+		}
+	}
+
+	// On the local hub cluster, controller-runtime's cached client starts cluster-wide informers on List()
+	// and blocks until context timeout if optional resource kinds (DaemonSet, CronJob, HPA, PDB, Ingress, PVC)
+	// are outside the least-privilege controller ClusterRole. On the hub, same-namespace resources carry
+	// OwnerReferences to Environment and create-namespace resources are removed with PreviewNamespace();
+	// delete any additional rendered objects directly by name without starting new informers.
+	if !isRemote {
+		for kind, objs := range deployedByKind {
+			switch kind {
+			case "Deployment", "StatefulSet", "Job", "Service":
+				continue
+			}
+			filtered := filterDeferredObjects(env, objs)
+			delOpts := []client.DeleteOption(nil)
+			if kind == "DaemonSet" || kind == "ReplicaSet" || kind == "CronJob" {
+				delOpts = fgDelOpts
+			}
+			for i := range filtered {
+				if err := deleteManagedRenderedObject(ctx, targetClient, env, &filtered[i], delOpts...); err != nil {
+					return fmt.Errorf("failed to delete %s %s/%s: %w", strings.ToLower(kind), targetNS, filtered[i].GetName(), err)
+				}
+			}
+		}
+		return nil
+	}
+
+	// On remote spoke clusters, targetClient is uncached and cross-cluster OwnerReferences are omitted,
+	// so explicitly list and clean up all remaining supported workload and configuration kinds.
+	var dsList appsv1.DaemonSetList
+	if err := handleOptionalKindListErr(ctx, targetClient, env, "DaemonSet", errOrNil(targetClient.List(ctx, &dsList, listOpts...)), deployedByKind["DaemonSet"], fgDelOpts...); err != nil {
+		return fmt.Errorf("failed to list daemonsets for teardown: %w", err)
+	}
+	for i := range dsList.Items {
+		if err := targetClient.Delete(ctx, &dsList.Items[i], fgDelOpts...); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete daemonset %s/%s: %w", targetNS, dsList.Items[i].Name, err)
+		}
+	}
+
+	var rsList appsv1.ReplicaSetList
+	if err := handleOptionalKindListErr(ctx, targetClient, env, "ReplicaSet", errOrNil(targetClient.List(ctx, &rsList, listOpts...)), deployedByKind["ReplicaSet"], fgDelOpts...); err != nil {
+		return fmt.Errorf("failed to list replicasets for teardown: %w", err)
+	}
+	for i := range rsList.Items {
+		if err := targetClient.Delete(ctx, &rsList.Items[i], fgDelOpts...); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete replicaset %s/%s: %w", targetNS, rsList.Items[i].Name, err)
+		}
+	}
+
+	var cronJobList batchv1.CronJobList
+	if err := handleOptionalKindListErr(ctx, targetClient, env, "CronJob", errOrNil(targetClient.List(ctx, &cronJobList, listOpts...)), deployedByKind["CronJob"], fgDelOpts...); err != nil {
+		return fmt.Errorf("failed to list cronjobs for teardown: %w", err)
+	}
+	for i := range cronJobList.Items {
+		if err := targetClient.Delete(ctx, &cronJobList.Items[i], fgDelOpts...); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete cronjob %s/%s: %w", targetNS, cronJobList.Items[i].Name, err)
+		}
+	}
+
+	var hpaList autoscalingv2.HorizontalPodAutoscalerList
+	if err := handleOptionalKindListErr(ctx, targetClient, env, "HorizontalPodAutoscaler", errOrNil(targetClient.List(ctx, &hpaList, listOpts...)), deployedByKind["HorizontalPodAutoscaler"]); err != nil {
+		return fmt.Errorf("failed to list horizontalpodautoscalers for teardown: %w", err)
+	}
+	for i := range hpaList.Items {
+		if err := targetClient.Delete(ctx, &hpaList.Items[i]); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete horizontalpodautoscaler %s/%s: %w", targetNS, hpaList.Items[i].Name, err)
+		}
+	}
+
+	var pdbList policyv1.PodDisruptionBudgetList
+	if err := handleOptionalKindListErr(ctx, targetClient, env, "PodDisruptionBudget", errOrNil(targetClient.List(ctx, &pdbList, listOpts...)), deployedByKind["PodDisruptionBudget"]); err != nil {
+		return fmt.Errorf("failed to list poddisruptionbudgets for teardown: %w", err)
+	}
+	for i := range pdbList.Items {
+		if err := targetClient.Delete(ctx, &pdbList.Items[i]); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete poddisruptionbudget %s/%s: %w", targetNS, pdbList.Items[i].Name, err)
+		}
+	}
+
+	var ingressList networkingv1.IngressList
+	if err := handleOptionalKindListErr(ctx, targetClient, env, "Ingress", errOrNil(targetClient.List(ctx, &ingressList, listOpts...)), deployedByKind["Ingress"]); err != nil {
+		return fmt.Errorf("failed to list ingresses for teardown: %w", err)
+	}
+	for i := range ingressList.Items {
+		if err := targetClient.Delete(ctx, &ingressList.Items[i]); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete ingress %s/%s: %w", targetNS, ingressList.Items[i].Name, err)
+		}
+	}
+
+	var netpolList networkingv1.NetworkPolicyList
+	if err := handleOptionalKindListErr(ctx, targetClient, env, "NetworkPolicy", errOrNil(targetClient.List(ctx, &netpolList, listOpts...)), filterDeferredObjects(env, deployedByKind["NetworkPolicy"])); err != nil {
+		return fmt.Errorf("failed to list networkpolicies for teardown: %w", err)
+	}
+	for i := range netpolList.Items {
+		// In create-namespace mode, diverge-default-netpol is removed with the preview namespace after workload drain.
+		if env.Spec.Deploy.Namespace == "create" && netpolList.Items[i].Name == "diverge-default-netpol" {
+			continue
+		}
+		if err := targetClient.Delete(ctx, &netpolList.Items[i]); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete networkpolicy %s/%s: %w", targetNS, netpolList.Items[i].Name, err)
+		}
+	}
+
+	var cmList corev1.ConfigMapList
+	if err := handleOptionalKindListErr(ctx, targetClient, env, "ConfigMap", errOrNil(targetClient.List(ctx, &cmList, listOpts...)), filterDeferredObjects(env, deployedByKind["ConfigMap"])); err != nil {
+		return fmt.Errorf("failed to list configmaps for teardown: %w", err)
+	}
+	for i := range cmList.Items {
+		if isControllerDeferredConfigMap(env, cmList.Items[i].Name) {
+			continue
+		}
+		if err := targetClient.Delete(ctx, &cmList.Items[i]); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete configmap %s/%s: %w", targetNS, cmList.Items[i].Name, err)
+		}
+	}
+
+	var secretList corev1.SecretList
+	if err := handleOptionalKindListErr(ctx, targetClient, env, "Secret", errOrNil(targetClient.List(ctx, &secretList, listOpts...)), filterDeferredObjects(env, deployedByKind["Secret"])); err != nil {
+		return fmt.Errorf("failed to list secrets for teardown: %w", err)
+	}
+	for i := range secretList.Items {
+		if isControllerDeferredSecret(env, secretList.Items[i].Name) {
+			continue
+		}
+		if err := targetClient.Delete(ctx, &secretList.Items[i]); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete secret %s/%s: %w", targetNS, secretList.Items[i].Name, err)
+		}
+	}
+
+	var pvcList corev1.PersistentVolumeClaimList
+	if err := handleOptionalKindListErr(ctx, targetClient, env, "PersistentVolumeClaim", errOrNil(targetClient.List(ctx, &pvcList, listOpts...)), deployedByKind["PersistentVolumeClaim"]); err != nil {
+		return fmt.Errorf("failed to list persistentvolumeclaims for teardown: %w", err)
+	}
+	for i := range pvcList.Items {
+		if err := targetClient.Delete(ctx, &pvcList.Items[i]); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete persistentvolumeclaim %s/%s: %w", targetNS, pvcList.Items[i].Name, err)
+		}
+	}
+
+	var saList corev1.ServiceAccountList
+	if err := handleOptionalKindListErr(ctx, targetClient, env, "ServiceAccount", errOrNil(targetClient.List(ctx, &saList, listOpts...)), deployedByKind["ServiceAccount"]); err != nil {
+		return fmt.Errorf("failed to list serviceaccounts for teardown: %w", err)
+	}
+	for i := range saList.Items {
+		if err := targetClient.Delete(ctx, &saList.Items[i]); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete serviceaccount %s/%s: %w", targetNS, saList.Items[i].Name, err)
 		}
 	}
 
 	return nil
 }
 
+var (
+	nonAlnumHyphenRegex = regexp.MustCompile(`[^a-z0-9-]`)
+	multiHyphenRegex    = regexp.MustCompile(`-{2,}`)
+)
+
+func errOrNil(err error) error { return err }
+
+func (d *DirectDeployer) fetchedObjectsByKind(ctx context.Context, env *v1alpha1.Environment, targetNS string) (map[string][]unstructured.Unstructured, error) {
+	if d == nil || d.Fetcher == nil || env == nil {
+		return nil, nil
+	}
+	objects, err := d.Fetcher.Fetch(ctx, env)
+	if err != nil {
+		return nil, err
+	}
+	if len(objects) == 0 {
+		return nil, nil
+	}
+	byKind := make(map[string][]unstructured.Unstructured)
+	for i := range objects {
+		obj := objects[i].DeepCopy()
+		kind := obj.GetObjectKind().GroupVersionKind().Kind
+		if kind == "" {
+			kind = obj.GetKind()
+		}
+		if kind == "" || !d.isKindPermitted(kind) {
+			continue
+		}
+		if objNS := obj.GetNamespace(); objNS != "" && objNS != targetNS {
+			continue
+		}
+		obj.SetNamespace(targetNS)
+		byKind[kind] = append(byKind[kind], *obj)
+	}
+	return byKind, nil
+}
+
+func deleteManagedRenderedObject(
+	ctx context.Context,
+	targetClient client.Client,
+	env *v1alpha1.Environment,
+	renderedObj *unstructured.Unstructured,
+	delOpts ...client.DeleteOption,
+) error {
+	if renderedObj == nil || env == nil {
+		return nil
+	}
+	live := &unstructured.Unstructured{}
+	live.SetGroupVersionKind(renderedObj.GroupVersionKind())
+	err := targetClient.Get(ctx, client.ObjectKey{
+		Namespace: renderedObj.GetNamespace(),
+		Name:      renderedObj.GetName(),
+	}, live)
+	if err != nil {
+		if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) || runtime.IsNotRegisteredError(err) {
+			return nil
+		}
+		return err
+	}
+	lbls := live.GetLabels()
+	if lbls["divergedev.com/environment"] != env.Name || lbls["divergedev.com/managed-by"] != "diverge" {
+		// Leave pre-existing or another Environment's resource untouched.
+		return nil
+	}
+	opts := append([]client.DeleteOption(nil), delOpts...)
+	if uid := live.GetUID(); uid != "" {
+		opts = append(opts, client.Preconditions{UID: &uid})
+	}
+	return client.IgnoreNotFound(targetClient.Delete(ctx, live, opts...))
+}
+
+func filterDeferredObjects(env *v1alpha1.Environment, objs []unstructured.Unstructured) []unstructured.Unstructured {
+	if len(objs) == 0 {
+		return nil
+	}
+	out := make([]unstructured.Unstructured, 0, len(objs))
+	for i := range objs {
+		kind := objs[i].GetKind()
+		name := objs[i].GetName()
+		if kind == "NetworkPolicy" && env != nil && env.Spec.Deploy.Namespace == "create" && name == "diverge-default-netpol" {
+			continue
+		}
+		if kind == "ConfigMap" && isControllerDeferredConfigMap(env, name) {
+			continue
+		}
+		if kind == "Secret" && isControllerDeferredSecret(env, name) {
+			continue
+		}
+		out = append(out, objs[i])
+	}
+	return out
+}
+
+func handleOptionalKindListErr(
+	ctx context.Context,
+	targetClient client.Client,
+	env *v1alpha1.Environment,
+	kind string,
+	listErr error,
+	renderedObjs []unstructured.Unstructured,
+	delOpts ...client.DeleteOption,
+) error {
+	if listErr == nil || meta.IsNoMatchError(listErr) || runtime.IsNotRegisteredError(listErr) {
+		return nil
+	}
+	if apierrors.IsForbidden(listErr) {
+		// Least-privilege controller/spoke RBAC roles may omit list permissions for optional kinds
+		// (e.g. DaemonSet, CronJob, HPA, PDB, Ingress, PVC) when the preview does not deploy them.
+		if len(renderedObjs) == 0 {
+			log.FromContext(ctx).V(1).Info("Skipping optional resource kind list due to RBAC Forbidden", "kind", kind)
+			return nil
+		}
+		for i := range renderedObjs {
+			if delErr := deleteManagedRenderedObject(ctx, targetClient, env, &renderedObjs[i], delOpts...); delErr != nil {
+				return delErr
+			}
+		}
+		return nil
+	}
+	return listErr
+}
+
+func isControllerDeferredConfigMap(env *v1alpha1.Environment, name string) bool {
+	if env == nil || env.DeletionTimestamp.IsZero() {
+		return false
+	}
+	featuresCM := "diverge-features-" + env.Name
+	if len(featuresCM) > 253 {
+		featuresCM = featuresCM[:253]
+	}
+	bannerCM := "diverge-banner-" + env.Name
+	if len(bannerCM) > 253 {
+		bannerCM = bannerCM[:253]
+	}
+	return name == featuresCM || name == bannerCM
+}
+
+func controllerDBEnvSecretName(envName string) string {
+	raw := strings.ToLower("diverge-db-env-" + envName)
+	raw = strings.NewReplacer(".", "-", "_", "-").Replace(raw)
+	raw = nonAlnumHyphenRegex.ReplaceAllString(raw, "")
+	raw = multiHyphenRegex.ReplaceAllString(raw, "-")
+	raw = strings.Trim(raw, "-")
+	if raw == "" {
+		raw = "resource"
+	}
+	sum := sha256.Sum256([]byte(envName))
+	hash := fmt.Sprintf("%x", sum)[:8]
+	prefix := raw
+	if len(prefix) > 63-9 {
+		prefix = strings.TrimRight(prefix[:63-9], "-")
+	}
+	if prefix == "" {
+		prefix = "r"
+	}
+	return prefix + "-" + hash
+}
+
+func isControllerDeferredSecret(env *v1alpha1.Environment, name string) bool {
+	if env == nil || env.DeletionTimestamp.IsZero() {
+		return false
+	}
+	return name == controllerDBEnvSecretName(env.Name)
+}
+
 // Status returns the deployment status of resources managed by this deployer.
 func (d *DirectDeployer) Status(ctx context.Context, env *v1alpha1.Environment) ([]ServiceStatus, error) {
+	targetClient, _, err := d.resolveClient(ctx, env)
+	if err != nil {
+		if !env.DeletionTimestamp.IsZero() {
+			if _, isVal := multicluster.IsValidationError(err); isVal && !multicluster.HasConfirmedRemoteTarget(env) {
+				return nil, nil
+			}
+		}
+		return nil, fmt.Errorf("failed to resolve target cluster for status: %w", err)
+	}
+
 	targetNS := env.Namespace
 	if env.Spec.Deploy.Namespace == "create" {
 		targetNS = env.PreviewNamespace()
@@ -318,7 +698,7 @@ func (d *DirectDeployer) Status(ctx context.Context, env *v1alpha1.Environment) 
 
 	// Check Deployments
 	var deployList appsv1.DeploymentList
-	if err := d.Client.List(ctx, &deployList,
+	if err := targetClient.List(ctx, &deployList,
 		client.InNamespace(targetNS),
 		client.MatchingLabelsSelector{Selector: selector},
 	); err != nil {
@@ -335,7 +715,7 @@ func (d *DirectDeployer) Status(ctx context.Context, env *v1alpha1.Environment) 
 
 	// Check StatefulSets
 	var stsList appsv1.StatefulSetList
-	if err := d.Client.List(ctx, &stsList,
+	if err := targetClient.List(ctx, &stsList,
 		client.InNamespace(targetNS),
 		client.MatchingLabelsSelector{Selector: selector},
 	); err != nil {
@@ -355,7 +735,7 @@ func (d *DirectDeployer) Status(ctx context.Context, env *v1alpha1.Environment) 
 	// out from under active containers.
 	if !env.DeletionTimestamp.IsZero() {
 		var jobList batchv1.JobList
-		if err := d.Client.List(ctx, &jobList,
+		if err := targetClient.List(ctx, &jobList,
 			client.InNamespace(targetNS),
 			client.MatchingLabelsSelector{Selector: selector},
 		); err != nil {
@@ -374,7 +754,7 @@ func (d *DirectDeployer) Status(ctx context.Context, env *v1alpha1.Environment) 
 			"divergedev.com/environment": env.Name,
 		})
 		var podList corev1.PodList
-		if err := d.Client.List(ctx, &podList,
+		if err := targetClient.List(ctx, &podList,
 			client.InNamespace(targetNS),
 			client.MatchingLabelsSelector{Selector: podSelector},
 		); err != nil {

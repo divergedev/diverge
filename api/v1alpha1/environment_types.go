@@ -19,6 +19,61 @@ type SecretRef struct {
 	Key string `json:"key,omitempty"`
 }
 
+// ClusterTargetRef identifies a remote spoke Kubernetes cluster for federated preview deployments.
+type ClusterTargetRef struct {
+	// Name is a logical cluster identifier (e.g. "us-west-burst", "eu-central-1")
+	// surfaced in status, CLI, and FinOps reports. Defaults to the Secret name when omitted.
+	// +kubebuilder:validation:MaxLength=63
+	// +optional
+	Name string `json:"name,omitempty"`
+	// KubeconfigSecretRef references a Secret in the same namespace containing
+	// a kubeconfig for the target spoke cluster (defaults to key "kubeconfig", falling back to "value").
+	// +optional
+	KubeconfigSecretRef *SecretRef `json:"kubeconfigSecretRef,omitempty"`
+}
+
+type canonicalClusterRef struct {
+	isRemote   bool
+	name       string
+	secretNS   string
+	secretName string
+	secretKey  string
+}
+
+func canonicalizeClusterTargetRef(ref *ClusterTargetRef, defaultNamespace string) canonicalClusterRef {
+	if ref == nil {
+		return canonicalClusterRef{name: "local"}
+	}
+	name := strings.TrimSpace(ref.Name)
+	if ref.KubeconfigSecretRef == nil && (name == "" || name == "local") {
+		return canonicalClusterRef{name: "local"}
+	}
+	var secNS, secName, secKey string
+	if ref.KubeconfigSecretRef != nil {
+		secNS = strings.TrimSpace(ref.KubeconfigSecretRef.Namespace)
+		if secNS == "" {
+			secNS = strings.TrimSpace(defaultNamespace)
+		}
+		secName = strings.TrimSpace(ref.KubeconfigSecretRef.Name)
+		secKey = strings.TrimSpace(ref.KubeconfigSecretRef.Key)
+	}
+	if name == "" {
+		name = secName
+	}
+	return canonicalClusterRef{
+		isRemote:   true,
+		name:       name,
+		secretNS:   secNS,
+		secretName: secName,
+		secretKey:  secKey,
+	}
+}
+
+// EqualClusterTargetRef reports whether two ClusterTargetRefs resolve to the same canonical target cluster and Secret reference.
+func EqualClusterTargetRef(a, b *ClusterTargetRef, defaultNamespace string) bool {
+	return canonicalizeClusterTargetRef(a, defaultNamespace) == canonicalizeClusterTargetRef(b, defaultNamespace)
+}
+
 // MigrationJobSpec configures a Kubernetes Job for database migrations.
 type MigrationJobSpec struct {
 	// Image is the container image to use for the migration job.
@@ -66,6 +121,11 @@ type EnvironmentDeploy struct {
 	// EnvFrom specifies environment variables to inject from Secrets.
 	// +optional
 	EnvFrom []SecretRef `json:"envFrom,omitempty"`
+	// ClusterRef targets a remote spoke cluster for workload and route provisioning.
+	// When omitted, workloads deploy to the local hub cluster.
+	// Immutable once Status.TargetCluster has been assigned.
+	// +optional
+	ClusterRef *ClusterTargetRef `json:"clusterRef,omitempty"`
 }
 
 // AsyncRouteSpec defines an async routing target for event-driven services.
@@ -475,6 +535,9 @@ type EnvironmentStatus struct {
 	// FeatureEnvVars contains environment variables injected by feature providers.
 	// +optional
 	FeatureEnvVars map[string]string `json:"featureEnvVars,omitempty"`
+	// TargetCluster records the resolved cluster identifier ("local" or spoke cluster name).
+	// +optional
+	TargetCluster string `json:"targetCluster,omitempty"`
 }
 
 // +kubebuilder:object:root=true

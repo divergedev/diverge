@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/multicluster"
 )
 
 var hsoGVK = schema.GroupVersionKind{
@@ -36,9 +37,31 @@ type KEDAConfig struct {
 
 // KEDADeployer represents the configuration or state for this type.
 type KEDADeployer struct {
-	Inner  Deployer
-	Client client.Client
-	Config KEDAConfig
+	Inner          Deployer
+	Client         client.Client
+	ClusterClients multicluster.Resolver
+	Config         KEDAConfig
+}
+
+func (d *KEDADeployer) resolveTarget(ctx context.Context, env *v1alpha1.Environment) (*multicluster.Target, error) {
+	if pinned, ok := multicluster.TargetFromContext(ctx); ok {
+		return pinned, nil
+	}
+	if !multicluster.IsRemoteEnv(env) {
+		return &multicluster.Target{
+			Name:     multicluster.LocalClusterName,
+			IsRemote: false,
+			Client:   d.Client,
+		}, nil
+	}
+	resolver := d.ClusterClients
+	if resolver == nil && d.Client != nil {
+		resolver = multicluster.NewManager(d.Client, nil, nil, d.Client.Scheme())
+	}
+	if resolver == nil {
+		return nil, fmt.Errorf("multi-cluster resolver is not configured")
+	}
+	return resolver.Resolve(ctx, env)
 }
 
 // Deploy performs its designated operation.
@@ -52,14 +75,23 @@ func (d *KEDADeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) er
 		return fmt.Errorf("invalid KEDA config: minReplicas (%d) > maxReplicas (%d)", minRepl, maxRepl)
 	}
 
-	if err := d.Inner.Deploy(ctx, env); err != nil {
+	// Resolve target cluster once and pin it in context so Inner.Deploy and HTTPScaledObject
+	// reconciliation always target the exact same cluster even if a Secret rotates mid-flight.
+	target, err := d.resolveTarget(ctx, env)
+	if err != nil {
+		return fmt.Errorf("failed to resolve target cluster for KEDA: %w", err)
+	}
+	pinnedCtx := multicluster.WithTarget(ctx, target)
+	targetClient := target.Client
+
+	if err := d.Inner.Deploy(pinnedCtx, env); err != nil {
 		return err
 	}
 
 	// Check if KEDA CRD exists
 	list := &unstructured.UnstructuredList{}
 	list.SetGroupVersionKind(hsoListGVK)
-	if err := d.Client.List(ctx, list, client.Limit(1)); err != nil {
+	if err := targetClient.List(ctx, list, client.Limit(1)); err != nil {
 		if meta.IsNoMatchError(err) {
 			logger.V(1).Info("KEDA HTTPScaledObject CRD not found, skipping KEDA integration")
 			return nil
@@ -90,7 +122,7 @@ func (d *KEDADeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) er
 		if k.Enabled != nil && !*k.Enabled {
 			logger.Info("KEDA explicitly disabled for service, cleaning up any existing HSO",
 				"name", targetName, "namespace", targetNS)
-			return d.deleteHSOIfExists(ctx, targetName, targetNS)
+			return d.deleteHSOIfExistsWithClient(ctx, targetClient, targetName, targetNS)
 		}
 	}
 
@@ -140,13 +172,13 @@ func (d *KEDADeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) er
 	// Apply via Server-Side Apply (create-or-patch)
 	existing := &unstructured.Unstructured{}
 	existing.SetGroupVersionKind(hsoGVK)
-	err := d.Client.Get(ctx, client.ObjectKey{Name: targetName, Namespace: targetNS}, existing)
+	err = targetClient.Get(ctx, client.ObjectKey{Name: targetName, Namespace: targetNS}, existing)
 	if err != nil {
 		if client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("failed to check existing HTTPScaledObject: %w", err)
 		}
 		// Resource doesn't exist, create it
-		if err := d.Client.Create(ctx, hso); err != nil {
+		if err := targetClient.Create(ctx, hso); err != nil {
 			return fmt.Errorf("failed to create HTTPScaledObject: %w", err)
 		}
 	} else {
@@ -155,7 +187,7 @@ func (d *KEDADeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) er
 			client.FieldOwner("diverge-keda-deployer"),
 			client.ForceOwnership,
 		}
-		if err := d.Client.Apply(ctx, client.ApplyConfigurationFromUnstructured(hso), opts...); err != nil {
+		if err := targetClient.Apply(ctx, client.ApplyConfigurationFromUnstructured(hso), opts...); err != nil {
 			return fmt.Errorf("failed to apply HTTPScaledObject: %w", err)
 		}
 	}
@@ -164,8 +196,8 @@ func (d *KEDADeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) er
 	return nil
 }
 
-// deleteHSOIfExists removes an HTTPScaledObject if it exists, used when KEDA is explicitly disabled.
-func (d *KEDADeployer) deleteHSOIfExists(ctx context.Context, name, namespace string) error {
+// deleteHSOIfExistsWithClient removes an HTTPScaledObject if it exists, used when KEDA is explicitly disabled.
+func (d *KEDADeployer) deleteHSOIfExistsWithClient(ctx context.Context, targetClient client.Client, name, namespace string) error {
 	deleteCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -174,7 +206,7 @@ func (d *KEDADeployer) deleteHSOIfExists(ctx context.Context, name, namespace st
 	hso.SetName(name)
 	hso.SetNamespace(namespace)
 
-	if err := d.Client.Delete(deleteCtx, hso); err != nil {
+	if err := targetClient.Delete(deleteCtx, hso); err != nil {
 		if !meta.IsNoMatchError(err) && client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("failed to delete HTTPScaledObject for disabled KEDA: %w", err)
 		}
@@ -218,6 +250,16 @@ func (d *KEDADeployer) resolveKEDAConfig(env *v1alpha1.Environment) (minRepl, ma
 func (d *KEDADeployer) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
 	logger := log.FromContext(ctx).WithName("keda-deployer")
 
+	target, err := d.resolveTarget(ctx, env)
+	if err != nil {
+		if _, isVal := multicluster.IsValidationError(err); isVal && !multicluster.HasConfirmedRemoteTarget(env) {
+			return d.Inner.Teardown(ctx, env)
+		}
+		return fmt.Errorf("failed to resolve target cluster for KEDA teardown: %w", err)
+	}
+	pinnedCtx := multicluster.WithTarget(ctx, target)
+	targetClient := target.Client
+
 	targetNS := env.Namespace
 	if env.Spec.Deploy.Namespace == "create" {
 		targetNS = env.PreviewNamespace()
@@ -234,19 +276,33 @@ func (d *KEDADeployer) Teardown(ctx context.Context, env *v1alpha1.Environment) 
 	hso.SetName(targetName)
 	hso.SetNamespace(targetNS)
 
-	if err := d.Client.Delete(ctx, hso); err != nil {
-		if !meta.IsNoMatchError(err) && client.IgnoreNotFound(err) != nil {
-			return fmt.Errorf("failed to delete HTTPScaledObject: %w", err)
+	if targetClient != nil {
+		if err := targetClient.Delete(pinnedCtx, hso); err != nil {
+			if !meta.IsNoMatchError(err) && client.IgnoreNotFound(err) != nil {
+				return fmt.Errorf("failed to delete HTTPScaledObject: %w", err)
+			}
+			logger.V(1).Info("HTTPScaledObject CRD missing or resource not found during teardown")
 		}
-		logger.V(1).Info("HTTPScaledObject CRD missing or resource not found during teardown")
 	}
 
-	return d.Inner.Teardown(ctx, env)
+	return d.Inner.Teardown(pinnedCtx, env)
 }
 
 // Status performs its designated operation.
 func (d *KEDADeployer) Status(ctx context.Context, env *v1alpha1.Environment) ([]ServiceStatus, error) {
-	innerStatus, err := d.Inner.Status(ctx, env)
+	target, err := d.resolveTarget(ctx, env)
+	if err != nil {
+		if !env.DeletionTimestamp.IsZero() {
+			if _, isVal := multicluster.IsValidationError(err); isVal && !multicluster.HasConfirmedRemoteTarget(env) {
+				return nil, nil
+			}
+		}
+		return nil, fmt.Errorf("failed to resolve target cluster for KEDA status: %w", err)
+	}
+	pinnedCtx := multicluster.WithTarget(ctx, target)
+	targetClient := target.Client
+
+	innerStatus, err := d.Inner.Status(pinnedCtx, env)
 	if err != nil {
 		return nil, err
 	}
@@ -264,7 +320,7 @@ func (d *KEDADeployer) Status(ctx context.Context, env *v1alpha1.Environment) ([
 
 	hso := &unstructured.Unstructured{}
 	hso.SetGroupVersionKind(hsoGVK)
-	err = d.Client.Get(ctx, client.ObjectKey{Name: targetName, Namespace: targetNS}, hso)
+	err = targetClient.Get(ctx, client.ObjectKey{Name: targetName, Namespace: targetNS}, hso)
 	if err != nil {
 		if meta.IsNoMatchError(err) || client.IgnoreNotFound(err) == nil {
 			// HSO doesn't exist or CRD doesn't exist, we just return inner status

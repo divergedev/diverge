@@ -27,6 +27,7 @@ import (
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/events"
 	"github.com/divergedev/diverge/internal/metrics"
+	"github.com/divergedev/diverge/internal/multicluster"
 	"github.com/divergedev/diverge/internal/notifier"
 	"github.com/divergedev/diverge/pkg/database"
 )
@@ -47,6 +48,7 @@ type PreviewGroupReconciler struct {
 	Notifier         notifier.PreviewGroupNotifier
 	StatusReporter   notifier.StatusReporter
 	DatabaseProvider database.DatabaseProvider
+	ClusterClients   multicluster.Resolver
 	EnableGAMMA      bool // Enable GAMMA mesh routing (requires Istio Ambient)
 }
 
@@ -224,8 +226,22 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			svcStatus.Phase = divergeiov1alpha1.PhasePending
 			svcStatus.Message = "Environment created"
 			svcStatus.ChangedServices = desiredEnv.Spec.Deploy.ChangedServices
+			svcStatus.TargetCluster = multicluster.ClusterName(desiredEnv)
 			existingEnv = *desiredEnv
 		} else {
+			if strings.TrimSpace(existingEnv.Status.TargetCluster) != "" &&
+				!divergeiov1alpha1.EqualClusterTargetRef(existingEnv.Spec.Deploy.ClusterRef, desiredEnv.Spec.Deploy.ClusterRef, targetNS) {
+				msg := fmt.Sprintf("effective clusterRef for service %q cannot be changed once provisioned on %q", svc.Name, existingEnv.Status.TargetCluster)
+				r.Recorder.Event(&pg, "Warning", "ClusterRefImmutable", msg)
+				svcStatus.Phase = divergeiov1alpha1.PhaseFailed
+				svcStatus.Reason = "ClusterRefImmutable"
+				svcStatus.Message = msg
+				svcStatus.ChangedServices = existingEnv.Spec.Deploy.ChangedServices
+				svcStatus.TargetCluster = existingEnv.Status.TargetCluster
+				serviceStatuses = append(serviceStatuses, svcStatus)
+				continue
+			}
+
 			// Update — sync spec if changed
 			if r.needsUpdate(&existingEnv, desiredEnv) {
 				existingEnv.Spec = desiredEnv.Spec
@@ -246,6 +262,7 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			svcStatus.Phase = existingEnv.Status.Phase
 			svcStatus.URL = existingEnv.Status.URL
 			svcStatus.ChangedServices = existingEnv.Spec.Deploy.ChangedServices
+			svcStatus.TargetCluster = multicluster.ClusterName(&existingEnv)
 			if existingEnv.Status.Phase == divergeiov1alpha1.PhaseFailed {
 				for _, cond := range existingEnv.Status.Conditions {
 					if cond.Status == metav1.ConditionFalse {
@@ -284,8 +301,9 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	// Delete orphaned Environments (services removed from spec)
-	if err := r.deleteOrphanedEnvironments(ctx, &pg, desiredEnvNames); err != nil {
-		logger.Error(err, "failed to delete orphaned Environments")
+	orphanCleanupErr := r.deleteOrphanedEnvironments(ctx, &pg, desiredEnvNames)
+	if orphanCleanupErr != nil {
+		logger.Error(orphanCleanupErr, "failed to delete orphaned Environments")
 	}
 
 	// Update status
@@ -350,6 +368,9 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 	}
 
+	if orphanCleanupErr != nil {
+		return ctrl.Result{}, orphanCleanupErr
+	}
 	if requeueAfter > 0 {
 		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
@@ -384,6 +405,22 @@ func (r *PreviewGroupReconciler) handleTeardown(ctx context.Context, pg *diverge
 	for i := range children {
 		child := &children[i]
 		if child.DeletionTimestamp.IsZero() {
+			hookCtx, cancelHook := context.WithTimeout(ctx, 15*time.Second)
+			hookErr := r.cleanupPostDeployJobs(hookCtx, child)
+			cancelHook()
+			if hookErr != nil {
+				if !shouldBypassPreviewGroupHookCleanup(pg, child) {
+					logger.Error(hookErr, "failed to cleanup post-deploy jobs for child Environment", "name", child.Name)
+					remaining++
+					continue
+				}
+				logger.Info("Bypassing post-deploy hook cleanup failure under force-teardown policy", "child", child.Name, "error", hookErr)
+				if r.Recorder != nil {
+					r.Recorder.Event(pg, "Warning", "ForceTeardown", "Bypassed post-deploy hook cleanup failure after timeout or force-teardown annotation")
+				}
+				r.propagateForceTeardownToChild(ctx, child)
+			}
+
 			if r.DatabaseProvider != nil && child.Spec.Database.Mode != "" {
 				dbCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 				if err := r.DatabaseProvider.Teardown(dbCtx, child); err != nil {
@@ -480,6 +517,14 @@ func (r *PreviewGroupReconciler) buildChildEnvironment(
 		KEDA:            svc.KEDA,
 	}
 
+	var clusterRef *divergeiov1alpha1.ClusterTargetRef
+	if pg.Spec.ClusterRef != nil {
+		clusterRef = pg.Spec.ClusterRef.DeepCopy()
+	}
+	if svc.ClusterRef != nil {
+		clusterRef = svc.ClusterRef.DeepCopy()
+	}
+
 	env := &divergeiov1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      envName,
@@ -498,6 +543,7 @@ func (r *PreviewGroupReconciler) buildChildEnvironment(
 				Mode:            "delta",
 				Namespace:       "same",
 				ChangedServices: []string{svc.Name},
+				ClusterRef:      clusterRef,
 			},
 		},
 	}
@@ -556,6 +602,40 @@ func (r *PreviewGroupReconciler) listChildEnvironments(ctx context.Context, pg *
 	return envList.Items, nil
 }
 
+func shouldBypassPreviewGroupHookCleanup(pg *divergeiov1alpha1.PreviewGroup, child *divergeiov1alpha1.Environment) bool {
+	if pg != nil {
+		if pg.Annotations["divergedev.com/force-teardown"] == "true" {
+			return true
+		}
+		if !pg.DeletionTimestamp.IsZero() && time.Since(pg.DeletionTimestamp.Time) > 15*time.Minute {
+			return true
+		}
+	}
+	if child != nil {
+		if child.Annotations["divergedev.com/force-teardown"] == "true" {
+			return true
+		}
+		if !child.DeletionTimestamp.IsZero() && time.Since(child.DeletionTimestamp.Time) > 15*time.Minute {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *PreviewGroupReconciler) propagateForceTeardownToChild(ctx context.Context, child *divergeiov1alpha1.Environment) {
+	if child == nil || child.Annotations["divergedev.com/force-teardown"] == "true" {
+		return
+	}
+	base := child.DeepCopy()
+	if child.Annotations == nil {
+		child.Annotations = make(map[string]string)
+	}
+	child.Annotations["divergedev.com/force-teardown"] = "true"
+	patchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	_ = r.Patch(patchCtx, child, client.MergeFrom(base))
+}
+
 // deleteOrphanedEnvironments removes child Environments that are no longer in the spec.
 func (r *PreviewGroupReconciler) deleteOrphanedEnvironments(ctx context.Context, pg *divergeiov1alpha1.PreviewGroup, desired map[string]bool) error {
 	logger := log.FromContext(ctx)
@@ -565,18 +645,34 @@ func (r *PreviewGroupReconciler) deleteOrphanedEnvironments(ctx context.Context,
 		return err
 	}
 
+	var errs []error
 	for i := range children {
 		child := &children[i]
 		if !desired[child.Namespace+"/"+child.Name] && !desired[child.Name] {
 			logger.Info("Deleting orphaned Environment", "name", child.Name, "namespace", child.Namespace)
+			hookCtx, cancelHook := context.WithTimeout(ctx, 15*time.Second)
+			hookErr := r.cleanupPostDeployJobs(hookCtx, child)
+			cancelHook()
+			if hookErr != nil {
+				if !shouldBypassPreviewGroupHookCleanup(pg, child) {
+					errs = append(errs, fmt.Errorf("failed to cleanup post-deploy jobs for orphaned Environment %s/%s: %w", child.Namespace, child.Name, hookErr))
+					continue
+				}
+				logger.Info("Bypassing orphan post-deploy hook cleanup failure under force-teardown policy", "child", child.Name, "error", hookErr)
+				if r.Recorder != nil {
+					r.Recorder.Event(pg, "Warning", "ForceTeardown", "Bypassed orphan post-deploy hook cleanup failure under force-teardown policy")
+				}
+				r.propagateForceTeardownToChild(ctx, child)
+			}
 			if err := r.Delete(ctx, child); err != nil && !apierrors.IsNotFound(err) {
-				return fmt.Errorf("failed to delete orphaned Environment %s/%s: %w", child.Namespace, child.Name, err)
+				errs = append(errs, fmt.Errorf("failed to delete orphaned Environment %s/%s: %w", child.Namespace, child.Name, err))
+				continue
 			}
 			r.Recorder.Eventf(pg, "Normal", "OrphanDeleted",
 				"Deleted orphaned Environment %s/%s", child.Namespace, child.Name)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // derivePreviewGroupPhase computes the aggregate phase from per-service statuses.

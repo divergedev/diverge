@@ -271,3 +271,45 @@ func TestPreviewGroupService_CrossNamespaceServiceAuthz(t *testing.T) {
 	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), "permission denied for service namespace restricted-ns")
 }
+
+func TestPreviewGroupService_UpdateRejectsClusterRefChangeOnExistingService(t *testing.T) {
+	_, _, svc := buildPreviewGroupTestSetup(t)
+	ctx := auth.ContextWithUserInfo(context.Background(), &auth.UserInfo{Username: "test-user"})
+
+	created, err := svc.CreatePreviewGroup(ctx, connect.NewRequest(&pb.CreatePreviewGroupRequest{
+		Namespace: "default",
+		PreviewGroup: &pb.PreviewGroup{
+			Name: "pg-federated",
+			Spec: &pb.PreviewGroupSpec{
+				ClusterRef: &pb.ClusterTargetRef{
+					Name:                "us-west",
+					KubeconfigSecretRef: &pb.SecretRef{Name: "west-sec"},
+				},
+				Services: []*pb.PreviewGroupServiceSpec{
+					{Name: "orders", Image: "orders:v1"},
+				},
+			},
+		},
+	}))
+	require.NoError(t, err)
+	rv := created.Msg.PreviewGroup.ResourceVersion
+
+	_, err = svc.UpdatePreviewGroup(ctx, connect.NewRequest(&pb.UpdatePreviewGroupRequest{
+		PreviewGroup: &pb.PreviewGroup{
+			Name:            "pg-federated",
+			Namespace:       "default",
+			ResourceVersion: rv,
+			Spec: &pb.PreviewGroupSpec{
+				ClusterRef: &pb.ClusterTargetRef{
+					Name:                "us-east",
+					KubeconfigSecretRef: &pb.SecretRef{Name: "east-sec"},
+				},
+				Services: []*pb.PreviewGroupServiceSpec{
+					{Name: "orders", Image: "orders:v2"},
+				},
+			},
+		},
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}

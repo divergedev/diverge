@@ -170,6 +170,21 @@ func parseNonNegativeEnvFloat(key string) (float64, bool) {
 	return v, true
 }
 
+// IsRateCardConfigured reports whether rate was explicitly constructed/normalized (preserving intentional zero prices)
+// as opposed to a zero-value CostRateCard{} literal.
+func IsRateCardConfigured(rate CostRateCard) bool {
+	return rate.configured ||
+		rate.VCPUHourUSD > 0 ||
+		rate.MemoryGiBHourUSD > 0 ||
+		rate.DatabaseSchemaHrUSD > 0 ||
+		rate.DatabaseDedicatedHrUSD > 0
+}
+
+// NormalizeRateCard normalizes a CostRateCard, substituting defaults only for an unconfigured zero-value CostRateCard{}.
+func NormalizeRateCard(rate CostRateCard) CostRateCard {
+	return normalizeRateCard(rate)
+}
+
 func normalizeRateCard(rate CostRateCard) CostRateCard {
 	defaults := DefaultCostRateCard()
 	if !rate.configured &&
@@ -278,6 +293,7 @@ func ObserveEnvironmentLifetime(env *v1alpha1.Environment, now time.Time) {
 type EnvironmentCostEstimate struct {
 	HourlyUSD                   float64
 	ComputeHourlyUSD            float64
+	BaseComputeHourlyUSD        float64
 	DatabaseHourlyUSD           float64
 	HibernationSavingsHourlyUSD float64
 	AccruedUSD                  float64
@@ -287,6 +303,8 @@ type EnvironmentCostEstimate struct {
 	HibernatedHours             float64
 	CPUCores                    float64
 	MemoryGiB                   float64
+	ConfiguredCPUCores          float64
+	ConfiguredMemoryGiB         float64
 	ServiceCount                int
 	Hibernated                  bool
 	IdleDuration                time.Duration
@@ -507,6 +525,7 @@ func ComputeEnvironmentCost(env *v1alpha1.Environment, now time.Time, rate CostR
 	return EnvironmentCostEstimate{
 		HourlyUSD:                   hourlyUSD,
 		ComputeHourlyUSD:            computeHourlyUSD,
+		BaseComputeHourlyUSD:        baseComputeHourly,
 		DatabaseHourlyUSD:           databaseHourlyUSD,
 		HibernationSavingsHourlyUSD: hibernationSavingsUSD,
 		AccruedUSD:                  accruedUSD,
@@ -516,6 +535,8 @@ func ComputeEnvironmentCost(env *v1alpha1.Environment, now time.Time, rate CostR
 		HibernatedHours:             hibernatedHours,
 		CPUCores:                    activeCPU,
 		MemoryGiB:                   activeMemory,
+		ConfiguredCPUCores:          float64(serviceCount) * cpuCores,
+		ConfiguredMemoryGiB:         float64(serviceCount) * memoryGiB,
 		ServiceCount:                serviceCount,
 		Hibernated:                  hibernated,
 		IdleDuration:                idleDuration,

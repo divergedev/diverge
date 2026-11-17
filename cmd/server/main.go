@@ -26,6 +26,7 @@ import (
 	crmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	divergev1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/multicluster"
 	"github.com/divergedev/diverge/internal/observability"
 	"github.com/divergedev/diverge/internal/server"
 	"github.com/divergedev/diverge/internal/server/auth"
@@ -346,6 +347,7 @@ func main() {
 	mux, tunnelMgr := server.NewServeMux(server.ServeMuxConfig{
 		Client:           crClient,
 		K8sClient:        k8sClient,
+		ClusterClients:   multicluster.NewManager(crClient, k8sClient, cfg, scheme),
 		InformerMgr:      informerMgr,
 		LogStreamer:      logStreamer,
 		StreamLimiter:    streamLimiter,

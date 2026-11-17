@@ -8,6 +8,7 @@ import (
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -15,6 +16,7 @@ import (
 type Deps struct {
 	Client    client.Client
 	Clientset kubernetes.Interface
+	Config    *rest.Config
 	Scheme    *runtime.Scheme
 	Logger    logr.Logger
 }

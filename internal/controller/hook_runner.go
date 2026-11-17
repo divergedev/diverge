@@ -37,6 +37,7 @@ type HookJobConfig struct {
 	VolumeMounts []corev1.VolumeMount
 	Timeout      int32
 	Owner        metav1.Object
+	SkipOwnerRef bool
 	Labels       map[string]string
 }
 
@@ -142,7 +143,7 @@ func buildJob(cfg HookJobConfig) *batchv1.Job {
 		},
 	}
 
-	if cfg.Owner != nil {
+	if cfg.Owner != nil && !cfg.SkipOwnerRef {
 		// Just a simple owner ref, assuming no scheme needed here if we do it manually,
 		// but controllerutil.SetControllerReference is better if scheme is provided.
 		// Since we don't pass scheme to buildJob, we'll manually append an OwnerReference.

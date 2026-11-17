@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -15,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/multicluster"
 )
 
 func newTestScheme(t *testing.T) *runtime.Scheme {
@@ -266,4 +268,61 @@ func TestCNPGDatabaseProvider_StatusAndTeardown(t *testing.T) {
 	stAfter, err := prov.Status(context.Background(), env)
 	require.NoError(t, err)
 	assert.False(t, stAfter.Provisioned)
+}
+
+func TestCNPGDatabaseProvider_RemotePinnedTargetPlacement(t *testing.T) {
+	scheme := newTestScheme(t)
+	hubClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	spokeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	prov := &CNPGDatabaseProvider{
+		Client: hubClient,
+		Scheme: scheme,
+	}
+
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-spoke-cnpg",
+			Namespace: "team-db",
+			UID:       "hub-uid-cnpg",
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Deploy: v1alpha1.EnvironmentDeploy{
+				Namespace: "same",
+				ClusterRef: &v1alpha1.ClusterTargetRef{
+					Name:                "spoke-west",
+					KubeconfigSecretRef: &v1alpha1.SecretRef{Name: "spoke-sec"},
+				},
+			},
+		},
+	}
+
+	pinnedCtx := multicluster.WithTarget(context.Background(), &multicluster.Target{
+		Name:     "spoke-west",
+		IsRemote: true,
+		Client:   spokeClient,
+	})
+
+	_, err := prov.Provision(pinnedCtx, env)
+	require.NoError(t, err)
+
+	// CNPG Cluster CR must live on spokeClient (NOT hubClient) and omit hub OwnerReferences.
+	hubCheck := &unstructured.Unstructured{}
+	hubCheck.SetGroupVersionKind(ClusterGVK)
+	assert.True(t, apierrors.IsNotFound(hubClient.Get(context.Background(), types.NamespacedName{
+		Name: "diverge-pg-pr-spoke-cnpg", Namespace: "team-db",
+	}, hubCheck)))
+
+	spokeCluster := &unstructured.Unstructured{}
+	spokeCluster.SetGroupVersionKind(ClusterGVK)
+	require.NoError(t, spokeClient.Get(context.Background(), types.NamespacedName{
+		Name: "diverge-pg-pr-spoke-cnpg", Namespace: "team-db",
+	}, spokeCluster))
+	assert.Empty(t, spokeCluster.GetOwnerReferences(), "remote spoke CNPG Cluster must not carry hub OwnerReference")
+
+	// Teardown with pinned spoke target removes the spoke CNPG Cluster.
+	require.NoError(t, prov.Teardown(pinnedCtx, env))
+	assert.True(t, apierrors.IsNotFound(spokeClient.Get(context.Background(), types.NamespacedName{
+		Name: "diverge-pg-pr-spoke-cnpg", Namespace: "team-db",
+	}, spokeCluster)))
 }

@@ -7,11 +7,17 @@ import (
 	"time"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/finops"
+	"github.com/divergedev/diverge/internal/multicluster"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 func TestHandleTeardown_Success(t *testing.T) {
@@ -45,6 +51,123 @@ func TestHandleTeardown_Success(t *testing.T) {
 	updatedEnv := &divergeiov1alpha1.Environment{}
 	err = client.Get(context.Background(), req.NamespacedName, updatedEnv)
 	require.Error(t, err) // Should be deleted
+
+	// Verify historical FinOps ledger recorded the torn-down environment
+	records := finops.ListHistoricalRecords(context.Background(), client, nil, "default", time.Now().UTC(), 7, 2*time.Second)
+	require.Len(t, records, 1)
+	assert.Equal(t, "test-env", records[0].Name)
+	assert.Greater(t, records[0].AccruedCostUSD, 0.0)
+}
+
+func TestProvisioningAndTeardown_MultiClusterSpokeAndCrossNamespaceRejection(t *testing.T) {
+	ctx := context.Background()
+
+	// 1. Cross-namespace kubeconfigSecretRef is rejected with SecretRefValid=False (S5).
+	badEnv := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "pr-cross-ns",
+			Namespace:  "default",
+			Finalizers: []string{environmentFinalizer},
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Source: divergeiov1alpha1.EnvironmentSource{Provider: "github", Branch: "feat/x"},
+			Deploy: divergeiov1alpha1.EnvironmentDeploy{
+				ClusterRef: &divergeiov1alpha1.ClusterTargetRef{
+					Name: "prod",
+					KubeconfigSecretRef: &divergeiov1alpha1.SecretRef{
+						Namespace: "kube-system",
+						Name:      "admin-kubeconfig",
+					},
+				},
+			},
+		},
+	}
+	rBad, hubBad, _, _, _ := newTestReconciler(t, badEnv, nil, "")
+	_, err := rBad.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "pr-cross-ns", Namespace: "default"}})
+	require.NoError(t, err)
+
+	var gotBad divergeiov1alpha1.Environment
+	require.NoError(t, hubBad.Get(ctx, types.NamespacedName{Name: "pr-cross-ns", Namespace: "default"}, &gotBad))
+	require.NotEmpty(t, gotBad.Status.Conditions)
+	assert.Equal(t, "SecretRefValid", gotBad.Status.Conditions[0].Type)
+	assert.Equal(t, metav1.ConditionFalse, gotBad.Status.Conditions[0].Status)
+	assert.Equal(t, "CrossNamespaceRef", gotBad.Status.Conditions[0].Reason)
+
+	// 1b. Repairing the reference clears SecretRefValid=False to True.
+	gotBad.Spec.Deploy.ClusterRef = nil
+	require.NoError(t, hubBad.Update(ctx, &gotBad))
+	_, err = rBad.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "pr-cross-ns", Namespace: "default"}})
+	require.NoError(t, err)
+	require.NoError(t, hubBad.Get(ctx, types.NamespacedName{Name: "pr-cross-ns", Namespace: "default"}, &gotBad))
+	secCond := meta.FindStatusCondition(gotBad.Status.Conditions, "SecretRefValid")
+	require.NotNil(t, secCond)
+	assert.Equal(t, metav1.ConditionTrue, secCond.Status)
+
+	// 2. Valid federated environment creates preview namespace + feature ConfigMap on spoke and records TargetCluster.
+	spokeEnv := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			UID:        "uid-spoke-1",
+			Name:       "pr-spoke",
+			Namespace:  "default",
+			Finalizers: []string{environmentFinalizer},
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Source: divergeiov1alpha1.EnvironmentSource{Provider: "github", Branch: "feat/federated"},
+			Deploy: divergeiov1alpha1.EnvironmentDeploy{
+				Namespace:       "create",
+				ChangedServices: []string{"orders"},
+				ClusterRef: &divergeiov1alpha1.ClusterTargetRef{
+					Name: "us-west-burst",
+					KubeconfigSecretRef: &divergeiov1alpha1.SecretRef{
+						Name: "spoke-west-kubeconfig",
+					},
+				},
+			},
+			Features: &divergeiov1alpha1.FeatureSpec{
+				Provider:  "configmap",
+				Overrides: map[string]string{"new_checkout": "true"},
+			},
+		},
+	}
+	rSpoke, hubSpoke, _, _, _ := newTestReconciler(t, spokeEnv, nil, "")
+	spokeClient := fake.NewClientBuilder().WithScheme(rSpoke.Scheme).Build()
+	rSpoke.ClusterClients = &multicluster.StaticResolver{
+		Hub: &multicluster.Target{Name: "local", IsRemote: false, Client: hubSpoke},
+		Spokes: map[string]*multicluster.Target{
+			"us-west-burst": {Name: "us-west-burst", IsRemote: true, Client: spokeClient},
+		},
+	}
+
+	_, err = rSpoke.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "pr-spoke", Namespace: "default"}})
+	require.NoError(t, err)
+
+	var gotSpoke divergeiov1alpha1.Environment
+	require.NoError(t, hubSpoke.Get(ctx, types.NamespacedName{Name: "pr-spoke", Namespace: "default"}, &gotSpoke))
+	assert.Equal(t, "us-west-burst", gotSpoke.Status.TargetCluster)
+
+	var spokePreviewNS corev1.Namespace
+	require.NoError(t, spokeClient.Get(ctx, types.NamespacedName{Name: spokeEnv.PreviewNamespace()}, &spokePreviewNS))
+
+	// Feature ConfigMap must exist on spoke (NOT on hub).
+	var spokeFeatureCM corev1.ConfigMap
+	require.NoError(t, spokeClient.Get(ctx, types.NamespacedName{Name: "diverge-features-pr-spoke", Namespace: spokeEnv.PreviewNamespace()}, &spokeFeatureCM))
+	assert.True(t, apierrors.IsNotFound(hubSpoke.Get(ctx, types.NamespacedName{Name: "diverge-features-pr-spoke", Namespace: spokeEnv.PreviewNamespace()}, &corev1.ConfigMap{})))
+
+	// 3. Confirmed remote environment retains finalizer if spoke kubeconfig becomes invalid during teardown.
+	delNow := metav1.Now()
+	corruptSpokeEnv := gotSpoke.DeepCopy()
+	corruptSpokeEnv.DeletionTimestamp = &delNow
+	// Use Manager with empty Secret on hub so Resolve returns ValidationError (EmptyKubeconfigSecret).
+	emptySec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "spoke-west-kubeconfig", Namespace: "default"},
+	}
+	require.NoError(t, hubSpoke.Create(ctx, emptySec))
+	rSpoke.ClusterClients = multicluster.NewManager(hubSpoke, nil, nil, rSpoke.Scheme)
+
+	res, tdErr := rSpoke.handleTeardown(ctx, corruptSpokeEnv)
+	require.Error(t, tdErr, "confirmed remote target must retain finalizer when kubeconfig validation fails")
+	assert.Equal(t, 10*time.Second, res.RequeueAfter)
+	assert.Contains(t, corruptSpokeEnv.Finalizers, environmentFinalizer)
 }
 
 func TestHandleTeardown_PartialFailure(t *testing.T) {
@@ -100,4 +223,87 @@ func TestHandleTeardown_AsyncTeardown(t *testing.T) {
 	assert.Empty(t, res)
 
 	assert.Equal(t, 1, fp.teardownCalls)
+}
+
+type countingResolver struct {
+	calls  int
+	target *multicluster.Target
+}
+
+func (c *countingResolver) Resolve(ctx context.Context, _ *divergeiov1alpha1.Environment) (*multicluster.Target, error) {
+	if pinned, ok := multicluster.TargetFromContext(ctx); ok && pinned != nil {
+		return pinned, nil
+	}
+	c.calls++
+	return c.target, nil
+}
+
+func TestReconcileProvisioning_SinglePinnedTargetAndOptimisticLockWriteAhead(t *testing.T) {
+	ctx := context.Background()
+	env := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "pr-pinned",
+			Namespace:  "default",
+			Finalizers: []string{environmentFinalizer},
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Source: divergeiov1alpha1.EnvironmentSource{Provider: "github", Branch: "feat/pin"},
+			Deploy: divergeiov1alpha1.EnvironmentDeploy{
+				Namespace: "create",
+				ClusterRef: &divergeiov1alpha1.ClusterTargetRef{
+					Name:                "spoke-west",
+					KubeconfigSecretRef: &divergeiov1alpha1.SecretRef{Name: "spoke-sec"},
+				},
+			},
+			Routing: divergeiov1alpha1.EnvironmentRouting{
+				Banner: &divergeiov1alpha1.BannerSpec{Enabled: true, Text: "PR"},
+			},
+			Features: &divergeiov1alpha1.FeatureSpec{
+				Provider:  "configmap",
+				Overrides: map[string]string{"beta": "true"},
+			},
+		},
+	}
+
+	r, hubClient, _, _, _ := newTestReconciler(t, env, nil, "")
+	spokeClient := fake.NewClientBuilder().WithScheme(r.Scheme).Build()
+	cr := &countingResolver{
+		target: &multicluster.Target{
+			Name:     "spoke-west",
+			IsRemote: true,
+			Client:   spokeClient,
+		},
+	}
+	r.ClusterClients = cr
+
+	// 1. Concurrent spec update before write-ahead TargetCluster patch must conflict BEFORE spoke resources are created.
+	var readSnapshot divergeiov1alpha1.Environment
+	require.NoError(t, hubClient.Get(ctx, types.NamespacedName{Name: "pr-pinned", Namespace: "default"}, &readSnapshot))
+	statusBaseStale := readSnapshot.DeepCopy()
+
+	var concurrent divergeiov1alpha1.Environment
+	require.NoError(t, hubClient.Get(ctx, types.NamespacedName{Name: "pr-pinned", Namespace: "default"}, &concurrent))
+	concurrent.Spec.Source.CommitSHA = "concurrent-sha"
+	require.NoError(t, hubClient.Update(ctx, &concurrent))
+
+	_, _, doneConflict, errConflict := r.reconcileProvisioningWithTarget(ctx, &readSnapshot, statusBaseStale)
+	require.Error(t, errConflict, "optimistic lock must reject stale write-ahead status patch")
+	assert.True(t, doneConflict)
+	assert.True(t, apierrors.IsNotFound(spokeClient.Get(ctx, types.NamespacedName{Name: env.PreviewNamespace()}, &corev1.Namespace{})),
+		"no spoke namespace may be created when write-ahead TargetCluster patch conflicts")
+
+	// 2. Fresh snapshot resolves the target once across namespace, banner, features, and deploy.
+	cr.calls = 0
+	var fresh divergeiov1alpha1.Environment
+	require.NoError(t, hubClient.Get(ctx, types.NamespacedName{Name: "pr-pinned", Namespace: "default"}, &fresh))
+	freshBase := fresh.DeepCopy()
+
+	provCtx, _, doneOK, errOK := r.reconcileProvisioningWithTarget(ctx, &fresh, freshBase)
+	require.NoError(t, errOK)
+	assert.False(t, doneOK)
+	assert.Equal(t, 1, cr.calls, "reconcileProvisioning must resolve spoke target once and reuse pinned target")
+	pinned, hasPinned := multicluster.TargetFromContext(provCtx)
+	require.True(t, hasPinned)
+	assert.Equal(t, "spoke-west", pinned.Name)
+	require.NoError(t, spokeClient.Get(ctx, types.NamespacedName{Name: fresh.PreviewNamespace()}, &corev1.Namespace{}))
 }

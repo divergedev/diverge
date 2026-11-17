@@ -306,6 +306,9 @@ export function buildCostSummaryCsv(consumers: readonly EnvironmentCostItem[]): 
     'cost_source',
     'ttl_warning',
     'ttl_warning_reason',
+    'cluster',
+    'historical',
+    'terminated_at',
   ]
   const lines = [header.join(',')]
   for (const item of consumers) {
@@ -329,6 +332,9 @@ export function buildCostSummaryCsv(consumers: readonly EnvironmentCostItem[]): 
       item.costSource || 'rate-card',
       String(Boolean(item.ttlWarning)),
       item.ttlWarningReason,
+      item.cluster || 'local',
+      String(Boolean(item.historical)),
+      item.terminatedAt || '',
     ]
     lines.push(row.map(escapeCsvCell).join(','))
   }
@@ -352,6 +358,9 @@ export function buildCostSummaryJson(summary: GetCostSummaryResponse): string {
     totalEnvironments: summary.totalEnvironments,
     activeEnvironments: summary.activeEnvironments,
     hibernatedEnvironments: summary.hibernatedEnvironments,
+    historicalEnvironments: summary.historicalEnvironments,
+    historicalAccruedCostUsd: summary.historicalAccruedCostUsd,
+    historicalSavingsUsd: summary.historicalSavingsUsd,
     opencostEnabled: Boolean(summary.opencostEnabled),
     rateCard: summary.rateCard
       ? {
@@ -394,6 +403,24 @@ export function buildCostSummaryJson(summary: GetCostSummaryResponse): string {
       cpuCores: svc.cpuCores,
       memoryGib: svc.memoryGib,
     })),
+    byCluster: (summary.byCluster ?? []).map((cl) => ({
+      cluster: cl.cluster || 'local',
+      totalEnvironments: cl.totalEnvironments,
+      activeEnvironments: cl.activeEnvironments,
+      hibernatedEnvironments: cl.hibernatedEnvironments,
+      hourlyCostUsd: cl.hourlyCostUsd,
+      accruedCostUsd: cl.accruedCostUsd,
+      cpuCores: cl.cpuCores,
+      memoryGib: cl.memoryGib,
+    })),
+    dailyTrend: (summary.dailyTrend ?? []).map((pt) => ({
+      date: pt.date,
+      accruedCostUsd: pt.accruedCostUsd,
+      hibernationSavingsUsd: pt.hibernationSavingsUsd,
+      deltaRoutingSavingsUsd: pt.deltaRoutingSavingsUsd,
+      activeEnvironments: pt.activeEnvironments,
+      terminatedEnvironments: pt.terminatedEnvironments,
+    })),
     topConsumers: summary.topConsumers.map((item) => ({
       name: item.name,
       namespace: item.namespace,
@@ -414,6 +441,26 @@ export function buildCostSummaryJson(summary: GetCostSummaryResponse): string {
       costSource: item.costSource || 'rate-card',
       ttlWarning: item.ttlWarning,
       ttlWarningReason: item.ttlWarningReason,
+      cluster: item.cluster || 'local',
+      historical: Boolean(item.historical),
+      terminatedAt: item.terminatedAt || '',
+    })),
+    historicalConsumers: (summary.historicalConsumers ?? []).map((item) => ({
+      name: item.name,
+      namespace: item.namespace,
+      project: item.project,
+      mr: item.mr,
+      branch: item.branch,
+      phase: item.phase,
+      accruedCostUsd: item.accruedCostUsd,
+      uptimeHours: item.uptimeHours,
+      cpuCores: item.cpuCores,
+      memoryGib: item.memoryGib,
+      serviceCount: item.serviceCount,
+      databaseMode: item.databaseMode,
+      cluster: item.cluster || 'local',
+      historical: true,
+      terminatedAt: item.terminatedAt || '',
     })),
   }
   return `${JSON.stringify(payload, null, 2)}\n`

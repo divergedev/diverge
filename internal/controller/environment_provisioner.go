@@ -18,6 +18,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/divergedev/diverge/config/banner"
 	"github.com/divergedev/diverge/internal/async"
 	internaldb "github.com/divergedev/diverge/internal/database"
+	"github.com/divergedev/diverge/internal/multicluster"
 	pkgdb "github.com/divergedev/diverge/pkg/database"
 	"github.com/divergedev/diverge/pkg/features"
 	"github.com/divergedev/diverge/pkg/registry"
@@ -43,8 +45,14 @@ func (r *EnvironmentReconciler) notifyFailed(ctx context.Context, env *divergeio
 }
 
 func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *divergeiov1alpha1.Environment, statusBase *divergeiov1alpha1.Environment) (ctrl.Result, bool, error) {
-	ctx, span := otel.Tracer("diverge").Start(ctx, "reconcileProvisioning")
+	_, res, done, err := r.reconcileProvisioningWithTarget(ctx, env, statusBase)
+	return res, done, err
+}
+
+func (r *EnvironmentReconciler) reconcileProvisioningWithTarget(ctx context.Context, env *divergeiov1alpha1.Environment, statusBase *divergeiov1alpha1.Environment) (context.Context, ctrl.Result, bool, error) {
+	pCtx, span := otel.Tracer("diverge").Start(ctx, "reconcileProvisioning")
 	defer span.End()
+	ctx = pCtx
 
 	logger := log.FromContext(ctx)
 
@@ -60,7 +68,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 				Message: "cross-namespace SecretRef not allowed",
 			})
 			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, nil, 0)
-			return res, true, retErr
+			return ctx, res, true, retErr
 		}
 	}
 	for _, ref := range env.Spec.Deploy.EnvFrom {
@@ -74,8 +82,78 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 				Message: "cross-namespace SecretRef not allowed",
 			})
 			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, nil, 0)
-			return res, true, retErr
+			return ctx, res, true, retErr
 		}
+	}
+
+	// 4.5. Resolve target cluster once (local hub or remote spoke via clusterRef) and pin for the reconcile
+	if prevCluster := strings.TrimSpace(env.Status.TargetCluster); prevCluster != "" {
+		desiredCluster := multicluster.LocalClusterName
+		if multicluster.IsRemoteEnv(env) {
+			desiredCluster = multicluster.DesiredClusterName(env.Spec.Deploy.ClusterRef)
+		}
+		if prevCluster != desiredCluster {
+			msg := fmt.Sprintf("spec.deploy.clusterRef cannot change target cluster from %q to %q after provisioning", prevCluster, desiredCluster)
+			r.Recorder.Event(env, "Warning", "ClusterRefImmutable", msg)
+			env.Status.Phase = divergeiov1alpha1.PhaseFailed
+			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+				Type:    "SecretRefValid",
+				Status:  metav1.ConditionFalse,
+				Reason:  "ClusterRefImmutable",
+				Message: msg,
+			})
+			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, nil, 0)
+			return ctx, res, true, retErr
+		}
+	}
+
+	resolvedTarget, clusterErr := r.resolveTarget(ctx, env)
+	if clusterErr != nil {
+		if ve, ok := multicluster.IsValidationError(clusterErr); ok {
+			if ve.Reason == "CrossNamespaceRef" {
+				r.Recorder.Event(env, "Warning", "SecurityViolation", ve.Message)
+			} else {
+				r.Recorder.Event(env, "Warning", "ClusterRefInvalid", ve.Message)
+				env.Status.Phase = divergeiov1alpha1.PhaseFailed
+			}
+			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+				Type:    "SecretRefValid",
+				Status:  metav1.ConditionFalse,
+				Reason:  ve.Reason,
+				Message: ve.Message,
+			})
+			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, nil, 0)
+			return ctx, res, true, retErr
+		}
+		meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+			Type:    "NamespaceReady",
+			Status:  metav1.ConditionFalse,
+			Reason:  "ClusterResolveFailed",
+			Message: clusterErr.Error(),
+		})
+		res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, clusterErr, 0)
+		return ctx, res, true, retErr
+	}
+	ctx = multicluster.WithTarget(ctx, resolvedTarget)
+	env.Status.TargetCluster = resolvedTarget.Name
+	if meta.FindStatusCondition(env.Status.Conditions, "SecretRefValid") != nil ||
+		len(env.Spec.EnvFrom) > 0 ||
+		len(env.Spec.Deploy.EnvFrom) > 0 ||
+		env.Spec.Deploy.ClusterRef != nil {
+		meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+			Type:    "SecretRefValid",
+			Status:  metav1.ConditionTrue,
+			Reason:  "SecretRefsValid",
+			Message: "All secret references are valid",
+		})
+	}
+	// Write-ahead persist TargetCluster with an optimistic lock before creating any remote spoke resources so
+	// concurrent spec updates conflict before spoke resources are provisioned and teardown always knows the target.
+	if resolvedTarget.IsRemote && strings.TrimSpace(statusBase.Status.TargetCluster) == "" {
+		if patchErr := r.Status().Patch(ctx, env, client.MergeFromWithOptions(statusBase, client.MergeFromWithOptimisticLock{})); patchErr != nil {
+			return ctx, ctrl.Result{}, true, fmt.Errorf("failed to persist targetCluster status: %w", patchErr)
+		}
+		*statusBase = *env.DeepCopy()
 	}
 
 	// 5. Ensure namespace
@@ -88,7 +166,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 		})
 		r.notifyFailed(ctx, env, err.Error())
 		res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
-		return res, true, retErr
+		return ctx, res, true, retErr
 	}
 	meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 		Type:    "NamespaceReady",
@@ -100,16 +178,16 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 	// 5.5. Enforce namespace quotas and FinOps LRU auto-hibernation
 	if res, done, err := r.reconcileNamespaceQuota(ctx, env, statusBase); done || err != nil {
 		if done {
-			return res, true, err
+			return ctx, res, true, err
 		}
 		res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
-		return res, true, retErr
+		return ctx, res, true, retErr
 	}
 
 	// 6. Ensure database
 	tCtxDB, cancelDB := context.WithTimeout(ctx, 15*time.Second)
 	defer cancelDB()
-	dbProv, resolvedDBName, err := r.resolveDatabaseProvider(env, false)
+	dbProv, resolvedDBName, err := r.resolveDatabaseProviderWithContext(tCtxDB, env, false)
 	if dbProv != nil && dbProv != r.DatabaseProvider {
 		defer closeDatabaseProvider(dbProv)
 	}
@@ -129,7 +207,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 		})
 		r.notifyFailed(ctx, env, err.Error())
 		res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
-		return res, true, retErr
+		return ctx, res, true, retErr
 	}
 	if dbStatus != nil && dbStatus.Ready {
 		// Run SetupSQL if configured and not already executed in-process by the provider
@@ -147,7 +225,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 						Message: "SetupSQL job is running",
 					})
 					res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, nil, 2*time.Second)
-					return res, true, retErr
+					return ctx, res, true, retErr
 				}
 				meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 					Type:    "DatabaseReady",
@@ -157,7 +235,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 				})
 				r.notifyFailed(ctx, env, setupErr.Error())
 				res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, setupErr, 0)
-				return res, true, retErr
+				return ctx, res, true, retErr
 			}
 		}
 
@@ -189,7 +267,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 				})
 				r.notifyFailed(ctx, env, err.Error())
 				res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
-				return res, true, retErr
+				return ctx, res, true, retErr
 			}
 		}
 
@@ -218,7 +296,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 					env.Status.Phase = divergeiov1alpha1.PhaseMigrating
 					r.Recorder.Event(env, "Normal", "MigrationInProgress", migErr.Error())
 					res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, nil, 3*time.Second)
-					return res, true, retErr
+					return ctx, res, true, retErr
 				}
 			} else if errors.Is(migErr, ErrHookFailed) {
 				env.Status.MigrationStatus = "Failed"
@@ -234,7 +312,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 					r.Recorder.Event(env, "Warning", "MigrationFailed", migErr.Error())
 					r.notifyFailed(ctx, env, migErr.Error())
 					res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, migErr, 0)
-					return res, true, retErr
+					return ctx, res, true, retErr
 				}
 			} else if migErr != nil {
 				logger.Error(migErr, "unexpected migration error")
@@ -251,7 +329,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 					r.Recorder.Event(env, "Warning", "MigrationFailed", migErr.Error())
 					r.notifyFailed(ctx, env, migErr.Error())
 					res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, migErr, 0)
-					return res, true, retErr
+					return ctx, res, true, retErr
 				}
 			} else {
 				env.Status.MigrationStatus = "Succeeded"
@@ -285,7 +363,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 		})
 		r.notifyFailed(ctx, env, err.Error())
 		res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
-		return res, true, retErr
+		return ctx, res, true, retErr
 	}
 	meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 		Type:    "RoutingReady",
@@ -310,7 +388,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 					})
 					r.Recorder.Event(env, "Warning", "ValidationFailed", err.Error())
 					res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, nil, 0)
-					return res, true, retErr
+					return ctx, res, true, retErr
 				}
 			}
 
@@ -359,7 +437,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 				})
 				r.Recorder.Event(env, "Warning", "AsyncProvisionFailed", err.Error())
 				res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
-				return res, true, retErr
+				return ctx, res, true, retErr
 			}
 
 			// Merge env vars sequentially to detect collisions deterministically
@@ -381,7 +459,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 						})
 						r.Recorder.Event(env, "Warning", "ValidationFailed", err.Error())
 						res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, nil, 0)
-						return res, true, retErr
+						return ctx, res, true, retErr
 					}
 					asyncEnvVars[k] = v
 				}
@@ -425,7 +503,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 		if meta.IsStatusConditionTrue(env.Status.Conditions, "FeaturesReady") && (env.Status.FeatureConfigMap != "" || len(env.Status.FeatureEnvVars) > 0 || len(env.Spec.Features.Overrides) == 0) {
 			// Skip re-provisioning if already ready and status recorded
 		} else {
-			fp, err := r.getFeatureProvider(env)
+			fp, err := r.getFeatureProvider(ctx, env)
 			if err != nil {
 				meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 					Type:    "FeaturesReady",
@@ -435,7 +513,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 				})
 				r.Recorder.Event(env, "Warning", "FeatureProvisionFailed", err.Error())
 				res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
-				return res, true, retErr
+				return ctx, res, true, retErr
 			}
 
 			tCtxF, cancelF := context.WithTimeout(ctx, 15*time.Second)
@@ -450,7 +528,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 				})
 				r.notifyFailed(ctx, env, err.Error())
 				res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
-				return res, true, retErr
+				return ctx, res, true, retErr
 			}
 
 			if featResult != nil {
@@ -471,7 +549,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 		}
 	}
 
-	return ctrl.Result{}, false, nil
+	return ctx, ctrl.Result{}, false, nil
 }
 
 func isKeyPrefixAsyncProto(p string) bool {
@@ -516,10 +594,27 @@ func (r *EnvironmentReconciler) resolveAsyncProvisioner(route divergeiov1alpha1.
 	return r.AsyncProvisioner
 }
 
-func (r *EnvironmentReconciler) getFeatureProvider(env *divergeiov1alpha1.Environment) (features.FeatureProvider, error) {
+func (r *EnvironmentReconciler) getFeatureProvider(ctx context.Context, env *divergeiov1alpha1.Environment) (features.FeatureProvider, error) {
 	providerName := "configmap"
 	if env.Spec.Features != nil && env.Spec.Features.Provider != "" {
 		providerName = env.Spec.Features.Provider
+	}
+	if multicluster.IsRemoteEnv(env) {
+		targetClient, _, _, err := r.resolveTargetCluster(ctx, env)
+		if err != nil {
+			return nil, err
+		}
+		deps := registry.Deps{
+			Client: targetClient,
+			Scheme: r.Scheme,
+		}
+		if features.Providers.Has(providerName) {
+			return features.Providers.Create(providerName, deps)
+		}
+		if r.FeatureProvider != nil && r.FeatureProvider.Type() != "configmap" {
+			return r.FeatureProvider, nil
+		}
+		return nil, fmt.Errorf("feature provider %q not registered", providerName)
 	}
 	if r.FeatureProvider != nil && r.FeatureProvider.Type() == providerName {
 		return r.FeatureProvider, nil
@@ -546,12 +641,43 @@ var allowedEnvDatabaseProviders = map[string]bool{
 	"none":     true,
 }
 
+func isClusterScopedDBProvider(name string) bool {
+	return name == "cnpg" || name == "fresh" || name == "snapshot"
+}
+
 func (r *EnvironmentReconciler) resolveDatabaseProvider(env *divergeiov1alpha1.Environment, forTeardown bool) (pkgdb.DatabaseProvider, string, error) {
+	return r.resolveDatabaseProviderWithContext(context.Background(), env, forTeardown)
+}
+
+func (r *EnvironmentReconciler) resolveDatabaseProviderWithContext(ctx context.Context, env *divergeiov1alpha1.Environment, forTeardown bool) (pkgdb.DatabaseProvider, string, error) {
 	if env != nil {
+		clientForProvider := func(providerName string) (client.Client, bool, error) {
+			if !isClusterScopedDBProvider(providerName) || !multicluster.IsRemoteEnv(env) {
+				return r.Client, false, nil
+			}
+			target, err := r.resolveTarget(ctx, env)
+			if err != nil {
+				if forTeardown {
+					if _, isVal := multicluster.IsValidationError(err); isVal && !multicluster.HasConfirmedRemoteTarget(env) {
+						return nil, true, nil
+					}
+				}
+				return nil, false, err
+			}
+			return target.Client, false, nil
+		}
+
 		recorded := strings.TrimSpace(env.Status.DatabaseProvider)
 		if forTeardown && recorded != "" && pkgdb.Providers.Has(recorded) {
+			provClient, skip, cErr := clientForProvider(recorded)
+			if cErr != nil {
+				return nil, recorded, fmt.Errorf("failed to resolve target cluster for database provider %q: %w", recorded, cErr)
+			}
+			if skip {
+				return nil, recorded, nil
+			}
 			deps := registry.Deps{
-				Client: r.Client,
+				Client: provClient,
 				Scheme: r.Scheme,
 			}
 			prov, err := pkgdb.Providers.Create(recorded, deps)
@@ -584,8 +710,15 @@ func (r *EnvironmentReconciler) resolveDatabaseProvider(env *divergeiov1alpha1.E
 			if !pkgdb.Providers.Has(candidate) {
 				return nil, candidate, fmt.Errorf("database provider %q is not registered", candidate)
 			}
+			provClient, skip, cErr := clientForProvider(candidate)
+			if cErr != nil {
+				return nil, candidate, fmt.Errorf("failed to resolve target cluster for database provider %q: %w", candidate, cErr)
+			}
+			if skip {
+				return nil, candidate, nil
+			}
 			deps := registry.Deps{
-				Client: r.Client,
+				Client: provClient,
 				Scheme: r.Scheme,
 			}
 			prov, err := pkgdb.Providers.Create(candidate, deps)
@@ -627,6 +760,11 @@ func closeDatabaseProvider(p pkgdb.DatabaseProvider) {
 func (r *EnvironmentReconciler) ensureBannerConfigMap(ctx context.Context, env *divergeiov1alpha1.Environment) error {
 	bannerSpec := env.Spec.Routing.Banner
 
+	targetClient, _, isRemote, err := r.resolveTargetCluster(ctx, env)
+	if err != nil {
+		return err
+	}
+
 	targetNS := env.Namespace
 	if env.Spec.Deploy.Namespace == "create" {
 		targetNS = env.PreviewNamespace()
@@ -639,8 +777,8 @@ func (r *EnvironmentReconciler) ensureBannerConfigMap(ctx context.Context, env *
 
 	if bannerSpec == nil || !bannerSpec.Enabled {
 		existing := &corev1.ConfigMap{}
-		if err := r.Get(ctx, types.NamespacedName{Name: cmName, Namespace: targetNS}, existing); err == nil {
-			if err := r.Delete(ctx, existing); err != nil {
+		if err := targetClient.Get(ctx, types.NamespacedName{Name: cmName, Namespace: targetNS}, existing); err == nil {
+			if err := targetClient.Delete(ctx, existing); err != nil {
 				return fmt.Errorf("failed to delete banner configmap: %w", err)
 			}
 		}
@@ -658,7 +796,7 @@ func (r *EnvironmentReconciler) ensureBannerConfigMap(ctx context.Context, env *
 		},
 	}
 
-	if targetNS == env.Namespace {
+	if !isRemote && targetNS == env.Namespace {
 		if err := controllerutil.SetControllerReference(env, cm, r.Scheme); err != nil {
 			return fmt.Errorf("failed to set owner reference: %w", err)
 		}
@@ -689,7 +827,7 @@ func (r *EnvironmentReconciler) ensureBannerConfigMap(ctx context.Context, env *
 	}
 	script = strings.ReplaceAll(script, "{{CONFIG_JSON}}", string(configJSON))
 
-	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
+	_, err = controllerutil.CreateOrUpdate(ctx, targetClient, cm, func() error {
 		if cm.Data == nil {
 			cm.Data = make(map[string]string)
 		}
@@ -703,6 +841,11 @@ func (r *EnvironmentReconciler) ensureBannerConfigMap(ctx context.Context, env *
 }
 
 func (r *EnvironmentReconciler) ensureDatabaseEnvSecret(ctx context.Context, env *divergeiov1alpha1.Environment, envVars map[string]string) error {
+	targetClient, _, isRemote, err := r.resolveTargetCluster(ctx, env)
+	if err != nil {
+		return err
+	}
+
 	secretName := sanitizeK8sName(fmt.Sprintf("diverge-db-env-%s", env.Name), env.Name, 63)
 
 	targetNS := env.Namespace
@@ -717,14 +860,14 @@ func (r *EnvironmentReconciler) ensureDatabaseEnvSecret(ctx context.Context, env
 		},
 	}
 
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
+	_, err = controllerutil.CreateOrUpdate(ctx, targetClient, secret, func() error {
 		if secret.Labels == nil {
 			secret.Labels = make(map[string]string)
 		}
 		secret.Labels["divergedev.com/environment"] = truncateLabel(env.Name)
 		secret.Labels["divergedev.com/managed-by"] = "diverge"
 
-		if targetNS == env.Namespace {
+		if !isRemote && targetNS == env.Namespace {
 			if r.Scheme != nil {
 				if err := controllerutil.SetControllerReference(env, secret, r.Scheme); err != nil {
 					return err

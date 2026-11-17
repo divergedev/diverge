@@ -25,6 +25,7 @@ import (
 	pb "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 	"github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/finops"
 	"github.com/divergedev/diverge/internal/metrics"
 )
 
@@ -245,4 +246,40 @@ func TestRenderCostTable_PropagatesWriteErrors(t *testing.T) {
 	err = renderCostTable(errWriter{}, &pb.GetCostSummaryResponse{}, true)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "simulated stdout write error")
+}
+
+func TestCostCmd_IncludesHistoricalLedgerWhenRequested(t *testing.T) {
+	app := buildCostCLITestApp(t)
+	now := time.Now().UTC()
+	closedEnv := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			UID:               "uid-closed-88",
+			Name:              "pr-closed-88",
+			Namespace:         "payments",
+			CreationTimestamp: metav1.NewTime(now.Add(-5 * time.Hour)),
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Source: divergeiov1alpha1.EnvironmentSource{MR: 88, Branch: "feat/closed-pr"},
+			Deploy: divergeiov1alpha1.EnvironmentDeploy{
+				ChangedServices: []string{"payments-api"},
+				ClusterRef: &divergeiov1alpha1.ClusterTargetRef{
+					Name:                "us-west-burst",
+					KubeconfigSecretRef: &divergeiov1alpha1.SecretRef{Name: "spoke-kubeconfig"},
+				},
+			},
+		},
+	}
+	require.NoError(t, finops.RecordEnvironmentTeardown(context.Background(), app.Client, closedEnv, now.Add(-1*time.Hour), metrics.DefaultCostRateCard()))
+
+	var csvBuf bytes.Buffer
+	root := NewRootCmd(app)
+	root.SetOut(&csvBuf)
+	root.SetArgs([]string{"cost", "-o", "csv", "--history", "--window-days", "7"})
+	require.NoError(t, root.Execute())
+
+	rows, err := csv.NewReader(strings.NewReader(csvBuf.String())).ReadAll()
+	require.NoError(t, err)
+	require.Len(t, rows, 4) // header + 2 live + 1 historical
+	assert.Contains(t, csvBuf.String(), "pr-closed-88")
+	assert.Contains(t, csvBuf.String(), "us-west-burst")
 }

@@ -206,4 +206,178 @@ describe('CostAnalytics', () => {
     fireEvent.change(screen.getByLabelText('Namespace scope'), { target: { value: '' } })
     expect(await screen.findByText('No preview usage recorded yet')).toBeInTheDocument()
   })
+
+  it('keeps historical window and closed-PR filter controls available after request failures so users can restore settings', async () => {
+    server.use(
+      http.post('*/diverge.v1alpha1.ClusterService/GetClusterInfo', () =>
+        HttpResponse.json({
+          controllerVersion: 'v0.27.0',
+          environmentCount: 1,
+          previewGroupCount: 0,
+          controllerHealthy: true,
+          namespaces: ['payments'],
+        }),
+      ),
+      http.post('*/diverge.v1alpha1.ClusterService/GetCostSummary', async ({ request }) => {
+        const body = (await request.json().catch(() => ({}))) as {
+          windowDays?: number
+          includeHistorical?: boolean
+        }
+        if (body.windowDays === 7 || body.includeHistorical === true) {
+          return HttpResponse.json({ code: 'internal', message: 'ledger configmap read failed' }, { status: 500 })
+        }
+        return HttpResponse.json({
+          totalHourlyCostUsd: 0.024,
+          monthlyRunRateUsd: 17.52,
+          totalEnvironments: 1,
+          activeEnvironments: 1,
+          byNamespace: [],
+          byService: [],
+          dailyTrend: [
+            {
+              date: '2026-11-17',
+              accruedCostUsd: 0.05,
+              hibernationSavingsUsd: 0.01,
+              deltaRoutingSavingsUsd: 0.02,
+              activeEnvironments: 1,
+              terminatedEnvironments: 0,
+            },
+          ],
+          topConsumers: [],
+        })
+      }),
+    )
+
+    render(<CostAnalytics />)
+    expect(await screen.findByRole('img', { name: /Daily preview spend and savings over the last 30 days/ })).toBeInTheDocument()
+
+    // Selecting 7d triggers an error, but the 7d/30d window group remains rendered so the user can switch back to 30d.
+    fireEvent.click(screen.getByRole('button', { name: '7d' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Failed to load cost analytics/)
+    expect(screen.getByRole('group', { name: 'Historical trend window' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '7d' })).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(screen.getByRole('button', { name: '30d' }))
+    expect(await screen.findByRole('img', { name: /Daily preview spend and savings over the last 30 days/ })).toBeInTheDocument()
+
+    // Enabling Include closed PRs triggers an error, and the toggle remains mounted to restore includeHistorical=false.
+    fireEvent.click(screen.getByRole('button', { name: /Include closed PRs/ }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Failed to load cost analytics/)
+    const closedBtn = screen.getByRole('button', { name: /Include closed PRs/ })
+    expect(closedBtn).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(closedBtn)
+    expect(await screen.findByRole('img', { name: /Daily preview spend and savings over the last 30 days/ })).toBeInTheDocument()
+  })
+
+  it('renders 7d/30d accessible SVG trend chart with semantic data table disclosure, spoke cluster attribution, and closed PR history toggle', async () => {
+    const observedRequests: Array<{ windowDays?: number; includeHistorical?: boolean }> = []
+    server.use(
+      http.post('*/diverge.v1alpha1.ClusterService/GetClusterInfo', () =>
+        HttpResponse.json({
+          controllerVersion: 'v0.27.0',
+          environmentCount: 1,
+          previewGroupCount: 0,
+          controllerHealthy: true,
+          namespaces: ['payments'],
+        }),
+      ),
+      http.post('*/diverge.v1alpha1.ClusterService/GetCostSummary', async ({ request }) => {
+        const body = (await request.json().catch(() => ({}))) as {
+          windowDays?: number
+          includeHistorical?: boolean
+        }
+        observedRequests.push(body)
+        const days = body.windowDays === 7 ? 7 : 30
+        const dailyTrend = Array.from({ length: days }, (_, idx) => ({
+          date: `2026-11-${String((idx % 28) + 1).padStart(2, '0')}`,
+          accruedCostUsd: 0.05,
+          hibernationSavingsUsd: 0.02,
+          deltaRoutingSavingsUsd: 0.01,
+          activeEnvironments: 1,
+          terminatedEnvironments: idx === days - 1 ? 1 : 0,
+        }))
+        return HttpResponse.json({
+          totalHourlyCostUsd: 0.024,
+          monthlyRunRateUsd: 17.52,
+          totalEnvironments: 1,
+          activeEnvironments: 1,
+          historicalEnvironments: 1,
+          historicalAccruedCostUsd: 0.18,
+          historicalSavingsUsd: 0.09,
+          byNamespace: [],
+          byService: [],
+          byCluster: [
+            {
+              cluster: 'us-west-burst',
+              totalEnvironments: 1,
+              activeEnvironments: 1,
+              hibernatedEnvironments: 0,
+              hourlyCostUsd: 0.024,
+              accruedCostUsd: 0.12,
+              cpuCores: 0.5,
+              memoryGib: 1.0,
+            },
+          ],
+          dailyTrend,
+          topConsumers: [
+            {
+              name: 'pr-live-200',
+              namespace: 'payments',
+              mr: '200',
+              branch: 'feat/federated',
+              phase: 'Running',
+              hourlyCostUsd: 0.024,
+              accruedCostUsd: 0.12,
+              uptimeHours: 5.0,
+              serviceCount: 1,
+              databaseMode: 'schema',
+              cluster: 'us-west-burst',
+            },
+          ],
+          historicalConsumers: body.includeHistorical
+            ? [
+                {
+                  name: 'pr-closed-199',
+                  namespace: 'payments',
+                  mr: '199',
+                  branch: 'feat/merged',
+                  phase: 'Terminated',
+                  hourlyCostUsd: 0,
+                  accruedCostUsd: 0.18,
+                  uptimeHours: 7.5,
+                  serviceCount: 1,
+                  databaseMode: 'schema',
+                  cluster: 'us-west-burst',
+                  historical: true,
+                  terminatedAt: '2026-11-16T12:00:00Z',
+                },
+              ]
+            : [],
+        })
+      }),
+    )
+
+    render(<CostAnalytics />)
+
+    expect(await screen.findByText('Federated Cluster Attribution')).toBeInTheDocument()
+    expect(screen.getAllByText('us-west-burst').length).toBeGreaterThanOrEqual(2)
+
+    const chartSvg = await screen.findByRole('img', { name: /Daily preview spend and savings over the last 30 days/ })
+    expect(chartSvg).toBeInTheDocument()
+    expect(screen.getByText(/View daily spend and savings data table \(30 days\)/)).toBeInTheDocument()
+
+    // Switch window to 7d via aria-pressed toggle button
+    const btn7d = screen.getByRole('button', { name: '7d' })
+    expect(btn7d).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(btn7d)
+    expect(await screen.findByRole('img', { name: /Daily preview spend and savings over the last 7 days/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '7d' })).toHaveAttribute('aria-pressed', 'true')
+
+    // Toggle Include closed PRs
+    const closedToggle = screen.getByRole('button', { name: /Include closed PRs \(1\)/ })
+    expect(closedToggle).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(closedToggle)
+    expect(await screen.findByText('pr-closed-199')).toBeInTheDocument()
+    expect(screen.getByText('Closed')).toBeInTheDocument()
+    expect(observedRequests.some((r) => r.windowDays === 7 && r.includeHistorical === true)).toBe(true)
+  })
 })

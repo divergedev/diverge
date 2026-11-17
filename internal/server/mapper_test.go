@@ -391,3 +391,106 @@ func TestEnvironment_StatusAsyncEnvVarsAndDatabaseProvider_RoundTrip(t *testing.
 		t.Errorf("expected DIVERGE_STORAGE_PREFIX in roundTripped.Status.AsyncEnvVars, got %v", roundTripped.Status.AsyncEnvVars)
 	}
 }
+
+func TestMultiCluster_ClusterRefAndTargetCluster_RoundTrip(t *testing.T) {
+	envCRD := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-federated",
+			Namespace: "payments",
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Deploy: v1alpha1.EnvironmentDeploy{
+				Mode: "delta",
+				ClusterRef: &v1alpha1.ClusterTargetRef{
+					Name: "us-west-burst",
+					KubeconfigSecretRef: &v1alpha1.SecretRef{
+						Name: "spoke-west-secret",
+						Key:  "kubeconfig",
+					},
+				},
+			},
+		},
+		Status: v1alpha1.EnvironmentStatus{
+			Phase:         v1alpha1.PhaseRunning,
+			TargetCluster: "us-west-burst",
+		},
+	}
+
+	envProto, err := CRDEnvToProto(envCRD)
+	if err != nil {
+		t.Fatalf("CRDEnvToProto failed: %v", err)
+	}
+	if envProto.GetSpec().GetDeploy().GetClusterRef().GetName() != "us-west-burst" {
+		t.Fatalf("expected clusterRef.name us-west-burst, got %q", envProto.GetSpec().GetDeploy().GetClusterRef().GetName())
+	}
+	if envProto.GetSpec().GetDeploy().GetClusterRef().GetKubeconfigSecretRef().GetName() != "spoke-west-secret" {
+		t.Fatalf("expected kubeconfigSecretRef.name spoke-west-secret, got %q", envProto.GetSpec().GetDeploy().GetClusterRef().GetKubeconfigSecretRef().GetName())
+	}
+	if envProto.GetStatus().GetTargetCluster() != "us-west-burst" {
+		t.Fatalf("expected status.targetCluster us-west-burst, got %q", envProto.GetStatus().GetTargetCluster())
+	}
+
+	envBack, err := ProtoEnvToCRD(envProto)
+	if err != nil {
+		t.Fatalf("ProtoEnvToCRD failed: %v", err)
+	}
+	if envBack.Spec.Deploy.ClusterRef == nil || envBack.Spec.Deploy.ClusterRef.Name != "us-west-burst" {
+		t.Fatalf("expected round-tripped ClusterRef us-west-burst, got %+v", envBack.Spec.Deploy.ClusterRef)
+	}
+	if envBack.Status.TargetCluster != "us-west-burst" {
+		t.Fatalf("expected round-tripped TargetCluster us-west-burst, got %q", envBack.Status.TargetCluster)
+	}
+
+	pgCRD := &v1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "pg-fed"},
+		Spec: v1alpha1.PreviewGroupSpec{
+			ClusterRef: &v1alpha1.ClusterTargetRef{
+				Name: "eu-central-1",
+				KubeconfigSecretRef: &v1alpha1.SecretRef{
+					Name: "eu-spoke-secret",
+				},
+			},
+			Services: []v1alpha1.PreviewGroupServiceSpec{
+				{
+					Name: "checkout",
+					ClusterRef: &v1alpha1.ClusterTargetRef{
+						Name: "us-east-gpu",
+						KubeconfigSecretRef: &v1alpha1.SecretRef{
+							Name: "gpu-spoke-secret",
+						},
+					},
+				},
+			},
+		},
+		Status: v1alpha1.PreviewGroupStatus{
+			Services: []v1alpha1.PreviewGroupServiceStatus{
+				{Name: "checkout", Phase: v1alpha1.PhaseRunning, TargetCluster: "us-east-gpu"},
+			},
+		},
+	}
+
+	pgProto, err := CRDPgToProto(pgCRD)
+	if err != nil {
+		t.Fatalf("CRDPgToProto failed: %v", err)
+	}
+	if pgProto.GetSpec().GetClusterRef().GetName() != "eu-central-1" {
+		t.Fatalf("expected group clusterRef eu-central-1, got %q", pgProto.GetSpec().GetClusterRef().GetName())
+	}
+	if pgProto.GetSpec().GetServices()[0].GetClusterRef().GetName() != "us-east-gpu" {
+		t.Fatalf("expected service clusterRef us-east-gpu, got %q", pgProto.GetSpec().GetServices()[0].GetClusterRef().GetName())
+	}
+	if pgProto.GetStatus().GetServices()[0].GetTargetCluster() != "us-east-gpu" {
+		t.Fatalf("expected service status targetCluster us-east-gpu, got %q", pgProto.GetStatus().GetServices()[0].GetTargetCluster())
+	}
+
+	pgBack, err := ProtoPgToCRD(pgProto)
+	if err != nil {
+		t.Fatalf("ProtoPgToCRD failed: %v", err)
+	}
+	if pgBack.Spec.ClusterRef == nil || pgBack.Spec.ClusterRef.Name != "eu-central-1" {
+		t.Fatalf("expected round-tripped group ClusterRef eu-central-1, got %+v", pgBack.Spec.ClusterRef)
+	}
+	if pgBack.Status.Services[0].TargetCluster != "us-east-gpu" {
+		t.Fatalf("expected round-tripped service TargetCluster us-east-gpu, got %q", pgBack.Status.Services[0].TargetCluster)
+	}
+}

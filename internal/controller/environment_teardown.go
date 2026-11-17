@@ -12,11 +12,14 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/finops"
 	"github.com/divergedev/diverge/internal/metrics"
+	"github.com/divergedev/diverge/internal/multicluster"
 )
 
 func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *divergeiov1alpha1.Environment) (ctrl.Result, error) {
@@ -78,17 +81,42 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		}
 		cancelR()
 
-		if dbProv, _, dbResolveErr := r.resolveDatabaseProvider(env, true); dbResolveErr != nil {
-			errs = append(errs, fmt.Errorf("failed to resolve database provider for teardown: %w", dbResolveErr))
-		} else if dbProv != nil {
-			if dbProv != r.DatabaseProvider {
-				defer closeDatabaseProvider(dbProv)
+		// Resolve target cluster once for database/secret/banner/feature/namespace teardown.
+		// Only skip ValidationError when Status.TargetCluster was never committed to a remote spoke;
+		// if a spoke target was already provisioned, retain the finalizer and retry until repaired or force-torn-down.
+		resolvedTarget, targetErr := r.resolveTarget(ctx, env)
+		var targetClient client.Client
+		isRemote := false
+		skipRemoteTargetCleanup := false
+		if targetErr != nil {
+			if _, isVal := multicluster.IsValidationError(targetErr); isVal && !multicluster.HasConfirmedRemoteTarget(env) {
+				skipRemoteTargetCleanup = true
+			} else {
+				errs = append(errs, fmt.Errorf("failed to resolve target cluster for teardown: %w", targetErr))
+				skipRemoteTargetCleanup = true
 			}
-			tCtxDB, cancelDB := context.WithTimeout(ctx, 15*time.Second)
-			if err := dbProv.Teardown(tCtxDB, env); err != nil {
-				errs = append(errs, fmt.Errorf("failed to teardown database: %w", err))
+		} else if resolvedTarget != nil {
+			targetClient = resolvedTarget.Client
+			isRemote = resolvedTarget.IsRemote
+			ctx = multicluster.WithTarget(ctx, resolvedTarget)
+		}
+
+		if !skipRemoteTargetCleanup {
+			tCtxDBResolve, cancelDBResolve := context.WithTimeout(ctx, 15*time.Second)
+			dbProv, _, dbResolveErr := r.resolveDatabaseProviderWithContext(tCtxDBResolve, env, true)
+			cancelDBResolve()
+			if dbResolveErr != nil {
+				errs = append(errs, fmt.Errorf("failed to resolve database provider for teardown: %w", dbResolveErr))
+			} else if dbProv != nil {
+				if dbProv != r.DatabaseProvider {
+					defer closeDatabaseProvider(dbProv)
+				}
+				tCtxDB, cancelDB := context.WithTimeout(ctx, 15*time.Second)
+				if err := dbProv.Teardown(tCtxDB, env); err != nil {
+					errs = append(errs, fmt.Errorf("failed to teardown database: %w", err))
+				}
+				cancelDB()
 			}
-			cancelDB()
 		}
 
 		// Wait for preview workloads to be fully terminated before deleting
@@ -111,39 +139,64 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		if env.Spec.Deploy.Namespace == "create" {
 			targetNS = env.PreviewNamespace()
 		}
-		dbSecretName := sanitizeK8sName(fmt.Sprintf("diverge-db-env-%s", env.Name), env.Name, 63)
-		dbSecret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      dbSecretName,
-				Namespace: targetNS,
-			},
+		if !skipRemoteTargetCleanup && targetClient != nil {
+			dbSecretName := sanitizeK8sName(fmt.Sprintf("diverge-db-env-%s", env.Name), env.Name, 63)
+			dbSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      dbSecretName,
+					Namespace: targetNS,
+				},
+			}
+			delSecCtx, cancelDelSec := context.WithTimeout(ctx, 15*time.Second)
+			if err := targetClient.Delete(delSecCtx, dbSecret); err != nil && !apierrors.IsNotFound(err) {
+				errs = append(errs, fmt.Errorf("failed to delete database env secret: %w", err))
+			}
+			cancelDelSec()
+
+			// On remote spoke clusters in "same" namespace mode, OwnerReferences are omitted, so also clean up any banner ConfigMap.
+			if isRemote && env.Spec.Deploy.Namespace != "create" {
+				cmName := fmt.Sprintf("diverge-banner-%s", env.Name)
+				if len(cmName) > 253 {
+					cmName = cmName[:253]
+				}
+				bannerCM := &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      cmName,
+						Namespace: targetNS,
+					},
+				}
+				delCMCtx, cancelDelCM := context.WithTimeout(ctx, 15*time.Second)
+				if err := targetClient.Delete(delCMCtx, bannerCM); err != nil && !apierrors.IsNotFound(err) {
+					errs = append(errs, fmt.Errorf("failed to delete spoke banner configmap: %w", err))
+				}
+				cancelDelCM()
+			}
 		}
-		delSecCtx, cancelDelSec := context.WithTimeout(ctx, 15*time.Second)
-		if err := r.Delete(delSecCtx, dbSecret); err != nil && !apierrors.IsNotFound(err) {
-			errs = append(errs, fmt.Errorf("failed to delete database env secret: %w", err))
-		}
-		cancelDelSec()
 
 		// Teardown features (executed only after deployer workloads have terminated)
-		if fp, err := r.getFeatureProvider(env); err == nil && fp != nil {
-			tCtxF, cancelF := context.WithTimeout(ctx, 15*time.Second)
-			if err := fp.Teardown(tCtxF, env); err != nil {
-				errs = append(errs, fmt.Errorf("failed to teardown features: %w", err))
+		if !skipRemoteTargetCleanup {
+			if fp, fpErr := r.getFeatureProvider(ctx, env); fpErr != nil {
+				errs = append(errs, fmt.Errorf("failed to resolve feature provider for teardown: %w", fpErr))
+			} else if fp != nil {
+				tCtxF, cancelF := context.WithTimeout(ctx, 15*time.Second)
+				if err := fp.Teardown(tCtxF, env); err != nil {
+					errs = append(errs, fmt.Errorf("failed to teardown features: %w", err))
+				}
+				cancelF()
 			}
-			cancelF()
 		}
 
 		// C4: Wait for workloads to be fully deleted before deleting the namespace,
 		// preventing finalizer deadlocks where the namespace enters Terminating
 		// but resources still retain finalizers.
-		if env.Spec.Deploy.Namespace == "create" {
+		if env.Spec.Deploy.Namespace == "create" && !skipRemoteTargetCleanup && targetClient != nil {
 			ns := &corev1.Namespace{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: env.PreviewNamespace(),
 				},
 			}
 			deleteCtx, cancelDelete := context.WithTimeout(ctx, 15*time.Second)
-			err := r.Delete(deleteCtx, ns)
+			err := targetClient.Delete(deleteCtx, ns)
 			cancelDelete()
 			if err != nil && !apierrors.IsNotFound(err) {
 				errs = append(errs, fmt.Errorf("failed to delete namespace: %w", err))
@@ -161,6 +214,13 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		if len(errs) > 0 {
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, errors.Join(errs...)
 		}
+
+		// Persist historical FinOps cost/savings ledger entry before removing finalizer (best-effort; never blocks deletion)
+		ledgerCtx, cancelLedger := context.WithTimeout(ctx, 5*time.Second)
+		if ledgerErr := finops.RecordEnvironmentTeardown(ledgerCtx, r.Client, env, time.Now().UTC(), metrics.CostRateCardFromEnv()); ledgerErr != nil {
+			log.FromContext(ctx).Error(ledgerErr, "failed to persist historical FinOps teardown record")
+		}
+		cancelLedger()
 
 		controllerutil.RemoveFinalizer(env, environmentFinalizer)
 		updateCtx, cancelUpdate := context.WithTimeout(ctx, 15*time.Second)
