@@ -284,7 +284,7 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 		return nil
 	}
 
-	targetClient, _, err := d.resolveClient(ctx, env)
+	targetClient, isRemote, err := d.resolveClient(ctx, env)
 	if err != nil {
 		if _, isVal := multicluster.IsValidationError(err); isVal && !multicluster.HasConfirmedRemoteTarget(env) {
 			return nil
@@ -334,6 +334,53 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 		}
 	}
 
+	var jobList batchv1.JobList
+	if err := targetClient.List(ctx, &jobList, listOpts...); err != nil {
+		return fmt.Errorf("failed to list jobs for teardown: %w", err)
+	}
+	for i := range jobList.Items {
+		if err := targetClient.Delete(ctx, &jobList.Items[i], fgDelOpts...); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete job %s/%s: %w", targetNS, jobList.Items[i].Name, err)
+		}
+	}
+
+	var svcList corev1.ServiceList
+	if err := targetClient.List(ctx, &svcList, listOpts...); err != nil {
+		return fmt.Errorf("failed to list services for teardown: %w", err)
+	}
+	for i := range svcList.Items {
+		if err := targetClient.Delete(ctx, &svcList.Items[i]); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete service %s/%s: %w", targetNS, svcList.Items[i].Name, err)
+		}
+	}
+
+	// On the local hub cluster, controller-runtime's cached client starts cluster-wide informers on List()
+	// and blocks until context timeout if optional resource kinds (DaemonSet, CronJob, HPA, PDB, Ingress, PVC)
+	// are outside the least-privilege controller ClusterRole. On the hub, same-namespace resources carry
+	// OwnerReferences to Environment and create-namespace resources are removed with PreviewNamespace();
+	// delete any additional rendered objects directly by name without starting new informers.
+	if !isRemote {
+		for kind, objs := range deployedByKind {
+			switch kind {
+			case "Deployment", "StatefulSet", "Job", "Service":
+				continue
+			}
+			filtered := filterDeferredObjects(env, objs)
+			delOpts := []client.DeleteOption(nil)
+			if kind == "DaemonSet" || kind == "ReplicaSet" || kind == "CronJob" {
+				delOpts = fgDelOpts
+			}
+			for i := range filtered {
+				if err := targetClient.Delete(ctx, &filtered[i], delOpts...); client.IgnoreNotFound(err) != nil {
+					return fmt.Errorf("failed to delete %s %s/%s: %w", strings.ToLower(kind), targetNS, filtered[i].GetName(), err)
+				}
+			}
+		}
+		return nil
+	}
+
+	// On remote spoke clusters, targetClient is uncached and cross-cluster OwnerReferences are omitted,
+	// so explicitly list and clean up all remaining supported workload and configuration kinds.
 	var dsList appsv1.DaemonSetList
 	if err := handleOptionalKindListErr(ctx, targetClient, "DaemonSet", errOrNil(targetClient.List(ctx, &dsList, listOpts...)), deployedByKind["DaemonSet"], fgDelOpts...); err != nil {
 		return fmt.Errorf("failed to list daemonsets for teardown: %w", err)
@@ -361,16 +408,6 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 	for i := range cronJobList.Items {
 		if err := targetClient.Delete(ctx, &cronJobList.Items[i], fgDelOpts...); client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("failed to delete cronjob %s/%s: %w", targetNS, cronJobList.Items[i].Name, err)
-		}
-	}
-
-	var jobList batchv1.JobList
-	if err := targetClient.List(ctx, &jobList, listOpts...); err != nil {
-		return fmt.Errorf("failed to list jobs for teardown: %w", err)
-	}
-	for i := range jobList.Items {
-		if err := targetClient.Delete(ctx, &jobList.Items[i], fgDelOpts...); client.IgnoreNotFound(err) != nil {
-			return fmt.Errorf("failed to delete job %s/%s: %w", targetNS, jobList.Items[i].Name, err)
 		}
 	}
 
@@ -415,16 +452,6 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 		}
 		if err := targetClient.Delete(ctx, &netpolList.Items[i]); client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("failed to delete networkpolicy %s/%s: %w", targetNS, netpolList.Items[i].Name, err)
-		}
-	}
-
-	var svcList corev1.ServiceList
-	if err := targetClient.List(ctx, &svcList, listOpts...); err != nil {
-		return fmt.Errorf("failed to list services for teardown: %w", err)
-	}
-	for i := range svcList.Items {
-		if err := targetClient.Delete(ctx, &svcList.Items[i]); client.IgnoreNotFound(err) != nil {
-			return fmt.Errorf("failed to delete service %s/%s: %w", targetNS, svcList.Items[i].Name, err)
 		}
 	}
 

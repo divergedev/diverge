@@ -25,6 +25,11 @@ jobs:
         run: make e2e-istio-setup
       - name: Run Istio conformance tests
         run: make e2e-istio-run
+      - name: Dump controller diagnostics on failure
+        if: failure()
+        run: |
+          kubectl --context kind-diverge-istio get environments -A -o yaml || true
+          kubectl --context kind-diverge-istio -n diverge-system logs -l control-plane=controller-manager --tail=200 || true
       - name: Teardown
         if: always()
         run: make e2e-istio-teardown
