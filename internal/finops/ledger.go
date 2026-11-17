@@ -128,7 +128,7 @@ func SnapshotEnvironmentTeardownWithGroup(
 	}
 
 	est := metrics.ComputeEnvironmentCost(env, termTime, rateCard)
-	activeComputeHourly := est.ComputeHourlyUSD + est.HibernationSavingsHourlyUSD
+	activeComputeHourly := est.BaseComputeHourlyUSD
 	hibernationSavingsUSD := 0.0
 	if est.HibernatedHours > 0 && activeComputeHourly > 0 {
 		hibernationSavingsUSD = est.HibernatedHours * activeComputeHourly
@@ -166,6 +166,15 @@ func SnapshotEnvironmentTeardownWithGroup(
 		project = strings.TrimSpace(env.Labels["divergedev.com/project"])
 	}
 
+	cpuCores := est.CPUCores
+	if cpuCores <= 0 {
+		cpuCores = est.ConfiguredCPUCores
+	}
+	memoryGiB := est.MemoryGiB
+	if memoryGiB <= 0 {
+		memoryGiB = est.ConfiguredMemoryGiB
+	}
+
 	return HistoricalEnvironmentRecord{
 		UID:                    string(env.UID),
 		Name:                   env.Name,
@@ -177,8 +186,8 @@ func SnapshotEnvironmentTeardownWithGroup(
 		Branch:                 env.Spec.Source.Branch,
 		DatabaseMode:           metrics.ResolveEnvironmentDatabaseMode(env),
 		ServiceCount:           int32(est.ServiceCount),
-		CPUCores:               est.CPUCores,
-		MemoryGiB:              est.MemoryGiB,
+		CPUCores:               cpuCores,
+		MemoryGiB:              memoryGiB,
 		ActiveComputeHourlyUSD: activeComputeHourly,
 		CreatedAt:              createdAt,
 		TerminatedAt:           termTime,
@@ -191,7 +200,186 @@ func SnapshotEnvironmentTeardownWithGroup(
 	}
 }
 
-func resolvePreviewGroupTeardownGrouping(
+type pgIntervalMember struct {
+	key               string
+	start             time.Time
+	end               time.Time
+	services          int
+	activeHours       float64
+	baseComputeHourly float64
+}
+
+func envDedupKey(ns string, env *v1alpha1.Environment, start time.Time) string {
+	if env != nil && strings.TrimSpace(string(env.UID)) != "" {
+		return "uid:" + strings.TrimSpace(string(env.UID))
+	}
+	name := ""
+	if env != nil {
+		name = env.Name
+	}
+	return fmt.Sprintf("env:%s/%s@%d", ns, name, start.UTC().Unix())
+}
+
+func buildEnvPGIntervalMember(ns string, env *v1alpha1.Environment, refNow time.Time, rateCard metrics.CostRateCard) (pgIntervalMember, metrics.EnvironmentCostEstimate, bool) {
+	if env == nil || env.Spec.Deploy.Namespace == "create" {
+		return pgIntervalMember{}, metrics.EnvironmentCostEstimate{}, false
+	}
+	est := metrics.ComputeEnvironmentCost(env, refNow, rateCard)
+	if est.ServiceCount <= 0 {
+		return pgIntervalMember{}, est, false
+	}
+	start := env.CreationTimestamp.UTC()
+	if start.IsZero() && env.Status.CreatedAt != nil {
+		start = env.Status.CreatedAt.UTC()
+	}
+	if start.IsZero() || start.After(refNow) {
+		start = refNow
+	}
+	end := refNow
+	terminal := env.Status.Phase == v1alpha1.PhaseFailed ||
+		env.Status.Phase == v1alpha1.PhaseTerminating ||
+		string(env.Status.Phase) == "Expired"
+	if terminal {
+		billableHours := est.ActiveHours + est.HibernatedHours
+		if billableHours > 0 {
+			end = start.Add(time.Duration(billableHours * float64(time.Hour)))
+			if end.After(refNow) {
+				end = refNow
+			}
+		} else {
+			end = start
+		}
+	}
+	return pgIntervalMember{
+		key:               envDedupKey(ns, env, start),
+		start:             start,
+		end:               end,
+		services:          est.ServiceCount,
+		activeHours:       est.ActiveHours,
+		baseComputeHourly: est.BaseComputeHourlyUSD,
+	}, est, true
+}
+
+func historicalRecordBaseComputeHourly(rec HistoricalEnvironmentRecord, rateCard metrics.CostRateCard) float64 {
+	if rec.ActiveComputeHourlyUSD > 0 {
+		return rec.ActiveComputeHourlyUSD
+	}
+	if rec.ServiceCount <= 0 {
+		return 0
+	}
+	cpu := rec.CPUCores
+	mem := rec.MemoryGiB
+	if cpu <= 0 {
+		cpu = float64(rec.ServiceCount) * metrics.DefaultServiceCPUCores
+	}
+	if mem <= 0 {
+		mem = float64(rec.ServiceCount) * metrics.DefaultServiceMemoryGiB
+	}
+	rc := rateCard
+	if rc.VCPUHourUSD == 0 && rc.MemoryGiBHourUSD == 0 && rc.DatabaseSchemaHrUSD == 0 && rc.DatabaseDedicatedHrUSD == 0 {
+		rc = metrics.DefaultCostRateCard()
+	}
+	return cpu*rc.VCPUHourUSD + mem*rc.MemoryGiBHourUSD
+}
+
+func buildHistoricalPGIntervalMember(rec HistoricalEnvironmentRecord, rateCard metrics.CostRateCard) (pgIntervalMember, bool) {
+	if rec.ServiceCount <= 0 {
+		return pgIntervalMember{}, false
+	}
+	start := rec.CreatedAt.UTC()
+	end := rec.TerminatedAt.UTC()
+	if !end.After(start) {
+		return pgIntervalMember{}, false
+	}
+	return pgIntervalMember{
+		key:               rec.dedupKey(),
+		start:             start,
+		end:               end,
+		services:          int(rec.ServiceCount),
+		activeHours:       rec.ActiveHours,
+		baseComputeHourly: historicalRecordBaseComputeHourly(rec, rateCard),
+	}, true
+}
+
+// allocatePreviewGroupIntervalSavings splits PreviewGroup delta-routing savings across elementary
+// sibling creation and termination intervals so each member receives savings proportional to the
+// actual active group membership during every sub-interval of its lifetime.
+func allocatePreviewGroupIntervalSavings(baselineCount int, members []pgIntervalMember) map[string]float64 {
+	savingsByKey := make(map[string]float64, len(members))
+	if baselineCount <= 0 || len(members) == 0 {
+		return savingsByKey
+	}
+
+	var boundaries []time.Time
+	valid := make([]pgIntervalMember, 0, len(members))
+	for _, m := range members {
+		if m.services <= 0 || !m.end.After(m.start) {
+			continue
+		}
+		valid = append(valid, m)
+		boundaries = append(boundaries, m.start, m.end)
+	}
+	if len(valid) == 0 {
+		return savingsByKey
+	}
+
+	sort.Slice(boundaries, func(i, j int) bool {
+		return boundaries[i].Before(boundaries[j])
+	})
+	uniq := boundaries[:0]
+	for _, b := range boundaries {
+		if len(uniq) == 0 || !uniq[len(uniq)-1].Equal(b) {
+			uniq = append(uniq, b)
+		}
+	}
+
+	for idx := 0; idx+1 < len(uniq); idx++ {
+		segStart := uniq[idx]
+		segEnd := uniq[idx+1]
+		segHours := segEnd.Sub(segStart).Hours()
+		if segHours <= 0 {
+			continue
+		}
+
+		var groupServices int
+		var groupHourlyUSD float64
+		var activeIdxs []int
+		for mIdx, m := range valid {
+			if !m.start.After(segStart) && !m.end.Before(segEnd) {
+				groupServices += m.services
+				groupHourlyUSD += m.baseComputeHourly
+				activeIdxs = append(activeIdxs, mIdx)
+			}
+		}
+		if groupServices <= 0 || baselineCount <= groupServices || groupHourlyUSD <= 0 {
+			continue
+		}
+
+		avoidedServices := float64(baselineCount - groupServices)
+		perServiceHourly := groupHourlyUSD / float64(groupServices)
+
+		for _, mIdx := range activeIdxs {
+			m := valid[mIdx]
+			if m.activeHours <= 0 {
+				continue
+			}
+			totalSpanHours := m.end.Sub(m.start).Hours()
+			if totalSpanHours <= 0 {
+				continue
+			}
+			activeRatio := m.activeHours / totalSpanHours
+			if activeRatio > 1 {
+				activeRatio = 1
+			}
+			segActiveHours := segHours * activeRatio
+			memberShare := float64(m.services) / float64(groupServices)
+			savingsByKey[m.key] += segActiveHours * (avoidedServices * memberShare) * perServiceHourly
+		}
+	}
+	return savingsByKey
+}
+
+func computePreviewGroupTeardownSnapshot(
 	ctx context.Context,
 	c client.Client,
 	env *v1alpha1.Environment,
@@ -200,39 +388,25 @@ func resolvePreviewGroupTeardownGrouping(
 	rateCard metrics.CostRateCard,
 	initialBaseline int,
 	existingLedger []HistoricalEnvironmentRecord,
-) (baselineCount int, groupDeployed int, groupPerSvcHourly float64) {
-	baselineCount = initialBaseline
-	selfEst := metrics.ComputeEnvironmentCost(env, termTime, rateCard)
-	selfActiveHourly := selfEst.ComputeHourlyUSD + selfEst.HibernationSavingsHourlyUSD
-
-	if pgName == "" || env.Spec.Deploy.Namespace == "create" || selfEst.ServiceCount <= 0 {
-		perSvc := 0.0
-		if selfEst.ServiceCount > 0 {
-			perSvc = selfActiveHourly / float64(selfEst.ServiceCount)
-		}
-		return baselineCount, selfEst.ServiceCount, perSvc
+) HistoricalEnvironmentRecord {
+	record := SnapshotEnvironmentTeardown(env, termTime, rateCard, initialBaseline)
+	if pgName == "" || env.Spec.Deploy.Namespace == "create" || record.ServiceCount <= 0 {
+		return record
 	}
 
-	selfCreated := env.CreationTimestamp.UTC()
-	if selfCreated.IsZero() && env.Status.CreatedAt != nil {
-		selfCreated = env.Status.CreatedAt.UTC()
+	baselineCount := initialBaseline
+	selfMember, _, ok := buildEnvPGIntervalMember(ns, env, termTime, rateCard)
+	if !ok {
+		return record
 	}
-	if selfCreated.IsZero() || selfCreated.After(termTime) {
-		selfCreated = termTime
-	}
-
-	type memberFootprint struct {
-		services     int
-		activeHourly float64
-	}
-	members := map[string]memberFootprint{
-		env.Name: {services: selfEst.ServiceCount, activeHourly: selfActiveHourly},
+	membersByKey := map[string]pgIntervalMember{
+		selfMember.key: selfMember,
 	}
 
 	qCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
-	// Inspect parent PreviewGroup if present for authoritative baseline & non-baseline service counts.
+	// Inspect parent PreviewGroup if present for authoritative total service count.
 	var pgList v1alpha1.PreviewGroupList
 	if err := c.List(qCtx, &pgList); err == nil {
 		for i := range pgList.Items {
@@ -254,7 +428,7 @@ func resolvePreviewGroupTeardownGrouping(
 		}
 	}
 
-	// Include live sibling Environments belonging to the same PreviewGroup.
+	// Include live/terminating sibling Environments belonging to the same PreviewGroup.
 	var envList v1alpha1.EnvironmentList
 	if err := c.List(qCtx, &envList, client.InNamespace(ns)); err == nil {
 		for i := range envList.Items {
@@ -270,43 +444,34 @@ func resolvePreviewGroupTeardownGrouping(
 					baselineCount = parsed
 				}
 			}
-			sibEst := metrics.ComputeEnvironmentCost(sib, termTime, rateCard)
-			if sibEst.ServiceCount > 0 {
-				members[sib.Name] = memberFootprint{
-					services:     sibEst.ServiceCount,
-					activeHourly: sibEst.ComputeHourlyUSD + sibEst.HibernationSavingsHourlyUSD,
-				}
+			if sibMember, _, sibOK := buildEnvPGIntervalMember(ns, sib, termTime, rateCard); sibOK {
+				membersByKey[sibMember.key] = sibMember
 			}
 		}
 	}
 
-	// Include sibling environments from the same PreviewGroup that already tore down earlier in this run.
+	// Include sibling environments from the same PreviewGroup that already tore down earlier.
 	for _, rec := range existingLedger {
-		if rec.PreviewGroup != pgName || rec.Namespace != ns || rec.Name == env.Name || rec.ServiceCount <= 0 {
+		if rec.PreviewGroup != pgName || rec.Namespace != ns {
 			continue
 		}
-		if _, seen := members[rec.Name]; seen {
+		histMember, histOK := buildHistoricalPGIntervalMember(rec, rateCard)
+		if !histOK {
 			continue
 		}
-		// Overlapping lifetime check: sibling existed during [selfCreated, termTime] (with 5m teardown clock skew buffer).
-		if rec.TerminatedAt.Before(selfCreated.Add(-5*time.Minute)) || rec.CreatedAt.After(termTime.Add(5*time.Minute)) {
+		if _, seen := membersByKey[histMember.key]; seen {
 			continue
 		}
-		members[rec.Name] = memberFootprint{
-			services:     int(rec.ServiceCount),
-			activeHourly: rec.ActiveComputeHourlyUSD,
-		}
+		membersByKey[histMember.key] = histMember
 	}
 
-	var totalHourly float64
-	for _, m := range members {
-		groupDeployed += m.services
-		totalHourly += m.activeHourly
+	members := make([]pgIntervalMember, 0, len(membersByKey))
+	for _, m := range membersByKey {
+		members = append(members, m)
 	}
-	if groupDeployed > 0 {
-		groupPerSvcHourly = totalHourly / float64(groupDeployed)
-	}
-	return baselineCount, groupDeployed, groupPerSvcHourly
+	allocated := allocatePreviewGroupIntervalSavings(baselineCount, members)
+	record.DeltaRoutingSavingsUSD = allocated[selfMember.key]
+	return record
 }
 
 // RecordEnvironmentTeardown persists a torn-down Environment's cost and savings snapshot into
@@ -344,8 +509,7 @@ func RecordEnvironmentTeardown(ctx context.Context, c client.Client, env *v1alph
 			if !apierrors.IsNotFound(err) {
 				return fmt.Errorf("getting finops ledger configmap %s/%s: %w", ns, LedgerConfigMapName, err)
 			}
-			effBaseline, groupSvcs, groupPerSvc := resolvePreviewGroupTeardownGrouping(ctx, c, env, ns, pgName, termTime, rateCard, baselineCount, nil)
-			record := SnapshotEnvironmentTeardownWithGroup(env, termTime, rateCard, effBaseline, groupSvcs, groupPerSvc)
+			record := computePreviewGroupTeardownSnapshot(ctx, c, env, ns, pgName, termTime, rateCard, baselineCount, nil)
 			encoded, encErr := json.Marshal([]HistoricalEnvironmentRecord{record})
 			if encErr != nil {
 				return encErr
@@ -373,8 +537,7 @@ func RecordEnvironmentTeardown(ctx context.Context, c client.Client, env *v1alph
 		}
 
 		existing := parseLedgerConfigMap(&cm)
-		effBaseline, groupSvcs, groupPerSvc := resolvePreviewGroupTeardownGrouping(ctx, c, env, ns, pgName, termTime, rateCard, baselineCount, existing)
-		record := SnapshotEnvironmentTeardownWithGroup(env, termTime, rateCard, effBaseline, groupSvcs, groupPerSvc)
+		record := computePreviewGroupTeardownSnapshot(ctx, c, env, ns, pgName, termTime, rateCard, baselineCount, existing)
 		cutoff := record.TerminatedAt.AddDate(0, 0, -LedgerRetentionDays)
 		merged := mergeAndPruneLedger(existing, record, cutoff, LedgerMaxEntries)
 		encoded, encErr := json.Marshal(merged)

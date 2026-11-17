@@ -45,8 +45,14 @@ func (r *EnvironmentReconciler) notifyFailed(ctx context.Context, env *divergeio
 }
 
 func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *divergeiov1alpha1.Environment, statusBase *divergeiov1alpha1.Environment) (ctrl.Result, bool, error) {
-	ctx, span := otel.Tracer("diverge").Start(ctx, "reconcileProvisioning")
+	_, res, done, err := r.reconcileProvisioningWithTarget(ctx, env, statusBase)
+	return res, done, err
+}
+
+func (r *EnvironmentReconciler) reconcileProvisioningWithTarget(ctx context.Context, env *divergeiov1alpha1.Environment, statusBase *divergeiov1alpha1.Environment) (context.Context, ctrl.Result, bool, error) {
+	pCtx, span := otel.Tracer("diverge").Start(ctx, "reconcileProvisioning")
 	defer span.End()
+	ctx = pCtx
 
 	logger := log.FromContext(ctx)
 
@@ -62,7 +68,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 				Message: "cross-namespace SecretRef not allowed",
 			})
 			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, nil, 0)
-			return res, true, retErr
+			return ctx, res, true, retErr
 		}
 	}
 	for _, ref := range env.Spec.Deploy.EnvFrom {
@@ -76,11 +82,11 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 				Message: "cross-namespace SecretRef not allowed",
 			})
 			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, nil, 0)
-			return res, true, retErr
+			return ctx, res, true, retErr
 		}
 	}
 
-	// 4.5. Resolve target cluster (local hub or remote spoke via clusterRef)
+	// 4.5. Resolve target cluster once (local hub or remote spoke via clusterRef) and pin for the reconcile
 	if prevCluster := strings.TrimSpace(env.Status.TargetCluster); prevCluster != "" {
 		desiredCluster := multicluster.LocalClusterName
 		if multicluster.IsRemoteEnv(env) {
@@ -97,11 +103,11 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 				Message: msg,
 			})
 			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, nil, 0)
-			return res, true, retErr
+			return ctx, res, true, retErr
 		}
 	}
 
-	_, resolvedCluster, isRemoteCluster, clusterErr := r.resolveTargetCluster(ctx, env)
+	resolvedTarget, clusterErr := r.resolveTarget(ctx, env)
 	if clusterErr != nil {
 		if ve, ok := multicluster.IsValidationError(clusterErr); ok {
 			if ve.Reason == "CrossNamespaceRef" {
@@ -117,7 +123,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 				Message: ve.Message,
 			})
 			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, nil, 0)
-			return res, true, retErr
+			return ctx, res, true, retErr
 		}
 		meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 			Type:    "NamespaceReady",
@@ -126,9 +132,10 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 			Message: clusterErr.Error(),
 		})
 		res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, clusterErr, 0)
-		return res, true, retErr
+		return ctx, res, true, retErr
 	}
-	env.Status.TargetCluster = resolvedCluster
+	ctx = multicluster.WithTarget(ctx, resolvedTarget)
+	env.Status.TargetCluster = resolvedTarget.Name
 	if meta.FindStatusCondition(env.Status.Conditions, "SecretRefValid") != nil ||
 		len(env.Spec.EnvFrom) > 0 ||
 		len(env.Spec.Deploy.EnvFrom) > 0 ||
@@ -140,11 +147,11 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 			Message: "All secret references are valid",
 		})
 	}
-	// Write-ahead persist TargetCluster before creating any remote spoke resources so teardown
-	// always knows a remote target was committed even if a later provisioning step fails.
-	if isRemoteCluster && strings.TrimSpace(statusBase.Status.TargetCluster) == "" {
-		if patchErr := r.Status().Patch(ctx, env, client.MergeFrom(statusBase)); patchErr != nil {
-			return ctrl.Result{}, true, fmt.Errorf("failed to persist targetCluster status: %w", patchErr)
+	// Write-ahead persist TargetCluster with an optimistic lock before creating any remote spoke resources so
+	// concurrent spec updates conflict before spoke resources are provisioned and teardown always knows the target.
+	if resolvedTarget.IsRemote && strings.TrimSpace(statusBase.Status.TargetCluster) == "" {
+		if patchErr := r.Status().Patch(ctx, env, client.MergeFromWithOptions(statusBase, client.MergeFromWithOptimisticLock{})); patchErr != nil {
+			return ctx, ctrl.Result{}, true, fmt.Errorf("failed to persist targetCluster status: %w", patchErr)
 		}
 		*statusBase = *env.DeepCopy()
 	}
@@ -159,7 +166,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 		})
 		r.notifyFailed(ctx, env, err.Error())
 		res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
-		return res, true, retErr
+		return ctx, res, true, retErr
 	}
 	meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 		Type:    "NamespaceReady",
@@ -171,10 +178,10 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 	// 5.5. Enforce namespace quotas and FinOps LRU auto-hibernation
 	if res, done, err := r.reconcileNamespaceQuota(ctx, env, statusBase); done || err != nil {
 		if done {
-			return res, true, err
+			return ctx, res, true, err
 		}
 		res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
-		return res, true, retErr
+		return ctx, res, true, retErr
 	}
 
 	// 6. Ensure database
@@ -200,7 +207,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 		})
 		r.notifyFailed(ctx, env, err.Error())
 		res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
-		return res, true, retErr
+		return ctx, res, true, retErr
 	}
 	if dbStatus != nil && dbStatus.Ready {
 		// Run SetupSQL if configured and not already executed in-process by the provider
@@ -218,7 +225,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 						Message: "SetupSQL job is running",
 					})
 					res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, nil, 2*time.Second)
-					return res, true, retErr
+					return ctx, res, true, retErr
 				}
 				meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 					Type:    "DatabaseReady",
@@ -228,7 +235,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 				})
 				r.notifyFailed(ctx, env, setupErr.Error())
 				res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, setupErr, 0)
-				return res, true, retErr
+				return ctx, res, true, retErr
 			}
 		}
 
@@ -260,7 +267,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 				})
 				r.notifyFailed(ctx, env, err.Error())
 				res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
-				return res, true, retErr
+				return ctx, res, true, retErr
 			}
 		}
 
@@ -289,7 +296,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 					env.Status.Phase = divergeiov1alpha1.PhaseMigrating
 					r.Recorder.Event(env, "Normal", "MigrationInProgress", migErr.Error())
 					res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, nil, 3*time.Second)
-					return res, true, retErr
+					return ctx, res, true, retErr
 				}
 			} else if errors.Is(migErr, ErrHookFailed) {
 				env.Status.MigrationStatus = "Failed"
@@ -305,7 +312,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 					r.Recorder.Event(env, "Warning", "MigrationFailed", migErr.Error())
 					r.notifyFailed(ctx, env, migErr.Error())
 					res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, migErr, 0)
-					return res, true, retErr
+					return ctx, res, true, retErr
 				}
 			} else if migErr != nil {
 				logger.Error(migErr, "unexpected migration error")
@@ -322,7 +329,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 					r.Recorder.Event(env, "Warning", "MigrationFailed", migErr.Error())
 					r.notifyFailed(ctx, env, migErr.Error())
 					res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, migErr, 0)
-					return res, true, retErr
+					return ctx, res, true, retErr
 				}
 			} else {
 				env.Status.MigrationStatus = "Succeeded"
@@ -356,7 +363,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 		})
 		r.notifyFailed(ctx, env, err.Error())
 		res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
-		return res, true, retErr
+		return ctx, res, true, retErr
 	}
 	meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 		Type:    "RoutingReady",
@@ -381,7 +388,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 					})
 					r.Recorder.Event(env, "Warning", "ValidationFailed", err.Error())
 					res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, nil, 0)
-					return res, true, retErr
+					return ctx, res, true, retErr
 				}
 			}
 
@@ -430,7 +437,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 				})
 				r.Recorder.Event(env, "Warning", "AsyncProvisionFailed", err.Error())
 				res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
-				return res, true, retErr
+				return ctx, res, true, retErr
 			}
 
 			// Merge env vars sequentially to detect collisions deterministically
@@ -452,7 +459,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 						})
 						r.Recorder.Event(env, "Warning", "ValidationFailed", err.Error())
 						res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, nil, 0)
-						return res, true, retErr
+						return ctx, res, true, retErr
 					}
 					asyncEnvVars[k] = v
 				}
@@ -506,7 +513,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 				})
 				r.Recorder.Event(env, "Warning", "FeatureProvisionFailed", err.Error())
 				res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
-				return res, true, retErr
+				return ctx, res, true, retErr
 			}
 
 			tCtxF, cancelF := context.WithTimeout(ctx, 15*time.Second)
@@ -521,7 +528,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 				})
 				r.notifyFailed(ctx, env, err.Error())
 				res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
-				return res, true, retErr
+				return ctx, res, true, retErr
 			}
 
 			if featResult != nil {
@@ -542,7 +549,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 		}
 	}
 
-	return ctrl.Result{}, false, nil
+	return ctx, ctrl.Result{}, false, nil
 }
 
 func isKeyPrefixAsyncProto(p string) bool {

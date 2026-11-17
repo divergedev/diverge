@@ -3,8 +3,10 @@ package controller
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,10 +15,14 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sevents "k8s.io/client-go/tools/events"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/events"
 	"github.com/divergedev/diverge/internal/multicluster"
 )
 
@@ -180,4 +186,100 @@ func TestRunPostDeployJob_RemoteSpokeExecutionAndCleanup(t *testing.T) {
 	// Cleanup deletes the spoke Job.
 	require.NoError(t, r.cleanupPostDeployJobs(ctx, env))
 	assert.True(t, apierrors.IsNotFound(spokeClient.Get(ctx, client.ObjectKey{Name: jobName, Namespace: "default"}, &batchv1.Job{})))
+}
+
+func TestPreviewGroupReconcile_OrphanHookCleanupFailureTriggersRetry(t *testing.T) {
+	s := runtime.NewScheme()
+	require.NoError(t, divergeiov1alpha1.AddToScheme(s))
+	require.NoError(t, batchv1.AddToScheme(s))
+	require.NoError(t, corev1.AddToScheme(s))
+
+	failSecondJobDelete := true
+	deletedJobCount := 0
+
+	pg := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "pg-orphan",
+			Finalizers: []string{previewGroupFinalizer},
+		},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Source:  divergeiov1alpha1.EnvironmentSource{Provider: "github", Branch: "feat/x"},
+			Routing: divergeiov1alpha1.PreviewGroupRouting{HeaderValue: "pr-1"},
+			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{Name: "api", Image: "api:v1"},
+			},
+		},
+	}
+
+	orphanEnv := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      childEnvironmentName("pg-orphan", "removed-svc"),
+			Namespace: "default",
+			Labels: map[string]string{
+				labelPreviewGroup: "pg-orphan",
+				labelManagedBy:    "diverge-previewgroup",
+			},
+		},
+	}
+	job1 := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "hook-orphan-1",
+			Namespace: "default",
+			Labels: map[string]string{
+				labelEnvironment: truncateLabel(orphanEnv.Name),
+				labelHookType:    hookTypePostDeploy,
+			},
+		},
+	}
+	job2 := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "hook-orphan-2",
+			Namespace: "default",
+			Labels: map[string]string{
+				labelEnvironment: truncateLabel(orphanEnv.Name),
+				labelHookType:    hookTypePostDeploy,
+			},
+		},
+	}
+
+	hubClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(pg).
+		WithObjects(pg, orphanEnv, job1, job2).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if _, isJob := obj.(*batchv1.Job); isJob {
+					deletedJobCount++
+					if failSecondJobDelete && deletedJobCount == 2 {
+						return errors.New("transient spoke job delete failure")
+					}
+				}
+				return cl.Delete(ctx, obj, opts...)
+			},
+		}).
+		Build()
+
+	r := &PreviewGroupReconciler{
+		Client:   hubClient,
+		Scheme:   s,
+		Recorder: events.NewRecorder(k8sevents.NewFakeRecorder(10)),
+	}
+
+	ctx := context.Background()
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "pg-orphan"}}
+
+	// Reconcile #1: deletes job1, fails on job2 -> returns error so controller-runtime retries!
+	_, err := r.Reconcile(ctx, req)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "transient spoke job delete failure")
+	// Orphan child Environment has not been deleted yet while hook cleanup is incomplete.
+	require.NoError(t, hubClient.Get(ctx, client.ObjectKeyFromObject(orphanEnv), &divergeiov1alpha1.Environment{}))
+
+	// Reconcile #2: transient error clears -> remaining job2 and orphanEnv are both deleted cleanly!
+	failSecondJobDelete = false
+	_, err = r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.True(t, apierrors.IsNotFound(hubClient.Get(ctx, client.ObjectKeyFromObject(job1), &batchv1.Job{})))
+	assert.True(t, apierrors.IsNotFound(hubClient.Get(ctx, client.ObjectKeyFromObject(job2), &batchv1.Job{})))
+	assert.True(t, apierrors.IsNotFound(hubClient.Get(ctx, client.ObjectKeyFromObject(orphanEnv), &divergeiov1alpha1.Environment{})))
 }

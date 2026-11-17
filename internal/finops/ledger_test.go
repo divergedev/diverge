@@ -268,6 +268,23 @@ func TestPreviewGroupSavingsAllocation_LiveTrendAndSequentialTeardown(t *testing
 	// 2. Sequential teardown: childA tears down & is deleted from cluster BEFORE childB tears down.
 	require.NoError(t, RecordEnvironmentTeardown(ctx, cl, childA, now, rateCard))
 	require.NoError(t, cl.Delete(ctx, childA))
+
+	// 2a. Mid-transition summary (childA in ledger, childB still live) must retain childA's 2r and keep childB at 2r (total 4r, NOT 8r).
+	midSummary, err := BuildCostSummary(ctx, SummaryOptions{
+		Namespace:         "shop",
+		Client:            cl,
+		Now:               now,
+		RateCard:          &rateCard,
+		IncludeHistorical: true,
+		WindowDays:        7,
+	})
+	require.NoError(t, err)
+	var midTrendDeltaSum float64
+	for _, pt := range midSummary.DailyTrend {
+		midTrendDeltaSum += pt.DeltaRoutingSavingsUsd
+	}
+	assert.InDelta(t, expectedGroupDeltaSavings, midTrendDeltaSum, 1e-6, "mid-teardown summary must not double-allocate avoided baseline services to surviving childB")
+
 	require.NoError(t, RecordEnvironmentTeardown(ctx, cl, childB, now, rateCard))
 	require.NoError(t, cl.Delete(ctx, childB))
 
@@ -282,6 +299,139 @@ func TestPreviewGroupSavingsAllocation_LiveTrendAndSequentialTeardown(t *testing
 	require.NoError(t, err)
 	assert.Equal(t, int32(2), histSummary.HistoricalEnvironments)
 	assert.InDelta(t, expectedGroupDeltaSavings, histSummary.HistoricalSavingsUsd, 1e-6)
+}
+
+func TestPreviewGroupSavingsAllocation_StaggeredOverlapAndTerminalSibling(t *testing.T) {
+	ctx := context.Background()
+	scheme := ledgerTestScheme(t)
+	now := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	rateCard := metrics.DefaultCostRateCard()
+
+	pg := &v1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "pg-staggered", Namespace: "shop"},
+		Spec: v1alpha1.PreviewGroupSpec{
+			Services: []v1alpha1.PreviewGroupServiceSpec{
+				{Name: "api", Image: "api:pr"},
+				{Name: "web", Image: "web:pr"},
+				{Name: "orders", Mode: v1alpha1.ServiceModeBaseline},
+				{Name: "payments", Mode: v1alpha1.ServiceModeBaseline},
+			},
+		},
+	}
+
+	// Subtest 1: A runs 10:00-12:00 (2h), B runs 11:00-12:00 (1h), baseline = 4.
+	// 10:00-11:00: 1 deployed -> 3 avoided * r = 3r (all to A)
+	// 11:00-12:00: 2 deployed -> 2 avoided * r = 2r (1r to A, 1r to B)
+	// Total = 5r (A=4r, B=1r).
+	childA := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			UID:               types.UID("uid-stag-a"),
+			Name:              "pg-stag-api",
+			Namespace:         "shop",
+			CreationTimestamp: metav1.NewTime(now.Add(-2 * time.Hour)),
+			Labels:            map[string]string{"divergedev.com/previewgroup": "pg-staggered"},
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "github", Branch: "feat/stag"},
+			Deploy: v1alpha1.EnvironmentDeploy{Namespace: "same", ChangedServices: []string{"api"}},
+		},
+		Status: v1alpha1.EnvironmentStatus{Phase: v1alpha1.PhaseRunning},
+	}
+	childB := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			UID:               types.UID("uid-stag-b"),
+			Name:              "pg-stag-web",
+			Namespace:         "shop",
+			CreationTimestamp: metav1.NewTime(now.Add(-1 * time.Hour)),
+			Labels:            map[string]string{"divergedev.com/previewgroup": "pg-staggered"},
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "github", Branch: "feat/stag"},
+			Deploy: v1alpha1.EnvironmentDeploy{Namespace: "same", ChangedServices: []string{"web"}},
+		},
+		Status: v1alpha1.EnvironmentStatus{Phase: v1alpha1.PhaseRunning},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pg, childA, childB).Build()
+	r := metrics.ComputeEnvironmentCost(childA, now, rateCard).BaseComputeHourlyUSD
+
+	require.NoError(t, RecordEnvironmentTeardown(ctx, cl, childA, now, rateCard))
+	require.NoError(t, cl.Delete(ctx, childA))
+	require.NoError(t, RecordEnvironmentTeardown(ctx, cl, childB, now, rateCard))
+	require.NoError(t, cl.Delete(ctx, childB))
+
+	records := ListHistoricalRecords(ctx, cl, nil, "shop", now, 7, 2*time.Second)
+	require.Len(t, records, 2)
+	savingsByName := map[string]float64{}
+	var totalStaggered float64
+	for _, rec := range records {
+		savingsByName[rec.Name] = rec.DeltaRoutingSavingsUSD
+		totalStaggered += rec.DeltaRoutingSavingsUSD
+	}
+	assert.InDelta(t, 4.0*r, savingsByName["pg-stag-api"], 1e-6)
+	assert.InDelta(t, 1.0*r, savingsByName["pg-stag-web"], 1e-6)
+	assert.InDelta(t, 5.0*r, totalStaggered, 1e-6)
+
+	// Subtest 2: Equal 2h children where sibling B entered PhaseFailed right at 12:00 (retaining 2h historical active runtime).
+	// Phase-independent BaseComputeHourlyUSD must preserve full 4r group savings rather than halving to 2r.
+	termA := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			UID:               types.UID("uid-term-a"),
+			Name:              "pg-term-api",
+			Namespace:         "shop-term",
+			CreationTimestamp: metav1.NewTime(now.Add(-2 * time.Hour)),
+			Labels:            map[string]string{"divergedev.com/previewgroup": "pg-term"},
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "github", Branch: "feat/term"},
+			Deploy: v1alpha1.EnvironmentDeploy{Namespace: "same", ChangedServices: []string{"api"}},
+		},
+		Status: v1alpha1.EnvironmentStatus{Phase: v1alpha1.PhaseRunning},
+	}
+	termB := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			UID:               types.UID("uid-term-b"),
+			Name:              "pg-term-web",
+			Namespace:         "shop-term",
+			CreationTimestamp: metav1.NewTime(now.Add(-2 * time.Hour)),
+			Labels:            map[string]string{"divergedev.com/previewgroup": "pg-term"},
+			Annotations: map[string]string{
+				metrics.AnnotationTerminatedAt: now.UTC().Format(time.RFC3339),
+			},
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "github", Branch: "feat/term"},
+			Deploy: v1alpha1.EnvironmentDeploy{Namespace: "same", ChangedServices: []string{"web"}},
+		},
+		Status: v1alpha1.EnvironmentStatus{Phase: v1alpha1.PhaseFailed},
+	}
+	pgTerm := pg.DeepCopy()
+	pgTerm.Name = "pg-term"
+	pgTerm.Namespace = "shop-term"
+
+	clTerm := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pgTerm, termA, termB).Build()
+	termLiveSummary, err := BuildCostSummary(ctx, SummaryOptions{
+		Namespace:  "shop-term",
+		Client:     clTerm,
+		Now:        now,
+		RateCard:   &rateCard,
+		WindowDays: 7,
+	})
+	require.NoError(t, err)
+	var termLiveSum float64
+	for _, pt := range termLiveSummary.DailyTrend {
+		termLiveSum += pt.DeltaRoutingSavingsUsd
+	}
+	assert.InDelta(t, 4.0*r, termLiveSum, 1e-6)
+
+	require.NoError(t, RecordEnvironmentTeardown(ctx, clTerm, termA, now, rateCard))
+	require.NoError(t, clTerm.Delete(ctx, termA))
+	require.NoError(t, RecordEnvironmentTeardown(ctx, clTerm, termB, now, rateCard))
+	require.NoError(t, clTerm.Delete(ctx, termB))
+
+	termRecs := ListHistoricalRecords(ctx, clTerm, nil, "shop-term", now, 7, 2*time.Second)
+	require.Len(t, termRecs, 2)
+	assert.InDelta(t, 4.0*r, termRecs[0].DeltaRoutingSavingsUSD+termRecs[1].DeltaRoutingSavingsUSD, 1e-6)
 }
 
 func liveTrendDeltaSavingsSumOrZero(v float64) float64 { return v }

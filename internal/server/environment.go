@@ -22,6 +22,7 @@ import (
 
 	"github.com/divergedev/diverge/internal/metrics"
 	"github.com/divergedev/diverge/internal/multicluster"
+	"github.com/divergedev/diverge/internal/server/auth"
 	"github.com/divergedev/diverge/internal/server/streaming"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -717,6 +718,14 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 		return SanitizeK8sError(s.logger, getErr)
 	}
 
+	if isRemoteTarget {
+		if user, ok := auth.UserInfoFromContext(ctx); ok && isMacaroonUser(user) {
+			if s.auditLogger != nil {
+				s.auditLogger.LogAuthz(ctx, "authz.denied", user, "get", "pods/log", podNamespace)
+			}
+			return connect.NewError(connect.CodePermissionDenied, errors.New("capability tokens cannot stream pod logs from remote target clusters"))
+		}
+	}
 	if podNamespace != msg.Namespace || isRemoteTarget {
 		if authzK8sClient == nil {
 			return connect.NewError(connect.CodeFailedPrecondition, errors.New("target cluster kubernetes clientset is not configured"))

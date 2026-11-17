@@ -3,6 +3,8 @@ package v1alpha1
 import (
 	"context"
 	"testing"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestValidatePreviewGroup(t *testing.T) {
@@ -381,5 +383,36 @@ func TestPreviewGroupValidateUpdate_ClusterRefImmutability(t *testing.T) {
 	})
 	if _, err := v.ValidateUpdate(ctx, oldPG, validUpdate); err != nil {
 		t.Fatalf("expected image update + new service addition to succeed, got: %v", err)
+	}
+
+	// 4. Deleting PreviewGroup still blocks effective clusterRef mutation while skipping structural checks.
+	delNow := metav1.Now()
+	deletingChanged := groupChanged.DeepCopy()
+	deletingChanged.DeletionTimestamp = &delNow
+	if _, err := v.ValidateUpdate(ctx, oldPG, deletingChanged); err == nil {
+		t.Fatal("expected deleting PreviewGroup to reject clusterRef mutation")
+	}
+	deletingUnchanged := oldPG.DeepCopy()
+	deletingUnchanged.DeletionTimestamp = &delNow
+	deletingUnchanged.Spec.Routing.HeaderValue = ""
+	if _, err := v.ValidateUpdate(ctx, oldPG, deletingUnchanged); err != nil {
+		t.Fatalf("expected deleting PreviewGroup with unchanged clusterRef to succeed, got: %v", err)
+	}
+
+	// 5. Remote clusterRef resolving to reserved "local" sentinel is rejected on both group and service specs.
+	localSentinelGroup := oldPG.DeepCopy()
+	localSentinelGroup.Spec.ClusterRef = &ClusterTargetRef{
+		KubeconfigSecretRef: &SecretRef{Name: "local"},
+	}
+	if _, err := v.ValidateCreate(ctx, localSentinelGroup); err == nil {
+		t.Fatal("expected group-level remote clusterRef resolving to \"local\" to be rejected")
+	}
+	localSentinelSvc := oldPG.DeepCopy()
+	localSentinelSvc.Spec.Services[0].ClusterRef = &ClusterTargetRef{
+		Name:                "local",
+		KubeconfigSecretRef: &SecretRef{Name: "spoke-sec"},
+	}
+	if _, err := v.ValidateCreate(ctx, localSentinelSvc); err == nil {
+		t.Fatal("expected service-level remote clusterRef named \"local\" to be rejected")
 	}
 }

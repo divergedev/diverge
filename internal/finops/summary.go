@@ -163,16 +163,14 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 		computeHourlyUSD float64
 		baselineCount    int
 	}
-	type previewGroupTrendMember struct {
-		spanIdx      int
-		serviceCount int
-		activeHours  float64
+	type previewGroupTrendLiveTarget struct {
+		spanIdx   int
+		memberKey string
 	}
 	type previewGroupTrendState struct {
-		deployedServices         int
-		rateCardComputeHourlyUSD float64
-		baselineCount            int
-		members                  []previewGroupTrendMember
+		baselineCount int
+		membersByKey  map[string]pgIntervalMember
+		liveTargets   []previewGroupTrendLiveTarget
 	}
 	pgDeltaByKey := make(map[string]*previewGroupDeltaState)
 	pgTrendByKey := make(map[string]*previewGroupTrendState)
@@ -194,19 +192,34 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 
 	for i := range envList.Items {
 		env := &envList.Items[i]
-		if !env.DeletionTimestamp.IsZero() {
-			continue
-		}
-
 		ns := strings.TrimSpace(env.Namespace)
 		if ns == "" {
 			ns = "default"
 		}
+		if !env.DeletionTimestamp.IsZero() {
+			// If a sibling in a PreviewGroup is mid-teardown (not yet persisted to the ledger),
+			// retain its historical membership interval so surviving siblings do not over-claim group savings.
+			if pgName := previewGroupNameFromEnv(env); pgName != "" && env.Spec.Deploy.Namespace != "create" {
+				if member, _, ok := buildEnvPGIntervalMember(ns, env, now, rateCard); ok {
+					pgKey := ns + "/" + pgName
+					tState, tExists := pgTrendByKey[pgKey]
+					if !tExists {
+						tState = &previewGroupTrendState{membersByKey: make(map[string]pgIntervalMember)}
+						pgTrendByKey[pgKey] = tState
+					}
+					if bc := resolveBaselineServices(ns, env); bc > tState.baselineCount {
+						tState.baselineCount = bc
+					}
+					tState.membersByKey[member.key] = member
+				}
+			}
+			continue
+		}
 
 		est := metrics.ComputeEnvironmentCost(env, now, rateCard)
-		// Capture unmodified rate-card active compute rate before OpenCost live allocation overrides
-		// est.ComputeHourlyUSD, so instantaneous current-hour rates never re-price prior lifetime hours.
-		rateCardActiveComputeRate := est.ComputeHourlyUSD + est.HibernationSavingsHourlyUSD
+		// Capture phase-independent rate-card active compute rate before OpenCost live allocation overrides
+		// est.ComputeHourlyUSD, so instantaneous current-hour rates and terminal phases never distort prior lifetime hours.
+		rateCardActiveComputeRate := est.BaseComputeHourlyUSD
 		terminal := env.Status.Phase == v1alpha1.PhaseFailed ||
 			env.Status.Phase == v1alpha1.PhaseTerminating ||
 			string(env.Status.Phase) == "Expired"
@@ -334,22 +347,22 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 			terminated:   false,
 		})
 		if pgName != "" && env.Spec.Deploy.Namespace != "create" && est.ServiceCount > 0 {
-			pgKey := ns + "/" + pgName
-			tState, tExists := pgTrendByKey[pgKey]
-			if !tExists {
-				tState = &previewGroupTrendState{}
-				pgTrendByKey[pgKey] = tState
+			if member, _, ok := buildEnvPGIntervalMember(ns, env, now, rateCard); ok {
+				pgKey := ns + "/" + pgName
+				tState, tExists := pgTrendByKey[pgKey]
+				if !tExists {
+					tState = &previewGroupTrendState{membersByKey: make(map[string]pgIntervalMember)}
+					pgTrendByKey[pgKey] = tState
+				}
+				if bc := resolveBaselineServices(ns, env); bc > tState.baselineCount {
+					tState.baselineCount = bc
+				}
+				tState.membersByKey[member.key] = member
+				tState.liveTargets = append(tState.liveTargets, previewGroupTrendLiveTarget{
+					spanIdx:   spanIdx,
+					memberKey: member.key,
+				})
 			}
-			tState.deployedServices += est.ServiceCount
-			tState.rateCardComputeHourlyUSD += rateCardActiveComputeRate
-			if bc := resolveBaselineServices(ns, env); bc > tState.baselineCount {
-				tState.baselineCount = bc
-			}
-			tState.members = append(tState.members, previewGroupTrendMember{
-				spanIdx:      spanIdx,
-				serviceCount: est.ServiceCount,
-				activeHours:  est.ActiveHours,
-			})
 		}
 
 		services := ExtractEnvironmentServiceNames(env)
@@ -418,17 +431,36 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 			totalDeltaSavingsUSD += float64(state.baselineCount-state.deployedServices) * perServiceComputeHourly
 		}
 	}
-	for _, tState := range pgTrendByKey {
-		if tState.deployedServices > 0 && tState.baselineCount > tState.deployedServices && tState.rateCardComputeHourlyUSD > 0 {
-			avoidedServices := float64(tState.baselineCount - tState.deployedServices)
-			perSvcRateCardHourly := tState.rateCardComputeHourlyUSD / float64(tState.deployedServices)
-			for _, member := range tState.members {
-				if member.activeHours <= 0 {
-					continue
-				}
-				memberShare := float64(member.serviceCount) / float64(tState.deployedServices)
-				trendSpans[member.spanIdx].deltaSaveUSD = member.activeHours * (avoidedServices * memberShare) * perSvcRateCardHourly
+
+	windowDays := NormalizeWindowDays(opts.WindowDays)
+	windowStart := startOfUTCDay(now).AddDate(0, 0, -(windowDays - 1))
+	allRetainedRecords := ListHistoricalRecords(ctx, opts.Client, opts.K8sClient, reqNS, now, LedgerRetentionDays, timeout)
+	for _, rec := range allRetainedRecords {
+		if rec.PreviewGroup == "" {
+			continue
+		}
+		pgKey := rec.Namespace + "/" + rec.PreviewGroup
+		tState, exists := pgTrendByKey[pgKey]
+		if !exists {
+			continue
+		}
+		if histMember, ok := buildHistoricalPGIntervalMember(rec, rateCard); ok {
+			if _, seen := tState.membersByKey[histMember.key]; !seen {
+				tState.membersByKey[histMember.key] = histMember
 			}
+		}
+	}
+	for _, tState := range pgTrendByKey {
+		if len(tState.liveTargets) == 0 || tState.baselineCount <= 0 {
+			continue
+		}
+		members := make([]pgIntervalMember, 0, len(tState.membersByKey))
+		for _, m := range tState.membersByKey {
+			members = append(members, m)
+		}
+		allocated := allocatePreviewGroupIntervalSavings(tState.baselineCount, members)
+		for _, target := range tState.liveTargets {
+			trendSpans[target.spanIdx].deltaSaveUSD = allocated[target.memberKey]
 		}
 	}
 
@@ -500,8 +532,13 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 		return byCluster[i].Cluster < byCluster[j].Cluster
 	})
 
-	windowDays := NormalizeWindowDays(opts.WindowDays)
-	historicalRecords := ListHistoricalRecords(ctx, opts.Client, opts.K8sClient, reqNS, now, windowDays, timeout)
+	historicalRecords := make([]HistoricalEnvironmentRecord, 0, len(allRetainedRecords))
+	for _, rec := range allRetainedRecords {
+		if rec.TerminatedAt.Before(windowStart) {
+			continue
+		}
+		historicalRecords = append(historicalRecords, rec)
+	}
 	var (
 		historicalAccruedUSD float64
 		historicalSavingsUSD float64

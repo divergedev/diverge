@@ -448,4 +448,66 @@ func TestEnvironmentValidateUpdate_ClusterRefImmutability(t *testing.T) {
 	if _, err := v.ValidateUpdate(ctx, unprovisioned, movedEast); err != nil {
 		t.Fatalf("expected repairing unprovisioned clusterRef to succeed, got: %v", err)
 	}
+
+	// Deleting Environment must still block clusterRef mutation so teardown cleans up the original spoke,
+	// while permitting finalizer/metadata updates when clusterRef is unchanged.
+	delNow := metav1.Now()
+	deletingMoved := movedEast.DeepCopy()
+	deletingMoved.DeletionTimestamp = &delNow
+	if _, err := v.ValidateUpdate(ctx, provisionedWest, deletingMoved); err == nil {
+		t.Fatal("expected deleting Environment to still reject clusterRef mutation when TargetCluster is assigned")
+	}
+
+	deletingSameCluster := provisionedWest.DeepCopy()
+	deletingSameCluster.DeletionTimestamp = &delNow
+	deletingSameCluster.Spec.Source.Provider = "" // structural checks remain skipped on deletion
+	if _, err := v.ValidateUpdate(ctx, provisionedWest, deletingSameCluster); err != nil {
+		t.Fatalf("expected deleting Environment with unchanged clusterRef to succeed, got: %v", err)
+	}
+
+	// Remote clusterRef resolving to reserved "local" sentinel must be rejected at admission.
+	sentinelExplicit := &Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "pr-sentinel", Namespace: "default"},
+		Spec: EnvironmentSpec{
+			Source: EnvironmentSource{Provider: "github", Branch: "feat/a"},
+			Deploy: EnvironmentDeploy{
+				ClusterRef: &ClusterTargetRef{
+					Name:                "local",
+					KubeconfigSecretRef: &SecretRef{Name: "spoke-secret"},
+				},
+			},
+		},
+	}
+	if _, err := v.ValidateCreate(ctx, sentinelExplicit); err == nil {
+		t.Fatal("expected remote clusterRef named \"local\" to be rejected")
+	}
+
+	sentinelViaSecretName := &Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "pr-sentinel-sec", Namespace: "default"},
+		Spec: EnvironmentSpec{
+			Source: EnvironmentSource{Provider: "github", Branch: "feat/a"},
+			Deploy: EnvironmentDeploy{
+				ClusterRef: &ClusterTargetRef{
+					KubeconfigSecretRef: &SecretRef{Name: "local"},
+				},
+			},
+		},
+	}
+	if _, err := v.ValidateCreate(ctx, sentinelViaSecretName); err == nil {
+		t.Fatal("expected remote clusterRef with blank name and kubeconfigSecretRef \"local\" to be rejected")
+	}
+
+	// Explicit local hub reference (no kubeconfigSecretRef) remains valid.
+	explicitLocalHub := &Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "pr-local", Namespace: "default"},
+		Spec: EnvironmentSpec{
+			Source: EnvironmentSource{Provider: "github", Branch: "feat/a"},
+			Deploy: EnvironmentDeploy{
+				ClusterRef: &ClusterTargetRef{Name: "local"},
+			},
+		},
+	}
+	if _, err := v.ValidateCreate(ctx, explicitLocalHub); err != nil {
+		t.Fatalf("expected local hub clusterRef without kubeconfigSecretRef to be allowed, got: %v", err)
+	}
 }

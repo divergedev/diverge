@@ -61,18 +61,29 @@ type EnvironmentReconciler struct {
 	SetupRunner      SetupRunner
 }
 
-func (r *EnvironmentReconciler) resolveTargetCluster(ctx context.Context, env *divergeiov1alpha1.Environment) (client.Client, string, bool, error) {
+func (r *EnvironmentReconciler) resolveTarget(ctx context.Context, env *divergeiov1alpha1.Environment) (*multicluster.Target, error) {
+	if pinned, ok := multicluster.TargetFromContext(ctx); ok && pinned != nil {
+		return pinned, nil
+	}
 	if !multicluster.IsRemoteEnv(env) {
-		return r.Client, multicluster.LocalClusterName, false, nil
+		return &multicluster.Target{
+			Name:     multicluster.LocalClusterName,
+			IsRemote: false,
+			Client:   r.Client,
+		}, nil
 	}
 	resolver := r.ClusterClients
 	if resolver == nil && r.Client != nil {
 		resolver = multicluster.NewManager(r.Client, nil, nil, r.Scheme)
 	}
 	if resolver == nil {
-		return nil, "", false, fmt.Errorf("multi-cluster resolver is not configured")
+		return nil, fmt.Errorf("multi-cluster resolver is not configured")
 	}
-	target, err := resolver.Resolve(ctx, env)
+	return resolver.Resolve(ctx, env)
+}
+
+func (r *EnvironmentReconciler) resolveTargetCluster(ctx context.Context, env *divergeiov1alpha1.Environment) (client.Client, string, bool, error) {
+	target, err := r.resolveTarget(ctx, env)
 	if err != nil {
 		return nil, "", false, err
 	}
@@ -192,14 +203,14 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// 4. Set ObservedGeneration
 	env.Status.ObservedGeneration = env.Generation
 
-	// 5-7.6 Provisioning (Namespace, DB, Routing, Async, Banner)
-	res, done, err := r.reconcileProvisioning(ctx, &env, statusBase)
+	// 5-7.7 Provisioning (Namespace, DB, Routing, Async, Banner, Features) with single-resolve pinned target
+	provCtx, res, done, err := r.reconcileProvisioningWithTarget(ctx, &env, statusBase)
 	if done {
 		return res, err
 	}
 
-	// 8. Deploy
-	res, done, err = r.reconcileDeploy(ctx, &env, statusBase)
+	// 8. Deploy (reusing the pinned target resolved during provisioning)
+	res, done, err = r.reconcileDeploy(provCtx, &env, statusBase)
 	if done {
 		return res, err
 	}

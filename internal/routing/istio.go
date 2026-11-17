@@ -26,7 +26,19 @@ type IstioRouter struct {
 }
 
 func (r *IstioRouter) routerForEnv(ctx context.Context, env *v1alpha1.Environment) (*IstioRouter, error) {
-	if r.scopedRemote || !multicluster.IsRemoteEnv(env) {
+	if r.scopedRemote {
+		return r, nil
+	}
+	if pinned, ok := multicluster.TargetFromContext(ctx); ok && pinned != nil {
+		if !pinned.IsRemote {
+			return r, nil
+		}
+		return &IstioRouter{
+			Client:       pinned.Client,
+			scopedRemote: true,
+		}, nil
+	}
+	if !multicluster.IsRemoteEnv(env) {
 		return r, nil
 	}
 	resolver := r.ClusterClients

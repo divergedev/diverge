@@ -40,11 +40,18 @@ kubectl -n istio-system rollout status daemonset/ztunnel --timeout=120s --contex
 
 echo "==> Enrolling default namespace in Istio Ambient dataplane..."
 LEGACY_INJECTION="$(kubectl get namespace default -o jsonpath='{.metadata.labels.istio-injection}' --context "kind-${CLUSTER_NAME}" 2>/dev/null || true)"
-kubectl label namespace default istio-injection- istio.io/dataplane-mode=ambient --context "kind-${CLUSTER_NAME}" --overwrite || true
-if [ "${LEGACY_INJECTION}" = "enabled" ]; then
+SIDECAR_PODS="$(kubectl get pods -n default -o jsonpath='{range .items[*]}{.metadata.annotations.sidecar\.istio\.io/status}{end}' --context "kind-${CLUSTER_NAME}" 2>/dev/null || true)"
+kubectl label namespace default istio-injection- istio.io/dataplane-mode=ambient --context "kind-${CLUSTER_NAME}" --overwrite
+if [ "${LEGACY_INJECTION}" = "enabled" ] || [ -n "${SIDECAR_PODS}" ]; then
   echo "==> Recreating existing default-namespace workloads to remove legacy sidecar proxies..."
-  kubectl rollout restart deployment -n default --context "kind-${CLUSTER_NAME}" || true
-  kubectl rollout status deployment -n default --timeout=120s --context "kind-${CLUSTER_NAME}" || true
+  if [ -n "$(kubectl get deployment -n default -o name --context "kind-${CLUSTER_NAME}" 2>/dev/null)" ]; then
+    kubectl rollout restart deployment -n default --context "kind-${CLUSTER_NAME}"
+    kubectl rollout status deployment -n default --timeout=120s --context "kind-${CLUSTER_NAME}"
+  fi
+  if [ -n "$(kubectl get statefulset -n default -o name --context "kind-${CLUSTER_NAME}" 2>/dev/null)" ]; then
+    kubectl rollout restart statefulset -n default --context "kind-${CLUSTER_NAME}"
+    kubectl rollout status statefulset -n default --timeout=120s --context "kind-${CLUSTER_NAME}"
+  fi
 fi
 
 echo "==> Building and loading controller image..."

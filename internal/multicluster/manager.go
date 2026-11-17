@@ -228,6 +228,13 @@ func (m *Manager) Resolve(ctx context.Context, env *v1alpha1.Environment) (*Targ
 		}
 	}
 
+	if strings.EqualFold(DesiredClusterName(clusterRef), LocalClusterName) {
+		return nil, &ValidationError{
+			Reason:  "InvalidClusterRef",
+			Message: fmt.Sprintf("remote clusterRef cannot resolve to reserved cluster name %q", LocalClusterName),
+		}
+	}
+
 	if m.HubClient == nil {
 		return nil, fmt.Errorf("hub client is not configured on multicluster manager")
 	}

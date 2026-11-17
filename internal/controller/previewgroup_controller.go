@@ -301,8 +301,9 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	// Delete orphaned Environments (services removed from spec)
-	if err := r.deleteOrphanedEnvironments(ctx, &pg, desiredEnvNames); err != nil {
-		logger.Error(err, "failed to delete orphaned Environments")
+	orphanCleanupErr := r.deleteOrphanedEnvironments(ctx, &pg, desiredEnvNames)
+	if orphanCleanupErr != nil {
+		logger.Error(orphanCleanupErr, "failed to delete orphaned Environments")
 	}
 
 	// Update status
@@ -367,6 +368,9 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 	}
 
+	if orphanCleanupErr != nil {
+		return ctrl.Result{}, orphanCleanupErr
+	}
 	if requeueAfter > 0 {
 		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
@@ -600,6 +604,7 @@ func (r *PreviewGroupReconciler) deleteOrphanedEnvironments(ctx context.Context,
 		return err
 	}
 
+	var errs []error
 	for i := range children {
 		child := &children[i]
 		if !desired[child.Namespace+"/"+child.Name] && !desired[child.Name] {
@@ -608,16 +613,18 @@ func (r *PreviewGroupReconciler) deleteOrphanedEnvironments(ctx context.Context,
 			hookErr := r.cleanupPostDeployJobs(hookCtx, child)
 			cancelHook()
 			if hookErr != nil {
-				return fmt.Errorf("failed to cleanup post-deploy jobs for orphaned Environment %s/%s: %w", child.Namespace, child.Name, hookErr)
+				errs = append(errs, fmt.Errorf("failed to cleanup post-deploy jobs for orphaned Environment %s/%s: %w", child.Namespace, child.Name, hookErr))
+				continue
 			}
 			if err := r.Delete(ctx, child); err != nil && !apierrors.IsNotFound(err) {
-				return fmt.Errorf("failed to delete orphaned Environment %s/%s: %w", child.Namespace, child.Name, err)
+				errs = append(errs, fmt.Errorf("failed to delete orphaned Environment %s/%s: %w", child.Namespace, child.Name, err))
+				continue
 			}
 			r.Recorder.Eventf(pg, "Normal", "OrphanDeleted",
 				"Deleted orphaned Environment %s/%s", child.Namespace, child.Name)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // derivePreviewGroupPhase computes the aggregate phase from per-service statuses.

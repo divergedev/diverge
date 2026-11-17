@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -851,4 +852,60 @@ func TestDirectDeployer_Teardown_DeletesAllSupportedSpokeResourceKinds(t *testin
 	assert.True(t, apierrors.IsNotFound(spokeClient.Get(ctx, client.ObjectKey{Name: "app-sec", Namespace: "team-orders"}, &corev1.Secret{})))
 	assert.True(t, apierrors.IsNotFound(spokeClient.Get(ctx, client.ObjectKey{Name: "app-ing", Namespace: "team-orders"}, &networkingv1.Ingress{})))
 	assert.True(t, apierrors.IsNotFound(spokeClient.Get(ctx, client.ObjectKey{Name: "app-sa", Namespace: "team-orders"}, &corev1.ServiceAccount{})))
+}
+
+func TestDirectDeployer_Teardown_LeastPrivilegeOptionalKindForbiddenAndExactSecretDeferral(t *testing.T) {
+	ctx := context.Background()
+	s := testScheme()
+
+	// Simulate Helm controller RBAC where DaemonSet, CronJob, HPA, PDB, Ingress, and PVC list calls return 403 Forbidden.
+	baseClient := fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(interceptor.Funcs{
+		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			switch list.(type) {
+			case *appsv1.DaemonSetList,
+				*appsv1.ReplicaSetList,
+				*batchv1.CronJobList,
+				*networkingv1.IngressList,
+				*corev1.PersistentVolumeClaimList:
+				return apierrors.NewForbidden(schema.GroupResource{Group: "apps", Resource: "daemonsets"}, "", errors.New("forbidden by least-privilege RBAC"))
+			default:
+				return cl.List(ctx, list, opts...)
+			}
+		},
+	}).Build()
+
+	manifests := []unstructured.Unstructured{
+		testDeploymentUnstructured("echo-preview", ""),
+		{Object: map[string]interface{}{"apiVersion": "v1", "kind": "Service", "metadata": map[string]interface{}{"name": "echo-preview"}}},
+		// User-supplied Secret sharing the diverge-db- prefix (must NOT be deferred during teardown).
+		{Object: map[string]interface{}{"apiVersion": "v1", "kind": "Secret", "metadata": map[string]interface{}{"name": "diverge-db-cache"}}},
+	}
+
+	d := NewDirectDeployer(baseClient, &mockFetcher{objects: manifests})
+	env := testEnv("istio-cleanup", "team-orders", "same")
+	require.NoError(t, d.Deploy(ctx, env))
+
+	// Also seed the exact controller-generated DB env Secret, which MUST remain deferred until workload drain completes.
+	generatedDBSecretName := controllerDBEnvSecretName(env.Name)
+	genSec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      generatedDBSecretName,
+			Namespace: "team-orders",
+			Labels: map[string]string{
+				"divergedev.com/environment": env.Name,
+				"divergedev.com/managed-by":  "diverge",
+			},
+		},
+	}
+	require.NoError(t, baseClient.Create(ctx, genSec))
+
+	delNow := metav1.Now()
+	env.DeletionTimestamp = &delNow
+	require.NoError(t, d.Teardown(ctx, env))
+
+	// Deployment, Service, and user-supplied diverge-db-cache Secret are deleted, while exact generated DB Secret is deferred.
+	assert.True(t, apierrors.IsNotFound(baseClient.Get(ctx, client.ObjectKey{Name: "echo-preview", Namespace: "team-orders"}, &appsv1.Deployment{})))
+	assert.True(t, apierrors.IsNotFound(baseClient.Get(ctx, client.ObjectKey{Name: "echo-preview", Namespace: "team-orders"}, &corev1.Service{})))
+	assert.True(t, apierrors.IsNotFound(baseClient.Get(ctx, client.ObjectKey{Name: "diverge-db-cache", Namespace: "team-orders"}, &corev1.Secret{})))
+	require.NoError(t, baseClient.Get(ctx, client.ObjectKey{Name: generatedDBSecretName, Namespace: "team-orders"}, &corev1.Secret{}))
 }

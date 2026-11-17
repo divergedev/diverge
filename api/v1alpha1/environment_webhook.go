@@ -32,14 +32,18 @@ func (v *environmentValidator) ValidateCreate(_ context.Context, env *Environmen
 // ValidateUpdate validates an updated Environment.
 func (v *environmentValidator) ValidateUpdate(_ context.Context, oldEnv *Environment, newEnv *Environment) (admission.Warnings, error) {
 	if newEnv != nil && newEnv.DeletionTimestamp != nil {
-		return nil, nil
+		return nil, validateClusterRefImmutability(oldEnv, newEnv).ToAggregate()
 	}
 	return nil, ValidateEnvironmentUpdate(oldEnv, newEnv).ToAggregate()
 }
 
 // ValidateEnvironmentUpdate validates structural rules and clusterRef immutability across an Environment update.
 func ValidateEnvironmentUpdate(oldEnv, newEnv *Environment) field.ErrorList {
-	allErrs := ValidateEnvironment(newEnv)
+	return append(ValidateEnvironment(newEnv), validateClusterRefImmutability(oldEnv, newEnv)...)
+}
+
+func validateClusterRefImmutability(oldEnv, newEnv *Environment) field.ErrorList {
+	var allErrs field.ErrorList
 	if oldEnv != nil && newEnv != nil && strings.TrimSpace(oldEnv.Status.TargetCluster) != "" {
 		if !EqualClusterTargetRef(oldEnv.Spec.Deploy.ClusterRef, newEnv.Spec.Deploy.ClusterRef, newEnv.Namespace) {
 			allErrs = append(allErrs, field.Forbidden(
@@ -84,18 +88,10 @@ func ValidateEnvironment(env *Environment) field.ErrorList {
 		allErrs = append(allErrs, field.Required(sourcePath.Child("branch"), "source branch is required"))
 	}
 
-	// Validate cross-namespace SecretRefs
+	// Validate cross-namespace SecretRefs and clusterRef sentinel constraints
 	allErrs = append(allErrs, validateSecretRefs(env.Spec.EnvFrom, env.Namespace, specPath.Child("envFrom"))...)
 	allErrs = append(allErrs, validateSecretRefs(env.Spec.Deploy.EnvFrom, env.Namespace, specPath.Child("deploy", "envFrom"))...)
-	if env.Spec.Deploy.ClusterRef != nil && env.Spec.Deploy.ClusterRef.KubeconfigSecretRef != nil {
-		secNS := strings.TrimSpace(env.Spec.Deploy.ClusterRef.KubeconfigSecretRef.Namespace)
-		if secNS != "" && secNS != env.Namespace {
-			allErrs = append(allErrs, field.Forbidden(
-				specPath.Child("deploy", "clusterRef", "kubeconfigSecretRef", "namespace"),
-				"cross-namespace SecretRef is not allowed",
-			))
-		}
-	}
+	allErrs = append(allErrs, validateClusterTargetRef(env.Spec.Deploy.ClusterRef, env.Namespace, specPath.Child("deploy", "clusterRef"))...)
 	if env.Spec.Database.MigrationJob != nil {
 		allErrs = append(allErrs, validateSecretRefs(
 			env.Spec.Database.MigrationJob.EnvFrom,
@@ -156,6 +152,33 @@ func ValidateEnvironment(env *Environment) field.ErrorList {
 	}
 
 	return allErrs
+}
+
+func validateClusterTargetRef(ref *ClusterTargetRef, envNamespace string, path *field.Path) field.ErrorList {
+	var errs field.ErrorList
+	if ref == nil || ref.KubeconfigSecretRef == nil {
+		return errs
+	}
+	effectiveName := strings.TrimSpace(ref.Name)
+	if effectiveName == "" {
+		effectiveName = strings.TrimSpace(ref.KubeconfigSecretRef.Name)
+	}
+	if strings.EqualFold(effectiveName, "local") {
+		errs = append(errs, field.Forbidden(
+			path,
+			"remote clusterRef with kubeconfigSecretRef cannot resolve to reserved cluster name \"local\"",
+		))
+	}
+	if envNamespace != "" {
+		secNS := strings.TrimSpace(ref.KubeconfigSecretRef.Namespace)
+		if secNS != "" && secNS != envNamespace {
+			errs = append(errs, field.Forbidden(
+				path.Child("kubeconfigSecretRef", "namespace"),
+				"cross-namespace SecretRef is not allowed",
+			))
+		}
+	}
+	return errs
 }
 
 func validateSecretRefs(refs []SecretRef, envNamespace string, path *field.Path) field.ErrorList {

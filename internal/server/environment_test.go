@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -408,8 +409,10 @@ func TestStreamLogs_PreviewNamespaceAuthzHookRoutingAndFollowClient(t *testing.T
 	}
 
 	_, handler := divergev1alpha1connect.NewEnvironmentServiceHandler(svc)
+	var currentUser atomic.Pointer[auth.UserInfo]
+	currentUser.Store(&auth.UserInfo{Username: "dev"})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r = r.WithContext(auth.ContextWithUserInfo(r.Context(), &auth.UserInfo{Username: "dev"}))
+		r = r.WithContext(auth.ContextWithUserInfo(r.Context(), currentUser.Load()))
 		handler.ServeHTTP(w, r)
 	}))
 	defer srv.Close()
@@ -454,4 +457,58 @@ func TestStreamLogs_PreviewNamespaceAuthzHookRoutingAndFollowClient(t *testing.T
 	assert.Equal(t, "orders-preview-pod", followStream.Msg().PodName)
 	_ = followStream.Close()
 	assert.NotEmpty(t, spokeStreamingK8s.Actions(), "Follow=true must stream using target.StreamingClientset")
+
+	// 4. Macaroon capability-token user bound to "team-a" can stream hub migration hook logs in "team-a",
+	//    but MUST be denied when streaming pod logs from a remote spoke cluster (even if same namespace name).
+	sameNSRemoteEnv := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "pr-spoke-same", Namespace: "team-a"},
+		Spec: v1alpha1.EnvironmentSpec{
+			Deploy: v1alpha1.EnvironmentDeploy{
+				Namespace: "same",
+				ClusterRef: &v1alpha1.ClusterTargetRef{
+					Name:                "spoke-west",
+					KubeconfigSecretRef: &v1alpha1.SecretRef{Name: "spoke-sec"},
+				},
+			},
+		},
+	}
+	require.NoError(t, hubClient.Create(ctx, sameNSRemoteEnv))
+	require.NoError(t, spokeClient.Create(ctx, &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "spoke-same-pod",
+			Namespace: "team-a",
+			Labels:    map[string]string{"divergedev.com/environment": "pr-spoke-same"},
+		},
+	}))
+
+	currentUser.Store(&auth.UserInfo{
+		Username: "macaroon-agent",
+		Extra: map[string]authorizationv1.ExtraValue{
+			auth.ExtraKeyAuthType:     {"macaroon"},
+			auth.ExtraKeyNamespace:    {"team-a"},
+			auth.ExtraKeyAllowedTools: {"diverge_get_environment", "diverge_stream_logs"},
+		},
+	})
+
+	macHubHook, err := rpcClient.StreamLogs(ctx, connect.NewRequest(&pb.StreamLogsRequest{
+		EnvironmentName: "pr-create",
+		Namespace:       "team-a",
+		HookType:        "migration",
+	}))
+	require.NoError(t, err)
+	require.True(t, macHubHook.Receive())
+	_ = macHubHook.Close()
+
+	macSpokeStream, err := rpcClient.StreamLogs(ctx, connect.NewRequest(&pb.StreamLogsRequest{
+		EnvironmentName: "pr-spoke-same",
+		Namespace:       "team-a",
+	}))
+	if err == nil {
+		for macSpokeStream.Receive() {
+		}
+		err = macSpokeStream.Err()
+		_ = macSpokeStream.Close()
+	}
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
 }

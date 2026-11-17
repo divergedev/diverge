@@ -489,4 +489,21 @@ func TestManager_DNSRebindingDialGuardAndStreamingClientset(t *testing.T) {
 	gotPinned, err := mgr.Resolve(WithTarget(ctx, pinned), env)
 	require.NoError(t, err)
 	assert.Same(t, pinned, gotPinned)
+
+	// Remote clusterRef resolving to reserved "local" sentinel is rejected as InvalidClusterRef.
+	sentinelEnv := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "pr-local-sentinel", Namespace: "team-a"},
+		Spec: v1alpha1.EnvironmentSpec{
+			Deploy: v1alpha1.EnvironmentDeploy{
+				ClusterRef: &v1alpha1.ClusterTargetRef{
+					KubeconfigSecretRef: &v1alpha1.SecretRef{Name: "local"},
+				},
+			},
+		},
+	}
+	_, err = mgr.Resolve(ctx, sentinelEnv)
+	require.Error(t, err)
+	veLocal, okLocal := IsValidationError(err)
+	require.True(t, okLocal)
+	assert.Equal(t, "InvalidClusterRef", veLocal.Reason)
 }

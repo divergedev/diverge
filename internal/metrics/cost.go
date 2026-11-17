@@ -278,6 +278,7 @@ func ObserveEnvironmentLifetime(env *v1alpha1.Environment, now time.Time) {
 type EnvironmentCostEstimate struct {
 	HourlyUSD                   float64
 	ComputeHourlyUSD            float64
+	BaseComputeHourlyUSD        float64
 	DatabaseHourlyUSD           float64
 	HibernationSavingsHourlyUSD float64
 	AccruedUSD                  float64
@@ -287,6 +288,8 @@ type EnvironmentCostEstimate struct {
 	HibernatedHours             float64
 	CPUCores                    float64
 	MemoryGiB                   float64
+	ConfiguredCPUCores          float64
+	ConfiguredMemoryGiB         float64
 	ServiceCount                int
 	Hibernated                  bool
 	IdleDuration                time.Duration
@@ -507,6 +510,7 @@ func ComputeEnvironmentCost(env *v1alpha1.Environment, now time.Time, rate CostR
 	return EnvironmentCostEstimate{
 		HourlyUSD:                   hourlyUSD,
 		ComputeHourlyUSD:            computeHourlyUSD,
+		BaseComputeHourlyUSD:        baseComputeHourly,
 		DatabaseHourlyUSD:           databaseHourlyUSD,
 		HibernationSavingsHourlyUSD: hibernationSavingsUSD,
 		AccruedUSD:                  accruedUSD,
@@ -516,6 +520,8 @@ func ComputeEnvironmentCost(env *v1alpha1.Environment, now time.Time, rate CostR
 		HibernatedHours:             hibernatedHours,
 		CPUCores:                    activeCPU,
 		MemoryGiB:                   activeMemory,
+		ConfiguredCPUCores:          float64(serviceCount) * cpuCores,
+		ConfiguredMemoryGiB:         float64(serviceCount) * memoryGiB,
 		ServiceCount:                serviceCount,
 		Hibernated:                  hibernated,
 		IdleDuration:                idleDuration,

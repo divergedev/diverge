@@ -224,3 +224,86 @@ func TestHandleTeardown_AsyncTeardown(t *testing.T) {
 
 	assert.Equal(t, 1, fp.teardownCalls)
 }
+
+type countingResolver struct {
+	calls  int
+	target *multicluster.Target
+}
+
+func (c *countingResolver) Resolve(ctx context.Context, _ *divergeiov1alpha1.Environment) (*multicluster.Target, error) {
+	if pinned, ok := multicluster.TargetFromContext(ctx); ok && pinned != nil {
+		return pinned, nil
+	}
+	c.calls++
+	return c.target, nil
+}
+
+func TestReconcileProvisioning_SinglePinnedTargetAndOptimisticLockWriteAhead(t *testing.T) {
+	ctx := context.Background()
+	env := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "pr-pinned",
+			Namespace:  "default",
+			Finalizers: []string{environmentFinalizer},
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Source: divergeiov1alpha1.EnvironmentSource{Provider: "github", Branch: "feat/pin"},
+			Deploy: divergeiov1alpha1.EnvironmentDeploy{
+				Namespace: "create",
+				ClusterRef: &divergeiov1alpha1.ClusterTargetRef{
+					Name:                "spoke-west",
+					KubeconfigSecretRef: &divergeiov1alpha1.SecretRef{Name: "spoke-sec"},
+				},
+			},
+			Routing: divergeiov1alpha1.EnvironmentRouting{
+				Banner: &divergeiov1alpha1.BannerSpec{Enabled: true, Text: "PR"},
+			},
+			Features: &divergeiov1alpha1.FeatureSpec{
+				Provider:  "configmap",
+				Overrides: map[string]string{"beta": "true"},
+			},
+		},
+	}
+
+	r, hubClient, _, _, _ := newTestReconciler(t, env, nil, "")
+	spokeClient := fake.NewClientBuilder().WithScheme(r.Scheme).Build()
+	cr := &countingResolver{
+		target: &multicluster.Target{
+			Name:     "spoke-west",
+			IsRemote: true,
+			Client:   spokeClient,
+		},
+	}
+	r.ClusterClients = cr
+
+	// 1. Concurrent spec update before write-ahead TargetCluster patch must conflict BEFORE spoke resources are created.
+	var readSnapshot divergeiov1alpha1.Environment
+	require.NoError(t, hubClient.Get(ctx, types.NamespacedName{Name: "pr-pinned", Namespace: "default"}, &readSnapshot))
+	statusBaseStale := readSnapshot.DeepCopy()
+
+	var concurrent divergeiov1alpha1.Environment
+	require.NoError(t, hubClient.Get(ctx, types.NamespacedName{Name: "pr-pinned", Namespace: "default"}, &concurrent))
+	concurrent.Spec.Source.CommitSHA = "concurrent-sha"
+	require.NoError(t, hubClient.Update(ctx, &concurrent))
+
+	_, _, doneConflict, errConflict := r.reconcileProvisioningWithTarget(ctx, &readSnapshot, statusBaseStale)
+	require.Error(t, errConflict, "optimistic lock must reject stale write-ahead status patch")
+	assert.True(t, doneConflict)
+	assert.True(t, apierrors.IsNotFound(spokeClient.Get(ctx, types.NamespacedName{Name: env.PreviewNamespace()}, &corev1.Namespace{})),
+		"no spoke namespace may be created when write-ahead TargetCluster patch conflicts")
+
+	// 2. Fresh snapshot resolves the target once across namespace, banner, features, and deploy.
+	cr.calls = 0
+	var fresh divergeiov1alpha1.Environment
+	require.NoError(t, hubClient.Get(ctx, types.NamespacedName{Name: "pr-pinned", Namespace: "default"}, &fresh))
+	freshBase := fresh.DeepCopy()
+
+	provCtx, _, doneOK, errOK := r.reconcileProvisioningWithTarget(ctx, &fresh, freshBase)
+	require.NoError(t, errOK)
+	assert.False(t, doneOK)
+	assert.Equal(t, 1, cr.calls, "reconcileProvisioning must resolve spoke target once and reuse pinned target")
+	pinned, hasPinned := multicluster.TargetFromContext(provCtx)
+	require.True(t, hasPinned)
+	assert.Equal(t, "spoke-west", pinned.Name)
+	require.NoError(t, spokeClient.Get(ctx, types.NamespacedName{Name: fresh.PreviewNamespace()}, &corev1.Namespace{}))
+}

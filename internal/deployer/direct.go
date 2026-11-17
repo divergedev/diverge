@@ -2,7 +2,9 @@ package deployer
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"regexp"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -11,6 +13,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -297,6 +300,8 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 		targetNS = env.PreviewNamespace()
 	}
 
+	deployedByKind := d.fetchedObjectsByKind(ctx, env, targetNS)
+
 	selector := labels.SelectorFromSet(map[string]string{
 		"divergedev.com/environment": env.Name,
 		"divergedev.com/managed-by":  "diverge",
@@ -330,7 +335,7 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 	}
 
 	var dsList appsv1.DaemonSetList
-	if err := targetClient.List(ctx, &dsList, listOpts...); isIgnorableListErr(err) != nil {
+	if err := handleOptionalKindListErr(ctx, targetClient, "DaemonSet", errOrNil(targetClient.List(ctx, &dsList, listOpts...)), deployedByKind["DaemonSet"], fgDelOpts...); err != nil {
 		return fmt.Errorf("failed to list daemonsets for teardown: %w", err)
 	}
 	for i := range dsList.Items {
@@ -340,7 +345,7 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 	}
 
 	var rsList appsv1.ReplicaSetList
-	if err := targetClient.List(ctx, &rsList, listOpts...); isIgnorableListErr(err) != nil {
+	if err := handleOptionalKindListErr(ctx, targetClient, "ReplicaSet", errOrNil(targetClient.List(ctx, &rsList, listOpts...)), deployedByKind["ReplicaSet"], fgDelOpts...); err != nil {
 		return fmt.Errorf("failed to list replicasets for teardown: %w", err)
 	}
 	for i := range rsList.Items {
@@ -350,7 +355,7 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 	}
 
 	var cronJobList batchv1.CronJobList
-	if err := targetClient.List(ctx, &cronJobList, listOpts...); isIgnorableListErr(err) != nil {
+	if err := handleOptionalKindListErr(ctx, targetClient, "CronJob", errOrNil(targetClient.List(ctx, &cronJobList, listOpts...)), deployedByKind["CronJob"], fgDelOpts...); err != nil {
 		return fmt.Errorf("failed to list cronjobs for teardown: %w", err)
 	}
 	for i := range cronJobList.Items {
@@ -370,7 +375,7 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 	}
 
 	var hpaList autoscalingv2.HorizontalPodAutoscalerList
-	if err := targetClient.List(ctx, &hpaList, listOpts...); isIgnorableListErr(err) != nil {
+	if err := handleOptionalKindListErr(ctx, targetClient, "HorizontalPodAutoscaler", errOrNil(targetClient.List(ctx, &hpaList, listOpts...)), deployedByKind["HorizontalPodAutoscaler"]); err != nil {
 		return fmt.Errorf("failed to list horizontalpodautoscalers for teardown: %w", err)
 	}
 	for i := range hpaList.Items {
@@ -380,7 +385,7 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 	}
 
 	var pdbList policyv1.PodDisruptionBudgetList
-	if err := targetClient.List(ctx, &pdbList, listOpts...); isIgnorableListErr(err) != nil {
+	if err := handleOptionalKindListErr(ctx, targetClient, "PodDisruptionBudget", errOrNil(targetClient.List(ctx, &pdbList, listOpts...)), deployedByKind["PodDisruptionBudget"]); err != nil {
 		return fmt.Errorf("failed to list poddisruptionbudgets for teardown: %w", err)
 	}
 	for i := range pdbList.Items {
@@ -390,7 +395,7 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 	}
 
 	var ingressList networkingv1.IngressList
-	if err := targetClient.List(ctx, &ingressList, listOpts...); isIgnorableListErr(err) != nil {
+	if err := handleOptionalKindListErr(ctx, targetClient, "Ingress", errOrNil(targetClient.List(ctx, &ingressList, listOpts...)), deployedByKind["Ingress"]); err != nil {
 		return fmt.Errorf("failed to list ingresses for teardown: %w", err)
 	}
 	for i := range ingressList.Items {
@@ -400,7 +405,7 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 	}
 
 	var netpolList networkingv1.NetworkPolicyList
-	if err := targetClient.List(ctx, &netpolList, listOpts...); isIgnorableListErr(err) != nil {
+	if err := handleOptionalKindListErr(ctx, targetClient, "NetworkPolicy", errOrNil(targetClient.List(ctx, &netpolList, listOpts...)), filterDeferredObjects(env, deployedByKind["NetworkPolicy"])); err != nil {
 		return fmt.Errorf("failed to list networkpolicies for teardown: %w", err)
 	}
 	for i := range netpolList.Items {
@@ -424,7 +429,7 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 	}
 
 	var cmList corev1.ConfigMapList
-	if err := targetClient.List(ctx, &cmList, listOpts...); isIgnorableListErr(err) != nil {
+	if err := handleOptionalKindListErr(ctx, targetClient, "ConfigMap", errOrNil(targetClient.List(ctx, &cmList, listOpts...)), filterDeferredObjects(env, deployedByKind["ConfigMap"])); err != nil {
 		return fmt.Errorf("failed to list configmaps for teardown: %w", err)
 	}
 	for i := range cmList.Items {
@@ -437,7 +442,7 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 	}
 
 	var secretList corev1.SecretList
-	if err := targetClient.List(ctx, &secretList, listOpts...); isIgnorableListErr(err) != nil {
+	if err := handleOptionalKindListErr(ctx, targetClient, "Secret", errOrNil(targetClient.List(ctx, &secretList, listOpts...)), filterDeferredObjects(env, deployedByKind["Secret"])); err != nil {
 		return fmt.Errorf("failed to list secrets for teardown: %w", err)
 	}
 	for i := range secretList.Items {
@@ -450,7 +455,7 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 	}
 
 	var pvcList corev1.PersistentVolumeClaimList
-	if err := targetClient.List(ctx, &pvcList, listOpts...); isIgnorableListErr(err) != nil {
+	if err := handleOptionalKindListErr(ctx, targetClient, "PersistentVolumeClaim", errOrNil(targetClient.List(ctx, &pvcList, listOpts...)), deployedByKind["PersistentVolumeClaim"]); err != nil {
 		return fmt.Errorf("failed to list persistentvolumeclaims for teardown: %w", err)
 	}
 	for i := range pvcList.Items {
@@ -460,7 +465,7 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 	}
 
 	var saList corev1.ServiceAccountList
-	if err := targetClient.List(ctx, &saList, listOpts...); isIgnorableListErr(err) != nil {
+	if err := handleOptionalKindListErr(ctx, targetClient, "ServiceAccount", errOrNil(targetClient.List(ctx, &saList, listOpts...)), deployedByKind["ServiceAccount"]); err != nil {
 		return fmt.Errorf("failed to list serviceaccounts for teardown: %w", err)
 	}
 	for i := range saList.Items {
@@ -472,11 +477,88 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 	return nil
 }
 
-func isIgnorableListErr(err error) error {
-	if err == nil || meta.IsNoMatchError(err) || runtime.IsNotRegisteredError(err) {
+var (
+	nonAlnumHyphenRegex = regexp.MustCompile(`[^a-z0-9-]`)
+	multiHyphenRegex    = regexp.MustCompile(`-{2,}`)
+)
+
+func errOrNil(err error) error { return err }
+
+func (d *DirectDeployer) fetchedObjectsByKind(ctx context.Context, env *v1alpha1.Environment, targetNS string) map[string][]unstructured.Unstructured {
+	if d == nil || d.Fetcher == nil || env == nil {
 		return nil
 	}
-	return err
+	objects, err := d.Fetcher.Fetch(ctx, env)
+	if err != nil || len(objects) == 0 {
+		return nil
+	}
+	byKind := make(map[string][]unstructured.Unstructured)
+	for i := range objects {
+		obj := objects[i].DeepCopy()
+		kind := obj.GetObjectKind().GroupVersionKind().Kind
+		if kind == "" {
+			kind = obj.GetKind()
+		}
+		if kind == "" || !d.isKindPermitted(kind) {
+			continue
+		}
+		if objNS := obj.GetNamespace(); objNS != "" && objNS != targetNS {
+			continue
+		}
+		obj.SetNamespace(targetNS)
+		byKind[kind] = append(byKind[kind], *obj)
+	}
+	return byKind
+}
+
+func filterDeferredObjects(env *v1alpha1.Environment, objs []unstructured.Unstructured) []unstructured.Unstructured {
+	if len(objs) == 0 {
+		return nil
+	}
+	out := make([]unstructured.Unstructured, 0, len(objs))
+	for i := range objs {
+		kind := objs[i].GetKind()
+		name := objs[i].GetName()
+		if kind == "NetworkPolicy" && env != nil && env.Spec.Deploy.Namespace == "create" && name == "diverge-default-netpol" {
+			continue
+		}
+		if kind == "ConfigMap" && isControllerDeferredConfigMap(env, name) {
+			continue
+		}
+		if kind == "Secret" && isControllerDeferredSecret(env, name) {
+			continue
+		}
+		out = append(out, objs[i])
+	}
+	return out
+}
+
+func handleOptionalKindListErr(
+	ctx context.Context,
+	targetClient client.Client,
+	kind string,
+	listErr error,
+	renderedObjs []unstructured.Unstructured,
+	delOpts ...client.DeleteOption,
+) error {
+	if listErr == nil || meta.IsNoMatchError(listErr) || runtime.IsNotRegisteredError(listErr) {
+		return nil
+	}
+	if apierrors.IsForbidden(listErr) {
+		// Least-privilege controller/spoke RBAC roles may omit list permissions for optional kinds
+		// (e.g. DaemonSet, CronJob, HPA, PDB, Ingress, PVC) when the preview does not deploy them.
+		if len(renderedObjs) == 0 {
+			log.FromContext(ctx).V(1).Info("Skipping optional resource kind list due to RBAC Forbidden", "kind", kind)
+			return nil
+		}
+		for i := range renderedObjs {
+			if delErr := targetClient.Delete(ctx, &renderedObjs[i], delOpts...); client.IgnoreNotFound(delErr) != nil {
+				return delErr
+			}
+		}
+		return nil
+	}
+	return listErr
 }
 
 func isControllerDeferredConfigMap(env *v1alpha1.Environment, name string) bool {
@@ -494,11 +576,32 @@ func isControllerDeferredConfigMap(env *v1alpha1.Environment, name string) bool 
 	return name == featuresCM || name == bannerCM
 }
 
+func controllerDBEnvSecretName(envName string) string {
+	raw := strings.ToLower("diverge-db-env-" + envName)
+	raw = strings.NewReplacer(".", "-", "_", "-").Replace(raw)
+	raw = nonAlnumHyphenRegex.ReplaceAllString(raw, "")
+	raw = multiHyphenRegex.ReplaceAllString(raw, "-")
+	raw = strings.Trim(raw, "-")
+	if raw == "" {
+		raw = "resource"
+	}
+	sum := sha256.Sum256([]byte(envName))
+	hash := fmt.Sprintf("%x", sum)[:8]
+	prefix := raw
+	if len(prefix) > 63-9 {
+		prefix = strings.TrimRight(prefix[:63-9], "-")
+	}
+	if prefix == "" {
+		prefix = "r"
+	}
+	return prefix + "-" + hash
+}
+
 func isControllerDeferredSecret(env *v1alpha1.Environment, name string) bool {
 	if env == nil || env.DeletionTimestamp.IsZero() {
 		return false
 	}
-	return strings.HasPrefix(name, "diverge-db-env-") || strings.HasPrefix(name, "diverge-db-")
+	return name == controllerDBEnvSecretName(env.Name)
 }
 
 // Status returns the deployment status of resources managed by this deployer.
