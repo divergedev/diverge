@@ -90,6 +90,6 @@ server:
   - Inspect `Overview` (source branch/PR, copyable routing headers, TTL countdown, and child service status table with direct links to each child `Environment`), interactive `Topology` graph, Kubernetes `Conditions`, and live `YAML`.
 - **Autonomous `AgentTask` Steering & Linked Previews**:
   - Send live steering guidance, pause/resume execution with optional USD budget bumps, stream sandbox pod logs, and jump directly to the task's **Linked Preview Environment** (`agent-preview-<task>`) and external preview URL.
-- **FinOps Cost & Usage Analytics (`/analytics`)**:
-  - Inspect fleet hourly burn, monthly run-rate, cumulative accrued spend, active service-hours, `AgentTask` LLM spend, scale-to-zero hibernation savings, and `PreviewGroup` delta-routing savings via `ClusterService.GetCostSummary`.
-  - Filter by namespace scope, monitor per-namespace quota utilization (`max-active-environments`, `max-hourly-cost-usd`, `max-cnpg-clusters`), view per-service footprint breakdowns, and sort top PR consumers with live TTL and budget warning callouts.
+- **FinOps Cost & Usage Analytics (`/analytics` and `/usage`)**:
+  - Inspect fleet hourly burn, monthly run-rate, cumulative accrued spend, active service-hours, `AgentTask` LLM spend, scale-to-zero hibernation savings, and `PreviewGroup` delta-routing savings via `ClusterService.GetCostSummary`, with inline **OpenCost Live** vs. **Rate-Card Estimate** attribution badges.
+  - Filter by namespace scope, monitor per-namespace quota utilization (`max-active-environments`, `max-hourly-cost-usd`, `max-cnpg-clusters`) and custom warning thresholds (`divergedev.com/budget-alert-threshold`), view per-service footprint breakdowns, sort top PR consumers with inline TTL and budget warning callouts, and download **1-click CSV or JSON chargeback reports** (`Export CSV` / `Export JSON`).

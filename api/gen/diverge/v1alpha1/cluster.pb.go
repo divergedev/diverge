@@ -345,6 +345,7 @@ type NamespaceCostBreakdown struct {
 	BudgetUtilizationPercent    float64                `protobuf:"fixed64,12,opt,name=budget_utilization_percent,json=budgetUtilizationPercent,proto3" json:"budget_utilization_percent,omitempty"`
 	BudgetWarning               bool                   `protobuf:"varint,13,opt,name=budget_warning,json=budgetWarning,proto3" json:"budget_warning,omitempty"`
 	WarningReason               string                 `protobuf:"bytes,14,opt,name=warning_reason,json=warningReason,proto3" json:"warning_reason,omitempty"`
+	AlertThresholdPercent       float64                `protobuf:"fixed64,15,opt,name=alert_threshold_percent,json=alertThresholdPercent,proto3" json:"alert_threshold_percent,omitempty"`
 	unknownFields               protoimpl.UnknownFields
 	sizeCache                   protoimpl.SizeCache
 }
@@ -477,6 +478,13 @@ func (x *NamespaceCostBreakdown) GetWarningReason() string {
 	return ""
 }
 
+func (x *NamespaceCostBreakdown) GetAlertThresholdPercent() float64 {
+	if x != nil {
+		return x.AlertThresholdPercent
+	}
+	return 0
+}
+
 type ServiceCostBreakdown struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	ServiceName      string                 `protobuf:"bytes,1,opt,name=service_name,json=serviceName,proto3" json:"service_name,omitempty"`
@@ -589,6 +597,7 @@ type EnvironmentCostItem struct {
 	DatabaseMode                string                 `protobuf:"bytes,16,opt,name=database_mode,json=databaseMode,proto3" json:"database_mode,omitempty"`
 	TtlWarning                  bool                   `protobuf:"varint,17,opt,name=ttl_warning,json=ttlWarning,proto3" json:"ttl_warning,omitempty"`
 	TtlWarningReason            string                 `protobuf:"bytes,18,opt,name=ttl_warning_reason,json=ttlWarningReason,proto3" json:"ttl_warning_reason,omitempty"`
+	CostSource                  string                 `protobuf:"bytes,19,opt,name=cost_source,json=costSource,proto3" json:"cost_source,omitempty"`
 	unknownFields               protoimpl.UnknownFields
 	sizeCache                   protoimpl.SizeCache
 }
@@ -749,6 +758,13 @@ func (x *EnvironmentCostItem) GetTtlWarningReason() string {
 	return ""
 }
 
+func (x *EnvironmentCostItem) GetCostSource() string {
+	if x != nil {
+		return x.CostSource
+	}
+	return ""
+}
+
 type GetCostSummaryResponse struct {
 	state                        protoimpl.MessageState    `protogen:"open.v1"`
 	TotalHourlyCostUsd           float64                   `protobuf:"fixed64,1,opt,name=total_hourly_cost_usd,json=totalHourlyCostUsd,proto3" json:"total_hourly_cost_usd,omitempty"`
@@ -767,6 +783,7 @@ type GetCostSummaryResponse struct {
 	ByService                    []*ServiceCostBreakdown   `protobuf:"bytes,14,rep,name=by_service,json=byService,proto3" json:"by_service,omitempty"`
 	TopConsumers                 []*EnvironmentCostItem    `protobuf:"bytes,15,rep,name=top_consumers,json=topConsumers,proto3" json:"top_consumers,omitempty"`
 	RateCard                     *CostRateCardInfo         `protobuf:"bytes,16,opt,name=rate_card,json=rateCard,proto3" json:"rate_card,omitempty"`
+	OpencostEnabled              bool                      `protobuf:"varint,17,opt,name=opencost_enabled,json=opencostEnabled,proto3" json:"opencost_enabled,omitempty"`
 	unknownFields                protoimpl.UnknownFields
 	sizeCache                    protoimpl.SizeCache
 }
@@ -913,6 +930,13 @@ func (x *GetCostSummaryResponse) GetRateCard() *CostRateCardInfo {
 	return nil
 }
 
+func (x *GetCostSummaryResponse) GetOpencostEnabled() bool {
+	if x != nil {
+		return x.OpencostEnabled
+	}
+	return false
+}
+
 var File_diverge_v1alpha1_cluster_proto protoreflect.FileDescriptor
 
 const file_diverge_v1alpha1_cluster_proto_rawDesc = "" +
@@ -940,7 +964,7 @@ const file_diverge_v1alpha1_cluster_proto_rawDesc = "" +
 	"\rvcpu_hour_usd\x18\x01 \x01(\x01R\vvcpuHourUsd\x12-\n" +
 	"\x13memory_gib_hour_usd\x18\x02 \x01(\x01R\x10memoryGibHourUsd\x127\n" +
 	"\x18database_schema_hour_usd\x18\x03 \x01(\x01R\x15databaseSchemaHourUsd\x12=\n" +
-	"\x1bdatabase_dedicated_hour_usd\x18\x04 \x01(\x01R\x18databaseDedicatedHourUsd\"\x8f\x05\n" +
+	"\x1bdatabase_dedicated_hour_usd\x18\x04 \x01(\x01R\x18databaseDedicatedHourUsd\"\xc7\x05\n" +
 	"\x16NamespaceCostBreakdown\x12\x1c\n" +
 	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12-\n" +
 	"\x12total_environments\x18\x02 \x01(\x05R\x11totalEnvironments\x12/\n" +
@@ -957,7 +981,8 @@ const file_diverge_v1alpha1_cluster_proto_rawDesc = "" +
 	"\x05quota\x18\v \x01(\v2$.diverge.v1alpha1.NamespaceQuotaInfoR\x05quota\x12<\n" +
 	"\x1abudget_utilization_percent\x18\f \x01(\x01R\x18budgetUtilizationPercent\x12%\n" +
 	"\x0ebudget_warning\x18\r \x01(\bR\rbudgetWarning\x12%\n" +
-	"\x0ewarning_reason\x18\x0e \x01(\tR\rwarningReason\"\x98\x02\n" +
+	"\x0ewarning_reason\x18\x0e \x01(\tR\rwarningReason\x126\n" +
+	"\x17alert_threshold_percent\x18\x0f \x01(\x01R\x15alertThresholdPercent\"\x98\x02\n" +
 	"\x14ServiceCostBreakdown\x12!\n" +
 	"\fservice_name\x18\x01 \x01(\tR\vserviceName\x12+\n" +
 	"\x11environment_count\x18\x02 \x01(\x05R\x10environmentCount\x12!\n" +
@@ -966,7 +991,7 @@ const file_diverge_v1alpha1_cluster_proto_rawDesc = "" +
 	"\x0fhourly_cost_usd\x18\x05 \x01(\x01R\rhourlyCostUsd\x12\x1b\n" +
 	"\tcpu_cores\x18\x06 \x01(\x01R\bcpuCores\x12\x1d\n" +
 	"\n" +
-	"memory_gib\x18\a \x01(\x01R\tmemoryGib\"\x83\x05\n" +
+	"memory_gib\x18\a \x01(\x01R\tmemoryGib\"\xa4\x05\n" +
 	"\x13EnvironmentCostItem\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
 	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12\x18\n" +
@@ -990,7 +1015,9 @@ const file_diverge_v1alpha1_cluster_proto_rawDesc = "" +
 	"\rdatabase_mode\x18\x10 \x01(\tR\fdatabaseMode\x12\x1f\n" +
 	"\vttl_warning\x18\x11 \x01(\bR\n" +
 	"ttlWarning\x12,\n" +
-	"\x12ttl_warning_reason\x18\x12 \x01(\tR\x10ttlWarningReason\"\xa9\a\n" +
+	"\x12ttl_warning_reason\x18\x12 \x01(\tR\x10ttlWarningReason\x12\x1f\n" +
+	"\vcost_source\x18\x13 \x01(\tR\n" +
+	"costSource\"\xd4\a\n" +
 	"\x16GetCostSummaryResponse\x121\n" +
 	"\x15total_hourly_cost_usd\x18\x01 \x01(\x01R\x12totalHourlyCostUsd\x12/\n" +
 	"\x14monthly_run_rate_usd\x18\x02 \x01(\x01R\x11monthlyRunRateUsd\x12C\n" +
@@ -1009,7 +1036,8 @@ const file_diverge_v1alpha1_cluster_proto_rawDesc = "" +
 	"\n" +
 	"by_service\x18\x0e \x03(\v2&.diverge.v1alpha1.ServiceCostBreakdownR\tbyService\x12J\n" +
 	"\rtop_consumers\x18\x0f \x03(\v2%.diverge.v1alpha1.EnvironmentCostItemR\ftopConsumers\x12?\n" +
-	"\trate_card\x18\x10 \x01(\v2\".diverge.v1alpha1.CostRateCardInfoR\brateCard2\xda\x01\n" +
+	"\trate_card\x18\x10 \x01(\v2\".diverge.v1alpha1.CostRateCardInfoR\brateCard\x12)\n" +
+	"\x10opencost_enabled\x18\x11 \x01(\bR\x0fopencostEnabled2\xda\x01\n" +
 	"\x0eClusterService\x12c\n" +
 	"\x0eGetClusterInfo\x12'.diverge.v1alpha1.GetClusterInfoRequest\x1a(.diverge.v1alpha1.GetClusterInfoResponse\x12c\n" +
 	"\x0eGetCostSummary\x12'.diverge.v1alpha1.GetCostSummaryRequest\x1a(.diverge.v1alpha1.GetCostSummaryResponseBHZFgithub.com/divergedev/diverge/api/gen/diverge/v1alpha1;divergev1alpha1b\x06proto3"

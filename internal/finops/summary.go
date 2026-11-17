@@ -36,6 +36,9 @@ const (
 	QuotaPolicyHibernateOldest = "hibernate-oldest"
 	QuotaPolicyReject          = "reject"
 
+	CostSourceRateCard = "rate-card"
+	CostSourceOpenCost = "opencost"
+
 	HoursPerMonth                 = 730.0
 	BudgetWarningThresholdPercent = 80.0
 	defaultSummaryTimeout         = 5 * time.Second
@@ -188,13 +191,16 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 			env.Status.Phase == v1alpha1.PhaseTerminating ||
 			string(env.Status.Phase) == "Expired"
 
+		costSource := CostSourceRateCard
 		if !terminal && !est.Hibernated && openCostQueried {
 			workloadNS := resolveWorkloadNamespace(env, ns)
-			if live, ok := liveAllocs[workloadNS+"/"+env.Name]; ok {
+			if live, ok := liveAllocs[workloadNS+"/"+env.Name]; ok && isFiniteNonNegative(live.HourlyComputeUSD) {
 				est = applyLiveAllocation(env, est, live)
+				costSource = CostSourceOpenCost
 			} else if workloadNS != ns {
-				if live, ok := liveAllocs[ns+"/"+env.Name]; ok {
+				if live, ok := liveAllocs[ns+"/"+env.Name]; ok && isFiniteNonNegative(live.HourlyComputeUSD) {
 					est = applyLiveAllocation(env, est, live)
+					costSource = CostSourceOpenCost
 				} else {
 					log.FromContext(ctx).V(1).Info("No OpenCost allocation entry matched active environment; using rate-card estimate",
 						"namespace", ns, "workloadNamespace", workloadNS, "environment", env.Name)
@@ -319,6 +325,7 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 			DatabaseMode:                dbMode,
 			TtlWarning:                  ttlWarn,
 			TtlWarningReason:            ttlReason,
+			CostSource:                  costSource,
 		})
 	}
 
@@ -405,6 +412,7 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 			DatabaseSchemaHourUsd:    rateCard.DatabaseSchemaHrUSD,
 			DatabaseDedicatedHourUsd: rateCard.DatabaseDedicatedHrUSD,
 		},
+		OpencostEnabled: openCostQueried,
 	}, nil
 }
 
@@ -747,11 +755,15 @@ func EvaluateEnvironmentTTLWarning(env *v1alpha1.Environment, hibernated, termin
 
 // PopulateNamespaceBudgetWarning evaluates namespace spend, active preview, and CNPG cluster quotas.
 func PopulateNamespaceBudgetWarning(entry *pb.NamespaceCostBreakdown, cnpgCount int32, warningThresholdPercent float64) {
-	if entry == nil || entry.Quota == nil {
+	if entry == nil {
 		return
 	}
 	if warningThresholdPercent <= 0 || warningThresholdPercent > 100 {
 		warningThresholdPercent = BudgetWarningThresholdPercent
+	}
+	entry.AlertThresholdPercent = warningThresholdPercent
+	if entry.Quota == nil {
+		return
 	}
 
 	var reasons []string

@@ -9,9 +9,12 @@ import {
   formatHourlyCostUSD,
   formatCurrencyUSD,
   buildMagicPreviewUrl,
+  buildCostSummaryCsv,
+  buildCostSummaryJson,
   parseCpuCores,
   parseMemoryGiB,
 } from './finops'
+import { EnvironmentCostItem, GetCostSummaryResponse } from '@/api/gen/diverge/v1alpha1/cluster_pb'
 
 describe('finops utilities', () => {
   describe('isEnvironmentHibernated', () => {
@@ -260,6 +263,64 @@ describe('finops utilities', () => {
           status: { url: 'javascript:alert(1)' },
         }),
       ).toBeUndefined()
+    })
+  })
+
+  describe('buildCostSummaryCsv and buildCostSummaryJson', () => {
+    it('exports RFC 4180 CSV with formula-injection protection and structured JSON', () => {
+      const item = new EnvironmentCostItem({
+        namespace: 'payments',
+        name: 'pr-101',
+        project: 'divergedev/bank',
+        mr: '101',
+        branch: '=cmd|calc',
+        phase: 'Running',
+        hibernated: false,
+        hourlyCostUsd: 0.065,
+        hibernationSavingsHourlyUsd: 0,
+        accruedCostUsd: 0.044,
+        projectedTtlCostUsd: 1.474,
+        uptimeHours: 2.0,
+        cpuCores: 0.75,
+        memoryGib: 1.0,
+        serviceCount: 1,
+        databaseMode: 'schema',
+        costSource: 'opencost',
+        ttlWarning: true,
+        ttlWarningReason: 'Long TTL, "check" quota',
+      })
+
+      const csv = buildCostSummaryCsv([item])
+      const lines = csv.trim().split('\n')
+      expect(lines).toHaveLength(2)
+      expect(lines[0]).toContain('cost_source')
+      expect(lines[1]).toContain("'=cmd|calc")
+      expect(lines[1]).toContain('opencost')
+      expect(lines[1]).toContain('"Long TTL, ""check"" quota"')
+
+      const summary = new GetCostSummaryResponse({
+        totalHourlyCostUsd: 0.065,
+        monthlyRunRateUsd: 47.45,
+        opencostEnabled: true,
+        topConsumers: [item],
+      })
+      const parsed = JSON.parse(buildCostSummaryJson(summary)) as {
+        opencostEnabled: boolean
+        topConsumers: Array<{ costSource: string }>
+      }
+      expect(parsed.opencostEnabled).toBe(true)
+      expect(parsed.topConsumers[0].costSource).toBe('opencost')
+
+      const dashFormulaItem = new EnvironmentCostItem({
+        namespace: 'payments',
+        name: 'pr-102',
+        project: '-1+2',
+        hourlyCostUsd: -0.5,
+      })
+      const dashLines = buildCostSummaryCsv([dashFormulaItem]).trim().split('\n')
+      const dashCells = dashLines[1].split(',')
+      expect(dashCells[2]).toBe("'-1+2")
+      expect(dashCells[7]).toBe('-0.5000')
     })
   })
 })

@@ -8,6 +8,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -306,17 +309,131 @@ func TestDirectDeployer_Status_EmptyWhenNoResources(t *testing.T) {
 	assert.Len(t, status, 0)
 }
 
-func TestDirectDeployer_Teardown_IsNoop(t *testing.T) {
-	s := testScheme()
-	c := fake.NewClientBuilder().WithScheme(s).Build()
+func TestDirectDeployer_Teardown_DeletesManagedWorkloads(t *testing.T) {
+	for _, nsMode := range []string{"same", "create"} {
+		t.Run(nsMode, func(t *testing.T) {
+			s := testScheme()
+			env := testEnv("test-env", "test-ns", nsMode)
+			targetNS := "test-ns"
+			if nsMode == "create" {
+				targetNS = env.PreviewNamespace()
+			}
 
-	d := &DirectDeployer{
-		Client: c,
+			unmanagedDep := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "baseline-dep",
+					Namespace: targetNS,
+					Labels: map[string]string{
+						"app": "baseline",
+					},
+				},
+			}
+			otherEnvSvc := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "other-env-svc",
+					Namespace: targetNS,
+					Labels: map[string]string{
+						"divergedev.com/environment": "other-env",
+						"divergedev.com/managed-by":  "diverge",
+					},
+				},
+			}
+			otherNSJob := &batchv1.Job{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "other-ns-job",
+					Namespace: "unrelated-ns",
+					Labels: map[string]string{
+						"divergedev.com/environment": "test-env",
+						"divergedev.com/managed-by":  "diverge",
+					},
+				},
+			}
+
+			c := fake.NewClientBuilder().WithScheme(s).WithObjects(unmanagedDep, otherEnvSvc, otherNSJob).Build()
+
+			stsUnstructured := unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "apps/v1",
+					"kind":       "StatefulSet",
+					"metadata":   map[string]interface{}{"name": "sts1"},
+					"spec":       map[string]interface{}{"serviceName": "svc1", "replicas": int64(1)},
+				},
+			}
+			jobUnstructured := unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "batch/v1",
+					"kind":       "Job",
+					"metadata":   map[string]interface{}{"name": "job1"},
+				},
+			}
+			svcUnstructured := unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Service",
+					"metadata":   map[string]interface{}{"name": "svc1"},
+					"spec":       map[string]interface{}{"ports": []interface{}{map[string]interface{}{"port": int64(8080)}}},
+				},
+			}
+
+			d := &DirectDeployer{
+				Client: c,
+				Fetcher: &mockFetcher{
+					objects: []unstructured.Unstructured{
+						testDeploymentUnstructured("dep1", ""),
+						stsUnstructured,
+						jobUnstructured,
+						svcUnstructured,
+					},
+				},
+			}
+
+			require.NoError(t, d.Deploy(context.Background(), env))
+
+			statusBefore, err := d.Status(context.Background(), env)
+			require.NoError(t, err)
+			require.Len(t, statusBefore, 2)
+
+			// Simulate a terminating preview Pod keeping the teardown Status gate closed
+			now := metav1.Now()
+			env.DeletionTimestamp = &now
+			terminatingPod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "dep1-pod-abc",
+					Namespace: targetNS,
+					Labels: map[string]string{
+						"divergedev.com/environment": "test-env",
+					},
+				},
+				Status: corev1.PodStatus{Phase: corev1.PodRunning},
+			}
+			require.NoError(t, c.Create(context.Background(), terminatingPod))
+
+			require.NoError(t, d.Teardown(context.Background(), env))
+
+			// Managed Deployment, StatefulSet, Job, and Service are deleted
+			assert.True(t, apierrors.IsNotFound(c.Get(context.Background(), client.ObjectKey{Name: "dep1", Namespace: targetNS}, &appsv1.Deployment{})))
+			assert.True(t, apierrors.IsNotFound(c.Get(context.Background(), client.ObjectKey{Name: "sts1", Namespace: targetNS}, &appsv1.StatefulSet{})))
+			assert.True(t, apierrors.IsNotFound(c.Get(context.Background(), client.ObjectKey{Name: "job1", Namespace: targetNS}, &batchv1.Job{})))
+			assert.True(t, apierrors.IsNotFound(c.Get(context.Background(), client.ObjectKey{Name: "svc1", Namespace: targetNS}, &corev1.Service{})))
+
+			// Unmanaged, other-environment, and other-namespace resources remain untouched
+			require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "baseline-dep", Namespace: targetNS}, &appsv1.Deployment{}))
+			require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "other-env-svc", Namespace: targetNS}, &corev1.Service{}))
+			require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "other-ns-job", Namespace: "unrelated-ns"}, &batchv1.Job{}))
+
+			// Status remains non-empty while terminatingPod is still running
+			statusDraining, err := d.Status(context.Background(), env)
+			require.NoError(t, err)
+			require.Len(t, statusDraining, 1)
+			assert.Equal(t, "Terminating", statusDraining[0].SyncStatus)
+
+			// Once the pod terminates, Status becomes empty
+			require.NoError(t, c.Delete(context.Background(), terminatingPod))
+			statusAfter, err := d.Status(context.Background(), env)
+			require.NoError(t, err)
+			assert.Empty(t, statusAfter)
+		})
 	}
-
-	env := testEnv("test-env", "test-ns", "same")
-	err := d.Teardown(context.Background(), env)
-	require.NoError(t, err)
 }
 
 // CR2: Cross-namespace manifests should be rejected

@@ -2,6 +2,7 @@ package routing
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"path"
@@ -84,8 +85,9 @@ func (r *GatewayRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment
 	}
 
 	ns := r.namespace(env)
+	services := effectiveChangedServices(env)
 
-	for _, svc := range env.Spec.Deploy.ChangedServices {
+	for _, svc := range services {
 		routeName := fmt.Sprintf("%s-%s", env.Name, svc)
 
 		if protocol == "grpc" {
@@ -116,7 +118,7 @@ func (r *GatewayRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment
 
 	logger.Info("Reconciled routes",
 		"environment", env.Name,
-		"services", len(env.Spec.Deploy.ChangedServices),
+		"services", len(services),
 		"protocol", protocol,
 	)
 	return nil
@@ -200,7 +202,20 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 		}
 	}
 
-	resolvedParentName, isServiceParent, err := r.resolveParentRef(ctx, env, ns, parentRefName)
+	existing := &unstructured.Unstructured{}
+	existing.SetAPIVersion(apiVersion)
+	existing.SetKind(kind)
+	existingErr := r.Client.Get(ctx, client.ObjectKey{Name: routeName, Namespace: ns}, existing)
+	if existingErr != nil && client.IgnoreNotFound(existingErr) != nil {
+		return fmt.Errorf("failed to get %s for %s: %w", kind, svc, existingErr)
+	}
+	existingFound := existingErr == nil
+	var existingForResolve *unstructured.Unstructured
+	if existingFound {
+		existingForResolve = existing
+	}
+
+	resolvedParentName, isServiceParent, err := r.resolveParentRef(ctx, env, ns, parentRefName, existingForResolve)
 	if err != nil {
 		return err
 	}
@@ -222,14 +237,31 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 		}
 	}
 
+	selectedGatewayNS := ns
 	parentRef := map[string]interface{}{
 		"name": resolvedParentName,
 	}
 	if isServiceParent {
 		parentRef["kind"] = "Service"
 		parentRef["group"] = ""
-	} else if gwNS := strings.TrimSpace(env.Annotations["divergedev.com/gateway-namespace"]); gwNS != "" && gwNS != ns {
-		parentRef["namespace"] = gwNS
+		svcPort, portErr := r.resolveServiceParentPort(ctx, ns, resolvedParentName, backendPort)
+		if portErr != nil {
+			return portErr
+		}
+		if svcPort > 0 {
+			parentRef["port"] = svcPort
+		}
+	} else {
+		gwNS, gwErr := r.resolveGatewayNamespace(ctx, env, ns, resolvedParentName, extractParentRefNamespace(existing))
+		if gwErr != nil {
+			return gwErr
+		}
+		if gwNS != "" {
+			selectedGatewayNS = gwNS
+		}
+		if selectedGatewayNS != ns {
+			parentRef["namespace"] = selectedGatewayNS
+		}
 	}
 
 	backendNS := r.backendNamespace(env, ns)
@@ -358,15 +390,7 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 		}
 	}
 
-	existing := &unstructured.Unstructured{}
-	existing.SetAPIVersion(apiVersion)
-	existing.SetKind(kind)
-
-	err = r.Client.Get(ctx, client.ObjectKey{Name: routeName, Namespace: ns}, existing)
-	if err != nil {
-		if client.IgnoreNotFound(err) != nil {
-			return fmt.Errorf("failed to get %s for %s: %w", kind, svc, err)
-		}
+	if !existingFound {
 		u.Object["spec"] = spec
 		if err := r.Client.Create(ctx, u); err != nil {
 			return fmt.Errorf("failed to create %s for %s: %w", kind, svc, err)
@@ -397,7 +421,7 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 	}
 
 	if !isServiceParent {
-		if err := r.reconcileGatewayTLS(ctx, env, ns, resolvedParentName, hostnames); err != nil {
+		if err := r.reconcileGatewayTLS(ctx, env, ns, selectedGatewayNS, resolvedParentName, hostnames); err != nil {
 			return err
 		}
 	}
@@ -433,8 +457,9 @@ func (r *GatewayRouter) reconcileReferenceGrant(ctx context.Context, env *v1alph
 	apiVersion := "gateway.networking.k8s.io/v1beta1"
 	kind := "ReferenceGrant"
 
-	toEntries := make([]interface{}, 0, len(env.Spec.Deploy.ChangedServices))
-	for _, svc := range env.Spec.Deploy.ChangedServices {
+	services := effectiveChangedServices(env)
+	toEntries := make([]interface{}, 0, len(services))
+	for _, svc := range services {
 		toEntries = append(toEntries, map[string]interface{}{
 			"group": "",
 			"kind":  "Service",
@@ -510,7 +535,7 @@ func (r *GatewayRouter) reconcileGRPCRoute(ctx context.Context, env *v1alpha1.En
 
 // resolveParentRef disambiguates whether rawParentRef targets a Kubernetes Service
 // (GAMMA east-west mesh) or a Gateway API Gateway (north-south ingress).
-func (r *GatewayRouter) resolveParentRef(ctx context.Context, env *v1alpha1.Environment, ns, rawParentRef string) (string, bool, error) {
+func (r *GatewayRouter) resolveParentRef(ctx context.Context, env *v1alpha1.Environment, ns, rawParentRef string, existingRoute *unstructured.Unstructured) (string, bool, error) {
 	rawParentRef = strings.TrimSpace(rawParentRef)
 	lowerRef := strings.ToLower(rawParentRef)
 	if strings.HasPrefix(lowerRef, "service/") {
@@ -531,10 +556,11 @@ func (r *GatewayRouter) resolveParentRef(ctx context.Context, env *v1alpha1.Envi
 	}
 
 	if r.Client != nil && rawParentRef != "" && isServiceName(rawParentRef) {
-		gwNS := ""
+		explicitGWNS := ""
 		if env != nil {
-			gwNS = strings.TrimSpace(env.Annotations["divergedev.com/gateway-namespace"])
+			explicitGWNS = strings.TrimSpace(env.Annotations["divergedev.com/gateway-namespace"])
 		}
+		gwNS := explicitGWNS
 		if gwNS == "" {
 			gwNS = ns
 		}
@@ -543,12 +569,115 @@ func (r *GatewayRouter) resolveParentRef(ctx context.Context, env *v1alpha1.Envi
 		gw.SetKind("Gateway")
 		if err := r.Client.Get(ctx, client.ObjectKey{Name: rawParentRef, Namespace: gwNS}, gw); err == nil {
 			return rawParentRef, false, nil
-		} else if !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) && !apierrors.IsForbidden(err) {
+		} else if apierrors.IsForbidden(err) {
+			if existingIsSvc, ok := extractParentRefIsService(existingRoute); ok {
+				return rawParentRef, existingIsSvc, nil
+			}
 			return "", false, fmt.Errorf("failed to look up Gateway %s/%s: %w", gwNS, rawParentRef, err)
+		} else if meta.IsNoMatchError(err) {
+			if existingIsSvc, ok := extractParentRefIsService(existingRoute); ok {
+				return rawParentRef, existingIsSvc, nil
+			}
+		} else if !apierrors.IsNotFound(err) {
+			return "", false, fmt.Errorf("failed to look up Gateway %s/%s: %w", gwNS, rawParentRef, err)
+		} else if explicitGWNS == "" && ns != "default" {
+			// Preserve existing GAMMA Service routes when a local Service matches the unqualified name;
+			// otherwise fall back to checking whether a shared Gateway exists in the default namespace.
+			localSvc := &unstructured.Unstructured{}
+			localSvc.SetAPIVersion("v1")
+			localSvc.SetKind("Service")
+			if svcErr := r.Client.Get(ctx, client.ObjectKey{Name: rawParentRef, Namespace: ns}, localSvc); svcErr == nil {
+				return rawParentRef, true, nil
+			} else if !apierrors.IsNotFound(svcErr) && !meta.IsNoMatchError(svcErr) && !apierrors.IsForbidden(svcErr) {
+				return "", false, fmt.Errorf("failed to look up Service %s/%s: %w", ns, rawParentRef, svcErr)
+			}
+
+			defaultGW := &unstructured.Unstructured{}
+			defaultGW.SetAPIVersion("gateway.networking.k8s.io/v1")
+			defaultGW.SetKind("Gateway")
+			if defErr := r.Client.Get(ctx, client.ObjectKey{Name: rawParentRef, Namespace: "default"}, defaultGW); defErr == nil {
+				return rawParentRef, false, nil
+			} else if apierrors.IsForbidden(defErr) {
+				if existingIsSvc, ok := extractParentRefIsService(existingRoute); ok {
+					return rawParentRef, existingIsSvc, nil
+				}
+				return "", false, fmt.Errorf("failed to look up Gateway default/%s: %w", rawParentRef, defErr)
+			} else if !apierrors.IsNotFound(defErr) && !meta.IsNoMatchError(defErr) {
+				return "", false, fmt.Errorf("failed to look up Gateway default/%s: %w", rawParentRef, defErr)
+			}
 		}
 	}
 
 	return rawParentRef, isServiceName(rawParentRef), nil
+}
+
+// resolveServiceParentPort inspects the baseline Kubernetes Service targeted by a
+// GAMMA mesh route so parentRef.port reflects the Service's exposed port even when
+// it differs from the preview container/backend port (falling back to fallbackPort
+// when the Service does not exist yet or cannot be read).
+func (r *GatewayRouter) resolveServiceParentPort(ctx context.Context, ns, serviceName string, fallbackPort int64) (int64, error) {
+	if r.Client == nil || serviceName == "" {
+		return fallbackPort, nil
+	}
+	svc := &unstructured.Unstructured{}
+	svc.SetAPIVersion("v1")
+	svc.SetKind("Service")
+	if err := r.Client.Get(ctx, client.ObjectKey{Name: serviceName, Namespace: ns}, svc); err != nil {
+		if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) || apierrors.IsForbidden(err) {
+			return fallbackPort, nil
+		}
+		return 0, fmt.Errorf("failed to look up Service %s/%s: %w", ns, serviceName, err)
+	}
+	ports, found, err := unstructured.NestedSlice(svc.Object, "spec", "ports")
+	if err != nil || !found || len(ports) == 0 {
+		return fallbackPort, nil
+	}
+
+	var firstPort int64
+	var targetPortMatch int64
+	for _, rawPort := range ports {
+		pm, ok := rawPort.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		p, ok := unstructuredInt64(pm["port"])
+		if !ok || p <= 0 {
+			continue
+		}
+		if firstPort == 0 {
+			firstPort = p
+		}
+		if fallbackPort > 0 && p == fallbackPort {
+			return p, nil
+		}
+		if fallbackPort > 0 && targetPortMatch == 0 {
+			if tp, tpOK := unstructuredInt64(pm["targetPort"]); tpOK && tp == fallbackPort {
+				targetPortMatch = p
+			}
+		}
+	}
+	if targetPortMatch > 0 {
+		return targetPortMatch, nil
+	}
+	if firstPort > 0 {
+		return firstPort, nil
+	}
+	return fallbackPort, nil
+}
+
+func unstructuredInt64(v interface{}) (int64, bool) {
+	switch n := v.(type) {
+	case int64:
+		return n, true
+	case int32:
+		return int64(n), true
+	case int:
+		return int64(n), true
+	case float64:
+		return int64(n), true
+	default:
+		return 0, false
+	}
 }
 
 func resolveCustomExternalDNSHostname(env *v1alpha1.Environment) string {
@@ -603,7 +732,7 @@ func buildRouteAnnotations(env *v1alpha1.Environment, hostnames []interface{}) m
 // reconcileGatewayTLS propagates cert-manager issuer annotations onto the target
 // Gateway only when the Gateway is explicitly dedicated to this environment, and
 // reconciles a cert-manager.io/v1 Certificate resource for the preview route hostnames.
-func (r *GatewayRouter) reconcileGatewayTLS(ctx context.Context, env *v1alpha1.Environment, ns, gatewayName string, hostnames []interface{}) error {
+func (r *GatewayRouter) reconcileGatewayTLS(ctx context.Context, env *v1alpha1.Environment, ns, selectedGatewayNS, gatewayName string, hostnames []interface{}) error {
 	if r.Client == nil || env == nil {
 		return nil
 	}
@@ -620,12 +749,15 @@ func (r *GatewayRouter) reconcileGatewayTLS(ctx context.Context, env *v1alpha1.E
 		}
 	}
 
-	gwNS := strings.TrimSpace(env.Annotations["divergedev.com/gateway-namespace"])
+	gwNS := strings.TrimSpace(selectedGatewayNS)
+	if gwNS == "" {
+		gwNS = strings.TrimSpace(env.Annotations["divergedev.com/gateway-namespace"])
+	}
 	if gwNS == "" {
 		gwNS = ns
 	}
 
-	if gatewayName != "" && gwNS == ns && (clusterIssuer != "" || issuer != "") {
+	if gatewayName != "" && (clusterIssuer != "" || issuer != "") {
 		gw := &unstructured.Unstructured{}
 		gw.SetAPIVersion("gateway.networking.k8s.io/v1")
 		gw.SetKind("Gateway")
@@ -652,7 +784,7 @@ func (r *GatewayRouter) reconcileGatewayTLS(ctx context.Context, env *v1alpha1.E
 		}
 	}
 
-	certName := fmt.Sprintf("%s-tls", env.Name)
+	certName := buildCertificateName(ns, env.Name, gwNS)
 	if (clusterIssuer == "" && issuer == "") || len(hostnames) == 0 {
 		staleCert := &unstructured.Unstructured{}
 		staleCert.SetAPIVersion("cert-manager.io/v1")
@@ -682,6 +814,12 @@ func (r *GatewayRouter) reconcileGatewayTLS(ctx context.Context, env *v1alpha1.E
 		},
 	}
 
+	certLabels := map[string]string{
+		"divergedev.com/environment":           env.Name,
+		"divergedev.com/environment-namespace": ns,
+		"divergedev.com/managed-by":            "diverge",
+	}
+
 	existingCert := &unstructured.Unstructured{}
 	existingCert.SetAPIVersion("cert-manager.io/v1")
 	existingCert.SetKind("Certificate")
@@ -698,10 +836,7 @@ func (r *GatewayRouter) reconcileGatewayTLS(ctx context.Context, env *v1alpha1.E
 		cert.SetKind("Certificate")
 		cert.SetName(certName)
 		cert.SetNamespace(gwNS)
-		cert.SetLabels(map[string]string{
-			"divergedev.com/environment": env.Name,
-			"divergedev.com/managed-by":  "diverge",
-		})
+		cert.SetLabels(certLabels)
 		cert.Object["spec"] = certSpec
 		if err := r.Client.Create(ctx, cert); err != nil {
 			if meta.IsNoMatchError(err) || apierrors.IsForbidden(err) {
@@ -712,15 +847,29 @@ func (r *GatewayRouter) reconcileGatewayTLS(ctx context.Context, env *v1alpha1.E
 		return nil
 	}
 
-	existingCert.SetLabels(map[string]string{
-		"divergedev.com/environment": env.Name,
-		"divergedev.com/managed-by":  "diverge",
-	})
+	existingCert.SetLabels(certLabels)
 	existingCert.Object["spec"] = certSpec
 	if err := r.Client.Update(ctx, existingCert); err != nil {
 		return fmt.Errorf("failed to update Certificate %s/%s: %w", gwNS, certName, err)
 	}
 	return nil
+}
+
+func buildCertificateName(routeNS, envName, certNS string) string {
+	base := fmt.Sprintf("%s-tls", envName)
+	if certNS != "" && certNS != routeNS {
+		base = fmt.Sprintf("%s-%s-tls", routeNS, envName)
+	}
+	if len(base) <= 63 {
+		return base
+	}
+	sum := fmt.Sprintf("%x", sha256.Sum256([]byte(routeNS+"/"+envName)))[:8]
+	suffix := "-" + sum + "-tls"
+	prefix := strings.TrimRight(base[:63-len(suffix)], "-")
+	if prefix == "" {
+		prefix = "env"
+	}
+	return prefix + suffix
 }
 
 // isEnvironmentOwnedGateway returns true only when a Gateway has an explicit,
@@ -759,6 +908,20 @@ func (r *GatewayRouter) Teardown(ctx context.Context, env *v1alpha1.Environment)
 
 	deleted := 0
 
+	certNamespaceSet := map[string]bool{ns: true}
+	var certNamespaces []string
+	addCertNS := func(candidate string) {
+		candidate = strings.TrimSpace(candidate)
+		if candidate != "" && !certNamespaceSet[candidate] {
+			certNamespaceSet[candidate] = true
+			certNamespaces = append(certNamespaces, candidate)
+		}
+	}
+	certNamespaces = append(certNamespaces, ns)
+	if gwNS := strings.TrimSpace(env.Annotations["divergedev.com/gateway-namespace"]); gwNS != "" {
+		addCertNS(gwNS)
+	}
+
 	// Delete HTTPRoutes
 	var httpRouteList unstructured.UnstructuredList
 	httpRouteList.SetAPIVersion("gateway.networking.k8s.io/v1")
@@ -772,6 +935,7 @@ func (r *GatewayRouter) Teardown(ctx context.Context, env *v1alpha1.Environment)
 	}
 
 	for i := range httpRouteList.Items {
+		addCertNS(extractParentRefNamespace(&httpRouteList.Items[i]))
 		if err := r.Client.Delete(ctx, &httpRouteList.Items[i]); err != nil {
 			if client.IgnoreNotFound(err) != nil {
 				return fmt.Errorf("failed to delete HTTPRoute %s: %w", httpRouteList.Items[i].GetName(), err)
@@ -794,6 +958,7 @@ func (r *GatewayRouter) Teardown(ctx context.Context, env *v1alpha1.Environment)
 		}
 	} else {
 		for i := range grpcRouteList.Items {
+			addCertNS(extractParentRefNamespace(&grpcRouteList.Items[i]))
 			if err := r.Client.Delete(ctx, &grpcRouteList.Items[i]); err != nil {
 				if client.IgnoreNotFound(err) != nil {
 					return fmt.Errorf("failed to delete GRPCRoute %s: %w", grpcRouteList.Items[i].GetName(), err)
@@ -835,19 +1000,41 @@ func (r *GatewayRouter) Teardown(ctx context.Context, env *v1alpha1.Environment)
 		}
 	}
 
-	// Delete cert-manager Certificates in route namespace and gateway namespace (if distinct)
-	certNamespaces := []string{ns}
-	if gwNS := strings.TrimSpace(env.Annotations["divergedev.com/gateway-namespace"]); gwNS != "" && gwNS != ns {
-		certNamespaces = append(certNamespaces, gwNS)
+	// Delete cert-manager Certificates in route namespace and resolved gateway namespace (if distinct)
+	parentRefName := "diverge-gateway"
+	if env.Spec.ServiceConfig != nil && strings.TrimSpace(env.Spec.ServiceConfig.ParentRef) != "" {
+		parentRefName = strings.TrimSpace(env.Spec.ServiceConfig.ParentRef)
+	}
+	if resolvedParentName, isSvcParent, resolveErr := r.resolveParentRef(ctx, env, ns, parentRefName, nil); resolveErr != nil {
+		if len(certNamespaces) == 1 {
+			return resolveErr
+		}
+	} else if !isSvcParent {
+		if resolvedGWNS, gwErr := r.resolveGatewayNamespace(ctx, env, ns, resolvedParentName, ""); gwErr != nil {
+			if len(certNamespaces) == 1 {
+				return gwErr
+			}
+		} else {
+			addCertNS(resolvedGWNS)
+		}
 	}
 	for _, certNS := range certNamespaces {
 		var certList unstructured.UnstructuredList
 		certList.SetAPIVersion("cert-manager.io/v1")
 		certList.SetKind("CertificateList")
 
+		certSelector := selector
+		if certNS != ns {
+			certSelector = labels.SelectorFromSet(map[string]string{
+				"divergedev.com/environment":           env.Name,
+				"divergedev.com/environment-namespace": ns,
+				"divergedev.com/managed-by":            "diverge",
+			})
+		}
+
 		if err := r.Client.List(ctx, &certList,
 			client.InNamespace(certNS),
-			client.MatchingLabelsSelector{Selector: selector},
+			client.MatchingLabelsSelector{Selector: certSelector},
 		); err != nil {
 			if meta.IsNoMatchError(err) || apierrors.IsForbidden(err) {
 				break
@@ -856,6 +1043,9 @@ func (r *GatewayRouter) Teardown(ctx context.Context, env *v1alpha1.Environment)
 		}
 
 		for i := range certList.Items {
+			if envNS := strings.TrimSpace(certList.Items[i].GetLabels()["divergedev.com/environment-namespace"]); envNS != "" && envNS != ns {
+				continue
+			}
 			if err := r.Client.Delete(ctx, &certList.Items[i]); err != nil {
 				if client.IgnoreNotFound(err) != nil {
 					return fmt.Errorf("failed to delete Certificate %s: %w", certList.Items[i].GetName(), err)
@@ -882,6 +1072,99 @@ func (r *GatewayRouter) GetExternalURL(env *v1alpha1.Environment) string {
 		return fmt.Sprintf("https://%s.%s", env.Name, env.Spec.Routing.BaseDomain)
 	}
 	return ""
+}
+
+func effectiveChangedServices(env *v1alpha1.Environment) []string {
+	if env == nil {
+		return nil
+	}
+	if len(env.Spec.Deploy.ChangedServices) > 0 {
+		return env.Spec.Deploy.ChangedServices
+	}
+	if env.Spec.ServiceConfig != nil {
+		if svc := strings.TrimSpace(env.Spec.ServiceConfig.ServiceName); svc != "" {
+			return []string{svc}
+		}
+	}
+	return nil
+}
+
+func extractParentRefNamespace(route *unstructured.Unstructured) string {
+	if route == nil || route.Object == nil {
+		return ""
+	}
+	parents, found, err := unstructured.NestedSlice(route.Object, "spec", "parentRefs")
+	if err != nil || !found || len(parents) == 0 {
+		return ""
+	}
+	if pm, ok := parents[0].(map[string]interface{}); ok {
+		if ns, ok := pm["namespace"].(string); ok {
+			return strings.TrimSpace(ns)
+		}
+	}
+	return ""
+}
+
+func extractParentRefIsService(route *unstructured.Unstructured) (bool, bool) {
+	if route == nil || route.Object == nil {
+		return false, false
+	}
+	parents, found, err := unstructured.NestedSlice(route.Object, "spec", "parentRefs")
+	if err != nil || !found || len(parents) == 0 {
+		return false, false
+	}
+	pm, ok := parents[0].(map[string]interface{})
+	if !ok {
+		return false, false
+	}
+	if kind, ok := pm["kind"].(string); ok && strings.EqualFold(strings.TrimSpace(kind), "Service") {
+		return true, true
+	}
+	return false, true
+}
+
+func (r *GatewayRouter) resolveGatewayNamespace(ctx context.Context, env *v1alpha1.Environment, routeNS, gatewayName, existingParentNS string) (string, error) {
+	if env != nil {
+		if gwNS := strings.TrimSpace(env.Annotations["divergedev.com/gateway-namespace"]); gwNS != "" {
+			return gwNS, nil
+		}
+	}
+	if r.Client != nil && routeNS != "default" && gatewayName != "" {
+		localGW := &unstructured.Unstructured{}
+		localGW.SetAPIVersion("gateway.networking.k8s.io/v1")
+		localGW.SetKind("Gateway")
+		err := r.Client.Get(ctx, client.ObjectKey{Name: gatewayName, Namespace: routeNS}, localGW)
+		if err == nil {
+			return routeNS, nil
+		}
+		if meta.IsNoMatchError(err) || apierrors.IsForbidden(err) {
+			if existingParentNS != "" {
+				return existingParentNS, nil
+			}
+			return routeNS, nil
+		}
+		if !apierrors.IsNotFound(err) {
+			return "", fmt.Errorf("failed to look up Gateway %s/%s: %w", routeNS, gatewayName, err)
+		}
+
+		defaultGW := &unstructured.Unstructured{}
+		defaultGW.SetAPIVersion("gateway.networking.k8s.io/v1")
+		defaultGW.SetKind("Gateway")
+		defErr := r.Client.Get(ctx, client.ObjectKey{Name: gatewayName, Namespace: "default"}, defaultGW)
+		if defErr == nil {
+			return "default", nil
+		}
+		if meta.IsNoMatchError(defErr) || apierrors.IsForbidden(defErr) {
+			if existingParentNS != "" {
+				return existingParentNS, nil
+			}
+			return routeNS, nil
+		}
+		if !apierrors.IsNotFound(defErr) {
+			return "", fmt.Errorf("failed to look up Gateway default/%s: %w", gatewayName, defErr)
+		}
+	}
+	return routeNS, nil
 }
 
 // namespace returns the target namespace for routing resources.
