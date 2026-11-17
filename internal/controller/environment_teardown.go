@@ -12,6 +12,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -80,17 +81,42 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		}
 		cancelR()
 
-		if dbProv, _, dbResolveErr := r.resolveDatabaseProvider(env, true); dbResolveErr != nil {
-			errs = append(errs, fmt.Errorf("failed to resolve database provider for teardown: %w", dbResolveErr))
-		} else if dbProv != nil {
-			if dbProv != r.DatabaseProvider {
-				defer closeDatabaseProvider(dbProv)
+		// Resolve target cluster once for database/secret/banner/feature/namespace teardown.
+		// Only skip ValidationError when Status.TargetCluster was never committed to a remote spoke;
+		// if a spoke target was already provisioned, retain the finalizer and retry until repaired or force-torn-down.
+		resolvedTarget, targetErr := r.resolveTarget(ctx, env)
+		var targetClient client.Client
+		isRemote := false
+		skipRemoteTargetCleanup := false
+		if targetErr != nil {
+			if _, isVal := multicluster.IsValidationError(targetErr); isVal && !multicluster.HasConfirmedRemoteTarget(env) {
+				skipRemoteTargetCleanup = true
+			} else {
+				errs = append(errs, fmt.Errorf("failed to resolve target cluster for teardown: %w", targetErr))
+				skipRemoteTargetCleanup = true
 			}
-			tCtxDB, cancelDB := context.WithTimeout(ctx, 15*time.Second)
-			if err := dbProv.Teardown(tCtxDB, env); err != nil {
-				errs = append(errs, fmt.Errorf("failed to teardown database: %w", err))
+		} else if resolvedTarget != nil {
+			targetClient = resolvedTarget.Client
+			isRemote = resolvedTarget.IsRemote
+			ctx = multicluster.WithTarget(ctx, resolvedTarget)
+		}
+
+		if !skipRemoteTargetCleanup {
+			tCtxDBResolve, cancelDBResolve := context.WithTimeout(ctx, 15*time.Second)
+			dbProv, _, dbResolveErr := r.resolveDatabaseProviderWithContext(tCtxDBResolve, env, true)
+			cancelDBResolve()
+			if dbResolveErr != nil {
+				errs = append(errs, fmt.Errorf("failed to resolve database provider for teardown: %w", dbResolveErr))
+			} else if dbProv != nil {
+				if dbProv != r.DatabaseProvider {
+					defer closeDatabaseProvider(dbProv)
+				}
+				tCtxDB, cancelDB := context.WithTimeout(ctx, 15*time.Second)
+				if err := dbProv.Teardown(tCtxDB, env); err != nil {
+					errs = append(errs, fmt.Errorf("failed to teardown database: %w", err))
+				}
+				cancelDB()
 			}
-			cancelDB()
 		}
 
 		// Wait for preview workloads to be fully terminated before deleting
@@ -105,20 +131,6 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 			} else if len(status) > 0 {
 				log.FromContext(ctx).Info("Waiting for deployer resources to be fully deleted", "remaining", len(status))
 				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-			}
-		}
-
-		// Resolve target cluster for spoke secret/banner/namespace cleanup.
-		// Only skip ValidationError when Status.TargetCluster was never committed to a remote spoke;
-		// if a spoke target was already provisioned, retain the finalizer and retry until repaired or force-torn-down.
-		targetClient, _, isRemote, targetErr := r.resolveTargetCluster(ctx, env)
-		skipRemoteTargetCleanup := false
-		if targetErr != nil {
-			if _, isVal := multicluster.IsValidationError(targetErr); isVal && !multicluster.HasConfirmedRemoteTarget(env) {
-				skipRemoteTargetCleanup = true
-			} else {
-				errs = append(errs, fmt.Errorf("failed to resolve target cluster for teardown: %w", targetErr))
-				skipRemoteTargetCleanup = true
 			}
 		}
 

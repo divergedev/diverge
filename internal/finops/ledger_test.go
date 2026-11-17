@@ -434,6 +434,128 @@ func TestPreviewGroupSavingsAllocation_StaggeredOverlapAndTerminalSibling(t *tes
 	assert.InDelta(t, 4.0*r, termRecs[0].DeltaRoutingSavingsUSD+termRecs[1].DeltaRoutingSavingsUSD, 1e-6)
 }
 
+func TestPreviewGroupTrend_MultiDayMembershipUIDDedupAndZeroRateCard(t *testing.T) {
+	ctx := context.Background()
+	scheme := ledgerTestScheme(t)
+	// Day 1: 2026-11-16, Day 2: 2026-11-17 (now = 12:00 UTC)
+	now := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	day1Noon := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
+	day2Midnight := time.Date(2026, 11, 17, 0, 0, 0, 0, time.UTC)
+	rateCard := metrics.DefaultCostRateCard()
+
+	pg := &v1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "pg-multiday", Namespace: "shop-md"},
+		Spec: v1alpha1.PreviewGroupSpec{
+			Services: []v1alpha1.PreviewGroupServiceSpec{
+				{Name: "api", Image: "api:pr"},
+				{Name: "web", Image: "web:pr"},
+				{Name: "orders", Mode: v1alpha1.ServiceModeBaseline},
+				{Name: "payments", Mode: v1alpha1.ServiceModeBaseline},
+			},
+		},
+	}
+
+	// childA runs from Day 1 12:00 -> Day 2 12:00 (12h solo on Day 1 = 12*3*r = 36r; 12h with B on Day 2 = 12*1*r = 12r).
+	// childB runs from Day 2 00:00 -> Day 2 12:00 (0h on Day 1; 12h with A on Day 2 = 12*1*r = 12r).
+	// Expected Day 1 DeltaRoutingSavingsUsd = 36r; Expected Day 2 DeltaRoutingSavingsUsd = 24r (NOT 24r + 12r = 36r from uniform spread!).
+	childA := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			UID:               types.UID("uid-md-a"),
+			Name:              "pg-md-api",
+			Namespace:         "shop-md",
+			CreationTimestamp: metav1.NewTime(day1Noon),
+			Labels:            map[string]string{"divergedev.com/previewgroup": "pg-multiday"},
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "github", Branch: "feat/md"},
+			Deploy: v1alpha1.EnvironmentDeploy{Namespace: "same", ChangedServices: []string{"api"}},
+		},
+		Status: v1alpha1.EnvironmentStatus{Phase: v1alpha1.PhaseRunning},
+	}
+	childB := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			UID:               types.UID("uid-md-b"),
+			Name:              "pg-md-web",
+			Namespace:         "shop-md",
+			CreationTimestamp: metav1.NewTime(day2Midnight),
+			Labels:            map[string]string{"divergedev.com/previewgroup": "pg-multiday"},
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "github", Branch: "feat/md"},
+			Deploy: v1alpha1.EnvironmentDeploy{Namespace: "same", ChangedServices: []string{"web"}},
+		},
+		Status: v1alpha1.EnvironmentStatus{Phase: v1alpha1.PhaseRunning},
+	}
+
+	r := metrics.ComputeEnvironmentCost(childA, now, rateCard).BaseComputeHourlyUSD
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pg, childA, childB).Build()
+
+	sumLive, err := BuildCostSummary(ctx, SummaryOptions{
+		Namespace:  "shop-md",
+		Client:     cl,
+		Now:        now,
+		RateCard:   &rateCard,
+		WindowDays: 2,
+	})
+	require.NoError(t, err)
+	require.Len(t, sumLive.DailyTrend, 2)
+	assert.Equal(t, "2026-11-16", sumLive.DailyTrend[0].Date)
+	assert.Equal(t, "2026-11-17", sumLive.DailyTrend[1].Date)
+	assert.InDelta(t, 36.0*r, sumLive.DailyTrend[0].DeltaRoutingSavingsUsd, 1e-6, "Day 1 had only childA active (3 avoided services * 12h)")
+	assert.InDelta(t, 24.0*r, sumLive.DailyTrend[1].DeltaRoutingSavingsUsd, 1e-6, "Day 2 had childA + childB active (2 avoided services * 12h)")
+
+	// Re-create childA with finalizer + Delete() to simulate mid-teardown before ledger write, then WITH ledger write to verify UID dedup!
+	childAWithFin := childA.DeepCopy()
+	childAWithFin.ResourceVersion = ""
+	childAWithFin.Finalizers = []string{"divergedev.com/environment-protection"}
+	clDedup := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pg, childAWithFin, childB.DeepCopy()).Build()
+	require.NoError(t, clDedup.Delete(ctx, childAWithFin)) // sets DeletionTimestamp while retaining object due to finalizer
+
+	sumDeletingBeforeLedger, err := BuildCostSummary(ctx, SummaryOptions{
+		Namespace:  "shop-md",
+		Client:     clDedup,
+		Now:        now,
+		RateCard:   &rateCard,
+		WindowDays: 2,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), sumDeletingBeforeLedger.TotalEnvironments, "deleting childA is excluded from live totals")
+	assert.InDelta(t, 36.0*r, sumDeletingBeforeLedger.DailyTrend[0].DeltaRoutingSavingsUsd, 1e-6)
+	assert.InDelta(t, 24.0*r, sumDeletingBeforeLedger.DailyTrend[1].DeltaRoutingSavingsUsd, 1e-6)
+
+	// Record childA to ledger while childAWithFin STILL exists in clDedup (before finalizer removal): UID dedup prevents double-counting!
+	var currentA v1alpha1.Environment
+	require.NoError(t, clDedup.Get(ctx, types.NamespacedName{Name: "pg-md-api", Namespace: "shop-md"}, &currentA))
+	require.NoError(t, RecordEnvironmentTeardown(ctx, clDedup, &currentA, now, rateCard))
+
+	sumAfterLedgerBeforeFinalizerRemoval, err := BuildCostSummary(ctx, SummaryOptions{
+		Namespace:  "shop-md",
+		Client:     clDedup,
+		Now:        now,
+		RateCard:   &rateCard,
+		WindowDays: 2,
+	})
+	require.NoError(t, err)
+	assert.InDelta(t, 36.0*r, sumAfterLedgerBeforeFinalizerRemoval.DailyTrend[0].DeltaRoutingSavingsUsd, 1e-6, "UID deduplication must prevent double-counting Day 1")
+	assert.InDelta(t, 24.0*r, sumAfterLedgerBeforeFinalizerRemoval.DailyTrend[1].DeltaRoutingSavingsUsd, 1e-6, "UID deduplication must prevent double-counting Day 2")
+
+	// Explicit all-zero configured rate card must preserve 0 savings rather than falling back to default prices.
+	zeroCard := metrics.DefaultCostRateCard()
+	zeroCard.VCPUHourUSD = 0
+	zeroCard.MemoryGiBHourUSD = 0
+	zeroCard.DatabaseSchemaHrUSD = 0
+	zeroCard.DatabaseDedicatedHrUSD = 0
+	clZero := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pg, childB.DeepCopy()).Build()
+	zeroFirst := childA.DeepCopy()
+	zeroFirst.DeletionTimestamp = nil
+	require.NoError(t, RecordEnvironmentTeardown(ctx, clZero, zeroFirst, now, zeroCard))
+	require.NoError(t, RecordEnvironmentTeardown(ctx, clZero, childB, now, zeroCard))
+	zeroRecs := ListHistoricalRecords(ctx, clZero, nil, "shop-md", now, 7, 2*time.Second)
+	require.Len(t, zeroRecs, 2)
+	assert.Equal(t, 0.0, zeroRecs[0].DeltaRoutingSavingsUSD)
+	assert.Equal(t, 0.0, zeroRecs[1].DeltaRoutingSavingsUSD)
+}
+
 func liveTrendDeltaSavingsSumOrZero(v float64) float64 { return v }
 
 func TestBuildCostSummary_LiveOpenCostDoesNotInflatePriorAccumulatedSavings(t *testing.T) {

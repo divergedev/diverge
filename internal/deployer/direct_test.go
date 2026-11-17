@@ -947,4 +947,26 @@ func TestDirectDeployer_Teardown_LeastPrivilegeOptionalKindForbiddenAndExactSecr
 	assert.True(t, apierrors.IsNotFound(spokeClient.Get(ctx, client.ObjectKey{Name: "echo-preview", Namespace: "team-orders"}, &corev1.Service{})))
 	assert.True(t, apierrors.IsNotFound(spokeClient.Get(ctx, client.ObjectKey{Name: "diverge-db-cache", Namespace: "team-orders"}, &corev1.Secret{})))
 	require.NoError(t, spokeClient.Get(ctx, client.ObjectKey{Name: generatedDBSecretName, Namespace: "team-orders"}, &corev1.Secret{}))
+
+	// 3. Unrelated pre-existing same-named Secret without matching ownership labels MUST NOT be deleted by named fallback.
+	unmanagedSec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "shared-baseline-sec",
+			Namespace: "team-orders",
+			Labels:    map[string]string{"app": "baseline"},
+		},
+	}
+	require.NoError(t, hubClient.Create(ctx, unmanagedSec))
+	dUnmanaged := NewDirectDeployer(hubClient, &mockFetcher{objects: []unstructured.Unstructured{
+		{Object: map[string]interface{}{"apiVersion": "v1", "kind": "Secret", "metadata": map[string]interface{}{"name": "shared-baseline-sec"}}},
+	}}, WithClusterClients(resolver))
+	require.NoError(t, dUnmanaged.Teardown(ctx, envHub))
+	require.NoError(t, hubClient.Get(ctx, client.ObjectKey{Name: "shared-baseline-sec", Namespace: "team-orders"}, &corev1.Secret{}),
+		"unmanaged baseline Secret must remain untouched when ownership labels do not match")
+
+	// 4. Remote same-namespace manifest fetch failure must propagate as an error so the finalizer is retained.
+	dFetchFail := NewDirectDeployer(hubClient, &mockFetcher{err: errors.New("manifest URL unreachable")}, WithClusterClients(resolver))
+	errFetch := dFetchFail.Teardown(ctx, env)
+	require.Error(t, errFetch)
+	assert.Contains(t, errFetch.Error(), "failed to fetch manifests for remote teardown")
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -404,6 +405,9 @@ func (m *Manager) parseAndValidateKubeconfig(raw []byte) (*rest.Config, error) {
 	if restCfg.Dial == nil {
 		restCfg.Dial = m.buildSafeDialContext()
 	}
+	// Disable implicit HTTP_PROXY/HTTPS_PROXY fallback so spoke connections always dial directly
+	// through buildSafeDialContext rather than validating only an ambient proxy's IP address.
+	restCfg.Proxy = func(*http.Request) (*url.URL, error) { return nil, nil }
 
 	return restCfg, nil
 }

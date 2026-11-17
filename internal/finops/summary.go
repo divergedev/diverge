@@ -177,6 +177,14 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 	cnpgCountsByNS := make(map[string]int32)
 	topConsumers := make([]*pb.EnvironmentCostItem, 0, len(envList.Items))
 
+	windowDays := NormalizeWindowDays(opts.WindowDays)
+	windowStart := startOfUTCDay(now).AddDate(0, 0, -(windowDays - 1))
+	allRetainedRecords := ListHistoricalRecords(ctx, opts.Client, opts.K8sClient, reqNS, now, LedgerRetentionDays, timeout)
+	ledgerKeys := make(map[string]struct{}, len(allRetainedRecords))
+	for _, rec := range allRetainedRecords {
+		ledgerKeys[rec.dedupKey()] = struct{}{}
+	}
+
 	var (
 		totalHourlyUSD             float64
 		totalHibernationSavingsUSD float64
@@ -197,20 +205,64 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 			ns = "default"
 		}
 		if !env.DeletionTimestamp.IsZero() {
-			// If a sibling in a PreviewGroup is mid-teardown (not yet persisted to the ledger),
-			// retain its historical membership interval so surviving siblings do not over-claim group savings.
-			if pgName := previewGroupNameFromEnv(env); pgName != "" && env.Spec.Deploy.Namespace != "create" {
-				if member, _, ok := buildEnvPGIntervalMember(ns, env, now, rateCard); ok {
-					pgKey := ns + "/" + pgName
-					tState, tExists := pgTrendByKey[pgKey]
-					if !tExists {
-						tState = &previewGroupTrendState{membersByKey: make(map[string]pgIntervalMember)}
-						pgTrendByKey[pgKey] = tState
+			// Deleting environments stay excluded from live totals, while retaining their historical trend
+			// contribution and PreviewGroup membership interval until their ledger record is written (deduped by UID).
+			envStart := env.CreationTimestamp.UTC()
+			if envStart.IsZero() && env.Status.CreatedAt != nil {
+				envStart = env.Status.CreatedAt.UTC()
+			}
+			if envStart.IsZero() || envStart.After(now) {
+				envStart = now
+			}
+			dedupK := envDedupKey(ns, env, envStart)
+			if _, inLedger := ledgerKeys[dedupK]; !inLedger {
+				delEst := metrics.ComputeEnvironmentCost(env, now, rateCard)
+				delRate := delEst.BaseComputeHourlyUSD
+				billableHours := delEst.ActiveHours + delEst.HibernatedHours
+				spanEnd := now
+				if billableHours >= 0 && (env.Status.Phase == v1alpha1.PhaseFailed || env.Status.Phase == v1alpha1.PhaseTerminating || string(env.Status.Phase) == "Expired") {
+					spanEnd = envStart.Add(time.Duration(billableHours * float64(time.Hour)))
+					if spanEnd.After(now) {
+						spanEnd = now
 					}
-					if bc := resolveBaselineServices(ns, env); bc > tState.baselineCount {
-						tState.baselineCount = bc
+				}
+				delHibSaved := 0.0
+				if delEst.HibernatedHours > 0 && delRate > 0 {
+					delHibSaved = delEst.HibernatedHours * delRate
+				}
+				pgName := previewGroupNameFromEnv(env)
+				delDeltaSaved := 0.0
+				if pgName == "" && env.Spec.Deploy.Namespace != "create" && delEst.ServiceCount > 0 && delRate > 0 && delEst.ActiveHours > 0 {
+					if bc := resolveBaselineServices(ns, env); bc > delEst.ServiceCount {
+						delDeltaSaved = delEst.ActiveHours * float64(bc-delEst.ServiceCount) * (delRate / float64(delEst.ServiceCount))
 					}
-					tState.membersByKey[member.key] = member
+				}
+				spanIdx := len(trendSpans)
+				trendSpans = append(trendSpans, trendSpan{
+					start:        envStart,
+					end:          spanEnd,
+					accruedUSD:   delEst.AccruedUSD,
+					hibSavedUSD:  delHibSaved,
+					deltaSaveUSD: delDeltaSaved,
+					terminated:   false,
+				})
+				if pgName != "" && env.Spec.Deploy.Namespace != "create" && delEst.ServiceCount > 0 {
+					if member, _, ok := buildEnvPGIntervalMember(ns, env, now, rateCard); ok {
+						pgKey := ns + "/" + pgName
+						tState, tExists := pgTrendByKey[pgKey]
+						if !tExists {
+							tState = &previewGroupTrendState{membersByKey: make(map[string]pgIntervalMember)}
+							pgTrendByKey[pgKey] = tState
+						}
+						if bc := resolveBaselineServices(ns, env); bc > tState.baselineCount {
+							tState.baselineCount = bc
+						}
+						tState.membersByKey[member.key] = member
+						tState.liveTargets = append(tState.liveTargets, previewGroupTrendLiveTarget{
+							spanIdx:   spanIdx,
+							memberKey: member.key,
+						})
+					}
 				}
 			}
 			continue
@@ -337,31 +389,42 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 				liveDeltaSavedUSD = est.ActiveHours * float64(bc-est.ServiceCount) * (rateCardActiveComputeRate / float64(est.ServiceCount))
 			}
 		}
-		spanIdx := len(trendSpans)
-		trendSpans = append(trendSpans, trendSpan{
-			start:        envStart,
-			end:          now,
-			accruedUSD:   est.AccruedUSD,
-			hibSavedUSD:  liveHibSavedUSD,
-			deltaSaveUSD: liveDeltaSavedUSD,
-			terminated:   false,
-		})
-		if pgName != "" && env.Spec.Deploy.Namespace != "create" && est.ServiceCount > 0 {
-			if member, _, ok := buildEnvPGIntervalMember(ns, env, now, rateCard); ok {
-				pgKey := ns + "/" + pgName
-				tState, tExists := pgTrendByKey[pgKey]
-				if !tExists {
-					tState = &previewGroupTrendState{membersByKey: make(map[string]pgIntervalMember)}
-					pgTrendByKey[pgKey] = tState
+		dedupK := envDedupKey(ns, env, envStart)
+		if _, inLedger := ledgerKeys[dedupK]; !inLedger {
+			spanEnd := now
+			if terminal {
+				billableHours := est.ActiveHours + est.HibernatedHours
+				spanEnd = envStart.Add(time.Duration(billableHours * float64(time.Hour)))
+				if spanEnd.After(now) {
+					spanEnd = now
 				}
-				if bc := resolveBaselineServices(ns, env); bc > tState.baselineCount {
-					tState.baselineCount = bc
+			}
+			spanIdx := len(trendSpans)
+			trendSpans = append(trendSpans, trendSpan{
+				start:        envStart,
+				end:          spanEnd,
+				accruedUSD:   est.AccruedUSD,
+				hibSavedUSD:  liveHibSavedUSD,
+				deltaSaveUSD: liveDeltaSavedUSD,
+				terminated:   false,
+			})
+			if pgName != "" && env.Spec.Deploy.Namespace != "create" && est.ServiceCount > 0 {
+				if member, _, ok := buildEnvPGIntervalMember(ns, env, now, rateCard); ok {
+					pgKey := ns + "/" + pgName
+					tState, tExists := pgTrendByKey[pgKey]
+					if !tExists {
+						tState = &previewGroupTrendState{membersByKey: make(map[string]pgIntervalMember)}
+						pgTrendByKey[pgKey] = tState
+					}
+					if bc := resolveBaselineServices(ns, env); bc > tState.baselineCount {
+						tState.baselineCount = bc
+					}
+					tState.membersByKey[member.key] = member
+					tState.liveTargets = append(tState.liveTargets, previewGroupTrendLiveTarget{
+						spanIdx:   spanIdx,
+						memberKey: member.key,
+					})
 				}
-				tState.membersByKey[member.key] = member
-				tState.liveTargets = append(tState.liveTargets, previewGroupTrendLiveTarget{
-					spanIdx:   spanIdx,
-					memberKey: member.key,
-				})
 			}
 		}
 
@@ -432,9 +495,6 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 		}
 	}
 
-	windowDays := NormalizeWindowDays(opts.WindowDays)
-	windowStart := startOfUTCDay(now).AddDate(0, 0, -(windowDays - 1))
-	allRetainedRecords := ListHistoricalRecords(ctx, opts.Client, opts.K8sClient, reqNS, now, LedgerRetentionDays, timeout)
 	for _, rec := range allRetainedRecords {
 		if rec.PreviewGroup == "" {
 			continue
@@ -458,9 +518,10 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 		for _, m := range tState.membersByKey {
 			members = append(members, m)
 		}
-		allocated := allocatePreviewGroupIntervalSavings(tState.baselineCount, members)
+		allocated, intervalsByKey := allocatePreviewGroupIntervalSavings(tState.baselineCount, members)
 		for _, target := range tState.liveTargets {
 			trendSpans[target.spanIdx].deltaSaveUSD = allocated[target.memberKey]
+			trendSpans[target.spanIdx].deltaIntervals = intervalsByKey[target.memberKey]
 		}
 	}
 
@@ -550,13 +611,19 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 	for _, rec := range historicalRecords {
 		historicalAccruedUSD += rec.AccruedCostUSD
 		historicalSavingsUSD += rec.HibernationSavingsUSD + rec.DeltaRoutingSavingsUSD
+		spanEnd := rec.TerminatedAt
+		if rec.BillableEndAt != nil && !rec.BillableEndAt.IsZero() && !rec.BillableEndAt.Before(rec.CreatedAt) && rec.BillableEndAt.Before(spanEnd) {
+			spanEnd = *rec.BillableEndAt
+		}
 		trendSpans = append(trendSpans, trendSpan{
-			start:        rec.CreatedAt,
-			end:          rec.TerminatedAt,
-			accruedUSD:   rec.AccruedCostUSD,
-			hibSavedUSD:  rec.HibernationSavingsUSD,
-			deltaSaveUSD: rec.DeltaRoutingSavingsUSD,
-			terminated:   true,
+			start:          rec.CreatedAt,
+			end:            spanEnd,
+			terminatedAt:   rec.TerminatedAt,
+			accruedUSD:     rec.AccruedCostUSD,
+			hibSavedUSD:    rec.HibernationSavingsUSD,
+			deltaSaveUSD:   rec.DeltaRoutingSavingsUSD,
+			deltaIntervals: rec.DeltaIntervals,
+			terminated:     true,
 		})
 		if opts.IncludeHistorical {
 			historicalConsumers = append(historicalConsumers, HistoricalRecordToCostItem(rec))

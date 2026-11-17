@@ -20,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/multicluster"
 	pkgdb "github.com/divergedev/diverge/pkg/database"
 )
 
@@ -94,9 +95,16 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func (p *CNPGDatabaseProvider) ensureSourcePasswordSecret(ctx context.Context, env *v1alpha1.Environment, sourceNS, targetNS, secretName, secretKey string) error {
+func (p *CNPGDatabaseProvider) clientForContext(ctx context.Context) (client.Client, bool) {
+	if pinned, ok := multicluster.TargetFromContext(ctx); ok && pinned != nil && pinned.Client != nil {
+		return pinned.Client, pinned.IsRemote
+	}
+	return p.Client, false
+}
+
+func (p *CNPGDatabaseProvider) ensureSourcePasswordSecret(ctx context.Context, c client.Client, env *v1alpha1.Environment, sourceNS, targetNS, secretName, secretKey string) error {
 	var dstSecret corev1.Secret
-	err := p.Client.Get(ctx, types.NamespacedName{Name: secretName, Namespace: targetNS}, &dstSecret)
+	err := c.Get(ctx, types.NamespacedName{Name: secretName, Namespace: targetNS}, &dstSecret)
 	if err == nil {
 		if len(dstSecret.Data[secretKey]) == 0 {
 			return fmt.Errorf("CNPG source secret %s/%s is missing key %q", targetNS, secretName, secretKey)
@@ -109,7 +117,7 @@ func (p *CNPGDatabaseProvider) ensureSourcePasswordSecret(ctx context.Context, e
 
 	if sourceNS != targetNS {
 		var srcSecret corev1.Secret
-		if err := p.Client.Get(ctx, types.NamespacedName{Name: secretName, Namespace: sourceNS}, &srcSecret); err != nil {
+		if err := c.Get(ctx, types.NamespacedName{Name: secretName, Namespace: sourceNS}, &srcSecret); err != nil {
 			return fmt.Errorf("failed to get CNPG source secret %s/%s: %w", sourceNS, secretName, err)
 		}
 		pw, ok := srcSecret.Data[secretKey]
@@ -130,7 +138,7 @@ func (p *CNPGDatabaseProvider) ensureSourcePasswordSecret(ctx context.Context, e
 				secretKey: append([]byte(nil), pw...),
 			},
 		}
-		if err := p.Client.Create(ctx, copied); err != nil && !apierrors.IsAlreadyExists(err) {
+		if err := c.Create(ctx, copied); err != nil && !apierrors.IsAlreadyExists(err) {
 			return fmt.Errorf("failed to copy CNPG source secret to %s/%s: %w", targetNS, secretName, err)
 		}
 		return nil
@@ -144,7 +152,11 @@ func (p *CNPGDatabaseProvider) Provision(ctx context.Context, env *v1alpha1.Envi
 	if env == nil {
 		return nil, fmt.Errorf("environment must not be nil")
 	}
-	if p.Client == nil {
+	c, isRemote := p.clientForContext(ctx)
+	if !isRemote {
+		isRemote = multicluster.IsRemoteEnv(env)
+	}
+	if c == nil {
 		return nil, fmt.Errorf("kubernetes client is required for CNPG database provider")
 	}
 
@@ -219,7 +231,7 @@ func (p *CNPGDatabaseProvider) Provision(ctx context.Context, env *v1alpha1.Envi
 				env.Annotations["divergedev.com/cnpg-source-secret-key"],
 				"password",
 			)
-			if err := p.ensureSourcePasswordSecret(ctx, env, sourceNS, targetNS, secretName, secretKey); err != nil {
+			if err := p.ensureSourcePasswordSecret(ctx, c, env, sourceNS, targetNS, secretName, secretKey); err != nil {
 				return nil, err
 			}
 			spec["externalClusters"] = []any{
@@ -256,13 +268,13 @@ func (p *CNPGDatabaseProvider) Provision(ctx context.Context, env *v1alpha1.Envi
 	})
 	cluster.Object["spec"] = spec
 
-	if targetNS == env.Namespace && p.Scheme != nil {
+	if !isRemote && targetNS == env.Namespace && p.Scheme != nil {
 		if err := controllerutil.SetControllerReference(env, cluster, p.Scheme); err != nil {
 			return nil, fmt.Errorf("failed to set owner reference on CNPG Cluster: %w", err)
 		}
 	}
 
-	if err := p.Client.Create(ctx, cluster); err != nil && !apierrors.IsAlreadyExists(err) {
+	if err := c.Create(ctx, cluster); err != nil && !apierrors.IsAlreadyExists(err) {
 		return nil, fmt.Errorf("failed to create CNPG Cluster %s/%s: %w", targetNS, clusterName, err)
 	}
 
@@ -274,7 +286,7 @@ func (p *CNPGDatabaseProvider) Provision(ctx context.Context, env *v1alpha1.Envi
 	dsn := fmt.Sprintf("postgres://app@%s-rw.%s.svc:5432/app?sslmode=disable", clusterName, targetNS)
 	hasSecretURI := false
 	var appSecret corev1.Secret
-	if err := p.Client.Get(ctx, types.NamespacedName{
+	if err := c.Get(ctx, types.NamespacedName{
 		Name:      clusterName + "-app",
 		Namespace: targetNS,
 	}, &appSecret); err == nil {
@@ -307,7 +319,8 @@ func (p *CNPGDatabaseProvider) Status(ctx context.Context, env *v1alpha1.Environ
 	if env == nil {
 		return nil, fmt.Errorf("environment must not be nil")
 	}
-	if p.Client == nil {
+	c, _ := p.clientForContext(ctx)
+	if c == nil {
 		return nil, fmt.Errorf("kubernetes client is required for CNPG database provider")
 	}
 
@@ -316,7 +329,7 @@ func (p *CNPGDatabaseProvider) Status(ctx context.Context, env *v1alpha1.Environ
 
 	cluster := &unstructured.Unstructured{}
 	cluster.SetGroupVersionKind(ClusterGVK)
-	err := p.Client.Get(ctx, types.NamespacedName{Name: clusterName, Namespace: targetNS}, cluster)
+	err := c.Get(ctx, types.NamespacedName{Name: clusterName, Namespace: targetNS}, cluster)
 	if err != nil {
 		if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
 			return &pkgdb.DatabaseStatus{
@@ -363,7 +376,11 @@ func (p *CNPGDatabaseProvider) Status(ctx context.Context, env *v1alpha1.Environ
 
 // Teardown deletes the CNPG Cluster for the preview environment idempotently.
 func (p *CNPGDatabaseProvider) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
-	if env == nil || p.Client == nil {
+	if env == nil {
+		return nil
+	}
+	c, _ := p.clientForContext(ctx)
+	if c == nil {
 		return nil
 	}
 
@@ -375,7 +392,7 @@ func (p *CNPGDatabaseProvider) Teardown(ctx context.Context, env *v1alpha1.Envir
 	cluster.SetName(clusterName)
 	cluster.SetNamespace(targetNS)
 
-	if err := p.Client.Delete(ctx, cluster); err != nil {
+	if err := c.Delete(ctx, cluster); err != nil {
 		if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
 			return nil
 		}

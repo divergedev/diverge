@@ -406,13 +406,20 @@ func (r *PreviewGroupReconciler) handleTeardown(ctx context.Context, pg *diverge
 		child := &children[i]
 		if child.DeletionTimestamp.IsZero() {
 			hookCtx, cancelHook := context.WithTimeout(ctx, 15*time.Second)
-			if err := r.cleanupPostDeployJobs(hookCtx, child); err != nil {
-				logger.Error(err, "failed to cleanup post-deploy jobs for child Environment", "name", child.Name)
-				cancelHook()
-				remaining++
-				continue
-			}
+			hookErr := r.cleanupPostDeployJobs(hookCtx, child)
 			cancelHook()
+			if hookErr != nil {
+				if !shouldBypassPreviewGroupHookCleanup(pg, child) {
+					logger.Error(hookErr, "failed to cleanup post-deploy jobs for child Environment", "name", child.Name)
+					remaining++
+					continue
+				}
+				logger.Info("Bypassing post-deploy hook cleanup failure under force-teardown policy", "child", child.Name, "error", hookErr)
+				if r.Recorder != nil {
+					r.Recorder.Event(pg, "Warning", "ForceTeardown", "Bypassed post-deploy hook cleanup failure after timeout or force-teardown annotation")
+				}
+				r.propagateForceTeardownToChild(ctx, child)
+			}
 
 			if r.DatabaseProvider != nil && child.Spec.Database.Mode != "" {
 				dbCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -595,6 +602,40 @@ func (r *PreviewGroupReconciler) listChildEnvironments(ctx context.Context, pg *
 	return envList.Items, nil
 }
 
+func shouldBypassPreviewGroupHookCleanup(pg *divergeiov1alpha1.PreviewGroup, child *divergeiov1alpha1.Environment) bool {
+	if pg != nil {
+		if pg.Annotations["divergedev.com/force-teardown"] == "true" {
+			return true
+		}
+		if !pg.DeletionTimestamp.IsZero() && time.Since(pg.DeletionTimestamp.Time) > 15*time.Minute {
+			return true
+		}
+	}
+	if child != nil {
+		if child.Annotations["divergedev.com/force-teardown"] == "true" {
+			return true
+		}
+		if !child.DeletionTimestamp.IsZero() && time.Since(child.DeletionTimestamp.Time) > 15*time.Minute {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *PreviewGroupReconciler) propagateForceTeardownToChild(ctx context.Context, child *divergeiov1alpha1.Environment) {
+	if child == nil || child.Annotations["divergedev.com/force-teardown"] == "true" {
+		return
+	}
+	base := child.DeepCopy()
+	if child.Annotations == nil {
+		child.Annotations = make(map[string]string)
+	}
+	child.Annotations["divergedev.com/force-teardown"] = "true"
+	patchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	_ = r.Patch(patchCtx, child, client.MergeFrom(base))
+}
+
 // deleteOrphanedEnvironments removes child Environments that are no longer in the spec.
 func (r *PreviewGroupReconciler) deleteOrphanedEnvironments(ctx context.Context, pg *divergeiov1alpha1.PreviewGroup, desired map[string]bool) error {
 	logger := log.FromContext(ctx)
@@ -613,8 +654,15 @@ func (r *PreviewGroupReconciler) deleteOrphanedEnvironments(ctx context.Context,
 			hookErr := r.cleanupPostDeployJobs(hookCtx, child)
 			cancelHook()
 			if hookErr != nil {
-				errs = append(errs, fmt.Errorf("failed to cleanup post-deploy jobs for orphaned Environment %s/%s: %w", child.Namespace, child.Name, hookErr))
-				continue
+				if !shouldBypassPreviewGroupHookCleanup(pg, child) {
+					errs = append(errs, fmt.Errorf("failed to cleanup post-deploy jobs for orphaned Environment %s/%s: %w", child.Namespace, child.Name, hookErr))
+					continue
+				}
+				logger.Info("Bypassing orphan post-deploy hook cleanup failure under force-teardown policy", "child", child.Name, "error", hookErr)
+				if r.Recorder != nil {
+					r.Recorder.Event(pg, "Warning", "ForceTeardown", "Bypassed orphan post-deploy hook cleanup failure under force-teardown policy")
+				}
+				r.propagateForceTeardownToChild(ctx, child)
 			}
 			if err := r.Delete(ctx, child); err != nil && !apierrors.IsNotFound(err) {
 				errs = append(errs, fmt.Errorf("failed to delete orphaned Environment %s/%s: %w", child.Namespace, child.Name, err))

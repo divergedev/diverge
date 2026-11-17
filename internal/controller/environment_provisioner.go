@@ -187,7 +187,7 @@ func (r *EnvironmentReconciler) reconcileProvisioningWithTarget(ctx context.Cont
 	// 6. Ensure database
 	tCtxDB, cancelDB := context.WithTimeout(ctx, 15*time.Second)
 	defer cancelDB()
-	dbProv, resolvedDBName, err := r.resolveDatabaseProvider(env, false)
+	dbProv, resolvedDBName, err := r.resolveDatabaseProviderWithContext(tCtxDB, env, false)
 	if dbProv != nil && dbProv != r.DatabaseProvider {
 		defer closeDatabaseProvider(dbProv)
 	}
@@ -641,12 +641,43 @@ var allowedEnvDatabaseProviders = map[string]bool{
 	"none":     true,
 }
 
+func isClusterScopedDBProvider(name string) bool {
+	return name == "cnpg" || name == "fresh" || name == "snapshot"
+}
+
 func (r *EnvironmentReconciler) resolveDatabaseProvider(env *divergeiov1alpha1.Environment, forTeardown bool) (pkgdb.DatabaseProvider, string, error) {
+	return r.resolveDatabaseProviderWithContext(context.Background(), env, forTeardown)
+}
+
+func (r *EnvironmentReconciler) resolveDatabaseProviderWithContext(ctx context.Context, env *divergeiov1alpha1.Environment, forTeardown bool) (pkgdb.DatabaseProvider, string, error) {
 	if env != nil {
+		clientForProvider := func(providerName string) (client.Client, bool, error) {
+			if !isClusterScopedDBProvider(providerName) || !multicluster.IsRemoteEnv(env) {
+				return r.Client, false, nil
+			}
+			target, err := r.resolveTarget(ctx, env)
+			if err != nil {
+				if forTeardown {
+					if _, isVal := multicluster.IsValidationError(err); isVal && !multicluster.HasConfirmedRemoteTarget(env) {
+						return nil, true, nil
+					}
+				}
+				return nil, false, err
+			}
+			return target.Client, false, nil
+		}
+
 		recorded := strings.TrimSpace(env.Status.DatabaseProvider)
 		if forTeardown && recorded != "" && pkgdb.Providers.Has(recorded) {
+			provClient, skip, cErr := clientForProvider(recorded)
+			if cErr != nil {
+				return nil, recorded, fmt.Errorf("failed to resolve target cluster for database provider %q: %w", recorded, cErr)
+			}
+			if skip {
+				return nil, recorded, nil
+			}
 			deps := registry.Deps{
-				Client: r.Client,
+				Client: provClient,
 				Scheme: r.Scheme,
 			}
 			prov, err := pkgdb.Providers.Create(recorded, deps)
@@ -679,8 +710,15 @@ func (r *EnvironmentReconciler) resolveDatabaseProvider(env *divergeiov1alpha1.E
 			if !pkgdb.Providers.Has(candidate) {
 				return nil, candidate, fmt.Errorf("database provider %q is not registered", candidate)
 			}
+			provClient, skip, cErr := clientForProvider(candidate)
+			if cErr != nil {
+				return nil, candidate, fmt.Errorf("failed to resolve target cluster for database provider %q: %w", candidate, cErr)
+			}
+			if skip {
+				return nil, candidate, nil
+			}
 			deps := registry.Deps{
-				Client: r.Client,
+				Client: provClient,
 				Scheme: r.Scheme,
 			}
 			prov, err := pkgdb.Providers.Create(candidate, deps)

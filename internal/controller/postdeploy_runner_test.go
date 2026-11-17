@@ -283,3 +283,77 @@ func TestPreviewGroupReconcile_OrphanHookCleanupFailureTriggersRetry(t *testing.
 	assert.True(t, apierrors.IsNotFound(hubClient.Get(ctx, client.ObjectKeyFromObject(job2), &batchv1.Job{})))
 	assert.True(t, apierrors.IsNotFound(hubClient.Get(ctx, client.ObjectKeyFromObject(orphanEnv), &divergeiov1alpha1.Environment{})))
 }
+
+type failingSpokeResolver struct {
+	err error
+}
+
+func (f *failingSpokeResolver) Resolve(_ context.Context, _ *divergeiov1alpha1.Environment) (*multicluster.Target, error) {
+	return nil, f.err
+}
+
+func TestPreviewGroupTeardown_UnreachableConfirmedSpokeRetainsUntilForceTeardown(t *testing.T) {
+	s := runtime.NewScheme()
+	require.NoError(t, divergeiov1alpha1.AddToScheme(s))
+	require.NoError(t, batchv1.AddToScheme(s))
+	require.NoError(t, corev1.AddToScheme(s))
+
+	delNow := metav1.Now()
+	pg := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "pg-spoke-down",
+			Finalizers:        []string{previewGroupFinalizer},
+			DeletionTimestamp: &delNow,
+		},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Source:  divergeiov1alpha1.EnvironmentSource{Provider: "github", Branch: "feat/down"},
+			Routing: divergeiov1alpha1.PreviewGroupRouting{HeaderValue: "pr-down"},
+			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{Name: "api", Image: "api:v1"},
+			},
+		},
+	}
+
+	child := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      childEnvironmentName("pg-spoke-down", "api"),
+			Namespace: "default",
+			Labels: map[string]string{
+				labelPreviewGroup: "pg-spoke-down",
+				labelManagedBy:    "diverge-previewgroup",
+			},
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Deploy: divergeiov1alpha1.EnvironmentDeploy{
+				ClusterRef: &divergeiov1alpha1.ClusterTargetRef{
+					Name:                "spoke-dead",
+					KubeconfigSecretRef: &divergeiov1alpha1.SecretRef{Name: "dead-sec"},
+				},
+			},
+		},
+		Status: divergeiov1alpha1.EnvironmentStatus{
+			TargetCluster: "spoke-dead",
+		},
+	}
+
+	hubClient := fake.NewClientBuilder().WithScheme(s).WithObjects(pg, child).Build()
+	r := &PreviewGroupReconciler{
+		Client:         hubClient,
+		Scheme:         s,
+		Recorder:       events.NewRecorder(k8sevents.NewFakeRecorder(10)),
+		ClusterClients: &failingSpokeResolver{err: errors.New("dial tcp spoke-dead: i/o timeout")},
+	}
+
+	ctx := context.Background()
+	// 1. Before force-release threshold/annotation, child is retained and teardown requeues.
+	res, err := r.handleTeardown(ctx, pg)
+	require.NoError(t, err)
+	assert.NotZero(t, res.RequeueAfter)
+	require.NoError(t, hubClient.Get(ctx, client.ObjectKeyFromObject(child), &divergeiov1alpha1.Environment{}))
+
+	// 2. Setting divergedev.com/force-teardown=true bypasses stuck spoke hook cleanup and deletes the child.
+	pg.Annotations = map[string]string{"divergedev.com/force-teardown": "true"}
+	_, err = r.handleTeardown(ctx, pg)
+	require.NoError(t, err)
+	assert.True(t, apierrors.IsNotFound(hubClient.Get(ctx, client.ObjectKeyFromObject(child), &divergeiov1alpha1.Environment{})))
+}

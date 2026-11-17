@@ -170,6 +170,21 @@ func parseNonNegativeEnvFloat(key string) (float64, bool) {
 	return v, true
 }
 
+// IsRateCardConfigured reports whether rate was explicitly constructed/normalized (preserving intentional zero prices)
+// as opposed to a zero-value CostRateCard{} literal.
+func IsRateCardConfigured(rate CostRateCard) bool {
+	return rate.configured ||
+		rate.VCPUHourUSD > 0 ||
+		rate.MemoryGiBHourUSD > 0 ||
+		rate.DatabaseSchemaHrUSD > 0 ||
+		rate.DatabaseDedicatedHrUSD > 0
+}
+
+// NormalizeRateCard normalizes a CostRateCard, substituting defaults only for an unconfigured zero-value CostRateCard{}.
+func NormalizeRateCard(rate CostRateCard) CostRateCard {
+	return normalizeRateCard(rate)
+}
+
 func normalizeRateCard(rate CostRateCard) CostRateCard {
 	defaults := DefaultCostRateCard()
 	if !rate.configured &&

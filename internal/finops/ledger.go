@@ -41,29 +41,39 @@ const (
 	DefaultWindowDays = 30
 )
 
+// DeltaSaveInterval records delta-routing savings attributed to a specific sub-interval of a PreviewGroup member's lifetime.
+type DeltaSaveInterval struct {
+	Start        time.Time `json:"start"`
+	End          time.Time `json:"end"`
+	DeltaSaveUSD float64   `json:"deltaSaveUsd"`
+}
+
 // HistoricalEnvironmentRecord captures final cost, lifetime, and savings metrics for a torn-down Environment.
 type HistoricalEnvironmentRecord struct {
-	UID                    string    `json:"uid,omitempty"`
-	Name                   string    `json:"name"`
-	Namespace              string    `json:"namespace"`
-	Cluster                string    `json:"cluster,omitempty"`
-	PreviewGroup           string    `json:"previewGroup,omitempty"`
-	Project                string    `json:"project,omitempty"`
-	MR                     string    `json:"mr,omitempty"`
-	Branch                 string    `json:"branch,omitempty"`
-	DatabaseMode           string    `json:"databaseMode,omitempty"`
-	ServiceCount           int32     `json:"serviceCount"`
-	CPUCores               float64   `json:"cpuCores"`
-	MemoryGiB              float64   `json:"memoryGiB"`
-	ActiveComputeHourlyUSD float64   `json:"activeComputeHourlyUsd,omitempty"`
-	CreatedAt              time.Time `json:"createdAt"`
-	TerminatedAt           time.Time `json:"terminatedAt"`
-	UptimeHours            float64   `json:"uptimeHours"`
-	ActiveHours            float64   `json:"activeHours"`
-	HibernatedHours        float64   `json:"hibernatedHours"`
-	AccruedCostUSD         float64   `json:"accruedCostUsd"`
-	HibernationSavingsUSD  float64   `json:"hibernationSavingsUsd"`
-	DeltaRoutingSavingsUSD float64   `json:"deltaRoutingSavingsUsd"`
+	UID                    string              `json:"uid,omitempty"`
+	Name                   string              `json:"name"`
+	Namespace              string              `json:"namespace"`
+	Cluster                string              `json:"cluster,omitempty"`
+	PreviewGroup           string              `json:"previewGroup,omitempty"`
+	Project                string              `json:"project,omitempty"`
+	MR                     string              `json:"mr,omitempty"`
+	Branch                 string              `json:"branch,omitempty"`
+	DatabaseMode           string              `json:"databaseMode,omitempty"`
+	ServiceCount           int32               `json:"serviceCount"`
+	CPUCores               float64             `json:"cpuCores"`
+	MemoryGiB              float64             `json:"memoryGiB"`
+	ActiveComputeHourlyUSD float64             `json:"activeComputeHourlyUsd,omitempty"`
+	RateCardConfigured     bool                `json:"rateCardConfigured,omitempty"`
+	CreatedAt              time.Time           `json:"createdAt"`
+	BillableEndAt          *time.Time          `json:"billableEndAt,omitempty"`
+	TerminatedAt           time.Time           `json:"terminatedAt"`
+	UptimeHours            float64             `json:"uptimeHours"`
+	ActiveHours            float64             `json:"activeHours"`
+	HibernatedHours        float64             `json:"hibernatedHours"`
+	AccruedCostUSD         float64             `json:"accruedCostUsd"`
+	HibernationSavingsUSD  float64             `json:"hibernationSavingsUsd"`
+	DeltaRoutingSavingsUSD float64             `json:"deltaRoutingSavingsUsd"`
+	DeltaIntervals         []DeltaSaveInterval `json:"deltaIntervals,omitempty"`
 }
 
 func previewGroupNameFromEnv(env *v1alpha1.Environment) string {
@@ -175,6 +185,22 @@ func SnapshotEnvironmentTeardownWithGroup(
 		memoryGiB = est.ConfiguredMemoryGiB
 	}
 
+	billableEnd := termTime
+	terminal := env.Status.Phase == v1alpha1.PhaseFailed ||
+		env.Status.Phase == v1alpha1.PhaseTerminating ||
+		string(env.Status.Phase) == "Expired"
+	if terminal {
+		billableHours := est.ActiveHours + est.HibernatedHours
+		if billableHours > 0 {
+			billableEnd = createdAt.Add(time.Duration(billableHours * float64(time.Hour)))
+			if billableEnd.After(termTime) {
+				billableEnd = termTime
+			}
+		} else {
+			billableEnd = createdAt
+		}
+	}
+
 	return HistoricalEnvironmentRecord{
 		UID:                    string(env.UID),
 		Name:                   env.Name,
@@ -189,7 +215,9 @@ func SnapshotEnvironmentTeardownWithGroup(
 		CPUCores:               cpuCores,
 		MemoryGiB:              memoryGiB,
 		ActiveComputeHourlyUSD: activeComputeHourly,
+		RateCardConfigured:     metrics.IsRateCardConfigured(rateCard),
 		CreatedAt:              createdAt,
+		BillableEndAt:          &billableEnd,
 		TerminatedAt:           termTime,
 		UptimeHours:            est.UptimeHours,
 		ActiveHours:            est.ActiveHours,
@@ -264,7 +292,8 @@ func historicalRecordBaseComputeHourly(rec HistoricalEnvironmentRecord, rateCard
 	if rec.ActiveComputeHourlyUSD > 0 {
 		return rec.ActiveComputeHourlyUSD
 	}
-	if rec.ServiceCount <= 0 {
+	// Preserve an explicitly configured zero-priced record without substituting default prices.
+	if rec.RateCardConfigured || rec.ServiceCount <= 0 {
 		return 0
 	}
 	cpu := rec.CPUCores
@@ -275,10 +304,7 @@ func historicalRecordBaseComputeHourly(rec HistoricalEnvironmentRecord, rateCard
 	if mem <= 0 {
 		mem = float64(rec.ServiceCount) * metrics.DefaultServiceMemoryGiB
 	}
-	rc := rateCard
-	if rc.VCPUHourUSD == 0 && rc.MemoryGiBHourUSD == 0 && rc.DatabaseSchemaHrUSD == 0 && rc.DatabaseDedicatedHrUSD == 0 {
-		rc = metrics.DefaultCostRateCard()
-	}
+	rc := metrics.NormalizeRateCard(rateCard)
 	return cpu*rc.VCPUHourUSD + mem*rc.MemoryGiBHourUSD
 }
 
@@ -288,6 +314,9 @@ func buildHistoricalPGIntervalMember(rec HistoricalEnvironmentRecord, rateCard m
 	}
 	start := rec.CreatedAt.UTC()
 	end := rec.TerminatedAt.UTC()
+	if rec.BillableEndAt != nil && !rec.BillableEndAt.IsZero() {
+		end = rec.BillableEndAt.UTC()
+	}
 	if !end.After(start) {
 		return pgIntervalMember{}, false
 	}
@@ -302,12 +331,13 @@ func buildHistoricalPGIntervalMember(rec HistoricalEnvironmentRecord, rateCard m
 }
 
 // allocatePreviewGroupIntervalSavings splits PreviewGroup delta-routing savings across elementary
-// sibling creation and termination intervals so each member receives savings proportional to the
+// sibling creation and billable-end intervals so each member receives savings proportional to the
 // actual active group membership during every sub-interval of its lifetime.
-func allocatePreviewGroupIntervalSavings(baselineCount int, members []pgIntervalMember) map[string]float64 {
+func allocatePreviewGroupIntervalSavings(baselineCount int, members []pgIntervalMember) (map[string]float64, map[string][]DeltaSaveInterval) {
 	savingsByKey := make(map[string]float64, len(members))
+	intervalsByKey := make(map[string][]DeltaSaveInterval, len(members))
 	if baselineCount <= 0 || len(members) == 0 {
-		return savingsByKey
+		return savingsByKey, intervalsByKey
 	}
 
 	var boundaries []time.Time
@@ -320,7 +350,7 @@ func allocatePreviewGroupIntervalSavings(baselineCount int, members []pgInterval
 		boundaries = append(boundaries, m.start, m.end)
 	}
 	if len(valid) == 0 {
-		return savingsByKey
+		return savingsByKey, intervalsByKey
 	}
 
 	sort.Slice(boundaries, func(i, j int) bool {
@@ -373,10 +403,19 @@ func allocatePreviewGroupIntervalSavings(baselineCount int, members []pgInterval
 			}
 			segActiveHours := segHours * activeRatio
 			memberShare := float64(m.services) / float64(groupServices)
-			savingsByKey[m.key] += segActiveHours * (avoidedServices * memberShare) * perServiceHourly
+			segSave := segActiveHours * (avoidedServices * memberShare) * perServiceHourly
+			if segSave <= 0 {
+				continue
+			}
+			savingsByKey[m.key] += segSave
+			intervalsByKey[m.key] = append(intervalsByKey[m.key], DeltaSaveInterval{
+				Start:        segStart,
+				End:          segEnd,
+				DeltaSaveUSD: segSave,
+			})
 		}
 	}
-	return savingsByKey
+	return savingsByKey, intervalsByKey
 }
 
 func computePreviewGroupTeardownSnapshot(
@@ -469,8 +508,9 @@ func computePreviewGroupTeardownSnapshot(
 	for _, m := range membersByKey {
 		members = append(members, m)
 	}
-	allocated := allocatePreviewGroupIntervalSavings(baselineCount, members)
+	allocated, intervalsByKey := allocatePreviewGroupIntervalSavings(baselineCount, members)
 	record.DeltaRoutingSavingsUSD = allocated[selfMember.key]
+	record.DeltaIntervals = intervalsByKey[selfMember.key]
 	return record
 }
 
@@ -733,12 +773,14 @@ func HistoricalRecordToCostItem(rec HistoricalEnvironmentRecord) *pb.Environment
 }
 
 type trendSpan struct {
-	start        time.Time
-	end          time.Time
-	accruedUSD   float64
-	hibSavedUSD  float64
-	deltaSaveUSD float64
-	terminated   bool
+	start          time.Time
+	end            time.Time
+	terminatedAt   time.Time
+	accruedUSD     float64
+	hibSavedUSD    float64
+	deltaSaveUSD   float64
+	deltaIntervals []DeltaSaveInterval
+	terminated     bool
 }
 
 func startOfUTCDay(t time.Time) time.Time {
@@ -765,7 +807,11 @@ func buildDailyCostTrend(now time.Time, windowDays int, spans []trendSpan) []*pb
 		}
 
 		for _, sp := range spans {
-			if sp.terminated && !sp.end.Before(dayStart) && sp.end.Before(dayEnd) {
+			termAt := sp.end
+			if !sp.terminatedAt.IsZero() {
+				termAt = sp.terminatedAt
+			}
+			if sp.terminated && !termAt.Before(dayStart) && termAt.Before(dayEnd) {
 				pt.TerminatedEnvironments++
 			}
 			if effectiveEnd.Before(dayStart) {
@@ -798,7 +844,29 @@ func buildDailyCostTrend(now time.Time, windowDays int, spans []trendSpan) []*pb
 			frac := ovEnd.Sub(ovStart).Seconds() / totalDur.Seconds()
 			pt.AccruedCostUsd += sp.accruedUSD * frac
 			pt.HibernationSavingsUsd += sp.hibSavedUSD * frac
-			pt.DeltaRoutingSavingsUsd += sp.deltaSaveUSD * frac
+			if len(sp.deltaIntervals) > 0 {
+				for _, sub := range sp.deltaIntervals {
+					subDur := sub.End.Sub(sub.Start)
+					if subDur <= 0 {
+						continue
+					}
+					sStart := sub.Start
+					if dayStart.After(sStart) {
+						sStart = dayStart
+					}
+					sEnd := sub.End
+					if effectiveEnd.Before(sEnd) {
+						sEnd = effectiveEnd
+					}
+					if !sEnd.After(sStart) {
+						continue
+					}
+					subFrac := sEnd.Sub(sStart).Seconds() / subDur.Seconds()
+					pt.DeltaRoutingSavingsUsd += sub.DeltaSaveUSD * subFrac
+				}
+			} else {
+				pt.DeltaRoutingSavingsUsd += sp.deltaSaveUSD * frac
+			}
 			pt.ActiveEnvironments++
 		}
 
