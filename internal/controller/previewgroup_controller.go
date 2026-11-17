@@ -48,6 +48,7 @@ type PreviewGroupReconciler struct {
 	Notifier         notifier.PreviewGroupNotifier
 	StatusReporter   notifier.StatusReporter
 	DatabaseProvider database.DatabaseProvider
+	ClusterClients   multicluster.Resolver
 	EnableGAMMA      bool // Enable GAMMA mesh routing (requires Istio Ambient)
 }
 
@@ -228,6 +229,19 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			svcStatus.TargetCluster = multicluster.ClusterName(desiredEnv)
 			existingEnv = *desiredEnv
 		} else {
+			if strings.TrimSpace(existingEnv.Status.TargetCluster) != "" &&
+				!divergeiov1alpha1.EqualClusterTargetRef(existingEnv.Spec.Deploy.ClusterRef, desiredEnv.Spec.Deploy.ClusterRef, targetNS) {
+				msg := fmt.Sprintf("effective clusterRef for service %q cannot be changed once provisioned on %q", svc.Name, existingEnv.Status.TargetCluster)
+				r.Recorder.Event(&pg, "Warning", "ClusterRefImmutable", msg)
+				svcStatus.Phase = divergeiov1alpha1.PhaseFailed
+				svcStatus.Reason = "ClusterRefImmutable"
+				svcStatus.Message = msg
+				svcStatus.ChangedServices = existingEnv.Spec.Deploy.ChangedServices
+				svcStatus.TargetCluster = existingEnv.Status.TargetCluster
+				serviceStatuses = append(serviceStatuses, svcStatus)
+				continue
+			}
+
 			// Update — sync spec if changed
 			if r.needsUpdate(&existingEnv, desiredEnv) {
 				existingEnv.Spec = desiredEnv.Spec
@@ -387,6 +401,15 @@ func (r *PreviewGroupReconciler) handleTeardown(ctx context.Context, pg *diverge
 	for i := range children {
 		child := &children[i]
 		if child.DeletionTimestamp.IsZero() {
+			hookCtx, cancelHook := context.WithTimeout(ctx, 15*time.Second)
+			if err := r.cleanupPostDeployJobs(hookCtx, child); err != nil {
+				logger.Error(err, "failed to cleanup post-deploy jobs for child Environment", "name", child.Name)
+				cancelHook()
+				remaining++
+				continue
+			}
+			cancelHook()
+
 			if r.DatabaseProvider != nil && child.Spec.Database.Mode != "" {
 				dbCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 				if err := r.DatabaseProvider.Teardown(dbCtx, child); err != nil {
@@ -581,6 +604,12 @@ func (r *PreviewGroupReconciler) deleteOrphanedEnvironments(ctx context.Context,
 		child := &children[i]
 		if !desired[child.Namespace+"/"+child.Name] && !desired[child.Name] {
 			logger.Info("Deleting orphaned Environment", "name", child.Name, "namespace", child.Namespace)
+			hookCtx, cancelHook := context.WithTimeout(ctx, 15*time.Second)
+			hookErr := r.cleanupPostDeployJobs(hookCtx, child)
+			cancelHook()
+			if hookErr != nil {
+				return fmt.Errorf("failed to cleanup post-deploy jobs for orphaned Environment %s/%s: %w", child.Namespace, child.Name, hookErr)
+			}
 			if err := r.Delete(ctx, child); err != nil && !apierrors.IsNotFound(err) {
 				return fmt.Errorf("failed to delete orphaned Environment %s/%s: %w", child.Namespace, child.Name, err)
 			}

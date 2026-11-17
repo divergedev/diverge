@@ -12,6 +12,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -91,7 +93,17 @@ func TestProvisioningAndTeardown_MultiClusterSpokeAndCrossNamespaceRejection(t *
 	assert.Equal(t, metav1.ConditionFalse, gotBad.Status.Conditions[0].Status)
 	assert.Equal(t, "CrossNamespaceRef", gotBad.Status.Conditions[0].Reason)
 
-	// 2. Valid federated environment creates preview namespace on spoke and records TargetCluster.
+	// 1b. Repairing the reference clears SecretRefValid=False to True.
+	gotBad.Spec.Deploy.ClusterRef = nil
+	require.NoError(t, hubBad.Update(ctx, &gotBad))
+	_, err = rBad.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "pr-cross-ns", Namespace: "default"}})
+	require.NoError(t, err)
+	require.NoError(t, hubBad.Get(ctx, types.NamespacedName{Name: "pr-cross-ns", Namespace: "default"}, &gotBad))
+	secCond := meta.FindStatusCondition(gotBad.Status.Conditions, "SecretRefValid")
+	require.NotNil(t, secCond)
+	assert.Equal(t, metav1.ConditionTrue, secCond.Status)
+
+	// 2. Valid federated environment creates preview namespace + feature ConfigMap on spoke and records TargetCluster.
 	spokeEnv := &divergeiov1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
 			UID:        "uid-spoke-1",
@@ -110,6 +122,10 @@ func TestProvisioningAndTeardown_MultiClusterSpokeAndCrossNamespaceRejection(t *
 						Name: "spoke-west-kubeconfig",
 					},
 				},
+			},
+			Features: &divergeiov1alpha1.FeatureSpec{
+				Provider:  "configmap",
+				Overrides: map[string]string{"new_checkout": "true"},
 			},
 		},
 	}
@@ -131,6 +147,27 @@ func TestProvisioningAndTeardown_MultiClusterSpokeAndCrossNamespaceRejection(t *
 
 	var spokePreviewNS corev1.Namespace
 	require.NoError(t, spokeClient.Get(ctx, types.NamespacedName{Name: spokeEnv.PreviewNamespace()}, &spokePreviewNS))
+
+	// Feature ConfigMap must exist on spoke (NOT on hub).
+	var spokeFeatureCM corev1.ConfigMap
+	require.NoError(t, spokeClient.Get(ctx, types.NamespacedName{Name: "diverge-features-pr-spoke", Namespace: spokeEnv.PreviewNamespace()}, &spokeFeatureCM))
+	assert.True(t, apierrors.IsNotFound(hubSpoke.Get(ctx, types.NamespacedName{Name: "diverge-features-pr-spoke", Namespace: spokeEnv.PreviewNamespace()}, &corev1.ConfigMap{})))
+
+	// 3. Confirmed remote environment retains finalizer if spoke kubeconfig becomes invalid during teardown.
+	delNow := metav1.Now()
+	corruptSpokeEnv := gotSpoke.DeepCopy()
+	corruptSpokeEnv.DeletionTimestamp = &delNow
+	// Use Manager with empty Secret on hub so Resolve returns ValidationError (EmptyKubeconfigSecret).
+	emptySec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "spoke-west-kubeconfig", Namespace: "default"},
+	}
+	require.NoError(t, hubSpoke.Create(ctx, emptySec))
+	rSpoke.ClusterClients = multicluster.NewManager(hubSpoke, nil, nil, rSpoke.Scheme)
+
+	res, tdErr := rSpoke.handleTeardown(ctx, corruptSpokeEnv)
+	require.Error(t, tdErr, "confirmed remote target must retain finalizer when kubeconfig validation fails")
+	assert.Equal(t, 10*time.Second, res.RequeueAfter)
+	assert.Contains(t, corruptSpokeEnv.Finalizers, environmentFinalizer)
 }
 
 func TestHandleTeardown_PartialFailure(t *testing.T) {

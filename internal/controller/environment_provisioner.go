@@ -18,6 +18,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -80,7 +81,27 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 	}
 
 	// 4.5. Resolve target cluster (local hub or remote spoke via clusterRef)
-	_, resolvedCluster, _, clusterErr := r.resolveTargetCluster(ctx, env)
+	if prevCluster := strings.TrimSpace(env.Status.TargetCluster); prevCluster != "" {
+		desiredCluster := multicluster.LocalClusterName
+		if multicluster.IsRemoteEnv(env) {
+			desiredCluster = multicluster.DesiredClusterName(env.Spec.Deploy.ClusterRef)
+		}
+		if prevCluster != desiredCluster {
+			msg := fmt.Sprintf("spec.deploy.clusterRef cannot change target cluster from %q to %q after provisioning", prevCluster, desiredCluster)
+			r.Recorder.Event(env, "Warning", "ClusterRefImmutable", msg)
+			env.Status.Phase = divergeiov1alpha1.PhaseFailed
+			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+				Type:    "SecretRefValid",
+				Status:  metav1.ConditionFalse,
+				Reason:  "ClusterRefImmutable",
+				Message: msg,
+			})
+			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, nil, 0)
+			return res, true, retErr
+		}
+	}
+
+	_, resolvedCluster, isRemoteCluster, clusterErr := r.resolveTargetCluster(ctx, env)
 	if clusterErr != nil {
 		if ve, ok := multicluster.IsValidationError(clusterErr); ok {
 			if ve.Reason == "CrossNamespaceRef" {
@@ -108,6 +129,25 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 		return res, true, retErr
 	}
 	env.Status.TargetCluster = resolvedCluster
+	if meta.FindStatusCondition(env.Status.Conditions, "SecretRefValid") != nil ||
+		len(env.Spec.EnvFrom) > 0 ||
+		len(env.Spec.Deploy.EnvFrom) > 0 ||
+		env.Spec.Deploy.ClusterRef != nil {
+		meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+			Type:    "SecretRefValid",
+			Status:  metav1.ConditionTrue,
+			Reason:  "SecretRefsValid",
+			Message: "All secret references are valid",
+		})
+	}
+	// Write-ahead persist TargetCluster before creating any remote spoke resources so teardown
+	// always knows a remote target was committed even if a later provisioning step fails.
+	if isRemoteCluster && strings.TrimSpace(statusBase.Status.TargetCluster) == "" {
+		if patchErr := r.Status().Patch(ctx, env, client.MergeFrom(statusBase)); patchErr != nil {
+			return ctrl.Result{}, true, fmt.Errorf("failed to persist targetCluster status: %w", patchErr)
+		}
+		*statusBase = *env.DeepCopy()
+	}
 
 	// 5. Ensure namespace
 	if err := r.ensureNamespace(ctx, env); err != nil {
@@ -456,7 +496,7 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 		if meta.IsStatusConditionTrue(env.Status.Conditions, "FeaturesReady") && (env.Status.FeatureConfigMap != "" || len(env.Status.FeatureEnvVars) > 0 || len(env.Spec.Features.Overrides) == 0) {
 			// Skip re-provisioning if already ready and status recorded
 		} else {
-			fp, err := r.getFeatureProvider(env)
+			fp, err := r.getFeatureProvider(ctx, env)
 			if err != nil {
 				meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 					Type:    "FeaturesReady",
@@ -547,10 +587,27 @@ func (r *EnvironmentReconciler) resolveAsyncProvisioner(route divergeiov1alpha1.
 	return r.AsyncProvisioner
 }
 
-func (r *EnvironmentReconciler) getFeatureProvider(env *divergeiov1alpha1.Environment) (features.FeatureProvider, error) {
+func (r *EnvironmentReconciler) getFeatureProvider(ctx context.Context, env *divergeiov1alpha1.Environment) (features.FeatureProvider, error) {
 	providerName := "configmap"
 	if env.Spec.Features != nil && env.Spec.Features.Provider != "" {
 		providerName = env.Spec.Features.Provider
+	}
+	if multicluster.IsRemoteEnv(env) {
+		targetClient, _, _, err := r.resolveTargetCluster(ctx, env)
+		if err != nil {
+			return nil, err
+		}
+		deps := registry.Deps{
+			Client: targetClient,
+			Scheme: r.Scheme,
+		}
+		if features.Providers.Has(providerName) {
+			return features.Providers.Create(providerName, deps)
+		}
+		if r.FeatureProvider != nil && r.FeatureProvider.Type() != "configmap" {
+			return r.FeatureProvider, nil
+		}
+		return nil, fmt.Errorf("feature provider %q not registered", providerName)
 	}
 	if r.FeatureProvider != nil && r.FeatureProvider.Type() == providerName {
 		return r.FeatureProvider, nil

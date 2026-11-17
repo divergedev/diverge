@@ -108,11 +108,13 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 			}
 		}
 
-		// Resolve target cluster for spoke secret/banner/namespace cleanup (skipping remote calls if clusterRef itself was invalid)
+		// Resolve target cluster for spoke secret/banner/namespace cleanup.
+		// Only skip ValidationError when Status.TargetCluster was never committed to a remote spoke;
+		// if a spoke target was already provisioned, retain the finalizer and retry until repaired or force-torn-down.
 		targetClient, _, isRemote, targetErr := r.resolveTargetCluster(ctx, env)
 		skipRemoteTargetCleanup := false
 		if targetErr != nil {
-			if _, isVal := multicluster.IsValidationError(targetErr); isVal {
+			if _, isVal := multicluster.IsValidationError(targetErr); isVal && !multicluster.HasConfirmedRemoteTarget(env) {
 				skipRemoteTargetCleanup = true
 			} else {
 				errs = append(errs, fmt.Errorf("failed to resolve target cluster for teardown: %w", targetErr))
@@ -160,12 +162,16 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		}
 
 		// Teardown features (executed only after deployer workloads have terminated)
-		if fp, err := r.getFeatureProvider(env); err == nil && fp != nil {
-			tCtxF, cancelF := context.WithTimeout(ctx, 15*time.Second)
-			if err := fp.Teardown(tCtxF, env); err != nil {
-				errs = append(errs, fmt.Errorf("failed to teardown features: %w", err))
+		if !skipRemoteTargetCleanup {
+			if fp, fpErr := r.getFeatureProvider(ctx, env); fpErr != nil {
+				errs = append(errs, fmt.Errorf("failed to resolve feature provider for teardown: %w", fpErr))
+			} else if fp != nil {
+				tCtxF, cancelF := context.WithTimeout(ctx, 15*time.Second)
+				if err := fp.Teardown(tCtxF, env); err != nil {
+					errs = append(errs, fmt.Errorf("failed to teardown features: %w", err))
+				}
+				cancelF()
 			}
-			cancelF()
 		}
 
 		// C4: Wait for workloads to be fully deleted before deleting the namespace,

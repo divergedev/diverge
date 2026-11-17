@@ -163,7 +163,19 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 		computeHourlyUSD float64
 		baselineCount    int
 	}
+	type previewGroupTrendMember struct {
+		spanIdx      int
+		serviceCount int
+		activeHours  float64
+	}
+	type previewGroupTrendState struct {
+		deployedServices         int
+		rateCardComputeHourlyUSD float64
+		baselineCount            int
+		members                  []previewGroupTrendMember
+	}
 	pgDeltaByKey := make(map[string]*previewGroupDeltaState)
+	pgTrendByKey := make(map[string]*previewGroupTrendState)
 	cnpgCountsByNS := make(map[string]int32)
 	topConsumers := make([]*pb.EnvironmentCostItem, 0, len(envList.Items))
 
@@ -192,6 +204,9 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 		}
 
 		est := metrics.ComputeEnvironmentCost(env, now, rateCard)
+		// Capture unmodified rate-card active compute rate before OpenCost live allocation overrides
+		// est.ComputeHourlyUSD, so instantaneous current-hour rates never re-price prior lifetime hours.
+		rateCardActiveComputeRate := est.ComputeHourlyUSD + est.HibernationSavingsHourlyUSD
 		terminal := env.Status.Phase == v1alpha1.PhaseFailed ||
 			env.Status.Phase == v1alpha1.PhaseTerminating ||
 			string(env.Status.Phase) == "Expired"
@@ -236,9 +251,9 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 		totalCPUCores += est.CPUCores
 		totalMemoryGiB += est.MemoryGiB
 
+		pgName := previewGroupNameFromEnv(env)
 		if !terminal && !est.Hibernated && env.Spec.Deploy.Namespace != "create" && est.ServiceCount > 0 {
 			baselineCount := resolveBaselineServices(ns, env)
-			pgName := strings.TrimSpace(env.Labels["divergedev.com/preview-group"])
 			if pgName != "" {
 				pgKey := ns + "/" + pgName
 				state, exists := pgDeltaByKey[pgKey]
@@ -299,17 +314,17 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 		if envStart.IsZero() || envStart.After(now) {
 			envStart = now
 		}
-		activeComputeRate := est.ComputeHourlyUSD + est.HibernationSavingsHourlyUSD
 		liveHibSavedUSD := 0.0
-		if est.HibernatedHours > 0 && activeComputeRate > 0 {
-			liveHibSavedUSD = est.HibernatedHours * activeComputeRate
+		if est.HibernatedHours > 0 && rateCardActiveComputeRate > 0 {
+			liveHibSavedUSD = est.HibernatedHours * rateCardActiveComputeRate
 		}
 		liveDeltaSavedUSD := 0.0
-		if env.Spec.Deploy.Namespace != "create" && est.ServiceCount > 0 && activeComputeRate > 0 && est.ActiveHours > 0 {
+		if pgName == "" && env.Spec.Deploy.Namespace != "create" && est.ServiceCount > 0 && rateCardActiveComputeRate > 0 && est.ActiveHours > 0 {
 			if bc := resolveBaselineServices(ns, env); bc > est.ServiceCount {
-				liveDeltaSavedUSD = est.ActiveHours * float64(bc-est.ServiceCount) * (activeComputeRate / float64(est.ServiceCount))
+				liveDeltaSavedUSD = est.ActiveHours * float64(bc-est.ServiceCount) * (rateCardActiveComputeRate / float64(est.ServiceCount))
 			}
 		}
+		spanIdx := len(trendSpans)
 		trendSpans = append(trendSpans, trendSpan{
 			start:        envStart,
 			end:          now,
@@ -318,6 +333,24 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 			deltaSaveUSD: liveDeltaSavedUSD,
 			terminated:   false,
 		})
+		if pgName != "" && env.Spec.Deploy.Namespace != "create" && est.ServiceCount > 0 {
+			pgKey := ns + "/" + pgName
+			tState, tExists := pgTrendByKey[pgKey]
+			if !tExists {
+				tState = &previewGroupTrendState{}
+				pgTrendByKey[pgKey] = tState
+			}
+			tState.deployedServices += est.ServiceCount
+			tState.rateCardComputeHourlyUSD += rateCardActiveComputeRate
+			if bc := resolveBaselineServices(ns, env); bc > tState.baselineCount {
+				tState.baselineCount = bc
+			}
+			tState.members = append(tState.members, previewGroupTrendMember{
+				spanIdx:      spanIdx,
+				serviceCount: est.ServiceCount,
+				activeHours:  est.ActiveHours,
+			})
+		}
 
 		services := ExtractEnvironmentServiceNames(env)
 		share := float64(len(services))
@@ -383,6 +416,19 @@ func BuildCostSummary(ctx context.Context, opts SummaryOptions) (*pb.GetCostSumm
 		if state.deployedServices > 0 && state.baselineCount > state.deployedServices {
 			perServiceComputeHourly := state.computeHourlyUSD / float64(state.deployedServices)
 			totalDeltaSavingsUSD += float64(state.baselineCount-state.deployedServices) * perServiceComputeHourly
+		}
+	}
+	for _, tState := range pgTrendByKey {
+		if tState.deployedServices > 0 && tState.baselineCount > tState.deployedServices && tState.rateCardComputeHourlyUSD > 0 {
+			avoidedServices := float64(tState.baselineCount - tState.deployedServices)
+			perSvcRateCardHourly := tState.rateCardComputeHourlyUSD / float64(tState.deployedServices)
+			for _, member := range tState.members {
+				if member.activeHours <= 0 {
+					continue
+				}
+				memberShare := float64(member.serviceCount) / float64(tState.deployedServices)
+				trendSpans[member.spanIdx].deltaSaveUSD = member.activeHours * (avoidedServices * memberShare) * perSvcRateCardHourly
+			}
 		}
 	}
 

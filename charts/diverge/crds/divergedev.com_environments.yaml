@@ -176,6 +176,7 @@ spec:
                     description: |-
                       ClusterRef targets a remote spoke cluster for workload and route provisioning.
                       When omitted, workloads deploy to the local hub cluster.
+                      Immutable once Status.TargetCluster has been assigned.
                     properties:
                       kubeconfigSecretRef:
                         description: |-

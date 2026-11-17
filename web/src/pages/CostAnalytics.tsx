@@ -290,6 +290,39 @@ export default function CostAnalytics() {
               ))}
             </Select>
           </div>
+          <div className="flex items-center gap-1.5" role="group" aria-label="Historical trend window">
+            <Button
+              type="button"
+              size="sm"
+              variant={windowDays === 7 ? 'secondary' : 'outline'}
+              aria-pressed={windowDays === 7}
+              onClick={() => setWindowDays(7)}
+              className="min-h-9 px-3"
+            >
+              7d
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={windowDays === 30 ? 'secondary' : 'outline'}
+              aria-pressed={windowDays === 30}
+              onClick={() => setWindowDays(30)}
+              className="min-h-9 px-3"
+            >
+              30d
+            </Button>
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant={includeHistorical ? 'secondary' : 'outline'}
+            aria-pressed={includeHistorical}
+            onClick={() => setIncludeHistorical((prev) => !prev)}
+            className="min-h-9"
+          >
+            Include closed PRs
+            {(summary?.historicalEnvironments ?? 0) > 0 ? ` (${summary?.historicalEnvironments})` : ''}
+          </Button>
           <div className="flex items-center gap-2" role="group" aria-label="Export FinOps report">
             <Button
               type="button"
@@ -448,28 +481,6 @@ export default function CostAnalytics() {
               <p className="text-xs text-muted-foreground mt-1">
                 Daily UTC accrued preview spend versus hibernation and delta-routing savings, including torn-down PRs
               </p>
-            </div>
-            <div className="flex items-center gap-1.5" role="group" aria-label="Historical trend window">
-              <Button
-                type="button"
-                size="sm"
-                variant={windowDays === 7 ? 'secondary' : 'outline'}
-                aria-pressed={windowDays === 7}
-                onClick={() => setWindowDays(7)}
-                className="min-h-9 px-3"
-              >
-                7d
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant={windowDays === 30 ? 'secondary' : 'outline'}
-                aria-pressed={windowDays === 30}
-                onClick={() => setWindowDays(30)}
-                className="min-h-9 px-3"
-              >
-                30d
-              </Button>
             </div>
           </CardHeader>
           <CardContent>
@@ -718,17 +729,6 @@ export default function CostAnalytics() {
                 </p>
               </div>
               <div className="flex items-center gap-2 flex-wrap">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={includeHistorical ? 'secondary' : 'outline'}
-                  aria-pressed={includeHistorical}
-                  onClick={() => setIncludeHistorical((prev) => !prev)}
-                  className="min-h-9"
-                >
-                  Include closed PRs
-                  {(summary?.historicalEnvironments ?? 0) > 0 ? ` (${summary?.historicalEnvironments})` : ''}
-                </Button>
                 {rateCard && (
                   <div className="text-xs font-mono text-muted-foreground bg-muted px-2.5 py-1 rounded">
                     Rate card: ${rateCard.vcpuHourUsd.toFixed(3)}/vCPU-hr · ${rateCard.memoryGibHourUsd.toFixed(3)}/GiB-hr ·

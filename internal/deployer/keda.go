@@ -43,9 +43,16 @@ type KEDADeployer struct {
 	Config         KEDAConfig
 }
 
-func (d *KEDADeployer) resolveClient(ctx context.Context, env *v1alpha1.Environment) (client.Client, error) {
+func (d *KEDADeployer) resolveTarget(ctx context.Context, env *v1alpha1.Environment) (*multicluster.Target, error) {
+	if pinned, ok := multicluster.TargetFromContext(ctx); ok {
+		return pinned, nil
+	}
 	if !multicluster.IsRemoteEnv(env) {
-		return d.Client, nil
+		return &multicluster.Target{
+			Name:     multicluster.LocalClusterName,
+			IsRemote: false,
+			Client:   d.Client,
+		}, nil
 	}
 	resolver := d.ClusterClients
 	if resolver == nil && d.Client != nil {
@@ -54,11 +61,7 @@ func (d *KEDADeployer) resolveClient(ctx context.Context, env *v1alpha1.Environm
 	if resolver == nil {
 		return nil, fmt.Errorf("multi-cluster resolver is not configured")
 	}
-	target, err := resolver.Resolve(ctx, env)
-	if err != nil {
-		return nil, err
-	}
-	return target.Client, nil
+	return resolver.Resolve(ctx, env)
 }
 
 // Deploy performs its designated operation.
@@ -72,13 +75,17 @@ func (d *KEDADeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) er
 		return fmt.Errorf("invalid KEDA config: minReplicas (%d) > maxReplicas (%d)", minRepl, maxRepl)
 	}
 
-	if err := d.Inner.Deploy(ctx, env); err != nil {
-		return err
-	}
-
-	targetClient, err := d.resolveClient(ctx, env)
+	// Resolve target cluster once and pin it in context so Inner.Deploy and HTTPScaledObject
+	// reconciliation always target the exact same cluster even if a Secret rotates mid-flight.
+	target, err := d.resolveTarget(ctx, env)
 	if err != nil {
 		return fmt.Errorf("failed to resolve target cluster for KEDA: %w", err)
+	}
+	pinnedCtx := multicluster.WithTarget(ctx, target)
+	targetClient := target.Client
+
+	if err := d.Inner.Deploy(pinnedCtx, env); err != nil {
+		return err
 	}
 
 	// Check if KEDA CRD exists
@@ -243,13 +250,15 @@ func (d *KEDADeployer) resolveKEDAConfig(env *v1alpha1.Environment) (minRepl, ma
 func (d *KEDADeployer) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
 	logger := log.FromContext(ctx).WithName("keda-deployer")
 
-	targetClient, err := d.resolveClient(ctx, env)
+	target, err := d.resolveTarget(ctx, env)
 	if err != nil {
-		if _, isVal := multicluster.IsValidationError(err); isVal {
+		if _, isVal := multicluster.IsValidationError(err); isVal && !multicluster.HasConfirmedRemoteTarget(env) {
 			return d.Inner.Teardown(ctx, env)
 		}
 		return fmt.Errorf("failed to resolve target cluster for KEDA teardown: %w", err)
 	}
+	pinnedCtx := multicluster.WithTarget(ctx, target)
+	targetClient := target.Client
 
 	targetNS := env.Namespace
 	if env.Spec.Deploy.Namespace == "create" {
@@ -268,7 +277,7 @@ func (d *KEDADeployer) Teardown(ctx context.Context, env *v1alpha1.Environment) 
 	hso.SetNamespace(targetNS)
 
 	if targetClient != nil {
-		if err := targetClient.Delete(ctx, hso); err != nil {
+		if err := targetClient.Delete(pinnedCtx, hso); err != nil {
 			if !meta.IsNoMatchError(err) && client.IgnoreNotFound(err) != nil {
 				return fmt.Errorf("failed to delete HTTPScaledObject: %w", err)
 			}
@@ -276,24 +285,26 @@ func (d *KEDADeployer) Teardown(ctx context.Context, env *v1alpha1.Environment) 
 		}
 	}
 
-	return d.Inner.Teardown(ctx, env)
+	return d.Inner.Teardown(pinnedCtx, env)
 }
 
 // Status performs its designated operation.
 func (d *KEDADeployer) Status(ctx context.Context, env *v1alpha1.Environment) ([]ServiceStatus, error) {
-	innerStatus, err := d.Inner.Status(ctx, env)
-	if err != nil {
-		return nil, err
-	}
-
-	targetClient, err := d.resolveClient(ctx, env)
+	target, err := d.resolveTarget(ctx, env)
 	if err != nil {
 		if !env.DeletionTimestamp.IsZero() {
-			if _, isVal := multicluster.IsValidationError(err); isVal {
-				return innerStatus, nil
+			if _, isVal := multicluster.IsValidationError(err); isVal && !multicluster.HasConfirmedRemoteTarget(env) {
+				return nil, nil
 			}
 		}
 		return nil, fmt.Errorf("failed to resolve target cluster for KEDA status: %w", err)
+	}
+	pinnedCtx := multicluster.WithTarget(ctx, target)
+	targetClient := target.Client
+
+	innerStatus, err := d.Inner.Status(pinnedCtx, env)
+	if err != nil {
+		return nil, err
 	}
 
 	targetNS := env.Namespace

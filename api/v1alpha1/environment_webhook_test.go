@@ -389,3 +389,63 @@ func TestEnvironmentValidatorLifecycle(t *testing.T) {
 		t.Errorf("ValidateUpdate on deleting env returned error: %v", err)
 	}
 }
+
+func TestEnvironmentValidateUpdate_ClusterRefImmutability(t *testing.T) {
+	v := &environmentValidator{}
+	ctx := context.Background()
+
+	provisionedWest := &Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-west",
+			Namespace: "default",
+		},
+		Spec: EnvironmentSpec{
+			Source: EnvironmentSource{Provider: "github", Branch: "feat/a"},
+			Deploy: EnvironmentDeploy{
+				ClusterRef: &ClusterTargetRef{
+					Name: "us-west",
+					KubeconfigSecretRef: &SecretRef{
+						Name: "west-kubeconfig",
+					},
+				},
+			},
+		},
+		Status: EnvironmentStatus{
+			TargetCluster: "us-west",
+		},
+	}
+
+	// Moving from us-west to us-east after TargetCluster is recorded must be rejected.
+	movedEast := provisionedWest.DeepCopy()
+	movedEast.Spec.Deploy.ClusterRef = &ClusterTargetRef{
+		Name: "us-east",
+		KubeconfigSecretRef: &SecretRef{
+			Name: "east-kubeconfig",
+		},
+	}
+	if _, err := v.ValidateUpdate(ctx, provisionedWest, movedEast); err == nil {
+		t.Fatal("expected error moving provisioned Environment from us-west to us-east, got nil")
+	}
+
+	// Clearing clusterRef back to local after TargetCluster is recorded must also be rejected.
+	movedLocal := provisionedWest.DeepCopy()
+	movedLocal.Spec.Deploy.ClusterRef = nil
+	if _, err := v.ValidateUpdate(ctx, provisionedWest, movedLocal); err == nil {
+		t.Fatal("expected error clearing clusterRef on provisioned Environment, got nil")
+	}
+
+	// Canonical equivalent (explicit same namespace) must remain allowed.
+	sameCanonical := provisionedWest.DeepCopy()
+	sameCanonical.Spec.Deploy.ClusterRef.KubeconfigSecretRef.Namespace = "default"
+	sameCanonical.Spec.Source.CommitSHA = "deadbeef"
+	if _, err := v.ValidateUpdate(ctx, provisionedWest, sameCanonical); err != nil {
+		t.Fatalf("expected canonical same-cluster update to succeed, got: %v", err)
+	}
+
+	// Before TargetCluster is assigned (e.g. repairing an unprovisioned reference), updating clusterRef is allowed.
+	unprovisioned := provisionedWest.DeepCopy()
+	unprovisioned.Status.TargetCluster = ""
+	if _, err := v.ValidateUpdate(ctx, unprovisioned, movedEast); err != nil {
+		t.Fatalf("expected repairing unprovisioned clusterRef to succeed, got: %v", err)
+	}
+}

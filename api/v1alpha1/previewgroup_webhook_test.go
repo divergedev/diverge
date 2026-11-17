@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	"context"
 	"testing"
 )
 
@@ -326,4 +327,59 @@ func containsHelper(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestPreviewGroupValidateUpdate_ClusterRefImmutability(t *testing.T) {
+	v := &previewGroupValidator{}
+	ctx := context.Background()
+
+	oldPG := &PreviewGroup{
+		Spec: PreviewGroupSpec{
+			Source:  EnvironmentSource{Provider: "github", Project: "org/repo", Branch: "feat/pg"},
+			Routing: PreviewGroupRouting{HeaderValue: "pr-99"},
+			ClusterRef: &ClusterTargetRef{
+				Name:                "spoke-west",
+				KubeconfigSecretRef: &SecretRef{Name: "west-secret"},
+			},
+			Services: []PreviewGroupServiceSpec{
+				{Name: "api", Image: "api:v1"},
+				{Name: "billing", Mode: ServiceModeBaseline},
+			},
+		},
+	}
+
+	// 1. Changing group-level clusterRef mutates existing service "api"'s effective target -> forbidden.
+	groupChanged := oldPG.DeepCopy()
+	groupChanged.Spec.ClusterRef = &ClusterTargetRef{
+		Name:                "spoke-east",
+		KubeconfigSecretRef: &SecretRef{Name: "east-secret"},
+	}
+	if _, err := v.ValidateUpdate(ctx, oldPG, groupChanged); err == nil {
+		t.Fatal("expected group-level clusterRef change on existing child service to be rejected")
+	}
+
+	// 2. Overriding service-level clusterRef on existing service "api" -> forbidden.
+	svcChanged := oldPG.DeepCopy()
+	svcChanged.Spec.Services[0].ClusterRef = &ClusterTargetRef{
+		Name:                "spoke-east",
+		KubeconfigSecretRef: &SecretRef{Name: "east-secret"},
+	}
+	if _, err := v.ValidateUpdate(ctx, oldPG, svcChanged); err == nil {
+		t.Fatal("expected service-level clusterRef change on existing child service to be rejected")
+	}
+
+	// 3. Updating image on existing service and adding a brand-new service on another spoke -> allowed.
+	validUpdate := oldPG.DeepCopy()
+	validUpdate.Spec.Services[0].Image = "api:v2"
+	validUpdate.Spec.Services = append(validUpdate.Spec.Services, PreviewGroupServiceSpec{
+		Name:  "worker",
+		Image: "worker:v1",
+		ClusterRef: &ClusterTargetRef{
+			Name:                "spoke-east",
+			KubeconfigSecretRef: &SecretRef{Name: "east-secret"},
+		},
+	})
+	if _, err := v.ValidateUpdate(ctx, oldPG, validUpdate); err != nil {
+		t.Fatalf("expected image update + new service addition to succeed, got: %v", err)
+	}
 }

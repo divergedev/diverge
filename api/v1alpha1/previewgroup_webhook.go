@@ -34,8 +34,65 @@ func (v *previewGroupValidator) ValidateCreate(_ context.Context, pg *PreviewGro
 }
 
 // ValidateUpdate validates an updated PreviewGroup.
-func (v *previewGroupValidator) ValidateUpdate(_ context.Context, _ *PreviewGroup, newPG *PreviewGroup) (admission.Warnings, error) {
-	return nil, validatePreviewGroup(newPG).ToAggregate()
+func (v *previewGroupValidator) ValidateUpdate(_ context.Context, oldPG *PreviewGroup, newPG *PreviewGroup) (admission.Warnings, error) {
+	if newPG != nil && newPG.DeletionTimestamp != nil {
+		return nil, nil
+	}
+	return nil, ValidatePreviewGroupUpdate(oldPG, newPG).ToAggregate()
+}
+
+// EffectivePreviewGroupClusterRef resolves the effective ClusterTargetRef for a service within a PreviewGroup,
+// applying service-level overrides over the group-level default.
+func EffectivePreviewGroupClusterRef(pg *PreviewGroup, svc PreviewGroupServiceSpec) *ClusterTargetRef {
+	var ref *ClusterTargetRef
+	if pg != nil && pg.Spec.ClusterRef != nil {
+		ref = pg.Spec.ClusterRef
+	}
+	if svc.ClusterRef != nil {
+		ref = svc.ClusterRef
+	}
+	return ref
+}
+
+// ValidatePreviewGroupUpdate validates structural rules and prevents mutating an existing non-baseline service's
+// effective clusterRef (whether via group-level spec.clusterRef or service-level spec.services[*].clusterRef).
+func ValidatePreviewGroupUpdate(oldPG, newPG *PreviewGroup) field.ErrorList {
+	allErrs := validatePreviewGroup(newPG)
+	if oldPG == nil || newPG == nil {
+		return allErrs
+	}
+
+	oldServices := make(map[string]PreviewGroupServiceSpec, len(oldPG.Spec.Services))
+	for _, svc := range oldPG.Spec.Services {
+		if svc.Name != "" && svc.Mode != ServiceModeBaseline {
+			oldServices[svc.Name] = svc
+		}
+	}
+
+	servicesPath := field.NewPath("spec", "services")
+	for i, svc := range newPG.Spec.Services {
+		if svc.Name == "" || svc.Mode == ServiceModeBaseline {
+			continue
+		}
+		oldSvc, existed := oldServices[svc.Name]
+		if !existed {
+			continue
+		}
+		targetNS := svc.Namespace
+		if targetNS == "" {
+			targetNS = "default"
+		}
+		oldRef := EffectivePreviewGroupClusterRef(oldPG, oldSvc)
+		newRef := EffectivePreviewGroupClusterRef(newPG, svc)
+		if !EqualClusterTargetRef(oldRef, newRef, targetNS) {
+			allErrs = append(allErrs, field.Forbidden(
+				servicesPath.Index(i).Child("clusterRef"),
+				fmt.Sprintf("effective clusterRef for existing service %q is immutable; remove and recreate the service or recreate the PreviewGroup to move clusters", svc.Name),
+			))
+		}
+	}
+
+	return allErrs
 }
 
 // ValidateDelete is a no-op for deletion.

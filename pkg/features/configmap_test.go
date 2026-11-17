@@ -209,3 +209,44 @@ func TestConfigMapProvider_SeparateNamespace(t *testing.T) {
 	err = provider.Teardown(ctx, env)
 	require.NoError(t, err)
 }
+
+func TestConfigMapProvider_RemoteClusterOmitsOwnerReference(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = v1alpha1.AddToScheme(scheme)
+
+	spokeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	provider := NewConfigMapProvider(spokeClient, scheme, logr.Discard())
+
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-remote",
+			Namespace: "default",
+			UID:       "hub-env-uid-123",
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Deploy: v1alpha1.EnvironmentDeploy{
+				Namespace: "same",
+				ClusterRef: &v1alpha1.ClusterTargetRef{
+					Name:                "us-west-burst",
+					KubeconfigSecretRef: &v1alpha1.SecretRef{Name: "spoke-west-kubeconfig"},
+				},
+			},
+			Features: &v1alpha1.FeatureSpec{
+				Provider:  "configmap",
+				Overrides: map[string]string{"beta_checkout": "true"},
+			},
+		},
+	}
+
+	ctx := context.Background()
+	res, err := provider.Provision(ctx, env)
+	require.NoError(t, err)
+	assert.Equal(t, "diverge-features-pr-remote", res.ConfigMapName)
+
+	var cm corev1.ConfigMap
+	require.NoError(t, spokeClient.Get(ctx, types.NamespacedName{Name: res.ConfigMapName, Namespace: "default"}, &cm))
+	assert.Empty(t, cm.OwnerReferences, "spoke feature ConfigMap must not set hub cross-cluster OwnerReference")
+
+	require.NoError(t, provider.Teardown(ctx, env))
+}

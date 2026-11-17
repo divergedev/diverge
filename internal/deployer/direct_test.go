@@ -10,6 +10,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -804,4 +805,50 @@ func TestDirectDeployer_MultiClusterSpokeDeployStatusTeardown(t *testing.T) {
 	require.NoError(t, d.Teardown(ctx, env))
 	err = spokeClient.Get(ctx, client.ObjectKey{Name: "orders-preview", Namespace: "team-orders"}, &spokeDep)
 	assert.True(t, apierrors.IsNotFound(err))
+}
+
+func TestDirectDeployer_Teardown_DeletesAllSupportedSpokeResourceKinds(t *testing.T) {
+	ctx := context.Background()
+	s := testScheme()
+	hubClient := fake.NewClientBuilder().WithScheme(s).Build()
+	spokeClient := fake.NewClientBuilder().WithScheme(s).Build()
+
+	resolver := &multicluster.StaticResolver{
+		Hub: &multicluster.Target{Name: "local", IsRemote: false, Client: hubClient},
+		Spokes: map[string]*multicluster.Target{
+			"spoke-west": {Name: "spoke-west", IsRemote: true, Client: spokeClient},
+		},
+	}
+
+	manifests := []unstructured.Unstructured{
+		{Object: map[string]interface{}{"apiVersion": "apps/v1", "kind": "DaemonSet", "metadata": map[string]interface{}{"name": "agent-ds"}}},
+		{Object: map[string]interface{}{"apiVersion": "batch/v1", "kind": "CronJob", "metadata": map[string]interface{}{"name": "cleanup-cj"}}},
+		{Object: map[string]interface{}{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "app-cm"}}},
+		{Object: map[string]interface{}{"apiVersion": "v1", "kind": "Secret", "metadata": map[string]interface{}{"name": "app-sec"}}},
+		{Object: map[string]interface{}{"apiVersion": "networking.k8s.io/v1", "kind": "Ingress", "metadata": map[string]interface{}{"name": "app-ing"}}},
+		{Object: map[string]interface{}{"apiVersion": "v1", "kind": "ServiceAccount", "metadata": map[string]interface{}{"name": "app-sa"}}},
+	}
+
+	d := NewDirectDeployer(hubClient, &mockFetcher{objects: manifests}, WithClusterClients(resolver))
+	env := testEnv("pr-all-kinds", "team-orders", "same")
+	env.Spec.Deploy.ClusterRef = &v1alpha1.ClusterTargetRef{
+		Name:                "spoke-west",
+		KubeconfigSecretRef: &v1alpha1.SecretRef{Name: "spoke-west-kubeconfig"},
+	}
+
+	require.NoError(t, d.Deploy(ctx, env))
+	require.NoError(t, spokeClient.Get(ctx, client.ObjectKey{Name: "agent-ds", Namespace: "team-orders"}, &appsv1.DaemonSet{}))
+	require.NoError(t, spokeClient.Get(ctx, client.ObjectKey{Name: "cleanup-cj", Namespace: "team-orders"}, &batchv1.CronJob{}))
+	require.NoError(t, spokeClient.Get(ctx, client.ObjectKey{Name: "app-cm", Namespace: "team-orders"}, &corev1.ConfigMap{}))
+	require.NoError(t, spokeClient.Get(ctx, client.ObjectKey{Name: "app-sec", Namespace: "team-orders"}, &corev1.Secret{}))
+	require.NoError(t, spokeClient.Get(ctx, client.ObjectKey{Name: "app-ing", Namespace: "team-orders"}, &networkingv1.Ingress{}))
+	require.NoError(t, spokeClient.Get(ctx, client.ObjectKey{Name: "app-sa", Namespace: "team-orders"}, &corev1.ServiceAccount{}))
+
+	require.NoError(t, d.Teardown(ctx, env))
+	assert.True(t, apierrors.IsNotFound(spokeClient.Get(ctx, client.ObjectKey{Name: "agent-ds", Namespace: "team-orders"}, &appsv1.DaemonSet{})))
+	assert.True(t, apierrors.IsNotFound(spokeClient.Get(ctx, client.ObjectKey{Name: "cleanup-cj", Namespace: "team-orders"}, &batchv1.CronJob{})))
+	assert.True(t, apierrors.IsNotFound(spokeClient.Get(ctx, client.ObjectKey{Name: "app-cm", Namespace: "team-orders"}, &corev1.ConfigMap{})))
+	assert.True(t, apierrors.IsNotFound(spokeClient.Get(ctx, client.ObjectKey{Name: "app-sec", Namespace: "team-orders"}, &corev1.Secret{})))
+	assert.True(t, apierrors.IsNotFound(spokeClient.Get(ctx, client.ObjectKey{Name: "app-ing", Namespace: "team-orders"}, &networkingv1.Ingress{})))
+	assert.True(t, apierrors.IsNotFound(spokeClient.Get(ctx, client.ObjectKey{Name: "app-sa", Namespace: "team-orders"}, &corev1.ServiceAccount{})))
 }

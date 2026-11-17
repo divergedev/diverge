@@ -53,11 +53,32 @@ func IsValidationError(err error) (*ValidationError, bool) {
 
 // Target holds resolved clients and metadata for a hub or spoke Kubernetes cluster.
 type Target struct {
-	Name       string
-	IsRemote   bool
-	Client     client.Client
-	Clientset  kubernetes.Interface
-	RESTConfig *rest.Config
+	Name               string
+	IsRemote           bool
+	Client             client.Client
+	Clientset          kubernetes.Interface
+	StreamingClientset kubernetes.Interface
+	RESTConfig         *rest.Config
+}
+
+type targetContextKey struct{}
+
+// WithTarget attaches a pre-resolved Target to ctx so composite operations (such as
+// KEDADeployer wrapping DirectDeployer) use the exact same cluster client throughout.
+func WithTarget(ctx context.Context, target *Target) context.Context {
+	if target == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, targetContextKey{}, target)
+}
+
+// TargetFromContext returns a pre-resolved Target attached via WithTarget, if present.
+func TargetFromContext(ctx context.Context) (*Target, bool) {
+	if ctx == nil {
+		return nil, false
+	}
+	t, ok := ctx.Value(targetContextKey{}).(*Target)
+	return t, ok && t != nil
 }
 
 // Resolver resolves hub or spoke cluster clients for a given Environment.
@@ -69,11 +90,12 @@ type Resolver interface {
 type ClientFactory func(cfg *rest.Config, scheme *runtime.Scheme) (client.Client, kubernetes.Interface, error)
 
 type cachedCluster struct {
-	hash       [32]byte
-	client     client.Client
-	clientset  kubernetes.Interface
-	restConfig *rest.Config
-	createdAt  time.Time
+	hash               [32]byte
+	client             client.Client
+	clientset          kubernetes.Interface
+	streamingClientset kubernetes.Interface
+	restConfig         *rest.Config
+	createdAt          time.Time
 }
 
 // Manager resolves and caches spoke-cluster Kubernetes clients from same-namespace Secrets.
@@ -89,6 +111,8 @@ type Manager struct {
 	AllowInsecureHTTPForTesting bool
 	// ClientFactory overrides client construction when non-nil (primarily for testing).
 	ClientFactory ClientFactory
+	// LookupIPAddr overrides DNS resolution in connection-time dial guards when non-nil (primarily for testing).
+	LookupIPAddr func(ctx context.Context, host string) ([]net.IPAddr, error)
 	// MaxCacheEntries bounds the number of cached spoke clients (defaults to 128).
 	MaxCacheEntries int
 
@@ -148,18 +172,32 @@ func IsRemoteEnv(env *v1alpha1.Environment) bool {
 	return name != "" && name != LocalClusterName
 }
 
+// HasConfirmedRemoteTarget reports whether env has already been committed to a remote spoke cluster
+// in Status.TargetCluster, meaning teardown must not silently skip spoke cleanup on kubeconfig validation errors.
+func HasConfirmedRemoteTarget(env *v1alpha1.Environment) bool {
+	if env == nil {
+		return false
+	}
+	tc := strings.TrimSpace(env.Status.TargetCluster)
+	return tc != "" && tc != LocalClusterName
+}
+
 // Resolve returns the hub or spoke Target for env.
 func (m *Manager) Resolve(ctx context.Context, env *v1alpha1.Environment) (*Target, error) {
+	if pinned, ok := TargetFromContext(ctx); ok {
+		return pinned, nil
+	}
 	if m == nil {
 		return nil, fmt.Errorf("multicluster manager is nil")
 	}
 	if env == nil || !IsRemoteEnv(env) {
 		return &Target{
-			Name:       LocalClusterName,
-			IsRemote:   false,
-			Client:     m.HubClient,
-			Clientset:  m.HubClientset,
-			RESTConfig: m.HubConfig,
+			Name:               LocalClusterName,
+			IsRemote:           false,
+			Client:             m.HubClient,
+			Clientset:          m.HubClientset,
+			StreamingClientset: m.HubClientset,
+			RESTConfig:         m.HubConfig,
 		}, nil
 	}
 
@@ -212,11 +250,12 @@ func (m *Manager) Resolve(ctx context.Context, env *v1alpha1.Environment) (*Targ
 	if hit, ok := m.cache[cacheKey]; ok && hit.hash == sum {
 		m.mu.RUnlock()
 		return &Target{
-			Name:       clusterName,
-			IsRemote:   true,
-			Client:     hit.client,
-			Clientset:  hit.clientset,
-			RESTConfig: rest.CopyConfig(hit.restConfig),
+			Name:               clusterName,
+			IsRemote:           true,
+			Client:             hit.client,
+			Clientset:          hit.clientset,
+			StreamingClientset: hit.streamingClientset,
+			RESTConfig:         rest.CopyConfig(hit.restConfig),
 		}, nil
 	}
 	m.mu.RUnlock()
@@ -241,20 +280,33 @@ func (m *Manager) Resolve(ctx context.Context, env *v1alpha1.Environment) (*Targ
 		return nil, fmt.Errorf("constructing spoke client for cluster %q: %w", clusterName, err)
 	}
 
+	streamingClientset := spokeClientset
+	if m.ClientFactory == nil {
+		streamCfg := rest.CopyConfig(restCfg)
+		streamCfg.Timeout = 0
+		streamingCS, streamErr := kubernetes.NewForConfig(streamCfg)
+		if streamErr != nil {
+			return nil, fmt.Errorf("constructing spoke streaming clientset for cluster %q: %w", clusterName, streamErr)
+		}
+		streamingClientset = streamingCS
+	}
+
 	m.storeCache(cacheKey, cachedCluster{
-		hash:       sum,
-		client:     spokeClient,
-		clientset:  spokeClientset,
-		restConfig: rest.CopyConfig(restCfg),
-		createdAt:  time.Now(),
+		hash:               sum,
+		client:             spokeClient,
+		clientset:          spokeClientset,
+		streamingClientset: streamingClientset,
+		restConfig:         rest.CopyConfig(restCfg),
+		createdAt:          time.Now(),
 	})
 
 	return &Target{
-		Name:       clusterName,
-		IsRemote:   true,
-		Client:     spokeClient,
-		Clientset:  spokeClientset,
-		RESTConfig: rest.CopyConfig(restCfg),
+		Name:               clusterName,
+		IsRemote:           true,
+		Client:             spokeClient,
+		Clientset:          spokeClientset,
+		StreamingClientset: streamingClientset,
+		RESTConfig:         rest.CopyConfig(restCfg),
 	}, nil
 }
 
@@ -342,6 +394,9 @@ func (m *Manager) parseAndValidateKubeconfig(raw []byte) (*rest.Config, error) {
 	if err := m.validateAPIServerURL(restCfg.Host); err != nil {
 		return nil, err
 	}
+	if restCfg.Dial == nil {
+		restCfg.Dial = m.buildSafeDialContext()
+	}
 
 	return restCfg, nil
 }
@@ -426,36 +481,106 @@ func (m *Manager) validateAPIServerURL(rawHost string) error {
 	}
 
 	if ip := net.ParseIP(hostname); ip != nil {
-		if ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-			return &ValidationError{
-				Reason:  "ForbiddenAPIServerHost",
-				Message: fmt.Sprintf("spoke kubeconfig server IP %q targets a link-local or unspecified address", hostname),
-			}
-		}
-		if ip.IsLoopback() && !m.AllowLoopbackForTesting {
-			return &ValidationError{
-				Reason:  "ForbiddenAPIServerHost",
-				Message: fmt.Sprintf("spoke kubeconfig server IP %q targets loopback", hostname),
-			}
-		}
-		return nil
+		return m.validateEndpointIP(ip, hostname)
 	}
 
+	if err := m.validateHostname(hostname); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (m *Manager) validateHostname(hostname string) error {
+	hostname = strings.ToLower(strings.TrimSpace(hostname))
 	if hostname == "metadata" || hostname == "metadata.google.internal" || strings.HasSuffix(hostname, ".metadata.google.internal") {
 		return &ValidationError{
 			Reason:  "ForbiddenAPIServerHost",
 			Message: fmt.Sprintf("spoke kubeconfig server host %q targets cloud metadata service", hostname),
 		}
 	}
-
 	if !m.AllowLoopbackForTesting && (hostname == "localhost" || strings.HasSuffix(hostname, ".localhost") || hostname == "kubernetes.default" || hostname == "kubernetes.default.svc" || strings.HasPrefix(hostname, "kubernetes.default.svc.")) {
 		return &ValidationError{
 			Reason:  "ForbiddenAPIServerHost",
 			Message: fmt.Sprintf("spoke kubeconfig server host %q targets local or in-cluster API server", hostname),
 		}
 	}
-
 	return nil
+}
+
+func (m *Manager) validateEndpointIP(ip net.IP, hostLabel string) error {
+	if ip == nil {
+		return &ValidationError{
+			Reason:  "InvalidAPIServerURL",
+			Message: fmt.Sprintf("spoke kubeconfig server IP %q is invalid", hostLabel),
+		}
+	}
+	if v4 := ip.To4(); v4 != nil {
+		ip = v4
+	}
+	if ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return &ValidationError{
+			Reason:  "ForbiddenAPIServerHost",
+			Message: fmt.Sprintf("spoke kubeconfig server %q resolves to link-local or unspecified address %s", hostLabel, ip.String()),
+		}
+	}
+	if ip.IsLoopback() && !m.AllowLoopbackForTesting {
+		return &ValidationError{
+			Reason:  "ForbiddenAPIServerHost",
+			Message: fmt.Sprintf("spoke kubeconfig server %q resolves to loopback address %s", hostLabel, ip.String()),
+		}
+	}
+	return nil
+}
+
+func (m *Manager) buildSafeDialContext() func(ctx context.Context, network, addr string) (net.Conn, error) {
+	dialer := &net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid spoke API server dial address %q: %w", addr, err)
+		}
+		trimmedHost := strings.TrimSpace(host)
+		if literalIP := net.ParseIP(trimmedHost); literalIP != nil {
+			if err := m.validateEndpointIP(literalIP, trimmedHost); err != nil {
+				return nil, err
+			}
+			return dialer.DialContext(ctx, network, net.JoinHostPort(literalIP.String(), port))
+		}
+		if err := m.validateHostname(trimmedHost); err != nil {
+			return nil, err
+		}
+
+		lookup := m.LookupIPAddr
+		if lookup == nil {
+			lookup = net.DefaultResolver.LookupIPAddr
+		}
+		addrs, err := lookup(ctx, trimmedHost)
+		if err != nil {
+			return nil, fmt.Errorf("resolving spoke API server host %q: %w", trimmedHost, err)
+		}
+		if len(addrs) == 0 {
+			return nil, fmt.Errorf("spoke API server host %q resolved to no IP addresses", trimmedHost)
+		}
+		for _, candidate := range addrs {
+			if err := m.validateEndpointIP(candidate.IP, trimmedHost); err != nil {
+				return nil, err
+			}
+		}
+
+		var lastErr error
+		for _, candidate := range addrs {
+			conn, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(candidate.IP.String(), port))
+			if dialErr == nil {
+				return conn, nil
+			}
+			lastErr = dialErr
+		}
+		return nil, lastErr
+	}
 }
 
 func (m *Manager) storeCache(key string, entry cachedCluster) {
@@ -492,7 +617,10 @@ type StaticResolver struct {
 }
 
 // Resolve returns Hub for local environments and Spokes[clusterName] for federated environments.
-func (s *StaticResolver) Resolve(_ context.Context, env *v1alpha1.Environment) (*Target, error) {
+func (s *StaticResolver) Resolve(ctx context.Context, env *v1alpha1.Environment) (*Target, error) {
+	if pinned, ok := TargetFromContext(ctx); ok {
+		return pinned, nil
+	}
 	if env == nil || !IsRemoteEnv(env) {
 		if s.Hub != nil {
 			return s.Hub, nil

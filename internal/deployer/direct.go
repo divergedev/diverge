@@ -6,11 +6,16 @@ import (
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -101,6 +106,9 @@ func (d *DirectDeployer) isKindPermitted(kind string) bool {
 }
 
 func (d *DirectDeployer) resolveClient(ctx context.Context, env *v1alpha1.Environment) (client.Client, bool, error) {
+	if pinned, ok := multicluster.TargetFromContext(ctx); ok {
+		return pinned.Client, pinned.IsRemote, nil
+	}
 	if !multicluster.IsRemoteEnv(env) {
 		return d.Client, false, nil
 	}
@@ -275,7 +283,7 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 
 	targetClient, _, err := d.resolveClient(ctx, env)
 	if err != nil {
-		if _, isVal := multicluster.IsValidationError(err); isVal {
+		if _, isVal := multicluster.IsValidationError(err); isVal && !multicluster.HasConfirmedRemoteTarget(env) {
 			return nil
 		}
 		return fmt.Errorf("failed to resolve target cluster for teardown: %w", err)
@@ -321,6 +329,36 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 		}
 	}
 
+	var dsList appsv1.DaemonSetList
+	if err := targetClient.List(ctx, &dsList, listOpts...); isIgnorableListErr(err) != nil {
+		return fmt.Errorf("failed to list daemonsets for teardown: %w", err)
+	}
+	for i := range dsList.Items {
+		if err := targetClient.Delete(ctx, &dsList.Items[i], fgDelOpts...); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete daemonset %s/%s: %w", targetNS, dsList.Items[i].Name, err)
+		}
+	}
+
+	var rsList appsv1.ReplicaSetList
+	if err := targetClient.List(ctx, &rsList, listOpts...); isIgnorableListErr(err) != nil {
+		return fmt.Errorf("failed to list replicasets for teardown: %w", err)
+	}
+	for i := range rsList.Items {
+		if err := targetClient.Delete(ctx, &rsList.Items[i], fgDelOpts...); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete replicaset %s/%s: %w", targetNS, rsList.Items[i].Name, err)
+		}
+	}
+
+	var cronJobList batchv1.CronJobList
+	if err := targetClient.List(ctx, &cronJobList, listOpts...); isIgnorableListErr(err) != nil {
+		return fmt.Errorf("failed to list cronjobs for teardown: %w", err)
+	}
+	for i := range cronJobList.Items {
+		if err := targetClient.Delete(ctx, &cronJobList.Items[i], fgDelOpts...); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete cronjob %s/%s: %w", targetNS, cronJobList.Items[i].Name, err)
+		}
+	}
+
 	var jobList batchv1.JobList
 	if err := targetClient.List(ctx, &jobList, listOpts...); err != nil {
 		return fmt.Errorf("failed to list jobs for teardown: %w", err)
@@ -328,6 +366,50 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 	for i := range jobList.Items {
 		if err := targetClient.Delete(ctx, &jobList.Items[i], fgDelOpts...); client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("failed to delete job %s/%s: %w", targetNS, jobList.Items[i].Name, err)
+		}
+	}
+
+	var hpaList autoscalingv2.HorizontalPodAutoscalerList
+	if err := targetClient.List(ctx, &hpaList, listOpts...); isIgnorableListErr(err) != nil {
+		return fmt.Errorf("failed to list horizontalpodautoscalers for teardown: %w", err)
+	}
+	for i := range hpaList.Items {
+		if err := targetClient.Delete(ctx, &hpaList.Items[i]); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete horizontalpodautoscaler %s/%s: %w", targetNS, hpaList.Items[i].Name, err)
+		}
+	}
+
+	var pdbList policyv1.PodDisruptionBudgetList
+	if err := targetClient.List(ctx, &pdbList, listOpts...); isIgnorableListErr(err) != nil {
+		return fmt.Errorf("failed to list poddisruptionbudgets for teardown: %w", err)
+	}
+	for i := range pdbList.Items {
+		if err := targetClient.Delete(ctx, &pdbList.Items[i]); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete poddisruptionbudget %s/%s: %w", targetNS, pdbList.Items[i].Name, err)
+		}
+	}
+
+	var ingressList networkingv1.IngressList
+	if err := targetClient.List(ctx, &ingressList, listOpts...); isIgnorableListErr(err) != nil {
+		return fmt.Errorf("failed to list ingresses for teardown: %w", err)
+	}
+	for i := range ingressList.Items {
+		if err := targetClient.Delete(ctx, &ingressList.Items[i]); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete ingress %s/%s: %w", targetNS, ingressList.Items[i].Name, err)
+		}
+	}
+
+	var netpolList networkingv1.NetworkPolicyList
+	if err := targetClient.List(ctx, &netpolList, listOpts...); isIgnorableListErr(err) != nil {
+		return fmt.Errorf("failed to list networkpolicies for teardown: %w", err)
+	}
+	for i := range netpolList.Items {
+		// In create-namespace mode, diverge-default-netpol is removed with the preview namespace after workload drain.
+		if env.Spec.Deploy.Namespace == "create" && netpolList.Items[i].Name == "diverge-default-netpol" {
+			continue
+		}
+		if err := targetClient.Delete(ctx, &netpolList.Items[i]); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete networkpolicy %s/%s: %w", targetNS, netpolList.Items[i].Name, err)
 		}
 	}
 
@@ -341,7 +423,82 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 		}
 	}
 
+	var cmList corev1.ConfigMapList
+	if err := targetClient.List(ctx, &cmList, listOpts...); isIgnorableListErr(err) != nil {
+		return fmt.Errorf("failed to list configmaps for teardown: %w", err)
+	}
+	for i := range cmList.Items {
+		if isControllerDeferredConfigMap(env, cmList.Items[i].Name) {
+			continue
+		}
+		if err := targetClient.Delete(ctx, &cmList.Items[i]); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete configmap %s/%s: %w", targetNS, cmList.Items[i].Name, err)
+		}
+	}
+
+	var secretList corev1.SecretList
+	if err := targetClient.List(ctx, &secretList, listOpts...); isIgnorableListErr(err) != nil {
+		return fmt.Errorf("failed to list secrets for teardown: %w", err)
+	}
+	for i := range secretList.Items {
+		if isControllerDeferredSecret(env, secretList.Items[i].Name) {
+			continue
+		}
+		if err := targetClient.Delete(ctx, &secretList.Items[i]); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete secret %s/%s: %w", targetNS, secretList.Items[i].Name, err)
+		}
+	}
+
+	var pvcList corev1.PersistentVolumeClaimList
+	if err := targetClient.List(ctx, &pvcList, listOpts...); isIgnorableListErr(err) != nil {
+		return fmt.Errorf("failed to list persistentvolumeclaims for teardown: %w", err)
+	}
+	for i := range pvcList.Items {
+		if err := targetClient.Delete(ctx, &pvcList.Items[i]); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete persistentvolumeclaim %s/%s: %w", targetNS, pvcList.Items[i].Name, err)
+		}
+	}
+
+	var saList corev1.ServiceAccountList
+	if err := targetClient.List(ctx, &saList, listOpts...); isIgnorableListErr(err) != nil {
+		return fmt.Errorf("failed to list serviceaccounts for teardown: %w", err)
+	}
+	for i := range saList.Items {
+		if err := targetClient.Delete(ctx, &saList.Items[i]); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete serviceaccount %s/%s: %w", targetNS, saList.Items[i].Name, err)
+		}
+	}
+
 	return nil
+}
+
+func isIgnorableListErr(err error) error {
+	if err == nil || meta.IsNoMatchError(err) || runtime.IsNotRegisteredError(err) {
+		return nil
+	}
+	return err
+}
+
+func isControllerDeferredConfigMap(env *v1alpha1.Environment, name string) bool {
+	if env == nil || env.DeletionTimestamp.IsZero() {
+		return false
+	}
+	featuresCM := "diverge-features-" + env.Name
+	if len(featuresCM) > 253 {
+		featuresCM = featuresCM[:253]
+	}
+	bannerCM := "diverge-banner-" + env.Name
+	if len(bannerCM) > 253 {
+		bannerCM = bannerCM[:253]
+	}
+	return name == featuresCM || name == bannerCM
+}
+
+func isControllerDeferredSecret(env *v1alpha1.Environment, name string) bool {
+	if env == nil || env.DeletionTimestamp.IsZero() {
+		return false
+	}
+	return strings.HasPrefix(name, "diverge-db-env-") || strings.HasPrefix(name, "diverge-db-")
 }
 
 // Status returns the deployment status of resources managed by this deployer.
@@ -349,7 +506,7 @@ func (d *DirectDeployer) Status(ctx context.Context, env *v1alpha1.Environment) 
 	targetClient, _, err := d.resolveClient(ctx, env)
 	if err != nil {
 		if !env.DeletionTimestamp.IsZero() {
-			if _, isVal := multicluster.IsValidationError(err); isVal {
+			if _, isVal := multicluster.IsValidationError(err); isVal && !multicluster.HasConfirmedRemoteTarget(env) {
 				return nil, nil
 			}
 		}

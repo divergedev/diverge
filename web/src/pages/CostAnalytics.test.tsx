@@ -207,6 +207,67 @@ describe('CostAnalytics', () => {
     expect(await screen.findByText('No preview usage recorded yet')).toBeInTheDocument()
   })
 
+  it('keeps historical window and closed-PR filter controls available after request failures so users can restore settings', async () => {
+    server.use(
+      http.post('*/diverge.v1alpha1.ClusterService/GetClusterInfo', () =>
+        HttpResponse.json({
+          controllerVersion: 'v0.27.0',
+          environmentCount: 1,
+          previewGroupCount: 0,
+          controllerHealthy: true,
+          namespaces: ['payments'],
+        }),
+      ),
+      http.post('*/diverge.v1alpha1.ClusterService/GetCostSummary', async ({ request }) => {
+        const body = (await request.json().catch(() => ({}))) as {
+          windowDays?: number
+          includeHistorical?: boolean
+        }
+        if (body.windowDays === 7 || body.includeHistorical === true) {
+          return HttpResponse.json({ code: 'internal', message: 'ledger configmap read failed' }, { status: 500 })
+        }
+        return HttpResponse.json({
+          totalHourlyCostUsd: 0.024,
+          monthlyRunRateUsd: 17.52,
+          totalEnvironments: 1,
+          activeEnvironments: 1,
+          byNamespace: [],
+          byService: [],
+          dailyTrend: [
+            {
+              date: '2026-11-17',
+              accruedCostUsd: 0.05,
+              hibernationSavingsUsd: 0.01,
+              deltaRoutingSavingsUsd: 0.02,
+              activeEnvironments: 1,
+              terminatedEnvironments: 0,
+            },
+          ],
+          topConsumers: [],
+        })
+      }),
+    )
+
+    render(<CostAnalytics />)
+    expect(await screen.findByRole('img', { name: /Daily preview spend and savings over the last 30 days/ })).toBeInTheDocument()
+
+    // Selecting 7d triggers an error, but the 7d/30d window group remains rendered so the user can switch back to 30d.
+    fireEvent.click(screen.getByRole('button', { name: '7d' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Failed to load cost analytics/)
+    expect(screen.getByRole('group', { name: 'Historical trend window' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '7d' })).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(screen.getByRole('button', { name: '30d' }))
+    expect(await screen.findByRole('img', { name: /Daily preview spend and savings over the last 30 days/ })).toBeInTheDocument()
+
+    // Enabling Include closed PRs triggers an error, and the toggle remains mounted to restore includeHistorical=false.
+    fireEvent.click(screen.getByRole('button', { name: /Include closed PRs/ }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Failed to load cost analytics/)
+    const closedBtn = screen.getByRole('button', { name: /Include closed PRs/ })
+    expect(closedBtn).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(closedBtn)
+    expect(await screen.findByRole('img', { name: /Daily preview spend and savings over the last 30 days/ })).toBeInTheDocument()
+  })
+
   it('renders 7d/30d accessible SVG trend chart with semantic data table disclosure, spoke cluster attribution, and closed PR history toggle', async () => {
     const observedRequests: Array<{ windowDays?: number; includeHistorical?: boolean }> = []
     server.use(

@@ -3,6 +3,8 @@ package server
 import (
 	"bytes"
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -20,8 +22,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	pb "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
+	"github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/multicluster"
 	"github.com/divergedev/diverge/internal/server/auth"
+	"github.com/divergedev/diverge/internal/server/streaming"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -260,4 +265,193 @@ func TestUpdateEnvironment_PBT(t *testing.T) {
 			require.NoError(t, err)
 		}
 	})
+}
+
+func TestUpdateEnvironment_ClusterRefImmutabilityOnceProvisioned(t *testing.T) {
+	_, c, k8s, logger := buildEnvTestSetup()
+	audit := NewAuditLogger(logger)
+	svc := NewEnvironmentService(c, k8s, nil, nil, NewStreamLimiter(250, 20), logger, audit)
+
+	ctx := auth.ContextWithUserInfo(context.Background(), &auth.UserInfo{Username: "alice"})
+	existing := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-west",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "github", Branch: "feat/x"},
+			Deploy: v1alpha1.EnvironmentDeploy{
+				ClusterRef: &v1alpha1.ClusterTargetRef{
+					Name:                "us-west",
+					KubeconfigSecretRef: &v1alpha1.SecretRef{Name: "west-sec"},
+				},
+			},
+		},
+		Status: v1alpha1.EnvironmentStatus{
+			TargetCluster: "us-west",
+		},
+	}
+	require.NoError(t, c.Create(ctx, existing))
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(existing), existing))
+
+	_, err := svc.UpdateEnvironment(ctx, connect.NewRequest(&pb.UpdateEnvironmentRequest{
+		Environment: &pb.Environment{
+			Name:            "pr-west",
+			Namespace:       "default",
+			ResourceVersion: existing.ResourceVersion,
+			Spec: &pb.EnvironmentSpec{
+				Source: &pb.EnvironmentSource{Provider: "github", Branch: "feat/x"},
+				Deploy: &pb.EnvironmentDeploy{
+					ClusterRef: &pb.ClusterTargetRef{
+						Name:                "us-east",
+						KubeconfigSecretRef: &pb.SecretRef{Name: "east-sec"},
+					},
+				},
+			},
+		},
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+func TestStreamLogs_PreviewNamespaceAuthzHookRoutingAndFollowClient(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1alpha1.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	envCreate := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-create",
+			Namespace: "team-a",
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "github", Branch: "feat/create"},
+			Deploy: v1alpha1.EnvironmentDeploy{
+				Namespace: "create",
+				ClusterRef: &v1alpha1.ClusterTargetRef{
+					Name:                "spoke-west",
+					KubeconfigSecretRef: &v1alpha1.SecretRef{Name: "spoke-sec"},
+				},
+			},
+		},
+	}
+	previewNS := envCreate.PreviewNamespace()
+
+	// Migration hook pod lives on the HUB in msg.Namespace ("team-a").
+	hubMigrationPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "hook-pr-create-migration-abc",
+			Namespace: "team-a",
+			Labels: map[string]string{
+				"divergedev.com/environment": "pr-create",
+				"divergedev.com/hook-type":   "migration",
+			},
+		},
+	}
+	// Service pod lives on the SPOKE in PreviewNamespace().
+	spokeServicePod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "orders-preview-pod",
+			Namespace: previewNS,
+			Labels: map[string]string{
+				"divergedev.com/environment": "pr-create",
+				"app.kubernetes.io/name":     "orders",
+			},
+		},
+	}
+
+	hubClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(envCreate, hubMigrationPod).Build()
+	spokeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(spokeServicePod).Build()
+
+	allowPreviewNS := false
+	hubK8s := fakek8s.NewSimpleClientset()
+	hubK8s.PrependReactor("create", "subjectaccessreviews", func(action coretesting.Action) (bool, runtime.Object, error) {
+		sar := action.(coretesting.CreateAction).GetObject().(*authorizationv1.SubjectAccessReview)
+		sar.Status.Allowed = true
+		return true, sar, nil
+	})
+
+	spokeK8s := fakek8s.NewSimpleClientset()
+	spokeK8s.PrependReactor("create", "subjectaccessreviews", func(action coretesting.Action) (bool, runtime.Object, error) {
+		sar := action.(coretesting.CreateAction).GetObject().(*authorizationv1.SubjectAccessReview)
+		attrs := sar.Spec.ResourceAttributes
+		if attrs != nil && attrs.Namespace == previewNS && !allowPreviewNS {
+			sar.Status.Allowed = false
+			return true, sar, nil
+		}
+		sar.Status.Allowed = true
+		return true, sar, nil
+	})
+	spokeStreamingK8s := fakek8s.NewSimpleClientset()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	svc := &EnvironmentService{
+		client:      hubClient,
+		k8sClient:   hubK8s,
+		logStreamer: streaming.NewLogStreamer(hubK8s),
+		limiter:     NewStreamLimiter(250, 20),
+		logger:      logger,
+		auditLogger: NewAuditLogger(logger),
+		clusterClients: &multicluster.StaticResolver{
+			Hub: &multicluster.Target{Name: "local", IsRemote: false, Client: hubClient, Clientset: hubK8s},
+			Spokes: map[string]*multicluster.Target{
+				"spoke-west": {
+					Name:               "spoke-west",
+					IsRemote:           true,
+					Client:             spokeClient,
+					Clientset:          spokeK8s,
+					StreamingClientset: spokeStreamingK8s,
+				},
+			},
+		},
+	}
+
+	_, handler := divergev1alpha1connect.NewEnvironmentServiceHandler(svc)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r = r.WithContext(auth.ContextWithUserInfo(r.Context(), &auth.UserInfo{Username: "dev"}))
+		handler.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+
+	rpcClient := divergev1alpha1connect.NewEnvironmentServiceClient(srv.Client(), srv.URL)
+	ctx := context.Background()
+
+	// 1. Migration HookType stays on hub in msg.Namespace ("team-a"), succeeding even when spoke/previewNS is denied.
+	hookStream, err := rpcClient.StreamLogs(ctx, connect.NewRequest(&pb.StreamLogsRequest{
+		EnvironmentName: "pr-create",
+		Namespace:       "team-a",
+		HookType:        "migration",
+	}))
+	require.NoError(t, err)
+	require.True(t, hookStream.Receive(), "expected migration hook log line from hub pod, err=%v", hookStream.Err())
+	assert.Equal(t, "hook-pr-create-migration-abc", hookStream.Msg().PodName)
+	_ = hookStream.Close()
+
+	// 2. Service logs in PreviewNamespace() on spoke are denied when user lacks pods/log in PreviewNamespace().
+	deniedStream, err := rpcClient.StreamLogs(ctx, connect.NewRequest(&pb.StreamLogsRequest{
+		EnvironmentName: "pr-create",
+		Namespace:       "team-a",
+	}))
+	if err == nil {
+		for deniedStream.Receive() {
+		}
+		err = deniedStream.Err()
+		_ = deniedStream.Close()
+	}
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+
+	// 3. Once granted pods/log in PreviewNamespace(), Follow=true uses StreamingClientset on the spoke.
+	allowPreviewNS = true
+	followStream, err := rpcClient.StreamLogs(ctx, connect.NewRequest(&pb.StreamLogsRequest{
+		EnvironmentName: "pr-create",
+		Namespace:       "team-a",
+		Follow:          true,
+	}))
+	require.NoError(t, err)
+	require.True(t, followStream.Receive(), "expected spoke service log line, err=%v", followStream.Err())
+	assert.Equal(t, "orders-preview-pod", followStream.Msg().PodName)
+	_ = followStream.Close()
+	assert.NotEmpty(t, spokeStreamingK8s.Actions(), "Follow=true must stream using target.StreamingClientset")
 }

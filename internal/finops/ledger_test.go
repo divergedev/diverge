@@ -3,6 +3,9 @@ package finops
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -178,4 +181,180 @@ func TestMergeAndPruneLedger_MaxEntriesCap(t *testing.T) {
 	require.Len(t, capped, 5)
 	assert.Equal(t, "pr-newest", capped[len(capped)-1].Name)
 	assert.Equal(t, "pr-6", capped[0].Name)
+}
+
+type staticRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f staticRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+func TestPreviewGroupSavingsAllocation_LiveTrendAndSequentialTeardown(t *testing.T) {
+	ctx := context.Background()
+	scheme := ledgerTestScheme(t)
+	now := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	rateCard := metrics.DefaultCostRateCard()
+
+	// 4-service PreviewGroup with 2 deployed child Environments (1 service each) and 2 baseline services.
+	// Together they avoid 4 - 2 = 2 services (NOT 3 + 3 = 6).
+	pg := &v1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pg-checkout",
+			Namespace: "shop",
+		},
+		Spec: v1alpha1.PreviewGroupSpec{
+			Services: []v1alpha1.PreviewGroupServiceSpec{
+				{Name: "api", Image: "api:pr"},
+				{Name: "web", Image: "web:pr"},
+				{Name: "orders", Mode: v1alpha1.ServiceModeBaseline},
+				{Name: "payments", Mode: v1alpha1.ServiceModeBaseline},
+			},
+		},
+	}
+
+	childA := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			UID:               types.UID("uid-pg-a"),
+			Name:              "pg-checkout-api",
+			Namespace:         "shop",
+			CreationTimestamp: metav1.NewTime(now.Add(-2 * time.Hour)),
+			Labels: map[string]string{
+				"divergedev.com/previewgroup": "pg-checkout",
+			},
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "github", Branch: "feat/pg"},
+			Deploy: v1alpha1.EnvironmentDeploy{Namespace: "same", ChangedServices: []string{"api"}},
+		},
+		Status: v1alpha1.EnvironmentStatus{Phase: v1alpha1.PhaseRunning},
+	}
+	childB := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			UID:               types.UID("uid-pg-b"),
+			Name:              "pg-checkout-web",
+			Namespace:         "shop",
+			CreationTimestamp: metav1.NewTime(now.Add(-2 * time.Hour)),
+			Labels: map[string]string{
+				"divergedev.com/previewgroup": "pg-checkout",
+			},
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "github", Branch: "feat/pg"},
+			Deploy: v1alpha1.EnvironmentDeploy{Namespace: "same", ChangedServices: []string{"web"}},
+		},
+		Status: v1alpha1.EnvironmentStatus{Phase: v1alpha1.PhaseRunning},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pg, childA, childB).Build()
+
+	estSingle := metrics.ComputeEnvironmentCost(childA, now, rateCard)
+	expectedGroupDeltaSavings := 2.0 * 2.0 * estSingle.ComputeHourlyUSD // 2h * (4 - 2 avoided svcs) * perSvcHourly
+
+	// 1. Live dailyTrend must report group-level avoided savings (2 services, not 6).
+	liveSummary, err := BuildCostSummary(ctx, SummaryOptions{
+		Namespace:  "shop",
+		Client:     cl,
+		Now:        now,
+		RateCard:   &rateCard,
+		WindowDays: 7,
+	})
+	require.NoError(t, err)
+	var liveTrendDeltaSum float64
+	for _, pt := range liveSummary.DailyTrend {
+		liveTrendDeltaSum += pt.DeltaRoutingSavingsUsd
+	}
+	assert.InDelta(t, expectedGroupDeltaSavings, liveTrendDeltaSavingsSumOrZero(liveTrendDeltaSum), 1e-6)
+
+	// 2. Sequential teardown: childA tears down & is deleted from cluster BEFORE childB tears down.
+	require.NoError(t, RecordEnvironmentTeardown(ctx, cl, childA, now, rateCard))
+	require.NoError(t, cl.Delete(ctx, childA))
+	require.NoError(t, RecordEnvironmentTeardown(ctx, cl, childB, now, rateCard))
+	require.NoError(t, cl.Delete(ctx, childB))
+
+	histSummary, err := BuildCostSummary(ctx, SummaryOptions{
+		Namespace:         "shop",
+		Client:            cl,
+		Now:               now,
+		RateCard:          &rateCard,
+		IncludeHistorical: true,
+		WindowDays:        7,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), histSummary.HistoricalEnvironments)
+	assert.InDelta(t, expectedGroupDeltaSavings, histSummary.HistoricalSavingsUsd, 1e-6)
+}
+
+func liveTrendDeltaSavingsSumOrZero(v float64) float64 { return v }
+
+func TestBuildCostSummary_LiveOpenCostDoesNotInflatePriorAccumulatedSavings(t *testing.T) {
+	ctx := context.Background()
+	scheme := ledgerTestScheme(t)
+	now := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	rateCard := metrics.DefaultCostRateCard()
+
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			UID:               types.UID("uid-oc-1"),
+			Name:              "pr-oc",
+			Namespace:         "payments",
+			CreationTimestamp: metav1.NewTime(now.Add(-4 * time.Hour)),
+			Annotations: map[string]string{
+				AnnotationBaselineServiceCount:      "3",
+				metrics.AnnotationHibernatedSeconds: "7200", // 2h hibernated, 2h active
+			},
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "github", Branch: "feat/oc"},
+			Deploy: v1alpha1.EnvironmentDeploy{Namespace: "same", ChangedServices: []string{"api"}},
+		},
+		Status: v1alpha1.EnvironmentStatus{Phase: v1alpha1.PhaseRunning},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(env).Build()
+
+	// Baseline summary without OpenCost.
+	withoutOC, err := BuildCostSummary(ctx, SummaryOptions{
+		Namespace:  "payments",
+		Client:     cl,
+		Now:        now,
+		RateCard:   &rateCard,
+		WindowDays: 7,
+	})
+	require.NoError(t, err)
+
+	// OpenCost reports a 50x current-hour spike ($5.00/hr for 60 minutes).
+	ocClient := &OpenCostClient{
+		baseURL: "https://opencost.internal",
+		timeout: time.Second,
+		httpClient: &http.Client{
+			Transport: staticRoundTripper(func(_ *http.Request) (*http.Response, error) {
+				payload := `{"code":200,"data":[{"payments/pr-oc":{"name":"payments/pr-oc","minutes":60,"totalCost":5.0,"cpuCoreUsageAverage":2.0,"ramByteUsageAverage":1073741824}}]}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(payload)),
+				}, nil
+			}),
+		},
+	}
+
+	withOC, err := BuildCostSummary(ctx, SummaryOptions{
+		Namespace:  "payments",
+		Client:     cl,
+		Now:        now,
+		RateCard:   &rateCard,
+		OpenCost:   ocClient,
+		WindowDays: 7,
+	})
+	require.NoError(t, err)
+	assert.True(t, withOC.OpencostEnabled)
+	assert.InDelta(t, 5.0, withOC.TotalHourlyCostUsd, 1e-6)
+
+	var baseSaved, ocSaved float64
+	for _, pt := range withoutOC.DailyTrend {
+		baseSaved += pt.HibernationSavingsUsd + pt.DeltaRoutingSavingsUsd
+	}
+	for _, pt := range withOC.DailyTrend {
+		ocSaved += pt.HibernationSavingsUsd + pt.DeltaRoutingSavingsUsd
+	}
+	assert.InDelta(t, baseSaved, ocSaved, 1e-6, "instantaneous OpenCost hourly spike must not retroactively inflate prior-hour trend savings")
 }

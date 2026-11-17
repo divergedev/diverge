@@ -47,6 +47,7 @@ type HistoricalEnvironmentRecord struct {
 	Name                   string    `json:"name"`
 	Namespace              string    `json:"namespace"`
 	Cluster                string    `json:"cluster,omitempty"`
+	PreviewGroup           string    `json:"previewGroup,omitempty"`
 	Project                string    `json:"project,omitempty"`
 	MR                     string    `json:"mr,omitempty"`
 	Branch                 string    `json:"branch,omitempty"`
@@ -54,6 +55,7 @@ type HistoricalEnvironmentRecord struct {
 	ServiceCount           int32     `json:"serviceCount"`
 	CPUCores               float64   `json:"cpuCores"`
 	MemoryGiB              float64   `json:"memoryGiB"`
+	ActiveComputeHourlyUSD float64   `json:"activeComputeHourlyUsd,omitempty"`
 	CreatedAt              time.Time `json:"createdAt"`
 	TerminatedAt           time.Time `json:"terminatedAt"`
 	UptimeHours            float64   `json:"uptimeHours"`
@@ -62,6 +64,16 @@ type HistoricalEnvironmentRecord struct {
 	AccruedCostUSD         float64   `json:"accruedCostUsd"`
 	HibernationSavingsUSD  float64   `json:"hibernationSavingsUsd"`
 	DeltaRoutingSavingsUSD float64   `json:"deltaRoutingSavingsUsd"`
+}
+
+func previewGroupNameFromEnv(env *v1alpha1.Environment) string {
+	if env == nil || len(env.Labels) == 0 {
+		return ""
+	}
+	if pg := strings.TrimSpace(env.Labels["divergedev.com/preview-group"]); pg != "" {
+		return pg
+	}
+	return strings.TrimSpace(env.Labels["divergedev.com/previewgroup"])
 }
 
 func (r HistoricalEnvironmentRecord) dedupKey() string {
@@ -84,6 +96,19 @@ func NormalizeWindowDays(windowDays int) int {
 
 // SnapshotEnvironmentTeardown builds a HistoricalEnvironmentRecord from a terminating Environment.
 func SnapshotEnvironmentTeardown(env *v1alpha1.Environment, now time.Time, rateCard metrics.CostRateCard, baselineServiceCount int) HistoricalEnvironmentRecord {
+	return SnapshotEnvironmentTeardownWithGroup(env, now, rateCard, baselineServiceCount, 0, 0)
+}
+
+// SnapshotEnvironmentTeardownWithGroup builds a HistoricalEnvironmentRecord while allocating PreviewGroup
+// delta-routing savings across the group's deployed services rather than counting full baseline savings per child.
+func SnapshotEnvironmentTeardownWithGroup(
+	env *v1alpha1.Environment,
+	now time.Time,
+	rateCard metrics.CostRateCard,
+	baselineServiceCount int,
+	groupDeployedServices int,
+	groupPerServiceHourlyUSD float64,
+) HistoricalEnvironmentRecord {
 	termTime := now.UTC()
 	if termTime.IsZero() {
 		termTime = time.Now().UTC()
@@ -109,10 +134,25 @@ func SnapshotEnvironmentTeardown(env *v1alpha1.Environment, now time.Time, rateC
 		hibernationSavingsUSD = est.HibernatedHours * activeComputeHourly
 	}
 
+	effectiveGroupServices := groupDeployedServices
+	if effectiveGroupServices < est.ServiceCount {
+		effectiveGroupServices = est.ServiceCount
+	}
+	effectivePerSvcHourly := groupPerServiceHourlyUSD
+	if effectivePerSvcHourly <= 0 && est.ServiceCount > 0 && activeComputeHourly > 0 {
+		effectivePerSvcHourly = activeComputeHourly / float64(est.ServiceCount)
+	}
+
 	deltaSavingsUSD := 0.0
-	if env.Spec.Deploy.Namespace != "create" && est.ServiceCount > 0 && baselineServiceCount > est.ServiceCount && activeComputeHourly > 0 && est.ActiveHours > 0 {
-		perSvcHourly := activeComputeHourly / float64(est.ServiceCount)
-		deltaSavingsUSD = est.ActiveHours * float64(baselineServiceCount-est.ServiceCount) * perSvcHourly
+	if env.Spec.Deploy.Namespace != "create" &&
+		est.ServiceCount > 0 &&
+		effectiveGroupServices > 0 &&
+		baselineServiceCount > effectiveGroupServices &&
+		effectivePerSvcHourly > 0 &&
+		est.ActiveHours > 0 {
+		avoidedGroupServices := float64(baselineServiceCount - effectiveGroupServices)
+		memberShare := float64(est.ServiceCount) / float64(effectiveGroupServices)
+		deltaSavingsUSD = est.ActiveHours * (avoidedGroupServices * memberShare) * effectivePerSvcHourly
 	}
 
 	mrStr := ""
@@ -131,6 +171,7 @@ func SnapshotEnvironmentTeardown(env *v1alpha1.Environment, now time.Time, rateC
 		Name:                   env.Name,
 		Namespace:              ns,
 		Cluster:                multicluster.ClusterName(env),
+		PreviewGroup:           previewGroupNameFromEnv(env),
 		Project:                project,
 		MR:                     mrStr,
 		Branch:                 env.Spec.Source.Branch,
@@ -138,6 +179,7 @@ func SnapshotEnvironmentTeardown(env *v1alpha1.Environment, now time.Time, rateC
 		ServiceCount:           int32(est.ServiceCount),
 		CPUCores:               est.CPUCores,
 		MemoryGiB:              est.MemoryGiB,
+		ActiveComputeHourlyUSD: activeComputeHourly,
 		CreatedAt:              createdAt,
 		TerminatedAt:           termTime,
 		UptimeHours:            est.UptimeHours,
@@ -147,6 +189,124 @@ func SnapshotEnvironmentTeardown(env *v1alpha1.Environment, now time.Time, rateC
 		HibernationSavingsUSD:  hibernationSavingsUSD,
 		DeltaRoutingSavingsUSD: deltaSavingsUSD,
 	}
+}
+
+func resolvePreviewGroupTeardownGrouping(
+	ctx context.Context,
+	c client.Client,
+	env *v1alpha1.Environment,
+	ns, pgName string,
+	termTime time.Time,
+	rateCard metrics.CostRateCard,
+	initialBaseline int,
+	existingLedger []HistoricalEnvironmentRecord,
+) (baselineCount int, groupDeployed int, groupPerSvcHourly float64) {
+	baselineCount = initialBaseline
+	selfEst := metrics.ComputeEnvironmentCost(env, termTime, rateCard)
+	selfActiveHourly := selfEst.ComputeHourlyUSD + selfEst.HibernationSavingsHourlyUSD
+
+	if pgName == "" || env.Spec.Deploy.Namespace == "create" || selfEst.ServiceCount <= 0 {
+		perSvc := 0.0
+		if selfEst.ServiceCount > 0 {
+			perSvc = selfActiveHourly / float64(selfEst.ServiceCount)
+		}
+		return baselineCount, selfEst.ServiceCount, perSvc
+	}
+
+	selfCreated := env.CreationTimestamp.UTC()
+	if selfCreated.IsZero() && env.Status.CreatedAt != nil {
+		selfCreated = env.Status.CreatedAt.UTC()
+	}
+	if selfCreated.IsZero() || selfCreated.After(termTime) {
+		selfCreated = termTime
+	}
+
+	type memberFootprint struct {
+		services     int
+		activeHourly float64
+	}
+	members := map[string]memberFootprint{
+		env.Name: {services: selfEst.ServiceCount, activeHourly: selfActiveHourly},
+	}
+
+	qCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	// Inspect parent PreviewGroup if present for authoritative baseline & non-baseline service counts.
+	var pgList v1alpha1.PreviewGroupList
+	if err := c.List(qCtx, &pgList); err == nil {
+		for i := range pgList.Items {
+			pg := &pgList.Items[i]
+			if pg.Name != pgName {
+				continue
+			}
+			if pg.Namespace != "" && pg.Namespace != ns {
+				continue
+			}
+			totalSvcs := len(pg.Spec.Services)
+			if int(pg.Status.ServiceCount) > totalSvcs {
+				totalSvcs = int(pg.Status.ServiceCount)
+			}
+			if totalSvcs > baselineCount {
+				baselineCount = totalSvcs
+			}
+			break
+		}
+	}
+
+	// Include live sibling Environments belonging to the same PreviewGroup.
+	var envList v1alpha1.EnvironmentList
+	if err := c.List(qCtx, &envList, client.InNamespace(ns)); err == nil {
+		for i := range envList.Items {
+			sib := &envList.Items[i]
+			if sib.Name == env.Name || sib.Spec.Deploy.Namespace == "create" {
+				continue
+			}
+			if previewGroupNameFromEnv(sib) != pgName {
+				continue
+			}
+			if raw := strings.TrimSpace(sib.Annotations[AnnotationBaselineServiceCount]); raw != "" {
+				if parsed, pErr := strconv.Atoi(raw); pErr == nil && parsed > baselineCount {
+					baselineCount = parsed
+				}
+			}
+			sibEst := metrics.ComputeEnvironmentCost(sib, termTime, rateCard)
+			if sibEst.ServiceCount > 0 {
+				members[sib.Name] = memberFootprint{
+					services:     sibEst.ServiceCount,
+					activeHourly: sibEst.ComputeHourlyUSD + sibEst.HibernationSavingsHourlyUSD,
+				}
+			}
+		}
+	}
+
+	// Include sibling environments from the same PreviewGroup that already tore down earlier in this run.
+	for _, rec := range existingLedger {
+		if rec.PreviewGroup != pgName || rec.Namespace != ns || rec.Name == env.Name || rec.ServiceCount <= 0 {
+			continue
+		}
+		if _, seen := members[rec.Name]; seen {
+			continue
+		}
+		// Overlapping lifetime check: sibling existed during [selfCreated, termTime] (with 5m teardown clock skew buffer).
+		if rec.TerminatedAt.Before(selfCreated.Add(-5*time.Minute)) || rec.CreatedAt.After(termTime.Add(5*time.Minute)) {
+			continue
+		}
+		members[rec.Name] = memberFootprint{
+			services:     int(rec.ServiceCount),
+			activeHourly: rec.ActiveComputeHourlyUSD,
+		}
+	}
+
+	var totalHourly float64
+	for _, m := range members {
+		groupDeployed += m.services
+		totalHourly += m.activeHourly
+	}
+	if groupDeployed > 0 {
+		groupPerSvcHourly = totalHourly / float64(groupDeployed)
+	}
+	return baselineCount, groupDeployed, groupPerSvcHourly
 }
 
 // RecordEnvironmentTeardown persists a torn-down Environment's cost and savings snapshot into
@@ -170,8 +330,11 @@ func RecordEnvironmentTeardown(ctx context.Context, c client.Client, env *v1alph
 		baselineCount = countBaselineDeployments(ctx, c, nil, ns, 3*time.Second)
 	}
 
-	record := SnapshotEnvironmentTeardown(env, now, rateCard, baselineCount)
-	cutoff := record.TerminatedAt.AddDate(0, 0, -LedgerRetentionDays)
+	pgName := previewGroupNameFromEnv(env)
+	termTime := now.UTC()
+	if termTime.IsZero() {
+		termTime = time.Now().UTC()
+	}
 
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		var cm corev1.ConfigMap
@@ -181,6 +344,8 @@ func RecordEnvironmentTeardown(ctx context.Context, c client.Client, env *v1alph
 			if !apierrors.IsNotFound(err) {
 				return fmt.Errorf("getting finops ledger configmap %s/%s: %w", ns, LedgerConfigMapName, err)
 			}
+			effBaseline, groupSvcs, groupPerSvc := resolvePreviewGroupTeardownGrouping(ctx, c, env, ns, pgName, termTime, rateCard, baselineCount, nil)
+			record := SnapshotEnvironmentTeardownWithGroup(env, termTime, rateCard, effBaseline, groupSvcs, groupPerSvc)
 			encoded, encErr := json.Marshal([]HistoricalEnvironmentRecord{record})
 			if encErr != nil {
 				return encErr
@@ -208,6 +373,9 @@ func RecordEnvironmentTeardown(ctx context.Context, c client.Client, env *v1alph
 		}
 
 		existing := parseLedgerConfigMap(&cm)
+		effBaseline, groupSvcs, groupPerSvc := resolvePreviewGroupTeardownGrouping(ctx, c, env, ns, pgName, termTime, rateCard, baselineCount, existing)
+		record := SnapshotEnvironmentTeardownWithGroup(env, termTime, rateCard, effBaseline, groupSvcs, groupPerSvc)
+		cutoff := record.TerminatedAt.AddDate(0, 0, -LedgerRetentionDays)
 		merged := mergeAndPruneLedger(existing, record, cutoff, LedgerMaxEntries)
 		encoded, encErr := json.Marshal(merged)
 		if encErr != nil {

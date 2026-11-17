@@ -30,11 +30,25 @@ func (v *environmentValidator) ValidateCreate(_ context.Context, env *Environmen
 }
 
 // ValidateUpdate validates an updated Environment.
-func (v *environmentValidator) ValidateUpdate(_ context.Context, _ *Environment, newEnv *Environment) (admission.Warnings, error) {
+func (v *environmentValidator) ValidateUpdate(_ context.Context, oldEnv *Environment, newEnv *Environment) (admission.Warnings, error) {
 	if newEnv != nil && newEnv.DeletionTimestamp != nil {
 		return nil, nil
 	}
-	return nil, ValidateEnvironment(newEnv).ToAggregate()
+	return nil, ValidateEnvironmentUpdate(oldEnv, newEnv).ToAggregate()
+}
+
+// ValidateEnvironmentUpdate validates structural rules and clusterRef immutability across an Environment update.
+func ValidateEnvironmentUpdate(oldEnv, newEnv *Environment) field.ErrorList {
+	allErrs := ValidateEnvironment(newEnv)
+	if oldEnv != nil && newEnv != nil && strings.TrimSpace(oldEnv.Status.TargetCluster) != "" {
+		if !EqualClusterTargetRef(oldEnv.Spec.Deploy.ClusterRef, newEnv.Spec.Deploy.ClusterRef, newEnv.Namespace) {
+			allErrs = append(allErrs, field.Forbidden(
+				field.NewPath("spec", "deploy", "clusterRef"),
+				fmt.Sprintf("clusterRef is immutable once targetCluster (%q) is assigned; recreate the Environment to change target clusters", oldEnv.Status.TargetCluster),
+			))
+		}
+	}
+	return allErrs
 }
 
 // ValidateDelete is a no-op for deletion.
@@ -73,6 +87,15 @@ func ValidateEnvironment(env *Environment) field.ErrorList {
 	// Validate cross-namespace SecretRefs
 	allErrs = append(allErrs, validateSecretRefs(env.Spec.EnvFrom, env.Namespace, specPath.Child("envFrom"))...)
 	allErrs = append(allErrs, validateSecretRefs(env.Spec.Deploy.EnvFrom, env.Namespace, specPath.Child("deploy", "envFrom"))...)
+	if env.Spec.Deploy.ClusterRef != nil && env.Spec.Deploy.ClusterRef.KubeconfigSecretRef != nil {
+		secNS := strings.TrimSpace(env.Spec.Deploy.ClusterRef.KubeconfigSecretRef.Namespace)
+		if secNS != "" && secNS != env.Namespace {
+			allErrs = append(allErrs, field.Forbidden(
+				specPath.Child("deploy", "clusterRef", "kubeconfigSecretRef", "namespace"),
+				"cross-namespace SecretRef is not allowed",
+			))
+		}
+	}
 	if env.Spec.Database.MigrationJob != nil {
 		allErrs = append(allErrs, validateSecretRefs(
 			env.Spec.Database.MigrationJob.EnvFrom,

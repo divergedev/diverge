@@ -947,7 +947,7 @@ func isServiceName(name string) bool {
 func (r *GatewayRouter) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
 	scoped, err := r.routerForEnv(ctx, env)
 	if err != nil {
-		if _, isVal := multicluster.IsValidationError(err); isVal {
+		if _, isVal := multicluster.IsValidationError(err); isVal && !multicluster.HasConfirmedRemoteTarget(env) {
 			return nil
 		}
 		return fmt.Errorf("failed to resolve target cluster for gateway teardown: %w", err)

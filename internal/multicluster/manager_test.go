@@ -3,6 +3,7 @@ package multicluster
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -415,6 +416,77 @@ func TestManager_CacheEvictionAndHelpers(t *testing.T) {
 
 	assert.Equal(t, LocalClusterName, ClusterName(nil))
 	assert.Equal(t, "s1", ClusterName(env1))
+	assert.False(t, HasConfirmedRemoteTarget(env1))
 	env1.Status.TargetCluster = "pinned-west"
 	assert.Equal(t, "pinned-west", ClusterName(env1))
+	assert.True(t, HasConfirmedRemoteTarget(env1))
+	env1.Status.TargetCluster = LocalClusterName
+	assert.False(t, HasConfirmedRemoteTarget(env1))
+}
+
+func TestManager_DNSRebindingDialGuardAndStreamingClientset(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+
+	sec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "rebind-sec", Namespace: "team-a"},
+		Data: map[string][]byte{
+			"kubeconfig": validTestKubeconfig("https://spoke-rebind.example.com:6443", "tok"),
+		},
+	}
+	hubClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sec).Build()
+
+	var lookupCalls atomic.Int32
+	mgr := NewManager(hubClient, k8sfake.NewClientset(), nil, scheme)
+	mgr.LookupIPAddr = func(_ context.Context, host string) ([]net.IPAddr, error) {
+		call := lookupCalls.Add(1)
+		if call == 1 {
+			// Simulate DNS resolving to loopback (DNS rebinding to 127.0.0.1).
+			return []net.IPAddr{{IP: net.ParseIP("127.0.0.1")}}, nil
+		}
+		// Simulate DNS resolving to cloud metadata IMDS 169.254.169.254 on retry.
+		return []net.IPAddr{{IP: net.ParseIP("169.254.169.254")}}, nil
+	}
+
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "pr-rebind", Namespace: "team-a"},
+		Spec: v1alpha1.EnvironmentSpec{
+			Deploy: v1alpha1.EnvironmentDeploy{
+				ClusterRef: &v1alpha1.ClusterTargetRef{
+					Name:                "rebind-spoke",
+					KubeconfigSecretRef: &v1alpha1.SecretRef{Name: "rebind-sec"},
+				},
+			},
+		},
+	}
+
+	// Hostname passes initial parse, but both Clientset and StreamingClientset are constructed
+	// with the connection-time safe dialer and distinct timeout profiles.
+	target, err := mgr.Resolve(ctx, env)
+	require.NoError(t, err)
+	require.NotNil(t, target.RESTConfig.Dial)
+	require.NotNil(t, target.Clientset)
+	require.NotNil(t, target.StreamingClientset)
+	assert.Equal(t, defaultRequestTimeout, target.RESTConfig.Timeout)
+
+	// Connection #1: DNS resolves to 127.0.0.1 -> blocked before dialing!
+	_, err = target.RESTConfig.Dial(ctx, "tcp", "spoke-rebind.example.com:6443")
+	require.Error(t, err)
+	ve1, ok1 := IsValidationError(err)
+	require.True(t, ok1)
+	assert.Equal(t, "ForbiddenAPIServerHost", ve1.Reason)
+
+	// Connection #2: DNS rebinds to 169.254.169.254 -> re-evaluated on every connection and blocked!
+	_, err = target.RESTConfig.Dial(ctx, "tcp", "spoke-rebind.example.com:6443")
+	require.Error(t, err)
+	ve2, ok2 := IsValidationError(err)
+	require.True(t, ok2)
+	assert.Equal(t, "ForbiddenAPIServerHost", ve2.Reason)
+	assert.Equal(t, int32(2), lookupCalls.Load())
+
+	// Context-pinned target returns directly without re-resolving Secrets.
+	pinned := &Target{Name: "pinned", IsRemote: true, Client: hubClient}
+	gotPinned, err := mgr.Resolve(WithTarget(ctx, pinned), env)
+	require.NoError(t, err)
+	assert.Same(t, pinned, gotPinned)
 }

@@ -327,6 +327,7 @@ func main() {
 		Notifier:         pgNotifierImpl,
 		StatusReporter:   statusReporterImpl,
 		DatabaseProvider: dbProviderImpl,
+		ClusterClients:   clusterMgr,
 		EnableGAMMA:      enableGAMMA,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PreviewGroup")

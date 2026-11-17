@@ -13,6 +13,7 @@ import (
 	"connectrpc.com/connect"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	pb "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
@@ -268,6 +269,7 @@ func (s *EnvironmentService) UpdateEnvironment(ctx context.Context, req *connect
 	wasHibernated := existingCrd.Annotations[metrics.AnnotationHibernated] == "true"
 	priorHibAt := existingCrd.Annotations[metrics.AnnotationHibernatedAt]
 	priorHibSec := existingCrd.Annotations[metrics.AnnotationHibernatedSeconds]
+	priorClusterRef := existingCrd.Spec.Deploy.ClusterRef.DeepCopy()
 
 	// NOTE: FieldMask currently supports top-level paths only (spec, labels, annotations).
 	// Nested paths like "spec.source" are not supported and will be rejected.
@@ -346,6 +348,11 @@ func (s *EnvironmentService) UpdateEnvironment(ctx context.Context, req *connect
 
 	if err := validateClusterRefNamespace(&existingCrd, existingCrd.Namespace); err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(existingCrd.Status.TargetCluster) != "" &&
+		!v1alpha1.EqualClusterTargetRef(priorClusterRef, existingCrd.Spec.Deploy.ClusterRef, existingCrd.Namespace) {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("spec.deploy.cluster_ref is immutable once target_cluster (%q) has been assigned; recreate the environment to move clusters", existingCrd.Status.TargetCluster))
 	}
 
 	if err := s.client.Update(ctx, &existingCrd); err != nil {
@@ -658,14 +665,21 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 	}
 	podClient := s.client
 	podNamespace := msg.Namespace
+	authzK8sClient := s.k8sClient
 	activeLogStreamer := s.logStreamer
+	isRemoteTarget := false
 
 	var envCRD v1alpha1.Environment
+	// Hook Jobs run on the hub in msg.Namespace (except PreviewGroup postdeploy Jobs on remote children).
+	// Apply PreviewNamespace() and spoke cluster lookup only where the target pods actually run.
 	if getErr := s.client.Get(ctx, client.ObjectKey{Name: msg.EnvironmentName, Namespace: msg.Namespace}, &envCRD); getErr == nil {
-		if envCRD.Spec.Deploy.Namespace == "create" {
+		if msg.HookType == "" && envCRD.Spec.Deploy.Namespace == "create" {
 			podNamespace = envCRD.PreviewNamespace()
 		}
-		if multicluster.IsRemoteEnv(&envCRD) {
+		if (msg.HookType == "" || msg.HookType == "postdeploy") && multicluster.IsRemoteEnv(&envCRD) {
+			if msg.HookType == "postdeploy" && envCRD.Spec.Deploy.Namespace == "create" {
+				podNamespace = envCRD.PreviewNamespace()
+			}
 			resolver := s.clusterClients
 			if resolver == nil && s.client != nil {
 				resolver = multicluster.NewManager(s.client, s.k8sClient, nil, s.client.Scheme())
@@ -680,13 +694,36 @@ func (s *EnvironmentService) StreamLogs(ctx context.Context, req *connect.Reques
 				}
 				return SanitizeK8sError(s.logger, resolveErr)
 			}
+			isRemoteTarget = target.IsRemote
 			podClient = target.Client
-			if target.Clientset != nil {
-				activeLogStreamer = streaming.NewLogStreamer(target.Clientset)
+			authzK8sClient = target.Clientset
+			streamCS := target.Clientset
+			if msg.Follow && target.StreamingClientset != nil {
+				streamCS = target.StreamingClientset
+			} else if msg.Follow && target.RESTConfig != nil {
+				streamCfg := rest.CopyConfig(target.RESTConfig)
+				streamCfg.Timeout = 0
+				if scs, scErr := kubernetes.NewForConfig(streamCfg); scErr == nil {
+					streamCS = scs
+				} else {
+					return SanitizeK8sError(s.logger, scErr)
+				}
+			}
+			if streamCS != nil {
+				activeLogStreamer = streaming.NewLogStreamer(streamCS)
 			}
 		}
-	} else if !apierrors.IsNotFound(getErr) {
+	} else if getErr != nil && !apierrors.IsNotFound(getErr) {
 		return SanitizeK8sError(s.logger, getErr)
+	}
+
+	if podNamespace != msg.Namespace || isRemoteTarget {
+		if authzK8sClient == nil {
+			return connect.NewError(connect.CodeFailedPrecondition, errors.New("target cluster kubernetes clientset is not configured"))
+		}
+		if err := AuthorizePodLogs(ctx, authzK8sClient, s.auditLogger, podNamespace); err != nil {
+			return err
+		}
 	}
 
 	opts := []client.ListOption{
