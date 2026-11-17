@@ -27,6 +27,7 @@ import (
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/events"
 	"github.com/divergedev/diverge/internal/metrics"
+	"github.com/divergedev/diverge/internal/multicluster"
 	"github.com/divergedev/diverge/internal/notifier"
 	"github.com/divergedev/diverge/pkg/database"
 )
@@ -224,6 +225,7 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			svcStatus.Phase = divergeiov1alpha1.PhasePending
 			svcStatus.Message = "Environment created"
 			svcStatus.ChangedServices = desiredEnv.Spec.Deploy.ChangedServices
+			svcStatus.TargetCluster = multicluster.ClusterName(desiredEnv)
 			existingEnv = *desiredEnv
 		} else {
 			// Update — sync spec if changed
@@ -246,6 +248,7 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			svcStatus.Phase = existingEnv.Status.Phase
 			svcStatus.URL = existingEnv.Status.URL
 			svcStatus.ChangedServices = existingEnv.Spec.Deploy.ChangedServices
+			svcStatus.TargetCluster = multicluster.ClusterName(&existingEnv)
 			if existingEnv.Status.Phase == divergeiov1alpha1.PhaseFailed {
 				for _, cond := range existingEnv.Status.Conditions {
 					if cond.Status == metav1.ConditionFalse {
@@ -480,6 +483,14 @@ func (r *PreviewGroupReconciler) buildChildEnvironment(
 		KEDA:            svc.KEDA,
 	}
 
+	var clusterRef *divergeiov1alpha1.ClusterTargetRef
+	if pg.Spec.ClusterRef != nil {
+		clusterRef = pg.Spec.ClusterRef.DeepCopy()
+	}
+	if svc.ClusterRef != nil {
+		clusterRef = svc.ClusterRef.DeepCopy()
+	}
+
 	env := &divergeiov1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      envName,
@@ -498,6 +509,7 @@ func (r *PreviewGroupReconciler) buildChildEnvironment(
 				Mode:            "delta",
 				Namespace:       "same",
 				ChangedServices: []string{svc.Name},
+				ClusterRef:      clusterRef,
 			},
 		},
 	}

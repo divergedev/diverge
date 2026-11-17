@@ -302,14 +302,20 @@ describe('finops utilities', () => {
         totalHourlyCostUsd: 0.065,
         monthlyRunRateUsd: 47.45,
         opencostEnabled: true,
+        historicalEnvironments: 1,
+        historicalAccruedCostUsd: 0.25,
+        historicalSavingsUsd: 0.08,
         topConsumers: [item],
       })
       const parsed = JSON.parse(buildCostSummaryJson(summary)) as {
         opencostEnabled: boolean
-        topConsumers: Array<{ costSource: string }>
+        historicalEnvironments: number
+        topConsumers: Array<{ costSource: string; cluster: string }>
       }
       expect(parsed.opencostEnabled).toBe(true)
+      expect(parsed.historicalEnvironments).toBe(1)
       expect(parsed.topConsumers[0].costSource).toBe('opencost')
+      expect(parsed.topConsumers[0].cluster).toBe('local')
 
       const dashFormulaItem = new EnvironmentCostItem({
         namespace: 'payments',

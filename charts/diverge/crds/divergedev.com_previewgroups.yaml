@@ -61,6 +61,33 @@ spec:
           spec:
             description: PreviewGroupSpec defines the desired state of a PreviewGroup.
             properties:
+              clusterRef:
+                description: |-
+                  ClusterRef provides a default remote spoke cluster target for services in this group.
+                  Individual services can override this in their own clusterRef field.
+                properties:
+                  kubeconfigSecretRef:
+                    description: |-
+                      KubeconfigSecretRef references a Secret in the same namespace containing
+                      a kubeconfig for the target spoke cluster (defaults to key "kubeconfig", falling back to "value").
+                    properties:
+                      key:
+                        description: Key is the specific key in the Secret to reference.
+                        type: string
+                      name:
+                        description: Name is the name of the Secret.
+                        type: string
+                      namespace:
+                        description: Namespace is the namespace of the Secret.
+                        type: string
+                    type: object
+                  name:
+                    description: |-
+                      Name is a logical cluster identifier (e.g. "us-west-burst", "eu-central-1")
+                      surfaced in status, CLI, and FinOps reports. Defaults to the Secret name when omitted.
+                    maxLength: 63
+                    type: string
+                type: object
               database:
                 description: |-
                   Database provides group-level database configuration.
@@ -281,6 +308,33 @@ spec:
                         - target
                         type: object
                       type: array
+                    clusterRef:
+                      description: ClusterRef overrides the group-level target cluster
+                        for this service.
+                      properties:
+                        kubeconfigSecretRef:
+                          description: |-
+                            KubeconfigSecretRef references a Secret in the same namespace containing
+                            a kubeconfig for the target spoke cluster (defaults to key "kubeconfig", falling back to "value").
+                          properties:
+                            key:
+                              description: Key is the specific key in the Secret to
+                                reference.
+                              type: string
+                            name:
+                              description: Name is the name of the Secret.
+                              type: string
+                            namespace:
+                              description: Namespace is the namespace of the Secret.
+                              type: string
+                          type: object
+                        name:
+                          description: |-
+                            Name is a logical cluster identifier (e.g. "us-west-burst", "eu-central-1")
+                            surfaced in status, CLI, and FinOps reports. Defaults to the Secret name when omitted.
+                          maxLength: 63
+                          type: string
+                      type: object
                     database:
                       description: Database overrides the group-level database configuration
                         for this service.
@@ -828,6 +882,10 @@ spec:
                       description: |-
                         Reason is a machine-readable failure reason
                         (e.g. "CrashLoopBackOff", "ImagePullBackOff", "OOMKilled").
+                      type: string
+                    targetCluster:
+                      description: TargetCluster records the resolved cluster where
+                        this service's preview runs.
                       type: string
                     url:
                       description: URL is the reachable URL for this service's preview.

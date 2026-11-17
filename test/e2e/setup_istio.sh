@@ -32,11 +32,14 @@ if [ ! -f "${ISTIO_BIN}" ]; then
   chmod +x "${ISTIO_BIN}"
 fi
 
-echo "==> Installing Istio control plane..."
-"${ISTIO_BIN}" install --set profile=minimal -y --context "kind-${CLUSTER_NAME}"
+echo "==> Installing Istio Ambient mesh (istiod, istio-cni, ztunnel)..."
+"${ISTIO_BIN}" install --set profile=ambient -y --context "kind-${CLUSTER_NAME}"
+kubectl -n istio-system rollout status deployment/istiod --timeout=120s --context "kind-${CLUSTER_NAME}"
+kubectl -n istio-system rollout status daemonset/istio-cni-node --timeout=120s --context "kind-${CLUSTER_NAME}"
+kubectl -n istio-system rollout status daemonset/ztunnel --timeout=120s --context "kind-${CLUSTER_NAME}"
 
-echo "==> Labeling default namespace for Istio injection..."
-kubectl label namespace default istio-injection=enabled --context "kind-${CLUSTER_NAME}" --overwrite || true
+echo "==> Enrolling default namespace in Istio Ambient dataplane..."
+kubectl label namespace default istio.io/dataplane-mode=ambient --context "kind-${CLUSTER_NAME}" --overwrite || true
 
 echo "==> Building and loading controller image..."
 make docker-build

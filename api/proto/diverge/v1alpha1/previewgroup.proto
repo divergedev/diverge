@@ -27,6 +27,7 @@ message PreviewGroupServiceSpec {
   EnvironmentDatabase database = 14;
   PostDeploySpec post_deploy = 15;
   KEDASpec keda = 16;
+  ClusterTargetRef cluster_ref = 17;
 }
 
 message PreviewGroupRouting {
@@ -49,6 +50,7 @@ message PreviewGroupSpec {
   EnvironmentDatabase database = 4;
   PreviewGroupLifecycle lifecycle = 5;
   string owner = 6;
+  ClusterTargetRef cluster_ref = 7;
 }
 
 message PreviewGroupServiceStatus {
@@ -63,6 +65,7 @@ message PreviewGroupServiceStatus {
   // changed_services lists the services that were modified in this preview,
   // sourced from the child Environment's spec.deploy.changedServices.
   repeated string changed_services = 9;
+  string target_cluster = 10;
 }
 
 message PreviewGroupStatus {

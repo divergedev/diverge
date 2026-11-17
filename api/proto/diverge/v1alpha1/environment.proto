@@ -15,6 +15,11 @@ message SecretRef {
   string key = 3;
 }
 
+message ClusterTargetRef {
+  string name = 1;
+  SecretRef kubeconfig_secret_ref = 2;
+}
+
 message MigrationJobSpec {
   string image = 1;
   repeated string args = 2;
@@ -44,6 +49,8 @@ message EnvironmentDeploy {
   string baseline_ref = 4;
   map<string, string> namespace_labels = 5;
   ManifestSource manifests = 6;
+  repeated SecretRef env_from = 7;
+  ClusterTargetRef cluster_ref = 8;
 }
 
 message AsyncRouteSpec {
@@ -235,6 +242,7 @@ message EnvironmentStatus {
   map<string, string> feature_env_vars = 17;
   map<string, string> async_env_vars = 18;
   string database_provider = 19;
+  string target_cluster = 20;
 }
 
 message Environment {

@@ -218,10 +218,12 @@ func (x *GetClusterInfoResponse) GetNamespaceQuota() *NamespaceQuotaInfo {
 }
 
 type GetCostSummaryRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Namespace     string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Namespace         string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	IncludeHistorical bool                   `protobuf:"varint,2,opt,name=include_historical,json=includeHistorical,proto3" json:"include_historical,omitempty"`
+	WindowDays        int32                  `protobuf:"varint,3,opt,name=window_days,json=windowDays,proto3" json:"window_days,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *GetCostSummaryRequest) Reset() {
@@ -259,6 +261,20 @@ func (x *GetCostSummaryRequest) GetNamespace() string {
 		return x.Namespace
 	}
 	return ""
+}
+
+func (x *GetCostSummaryRequest) GetIncludeHistorical() bool {
+	if x != nil {
+		return x.IncludeHistorical
+	}
+	return false
+}
+
+func (x *GetCostSummaryRequest) GetWindowDays() int32 {
+	if x != nil {
+		return x.WindowDays
+	}
+	return 0
 }
 
 type CostRateCardInfo struct {
@@ -598,6 +614,9 @@ type EnvironmentCostItem struct {
 	TtlWarning                  bool                   `protobuf:"varint,17,opt,name=ttl_warning,json=ttlWarning,proto3" json:"ttl_warning,omitempty"`
 	TtlWarningReason            string                 `protobuf:"bytes,18,opt,name=ttl_warning_reason,json=ttlWarningReason,proto3" json:"ttl_warning_reason,omitempty"`
 	CostSource                  string                 `protobuf:"bytes,19,opt,name=cost_source,json=costSource,proto3" json:"cost_source,omitempty"`
+	Cluster                     string                 `protobuf:"bytes,20,opt,name=cluster,proto3" json:"cluster,omitempty"`
+	Historical                  bool                   `protobuf:"varint,21,opt,name=historical,proto3" json:"historical,omitempty"`
+	TerminatedAt                string                 `protobuf:"bytes,22,opt,name=terminated_at,json=terminatedAt,proto3" json:"terminated_at,omitempty"`
 	unknownFields               protoimpl.UnknownFields
 	sizeCache                   protoimpl.SizeCache
 }
@@ -765,6 +784,211 @@ func (x *EnvironmentCostItem) GetCostSource() string {
 	return ""
 }
 
+func (x *EnvironmentCostItem) GetCluster() string {
+	if x != nil {
+		return x.Cluster
+	}
+	return ""
+}
+
+func (x *EnvironmentCostItem) GetHistorical() bool {
+	if x != nil {
+		return x.Historical
+	}
+	return false
+}
+
+func (x *EnvironmentCostItem) GetTerminatedAt() string {
+	if x != nil {
+		return x.TerminatedAt
+	}
+	return ""
+}
+
+type ClusterCostBreakdown struct {
+	state                  protoimpl.MessageState `protogen:"open.v1"`
+	Cluster                string                 `protobuf:"bytes,1,opt,name=cluster,proto3" json:"cluster,omitempty"`
+	TotalEnvironments      int32                  `protobuf:"varint,2,opt,name=total_environments,json=totalEnvironments,proto3" json:"total_environments,omitempty"`
+	ActiveEnvironments     int32                  `protobuf:"varint,3,opt,name=active_environments,json=activeEnvironments,proto3" json:"active_environments,omitempty"`
+	HibernatedEnvironments int32                  `protobuf:"varint,4,opt,name=hibernated_environments,json=hibernatedEnvironments,proto3" json:"hibernated_environments,omitempty"`
+	HourlyCostUsd          float64                `protobuf:"fixed64,5,opt,name=hourly_cost_usd,json=hourlyCostUsd,proto3" json:"hourly_cost_usd,omitempty"`
+	AccruedCostUsd         float64                `protobuf:"fixed64,6,opt,name=accrued_cost_usd,json=accruedCostUsd,proto3" json:"accrued_cost_usd,omitempty"`
+	CpuCores               float64                `protobuf:"fixed64,7,opt,name=cpu_cores,json=cpuCores,proto3" json:"cpu_cores,omitempty"`
+	MemoryGib              float64                `protobuf:"fixed64,8,opt,name=memory_gib,json=memoryGib,proto3" json:"memory_gib,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
+}
+
+func (x *ClusterCostBreakdown) Reset() {
+	*x = ClusterCostBreakdown{}
+	mi := &file_diverge_v1alpha1_cluster_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClusterCostBreakdown) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClusterCostBreakdown) ProtoMessage() {}
+
+func (x *ClusterCostBreakdown) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_cluster_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClusterCostBreakdown.ProtoReflect.Descriptor instead.
+func (*ClusterCostBreakdown) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_cluster_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ClusterCostBreakdown) GetCluster() string {
+	if x != nil {
+		return x.Cluster
+	}
+	return ""
+}
+
+func (x *ClusterCostBreakdown) GetTotalEnvironments() int32 {
+	if x != nil {
+		return x.TotalEnvironments
+	}
+	return 0
+}
+
+func (x *ClusterCostBreakdown) GetActiveEnvironments() int32 {
+	if x != nil {
+		return x.ActiveEnvironments
+	}
+	return 0
+}
+
+func (x *ClusterCostBreakdown) GetHibernatedEnvironments() int32 {
+	if x != nil {
+		return x.HibernatedEnvironments
+	}
+	return 0
+}
+
+func (x *ClusterCostBreakdown) GetHourlyCostUsd() float64 {
+	if x != nil {
+		return x.HourlyCostUsd
+	}
+	return 0
+}
+
+func (x *ClusterCostBreakdown) GetAccruedCostUsd() float64 {
+	if x != nil {
+		return x.AccruedCostUsd
+	}
+	return 0
+}
+
+func (x *ClusterCostBreakdown) GetCpuCores() float64 {
+	if x != nil {
+		return x.CpuCores
+	}
+	return 0
+}
+
+func (x *ClusterCostBreakdown) GetMemoryGib() float64 {
+	if x != nil {
+		return x.MemoryGib
+	}
+	return 0
+}
+
+type DailyCostPoint struct {
+	state                  protoimpl.MessageState `protogen:"open.v1"`
+	Date                   string                 `protobuf:"bytes,1,opt,name=date,proto3" json:"date,omitempty"`
+	AccruedCostUsd         float64                `protobuf:"fixed64,2,opt,name=accrued_cost_usd,json=accruedCostUsd,proto3" json:"accrued_cost_usd,omitempty"`
+	HibernationSavingsUsd  float64                `protobuf:"fixed64,3,opt,name=hibernation_savings_usd,json=hibernationSavingsUsd,proto3" json:"hibernation_savings_usd,omitempty"`
+	DeltaRoutingSavingsUsd float64                `protobuf:"fixed64,4,opt,name=delta_routing_savings_usd,json=deltaRoutingSavingsUsd,proto3" json:"delta_routing_savings_usd,omitempty"`
+	ActiveEnvironments     int32                  `protobuf:"varint,5,opt,name=active_environments,json=activeEnvironments,proto3" json:"active_environments,omitempty"`
+	TerminatedEnvironments int32                  `protobuf:"varint,6,opt,name=terminated_environments,json=terminatedEnvironments,proto3" json:"terminated_environments,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
+}
+
+func (x *DailyCostPoint) Reset() {
+	*x = DailyCostPoint{}
+	mi := &file_diverge_v1alpha1_cluster_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DailyCostPoint) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DailyCostPoint) ProtoMessage() {}
+
+func (x *DailyCostPoint) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_cluster_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DailyCostPoint.ProtoReflect.Descriptor instead.
+func (*DailyCostPoint) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_cluster_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *DailyCostPoint) GetDate() string {
+	if x != nil {
+		return x.Date
+	}
+	return ""
+}
+
+func (x *DailyCostPoint) GetAccruedCostUsd() float64 {
+	if x != nil {
+		return x.AccruedCostUsd
+	}
+	return 0
+}
+
+func (x *DailyCostPoint) GetHibernationSavingsUsd() float64 {
+	if x != nil {
+		return x.HibernationSavingsUsd
+	}
+	return 0
+}
+
+func (x *DailyCostPoint) GetDeltaRoutingSavingsUsd() float64 {
+	if x != nil {
+		return x.DeltaRoutingSavingsUsd
+	}
+	return 0
+}
+
+func (x *DailyCostPoint) GetActiveEnvironments() int32 {
+	if x != nil {
+		return x.ActiveEnvironments
+	}
+	return 0
+}
+
+func (x *DailyCostPoint) GetTerminatedEnvironments() int32 {
+	if x != nil {
+		return x.TerminatedEnvironments
+	}
+	return 0
+}
+
 type GetCostSummaryResponse struct {
 	state                        protoimpl.MessageState    `protogen:"open.v1"`
 	TotalHourlyCostUsd           float64                   `protobuf:"fixed64,1,opt,name=total_hourly_cost_usd,json=totalHourlyCostUsd,proto3" json:"total_hourly_cost_usd,omitempty"`
@@ -784,13 +1008,19 @@ type GetCostSummaryResponse struct {
 	TopConsumers                 []*EnvironmentCostItem    `protobuf:"bytes,15,rep,name=top_consumers,json=topConsumers,proto3" json:"top_consumers,omitempty"`
 	RateCard                     *CostRateCardInfo         `protobuf:"bytes,16,opt,name=rate_card,json=rateCard,proto3" json:"rate_card,omitempty"`
 	OpencostEnabled              bool                      `protobuf:"varint,17,opt,name=opencost_enabled,json=opencostEnabled,proto3" json:"opencost_enabled,omitempty"`
+	ByCluster                    []*ClusterCostBreakdown   `protobuf:"bytes,18,rep,name=by_cluster,json=byCluster,proto3" json:"by_cluster,omitempty"`
+	DailyTrend                   []*DailyCostPoint         `protobuf:"bytes,19,rep,name=daily_trend,json=dailyTrend,proto3" json:"daily_trend,omitempty"`
+	HistoricalAccruedCostUsd     float64                   `protobuf:"fixed64,20,opt,name=historical_accrued_cost_usd,json=historicalAccruedCostUsd,proto3" json:"historical_accrued_cost_usd,omitempty"`
+	HistoricalSavingsUsd         float64                   `protobuf:"fixed64,21,opt,name=historical_savings_usd,json=historicalSavingsUsd,proto3" json:"historical_savings_usd,omitempty"`
+	HistoricalEnvironments       int32                     `protobuf:"varint,22,opt,name=historical_environments,json=historicalEnvironments,proto3" json:"historical_environments,omitempty"`
+	HistoricalConsumers          []*EnvironmentCostItem    `protobuf:"bytes,23,rep,name=historical_consumers,json=historicalConsumers,proto3" json:"historical_consumers,omitempty"`
 	unknownFields                protoimpl.UnknownFields
 	sizeCache                    protoimpl.SizeCache
 }
 
 func (x *GetCostSummaryResponse) Reset() {
 	*x = GetCostSummaryResponse{}
-	mi := &file_diverge_v1alpha1_cluster_proto_msgTypes[8]
+	mi := &file_diverge_v1alpha1_cluster_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -802,7 +1032,7 @@ func (x *GetCostSummaryResponse) String() string {
 func (*GetCostSummaryResponse) ProtoMessage() {}
 
 func (x *GetCostSummaryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_cluster_proto_msgTypes[8]
+	mi := &file_diverge_v1alpha1_cluster_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -815,7 +1045,7 @@ func (x *GetCostSummaryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCostSummaryResponse.ProtoReflect.Descriptor instead.
 func (*GetCostSummaryResponse) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_cluster_proto_rawDescGZIP(), []int{8}
+	return file_diverge_v1alpha1_cluster_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *GetCostSummaryResponse) GetTotalHourlyCostUsd() float64 {
@@ -937,6 +1167,48 @@ func (x *GetCostSummaryResponse) GetOpencostEnabled() bool {
 	return false
 }
 
+func (x *GetCostSummaryResponse) GetByCluster() []*ClusterCostBreakdown {
+	if x != nil {
+		return x.ByCluster
+	}
+	return nil
+}
+
+func (x *GetCostSummaryResponse) GetDailyTrend() []*DailyCostPoint {
+	if x != nil {
+		return x.DailyTrend
+	}
+	return nil
+}
+
+func (x *GetCostSummaryResponse) GetHistoricalAccruedCostUsd() float64 {
+	if x != nil {
+		return x.HistoricalAccruedCostUsd
+	}
+	return 0
+}
+
+func (x *GetCostSummaryResponse) GetHistoricalSavingsUsd() float64 {
+	if x != nil {
+		return x.HistoricalSavingsUsd
+	}
+	return 0
+}
+
+func (x *GetCostSummaryResponse) GetHistoricalEnvironments() int32 {
+	if x != nil {
+		return x.HistoricalEnvironments
+	}
+	return 0
+}
+
+func (x *GetCostSummaryResponse) GetHistoricalConsumers() []*EnvironmentCostItem {
+	if x != nil {
+		return x.HistoricalConsumers
+	}
+	return nil
+}
+
 var File_diverge_v1alpha1_cluster_proto protoreflect.FileDescriptor
 
 const file_diverge_v1alpha1_cluster_proto_rawDesc = "" +
@@ -957,9 +1229,12 @@ const file_diverge_v1alpha1_cluster_proto_rawDesc = "" +
 	"namespaces\x18\x04 \x03(\tR\n" +
 	"namespaces\x12-\n" +
 	"\x12controller_healthy\x18\x05 \x01(\bR\x11controllerHealthy\x12M\n" +
-	"\x0fnamespace_quota\x18\x06 \x01(\v2$.diverge.v1alpha1.NamespaceQuotaInfoR\x0enamespaceQuota\"5\n" +
+	"\x0fnamespace_quota\x18\x06 \x01(\v2$.diverge.v1alpha1.NamespaceQuotaInfoR\x0enamespaceQuota\"\x85\x01\n" +
 	"\x15GetCostSummaryRequest\x12\x1c\n" +
-	"\tnamespace\x18\x01 \x01(\tR\tnamespace\"\xdd\x01\n" +
+	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12-\n" +
+	"\x12include_historical\x18\x02 \x01(\bR\x11includeHistorical\x12\x1f\n" +
+	"\vwindow_days\x18\x03 \x01(\x05R\n" +
+	"windowDays\"\xdd\x01\n" +
 	"\x10CostRateCardInfo\x12\"\n" +
 	"\rvcpu_hour_usd\x18\x01 \x01(\x01R\vvcpuHourUsd\x12-\n" +
 	"\x13memory_gib_hour_usd\x18\x02 \x01(\x01R\x10memoryGibHourUsd\x127\n" +
@@ -991,7 +1266,7 @@ const file_diverge_v1alpha1_cluster_proto_rawDesc = "" +
 	"\x0fhourly_cost_usd\x18\x05 \x01(\x01R\rhourlyCostUsd\x12\x1b\n" +
 	"\tcpu_cores\x18\x06 \x01(\x01R\bcpuCores\x12\x1d\n" +
 	"\n" +
-	"memory_gib\x18\a \x01(\x01R\tmemoryGib\"\xa4\x05\n" +
+	"memory_gib\x18\a \x01(\x01R\tmemoryGib\"\x83\x06\n" +
 	"\x13EnvironmentCostItem\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
 	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12\x18\n" +
@@ -1017,7 +1292,30 @@ const file_diverge_v1alpha1_cluster_proto_rawDesc = "" +
 	"ttlWarning\x12,\n" +
 	"\x12ttl_warning_reason\x18\x12 \x01(\tR\x10ttlWarningReason\x12\x1f\n" +
 	"\vcost_source\x18\x13 \x01(\tR\n" +
-	"costSource\"\xd4\a\n" +
+	"costSource\x12\x18\n" +
+	"\acluster\x18\x14 \x01(\tR\acluster\x12\x1e\n" +
+	"\n" +
+	"historical\x18\x15 \x01(\bR\n" +
+	"historical\x12#\n" +
+	"\rterminated_at\x18\x16 \x01(\tR\fterminatedAt\"\xd7\x02\n" +
+	"\x14ClusterCostBreakdown\x12\x18\n" +
+	"\acluster\x18\x01 \x01(\tR\acluster\x12-\n" +
+	"\x12total_environments\x18\x02 \x01(\x05R\x11totalEnvironments\x12/\n" +
+	"\x13active_environments\x18\x03 \x01(\x05R\x12activeEnvironments\x127\n" +
+	"\x17hibernated_environments\x18\x04 \x01(\x05R\x16hibernatedEnvironments\x12&\n" +
+	"\x0fhourly_cost_usd\x18\x05 \x01(\x01R\rhourlyCostUsd\x12(\n" +
+	"\x10accrued_cost_usd\x18\x06 \x01(\x01R\x0eaccruedCostUsd\x12\x1b\n" +
+	"\tcpu_cores\x18\a \x01(\x01R\bcpuCores\x12\x1d\n" +
+	"\n" +
+	"memory_gib\x18\b \x01(\x01R\tmemoryGib\"\xab\x02\n" +
+	"\x0eDailyCostPoint\x12\x12\n" +
+	"\x04date\x18\x01 \x01(\tR\x04date\x12(\n" +
+	"\x10accrued_cost_usd\x18\x02 \x01(\x01R\x0eaccruedCostUsd\x126\n" +
+	"\x17hibernation_savings_usd\x18\x03 \x01(\x01R\x15hibernationSavingsUsd\x129\n" +
+	"\x19delta_routing_savings_usd\x18\x04 \x01(\x01R\x16deltaRoutingSavingsUsd\x12/\n" +
+	"\x13active_environments\x18\x05 \x01(\x05R\x12activeEnvironments\x127\n" +
+	"\x17terminated_environments\x18\x06 \x01(\x05R\x16terminatedEnvironments\"\xe6\n" +
+	"\n" +
 	"\x16GetCostSummaryResponse\x121\n" +
 	"\x15total_hourly_cost_usd\x18\x01 \x01(\x01R\x12totalHourlyCostUsd\x12/\n" +
 	"\x14monthly_run_rate_usd\x18\x02 \x01(\x01R\x11monthlyRunRateUsd\x12C\n" +
@@ -1037,7 +1335,15 @@ const file_diverge_v1alpha1_cluster_proto_rawDesc = "" +
 	"by_service\x18\x0e \x03(\v2&.diverge.v1alpha1.ServiceCostBreakdownR\tbyService\x12J\n" +
 	"\rtop_consumers\x18\x0f \x03(\v2%.diverge.v1alpha1.EnvironmentCostItemR\ftopConsumers\x12?\n" +
 	"\trate_card\x18\x10 \x01(\v2\".diverge.v1alpha1.CostRateCardInfoR\brateCard\x12)\n" +
-	"\x10opencost_enabled\x18\x11 \x01(\bR\x0fopencostEnabled2\xda\x01\n" +
+	"\x10opencost_enabled\x18\x11 \x01(\bR\x0fopencostEnabled\x12E\n" +
+	"\n" +
+	"by_cluster\x18\x12 \x03(\v2&.diverge.v1alpha1.ClusterCostBreakdownR\tbyCluster\x12A\n" +
+	"\vdaily_trend\x18\x13 \x03(\v2 .diverge.v1alpha1.DailyCostPointR\n" +
+	"dailyTrend\x12=\n" +
+	"\x1bhistorical_accrued_cost_usd\x18\x14 \x01(\x01R\x18historicalAccruedCostUsd\x124\n" +
+	"\x16historical_savings_usd\x18\x15 \x01(\x01R\x14historicalSavingsUsd\x127\n" +
+	"\x17historical_environments\x18\x16 \x01(\x05R\x16historicalEnvironments\x12X\n" +
+	"\x14historical_consumers\x18\x17 \x03(\v2%.diverge.v1alpha1.EnvironmentCostItemR\x13historicalConsumers2\xda\x01\n" +
 	"\x0eClusterService\x12c\n" +
 	"\x0eGetClusterInfo\x12'.diverge.v1alpha1.GetClusterInfoRequest\x1a(.diverge.v1alpha1.GetClusterInfoResponse\x12c\n" +
 	"\x0eGetCostSummary\x12'.diverge.v1alpha1.GetCostSummaryRequest\x1a(.diverge.v1alpha1.GetCostSummaryResponseBHZFgithub.com/divergedev/diverge/api/gen/diverge/v1alpha1;divergev1alpha1b\x06proto3"
@@ -1054,7 +1360,7 @@ func file_diverge_v1alpha1_cluster_proto_rawDescGZIP() []byte {
 	return file_diverge_v1alpha1_cluster_proto_rawDescData
 }
 
-var file_diverge_v1alpha1_cluster_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_diverge_v1alpha1_cluster_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_diverge_v1alpha1_cluster_proto_goTypes = []any{
 	(*GetClusterInfoRequest)(nil),  // 0: diverge.v1alpha1.GetClusterInfoRequest
 	(*NamespaceQuotaInfo)(nil),     // 1: diverge.v1alpha1.NamespaceQuotaInfo
@@ -1064,24 +1370,29 @@ var file_diverge_v1alpha1_cluster_proto_goTypes = []any{
 	(*NamespaceCostBreakdown)(nil), // 5: diverge.v1alpha1.NamespaceCostBreakdown
 	(*ServiceCostBreakdown)(nil),   // 6: diverge.v1alpha1.ServiceCostBreakdown
 	(*EnvironmentCostItem)(nil),    // 7: diverge.v1alpha1.EnvironmentCostItem
-	(*GetCostSummaryResponse)(nil), // 8: diverge.v1alpha1.GetCostSummaryResponse
+	(*ClusterCostBreakdown)(nil),   // 8: diverge.v1alpha1.ClusterCostBreakdown
+	(*DailyCostPoint)(nil),         // 9: diverge.v1alpha1.DailyCostPoint
+	(*GetCostSummaryResponse)(nil), // 10: diverge.v1alpha1.GetCostSummaryResponse
 }
 var file_diverge_v1alpha1_cluster_proto_depIdxs = []int32{
-	1, // 0: diverge.v1alpha1.GetClusterInfoResponse.namespace_quota:type_name -> diverge.v1alpha1.NamespaceQuotaInfo
-	1, // 1: diverge.v1alpha1.NamespaceCostBreakdown.quota:type_name -> diverge.v1alpha1.NamespaceQuotaInfo
-	5, // 2: diverge.v1alpha1.GetCostSummaryResponse.by_namespace:type_name -> diverge.v1alpha1.NamespaceCostBreakdown
-	6, // 3: diverge.v1alpha1.GetCostSummaryResponse.by_service:type_name -> diverge.v1alpha1.ServiceCostBreakdown
-	7, // 4: diverge.v1alpha1.GetCostSummaryResponse.top_consumers:type_name -> diverge.v1alpha1.EnvironmentCostItem
-	4, // 5: diverge.v1alpha1.GetCostSummaryResponse.rate_card:type_name -> diverge.v1alpha1.CostRateCardInfo
-	0, // 6: diverge.v1alpha1.ClusterService.GetClusterInfo:input_type -> diverge.v1alpha1.GetClusterInfoRequest
-	3, // 7: diverge.v1alpha1.ClusterService.GetCostSummary:input_type -> diverge.v1alpha1.GetCostSummaryRequest
-	2, // 8: diverge.v1alpha1.ClusterService.GetClusterInfo:output_type -> diverge.v1alpha1.GetClusterInfoResponse
-	8, // 9: diverge.v1alpha1.ClusterService.GetCostSummary:output_type -> diverge.v1alpha1.GetCostSummaryResponse
-	8, // [8:10] is the sub-list for method output_type
-	6, // [6:8] is the sub-list for method input_type
-	6, // [6:6] is the sub-list for extension type_name
-	6, // [6:6] is the sub-list for extension extendee
-	0, // [0:6] is the sub-list for field type_name
+	1,  // 0: diverge.v1alpha1.GetClusterInfoResponse.namespace_quota:type_name -> diverge.v1alpha1.NamespaceQuotaInfo
+	1,  // 1: diverge.v1alpha1.NamespaceCostBreakdown.quota:type_name -> diverge.v1alpha1.NamespaceQuotaInfo
+	5,  // 2: diverge.v1alpha1.GetCostSummaryResponse.by_namespace:type_name -> diverge.v1alpha1.NamespaceCostBreakdown
+	6,  // 3: diverge.v1alpha1.GetCostSummaryResponse.by_service:type_name -> diverge.v1alpha1.ServiceCostBreakdown
+	7,  // 4: diverge.v1alpha1.GetCostSummaryResponse.top_consumers:type_name -> diverge.v1alpha1.EnvironmentCostItem
+	4,  // 5: diverge.v1alpha1.GetCostSummaryResponse.rate_card:type_name -> diverge.v1alpha1.CostRateCardInfo
+	8,  // 6: diverge.v1alpha1.GetCostSummaryResponse.by_cluster:type_name -> diverge.v1alpha1.ClusterCostBreakdown
+	9,  // 7: diverge.v1alpha1.GetCostSummaryResponse.daily_trend:type_name -> diverge.v1alpha1.DailyCostPoint
+	7,  // 8: diverge.v1alpha1.GetCostSummaryResponse.historical_consumers:type_name -> diverge.v1alpha1.EnvironmentCostItem
+	0,  // 9: diverge.v1alpha1.ClusterService.GetClusterInfo:input_type -> diverge.v1alpha1.GetClusterInfoRequest
+	3,  // 10: diverge.v1alpha1.ClusterService.GetCostSummary:input_type -> diverge.v1alpha1.GetCostSummaryRequest
+	2,  // 11: diverge.v1alpha1.ClusterService.GetClusterInfo:output_type -> diverge.v1alpha1.GetClusterInfoResponse
+	10, // 12: diverge.v1alpha1.ClusterService.GetCostSummary:output_type -> diverge.v1alpha1.GetCostSummaryResponse
+	11, // [11:13] is the sub-list for method output_type
+	9,  // [9:11] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_diverge_v1alpha1_cluster_proto_init() }
@@ -1095,7 +1406,7 @@ func file_diverge_v1alpha1_cluster_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_diverge_v1alpha1_cluster_proto_rawDesc), len(file_diverge_v1alpha1_cluster_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

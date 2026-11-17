@@ -34,6 +34,8 @@ type costOptions struct {
 	serverURL           string
 	openCostURL         string
 	failOnBudgetWarning bool
+	includeHistory      bool
+	windowDays          int
 }
 
 func newCostCmd(app *App) *cobra.Command {
@@ -70,6 +72,8 @@ AgentTask LLM spend, per-namespace quota utilization, and optional OpenCost live
 	cmd.PersistentFlags().StringVar(&opts.serverURL, "server-url", "", "Diverge ConnectRPC server URL (optional; uses kubeconfig when empty)")
 	cmd.PersistentFlags().StringVar(&opts.openCostURL, "opencost-url", "", "OpenCost / Kubecost Allocation API URL (defaults to DIVERGE_OPENCOST_URL)")
 	cmd.PersistentFlags().BoolVar(&opts.failOnBudgetWarning, "fail-on-budget-warning", false, "Exit non-zero when any namespace exceeds its FinOps budget warning threshold")
+	cmd.PersistentFlags().BoolVar(&opts.includeHistory, "history", false, "Include closed/deleted preview environments from the historical FinOps ledger")
+	cmd.PersistentFlags().IntVar(&opts.windowDays, "window-days", 30, "Historical FinOps trend and ledger lookback window in UTC days (1-30)")
 
 	cmd.AddCommand(&cobra.Command{
 		Use:          "summary",
@@ -115,6 +119,9 @@ func runCostReport(cmd *cobra.Command, app *App, opts *costOptions, consumersOnl
 	if opts.topLimit < 0 {
 		return fmt.Errorf("--top must be >= 0, got %d", opts.topLimit)
 	}
+	if opts.windowDays < 0 || opts.windowDays > finops.LedgerRetentionDays {
+		return fmt.Errorf("--window-days must be between 0 and %d, got %d", finops.LedgerRetentionDays, opts.windowDays)
+	}
 
 	summary, err := fetchCostSummary(cmd.Context(), app, opts)
 	if err != nil {
@@ -122,6 +129,9 @@ func runCostReport(cmd *cobra.Command, app *App, opts *costOptions, consumersOnl
 	}
 
 	cloned := proto.Clone(summary).(*pb.GetCostSummaryResponse)
+	if opts.includeHistory && len(cloned.HistoricalConsumers) > 0 {
+		cloned.TopConsumers = append(cloned.TopConsumers, cloned.HistoricalConsumers...)
+	}
 	sortCostConsumers(cloned.TopConsumers, sortField)
 	if opts.topLimit > 0 && len(cloned.TopConsumers) > opts.topLimit {
 		cloned.TopConsumers = cloned.TopConsumers[:opts.topLimit]
@@ -170,7 +180,7 @@ func fetchCostSummary(ctx context.Context, app *App, opts *costOptions) (*pb.Get
 			}
 			ns = strings.TrimSpace(app.Namespace)
 		}
-		return fetchCostSummaryViaServer(ctx, explicitServer, ns)
+		return fetchCostSummaryViaServer(ctx, explicitServer, ns, opts.includeHistory, opts.windowDays)
 	}
 
 	if app == nil {
@@ -188,7 +198,7 @@ func fetchCostSummary(ctx context.Context, app *App, opts *costOptions) (*pb.Get
 			if !opts.allNamespaces {
 				ns = strings.TrimSpace(app.Namespace)
 			}
-			return fetchCostSummaryViaServer(ctx, envServer, ns)
+			return fetchCostSummaryViaServer(ctx, envServer, ns, opts.includeHistory, opts.windowDays)
 		}
 		return nil, kubeErr
 	}
@@ -204,15 +214,17 @@ func fetchCostSummary(ctx context.Context, app *App, opts *costOptions) (*pb.Get
 	}
 
 	return finops.BuildCostSummary(ctx, finops.SummaryOptions{
-		Namespace: ns,
-		Client:    c,
-		K8sClient: k8sClient,
-		OpenCost:  ocClient,
-		Timeout:   10 * time.Second,
+		Namespace:         ns,
+		Client:            c,
+		K8sClient:         k8sClient,
+		OpenCost:          ocClient,
+		Timeout:           10 * time.Second,
+		IncludeHistorical: opts.includeHistory,
+		WindowDays:        opts.windowDays,
 	})
 }
 
-func fetchCostSummaryViaServer(ctx context.Context, rawServerURL, namespace string) (*pb.GetCostSummaryResponse, error) {
+func fetchCostSummaryViaServer(ctx context.Context, rawServerURL, namespace string, includeHistory bool, windowDays int) (*pb.GetCostSummaryResponse, error) {
 	serverURL := resolveMCPServerURL(rawServerURL)
 	if serverURL == "" {
 		return nil, errors.New("server URL cannot be empty")
@@ -224,7 +236,9 @@ func fetchCostSummaryViaServer(ctx context.Context, rawServerURL, namespace stri
 	defer cancel()
 
 	resp, err := clusterClient.GetCostSummary(reqCtx, connect.NewRequest(&pb.GetCostSummaryRequest{
-		Namespace: namespace,
+		Namespace:         namespace,
+		IncludeHistorical: includeHistory,
+		WindowDays:        int32(windowDays),
 	}))
 	if err != nil {
 		return nil, err
@@ -289,11 +303,16 @@ func renderCostCSV(w io.Writer, consumers []*pb.EnvironmentCostItem) error {
 		"hourly_cost_usd", "hibernation_savings_hourly_usd", "accrued_cost_usd",
 		"projected_ttl_cost_usd", "uptime_hours", "cpu_cores", "memory_gib",
 		"service_count", "database_mode", "ttl_warning", "ttl_warning_reason",
+		"cluster", "historical", "terminated_at",
 	}
 	if err := cw.Write(header); err != nil {
 		return err
 	}
 	for _, item := range consumers {
+		clusterName := item.GetCluster()
+		if clusterName == "" {
+			clusterName = "local"
+		}
 		row := []string{
 			item.GetNamespace(),
 			item.GetName(),
@@ -313,6 +332,9 @@ func renderCostCSV(w io.Writer, consumers []*pb.EnvironmentCostItem) error {
 			item.GetDatabaseMode(),
 			strconv.FormatBool(item.GetTtlWarning()),
 			item.GetTtlWarningReason(),
+			clusterName,
+			strconv.FormatBool(item.GetHistorical()),
+			item.GetTerminatedAt(),
 		}
 		if err := cw.Write(row); err != nil {
 			return err
@@ -359,6 +381,12 @@ func renderCostTable(w io.Writer, resp *pb.GetCostSummaryResponse, consumersOnly
 			resp.GetTotalEnvironments(), resp.GetActiveEnvironments(), resp.GetHibernatedEnvironments(),
 			resp.GetTotalCpuCores(), resp.GetTotalMemoryGib()); err != nil {
 			return err
+		}
+		if resp.GetHistoricalEnvironments() > 0 {
+			if err := writef(w, "  Closed PR Ledger:     %d environments ($%.3f accrued, $%.3f saved)\n",
+				resp.GetHistoricalEnvironments(), resp.GetHistoricalAccruedCostUsd(), resp.GetHistoricalSavingsUsd()); err != nil {
+				return err
+			}
 		}
 
 		if len(resp.ByNamespace) > 0 {

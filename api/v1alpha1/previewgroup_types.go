@@ -132,6 +132,10 @@ type PreviewGroupServiceSpec struct {
 	// Overrides controller-level CLI flags when set.
 	// +optional
 	KEDA *KEDASpec `json:"keda,omitempty"`
+
+	// ClusterRef overrides the group-level target cluster for this service.
+	// +optional
+	ClusterRef *ClusterTargetRef `json:"clusterRef,omitempty"`
 }
 
 // KEDASpec defines per-service autoscaling configuration for KEDA.
@@ -256,6 +260,11 @@ type PreviewGroupSpec struct {
 	// These override auto-discovered edges from Gateway API and Prometheus.
 	// +optional
 	TopologyOverrides []TopologyEdge `json:"topologyOverrides,omitempty"`
+
+	// ClusterRef provides a default remote spoke cluster target for services in this group.
+	// Individual services can override this in their own clusterRef field.
+	// +optional
+	ClusterRef *ClusterTargetRef `json:"clusterRef,omitempty"`
 }
 
 // TopologyEdge represents a directed dependency between two services.
@@ -313,6 +322,10 @@ type PreviewGroupServiceStatus struct {
 	// ChangedServices lists the services that were modified in this preview,
 	// sourced from the child Environment's spec.deploy.changedServices.
 	ChangedServices []string `json:"changedServices,omitempty"`
+
+	// TargetCluster records the resolved cluster where this service's preview runs.
+	// +optional
+	TargetCluster string `json:"targetCluster,omitempty"`
 }
 
 // PreviewGroupStatus describes the observed state of a PreviewGroup.

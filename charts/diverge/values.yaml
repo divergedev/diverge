@@ -268,6 +268,10 @@ server:
     # NOTE: Target namespaces must exist before helm install/upgrade.
     # The chart does NOT create these namespaces.
     targetNamespaces: []
+    # -- Allow diverge-server to read spoke-cluster kubeconfig Secrets for multi-cluster StreamLogs.
+    # Prefer listing explicit Secret names in multiClusterSecretNames over broad Secret read access.
+    multiClusterSecrets: false
+    multiClusterSecretNames: []
   metrics:
     serviceMonitor:
       enabled: false

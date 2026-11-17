@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,8 +17,46 @@ import (
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
 
-// TestIstio_HeaderRouting verifies that Istio routes east-west traffic
-// via GAMMA HTTPRoutes with parentRef: Service.
+func deployAmbientWaypoint(t *testing.T, ctx context.Context, f *Framework, ns string) {
+	t.Helper()
+	waypoint := &gatewayv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "waypoint",
+			Namespace: ns,
+			Labels: map[string]string{
+				"istio.io/waypoint-for": "service",
+			},
+		},
+		Spec: gatewayv1.GatewaySpec{
+			GatewayClassName: "istio-waypoint",
+			Listeners: []gatewayv1.Listener{
+				{
+					Name:     "mesh",
+					Port:     15008,
+					Protocol: gatewayv1.ProtocolType("HBONE"),
+				},
+			},
+		},
+	}
+	require.NoError(t, f.Client.Create(ctx, waypoint))
+
+	require.Eventually(t, func() bool {
+		var gw gatewayv1.Gateway
+		if err := f.Client.Get(ctx, client.ObjectKey{Name: "waypoint", Namespace: ns}, &gw); err != nil {
+			return false
+		}
+		for _, cond := range gw.Status.Conditions {
+			if cond.Type == string(gatewayv1.GatewayConditionProgrammed) && cond.Status == metav1.ConditionTrue {
+				return true
+			}
+		}
+		return false
+	}, 2*time.Minute, 2*time.Second, "Istio Ambient waypoint Gateway did not become Programmed")
+}
+
+// TestIstio_HeaderRouting verifies that Istio Ambient + Waypoint routes east-west
+// L7 traffic via GAMMA HTTPRoutes with parentRef: Service, preserving baseline
+// responses for unrouted traffic while splitting x-diverge-env traffic to the preview pod.
 func TestIstio_HeaderRouting(t *testing.T) {
 	f := NewFramework(t)
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
@@ -33,11 +72,13 @@ func TestIstio_HeaderRouting(t *testing.T) {
 		t.Skip("controller not deployed — skipping GAMMA assertions")
 	}
 
-	// Label namespace for Istio injection
+	// Enroll namespace in Istio Ambient mesh + namespace Waypoint proxy
 	ns := f.Namespace
 	f.LabelNamespace(ctx, ns, map[string]string{
-		"istio-injection": "enabled",
+		"istio.io/dataplane-mode": "ambient",
+		"istio.io/use-waypoint":   "waypoint",
 	})
+	deployAmbientWaypoint(t, ctx, f, ns)
 
 	f.DeployEchoServer(ctx, "orders-svc", ns, 5678)
 
@@ -84,7 +125,7 @@ func TestIstio_HeaderRouting(t *testing.T) {
 	err = f.DeployInClusterClient(ctx, "gamma-client", ns)
 	require.NoError(t, err)
 
-	// Wait for east-west routing to be programmed
+	// 1. Verify header-matched east-west traffic routes through Waypoint to the preview pod ("preview").
 	require.Eventually(t, func() bool {
 		out, err := f.SendMeshRequest(ctx, "gamma-client", ns, "orders-svc", 5678, map[string]string{
 			"x-diverge-env": "istio-routing",
@@ -92,10 +133,17 @@ func TestIstio_HeaderRouting(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		// A successful connection through the mesh with a non-empty response
-		// proves the east-west GAMMA route is programmed correctly.
-		return len(out) > 0
-	}, 2*time.Minute, 2*time.Second, "Mesh route not reachable or not routing to preview pod")
+		return strings.TrimSpace(out) == "preview"
+	}, 2*time.Minute, 2*time.Second, "Istio Ambient Waypoint GAMMA route did not route x-diverge-env traffic to preview pod")
+
+	// 2. Verify unrouted east-west traffic continues reaching baseline orders-svc ("orders-svc").
+	require.Eventually(t, func() bool {
+		out, err := f.SendMeshRequest(ctx, "gamma-client", ns, "orders-svc", 5678, nil)
+		if err != nil {
+			return false
+		}
+		return strings.TrimSpace(out) == "orders-svc"
+	}, 1*time.Minute, 2*time.Second, "Baseline east-west traffic without x-diverge-env did not reach orders-svc")
 }
 
 // TestIstio_HeaderPropagation verifies that the x-diverge-env header
@@ -117,7 +165,7 @@ func TestIstio_HeaderPropagation(t *testing.T) {
 
 	ns := f.Namespace
 	f.LabelNamespace(ctx, ns, map[string]string{
-		"istio-injection": "enabled",
+		"istio.io/dataplane-mode": "ambient",
 	})
 
 	f.DeployEchoServer(ctx, "header-svc", ns, 5678)
@@ -194,7 +242,7 @@ func TestIstio_RouteCleanup(t *testing.T) {
 
 	ns := f.Namespace
 	f.LabelNamespace(ctx, ns, map[string]string{
-		"istio-injection": "enabled",
+		"istio.io/dataplane-mode": "ambient",
 	})
 
 	f.DeployEchoServer(ctx, "cleanup-svc", ns, 5678)

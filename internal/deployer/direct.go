@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/multicluster"
 )
 
 // defaultAllowedKinds is an allowlist of Kubernetes resource kinds permitted in
@@ -55,11 +56,19 @@ func WithAllowedKinds(kinds map[string]bool) DirectDeployerOption {
 	}
 }
 
+// WithClusterClients configures multi-cluster spoke client resolution on a DirectDeployer.
+func WithClusterClients(resolver multicluster.Resolver) DirectDeployerOption {
+	return func(d *DirectDeployer) {
+		d.ClusterClients = resolver
+	}
+}
+
 // DirectDeployer applies pre-rendered Kubernetes manifests directly
 // via Server-Side Apply, without requiring ArgoCD.
 type DirectDeployer struct {
 	Client             client.Client
 	Fetcher            ManifestFetcher
+	ClusterClients     multicluster.Resolver
 	AllowedKinds       map[string]bool
 	customAllowedKinds bool
 }
@@ -91,6 +100,24 @@ func (d *DirectDeployer) isKindPermitted(kind string) bool {
 	return defaultAllowedKinds[kind]
 }
 
+func (d *DirectDeployer) resolveClient(ctx context.Context, env *v1alpha1.Environment) (client.Client, bool, error) {
+	if !multicluster.IsRemoteEnv(env) {
+		return d.Client, false, nil
+	}
+	resolver := d.ClusterClients
+	if resolver == nil && d.Client != nil {
+		resolver = multicluster.NewManager(d.Client, nil, nil, d.Client.Scheme())
+	}
+	if resolver == nil {
+		return nil, false, fmt.Errorf("multi-cluster resolver is not configured")
+	}
+	target, err := resolver.Resolve(ctx, env)
+	if err != nil {
+		return nil, false, err
+	}
+	return target.Client, target.IsRemote, nil
+}
+
 // Deploy fetches pre-rendered manifests and applies them via Server-Side Apply.
 func (d *DirectDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) error {
 	logger := log.FromContext(ctx).WithName("direct-deployer")
@@ -105,13 +132,18 @@ func (d *DirectDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) 
 		return nil
 	}
 
-	// Determine target namespace
+	// Determine target namespace and cluster client
+	targetClient, isRemote, err := d.resolveClient(ctx, env)
+	if err != nil {
+		return fmt.Errorf("failed to resolve target cluster: %w", err)
+	}
+
 	targetNS := env.Namespace
 	if env.Spec.Deploy.Namespace == "create" {
 		targetNS = env.PreviewNamespace()
 	}
 
-	logger.Info("Deploying manifests", "count", len(objects), "namespace", targetNS)
+	logger.Info("Deploying manifests", "count", len(objects), "namespace", targetNS, "remoteCluster", isRemote)
 
 	for i := range objects {
 		obj := &objects[i]
@@ -179,11 +211,10 @@ func (d *DirectDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) 
 			}
 		}
 
-		// Set OwnerReference for 'same' namespace mode only.
-		// CR2: Only set OwnerReferences when the object is in the same
-		// namespace as the Environment CR (required by K8s GC).
-		// In 'create' mode, namespace deletion handles cleanup.
-		if env.Spec.Deploy.Namespace != "create" && obj.GetNamespace() == env.Namespace {
+		// Set OwnerReference for local 'same' namespace mode only.
+		// CR2: Never set OwnerReferences across namespaces or on remote spoke clusters,
+		// where the hub Environment UID does not exist and K8s GC would delete the workload.
+		if !isRemote && env.Spec.Deploy.Namespace != "create" && obj.GetNamespace() == env.Namespace {
 			ownerRef := metav1.OwnerReference{
 				APIVersion: env.APIVersion,
 				Kind:       env.Kind,
@@ -195,14 +226,14 @@ func (d *DirectDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) 
 
 		// Apply via Server-Side Apply (create-or-patch)
 		existing := obj.DeepCopy()
-		err = d.Client.Get(ctx, client.ObjectKeyFromObject(obj), existing)
+		err = targetClient.Get(ctx, client.ObjectKeyFromObject(obj), existing)
 		if err != nil {
 			if client.IgnoreNotFound(err) != nil {
 				return fmt.Errorf("failed to check existing %s %s/%s: %w",
 					obj.GetKind(), obj.GetNamespace(), obj.GetName(), err)
 			}
 			// Resource doesn't exist, create it
-			if err := d.Client.Create(ctx, obj); err != nil {
+			if err := targetClient.Create(ctx, obj); err != nil {
 				return fmt.Errorf("failed to create %s %s/%s: %w",
 					obj.GetKind(), obj.GetNamespace(), obj.GetName(), err)
 			}
@@ -212,7 +243,7 @@ func (d *DirectDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) 
 				client.FieldOwner("diverge-direct-deployer"),
 				client.ForceOwnership,
 			}
-			if err := d.Client.Apply(ctx, client.ApplyConfigurationFromUnstructured(obj), opts...); err != nil {
+			if err := targetClient.Apply(ctx, client.ApplyConfigurationFromUnstructured(obj), opts...); err != nil {
 				return fmt.Errorf("failed to apply %s %s/%s: %w",
 					obj.GetKind(), obj.GetNamespace(), obj.GetName(), err)
 			}
@@ -238,7 +269,18 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 		"namespace_mode", env.Spec.Deploy.Namespace,
 		"environment", env.Name,
 	)
-	if d.Client == nil {
+	if d.Client == nil && d.ClusterClients == nil {
+		return nil
+	}
+
+	targetClient, _, err := d.resolveClient(ctx, env)
+	if err != nil {
+		if _, isVal := multicluster.IsValidationError(err); isVal {
+			return nil
+		}
+		return fmt.Errorf("failed to resolve target cluster for teardown: %w", err)
+	}
+	if targetClient == nil {
 		return nil
 	}
 
@@ -260,41 +302,41 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 	}
 
 	var deployList appsv1.DeploymentList
-	if err := d.Client.List(ctx, &deployList, listOpts...); err != nil {
+	if err := targetClient.List(ctx, &deployList, listOpts...); err != nil {
 		return fmt.Errorf("failed to list deployments for teardown: %w", err)
 	}
 	for i := range deployList.Items {
-		if err := d.Client.Delete(ctx, &deployList.Items[i], fgDelOpts...); client.IgnoreNotFound(err) != nil {
+		if err := targetClient.Delete(ctx, &deployList.Items[i], fgDelOpts...); client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("failed to delete deployment %s/%s: %w", targetNS, deployList.Items[i].Name, err)
 		}
 	}
 
 	var stsList appsv1.StatefulSetList
-	if err := d.Client.List(ctx, &stsList, listOpts...); err != nil {
+	if err := targetClient.List(ctx, &stsList, listOpts...); err != nil {
 		return fmt.Errorf("failed to list statefulsets for teardown: %w", err)
 	}
 	for i := range stsList.Items {
-		if err := d.Client.Delete(ctx, &stsList.Items[i], fgDelOpts...); client.IgnoreNotFound(err) != nil {
+		if err := targetClient.Delete(ctx, &stsList.Items[i], fgDelOpts...); client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("failed to delete statefulset %s/%s: %w", targetNS, stsList.Items[i].Name, err)
 		}
 	}
 
 	var jobList batchv1.JobList
-	if err := d.Client.List(ctx, &jobList, listOpts...); err != nil {
+	if err := targetClient.List(ctx, &jobList, listOpts...); err != nil {
 		return fmt.Errorf("failed to list jobs for teardown: %w", err)
 	}
 	for i := range jobList.Items {
-		if err := d.Client.Delete(ctx, &jobList.Items[i], fgDelOpts...); client.IgnoreNotFound(err) != nil {
+		if err := targetClient.Delete(ctx, &jobList.Items[i], fgDelOpts...); client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("failed to delete job %s/%s: %w", targetNS, jobList.Items[i].Name, err)
 		}
 	}
 
 	var svcList corev1.ServiceList
-	if err := d.Client.List(ctx, &svcList, listOpts...); err != nil {
+	if err := targetClient.List(ctx, &svcList, listOpts...); err != nil {
 		return fmt.Errorf("failed to list services for teardown: %w", err)
 	}
 	for i := range svcList.Items {
-		if err := d.Client.Delete(ctx, &svcList.Items[i]); client.IgnoreNotFound(err) != nil {
+		if err := targetClient.Delete(ctx, &svcList.Items[i]); client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("failed to delete service %s/%s: %w", targetNS, svcList.Items[i].Name, err)
 		}
 	}
@@ -304,6 +346,16 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 
 // Status returns the deployment status of resources managed by this deployer.
 func (d *DirectDeployer) Status(ctx context.Context, env *v1alpha1.Environment) ([]ServiceStatus, error) {
+	targetClient, _, err := d.resolveClient(ctx, env)
+	if err != nil {
+		if !env.DeletionTimestamp.IsZero() {
+			if _, isVal := multicluster.IsValidationError(err); isVal {
+				return nil, nil
+			}
+		}
+		return nil, fmt.Errorf("failed to resolve target cluster for status: %w", err)
+	}
+
 	targetNS := env.Namespace
 	if env.Spec.Deploy.Namespace == "create" {
 		targetNS = env.PreviewNamespace()
@@ -318,7 +370,7 @@ func (d *DirectDeployer) Status(ctx context.Context, env *v1alpha1.Environment) 
 
 	// Check Deployments
 	var deployList appsv1.DeploymentList
-	if err := d.Client.List(ctx, &deployList,
+	if err := targetClient.List(ctx, &deployList,
 		client.InNamespace(targetNS),
 		client.MatchingLabelsSelector{Selector: selector},
 	); err != nil {
@@ -335,7 +387,7 @@ func (d *DirectDeployer) Status(ctx context.Context, env *v1alpha1.Environment) 
 
 	// Check StatefulSets
 	var stsList appsv1.StatefulSetList
-	if err := d.Client.List(ctx, &stsList,
+	if err := targetClient.List(ctx, &stsList,
 		client.InNamespace(targetNS),
 		client.MatchingLabelsSelector{Selector: selector},
 	); err != nil {
@@ -355,7 +407,7 @@ func (d *DirectDeployer) Status(ctx context.Context, env *v1alpha1.Environment) 
 	// out from under active containers.
 	if !env.DeletionTimestamp.IsZero() {
 		var jobList batchv1.JobList
-		if err := d.Client.List(ctx, &jobList,
+		if err := targetClient.List(ctx, &jobList,
 			client.InNamespace(targetNS),
 			client.MatchingLabelsSelector{Selector: selector},
 		); err != nil {
@@ -374,7 +426,7 @@ func (d *DirectDeployer) Status(ctx context.Context, env *v1alpha1.Environment) 
 			"divergedev.com/environment": env.Name,
 		})
 		var podList corev1.PodList
-		if err := d.Client.List(ctx, &podList,
+		if err := targetClient.List(ctx, &podList,
 			client.InNamespace(targetNS),
 			client.MatchingLabelsSelector{Selector: podSelector},
 		); err != nil {

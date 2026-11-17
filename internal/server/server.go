@@ -10,6 +10,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
+	"github.com/divergedev/diverge/internal/multicluster"
 	"github.com/divergedev/diverge/internal/server/dashboard"
 	"github.com/divergedev/diverge/internal/server/streaming"
 	pkgauth "github.com/divergedev/diverge/pkg/auth"
@@ -19,6 +20,7 @@ import (
 type ServeMuxConfig struct {
 	Client           client.Client
 	K8sClient        kubernetes.Interface
+	ClusterClients   multicluster.Resolver
 	InformerMgr      *streaming.InformerManager
 	LogStreamer      *streaming.LogStreamer
 	StreamLimiter    *StreamLimiter
@@ -58,6 +60,11 @@ func NewServeMux(cfg ServeMuxConfig) (*http.ServeMux, *TunnelManager) {
 	interceptors := connect.WithInterceptors(interceptorList...)
 
 	envService := NewEnvironmentService(cfg.Client, cfg.K8sClient, cfg.InformerMgr, cfg.LogStreamer, cfg.StreamLimiter, cfg.Logger, cfg.AuditLogger)
+	if cfg.ClusterClients != nil {
+		if es, ok := envService.(*EnvironmentService); ok {
+			es.clusterClients = cfg.ClusterClients
+		}
+	}
 	envPath, envHandler := divergev1alpha1connect.NewEnvironmentServiceHandler(envService, interceptors)
 	mux.Handle(envPath, envHandler)
 

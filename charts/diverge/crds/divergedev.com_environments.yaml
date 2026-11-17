@@ -172,6 +172,34 @@ spec:
                     items:
                       type: string
                     type: array
+                  clusterRef:
+                    description: |-
+                      ClusterRef targets a remote spoke cluster for workload and route provisioning.
+                      When omitted, workloads deploy to the local hub cluster.
+                    properties:
+                      kubeconfigSecretRef:
+                        description: |-
+                          KubeconfigSecretRef references a Secret in the same namespace containing
+                          a kubeconfig for the target spoke cluster (defaults to key "kubeconfig", falling back to "value").
+                        properties:
+                          key:
+                            description: Key is the specific key in the Secret to
+                              reference.
+                            type: string
+                          name:
+                            description: Name is the name of the Secret.
+                            type: string
+                          namespace:
+                            description: Namespace is the namespace of the Secret.
+                            type: string
+                        type: object
+                      name:
+                        description: |-
+                          Name is a logical cluster identifier (e.g. "us-west-burst", "eu-central-1")
+                          surfaced in status, CLI, and FinOps reports. Defaults to the Secret name when omitted.
+                        maxLength: 63
+                        type: string
+                    type: object
                   envFrom:
                     description: EnvFrom specifies environment variables to inject
                       from Secrets.
@@ -743,6 +771,10 @@ spec:
                 items:
                   type: string
                 type: array
+              targetCluster:
+                description: TargetCluster records the resolved cluster identifier
+                  ("local" or spoke cluster name).
+                type: string
               testStatus:
                 description: TestStatus tracks the state of the test run for this
                   environment.

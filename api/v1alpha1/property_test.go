@@ -34,6 +34,13 @@ func TestEnvironmentDeepCopyProperty(t *testing.T) {
 					NamespaceLabels: map[string]string{
 						"team": "platform",
 					},
+					ClusterRef: &ClusterTargetRef{
+						Name: "spoke-west",
+						KubeconfigSecretRef: &SecretRef{
+							Name: "spoke-west-kubeconfig",
+							Key:  "kubeconfig",
+						},
+					},
 				},
 				ServiceConfig: &ServicePreviewConfig{
 					ServiceName: svcName,
@@ -74,6 +81,8 @@ func TestEnvironmentDeepCopyProperty(t *testing.T) {
 		// Mutate slices and maps on copy and verify original is untouched
 		copied.Spec.Deploy.ChangedServices[0] = "mutated-svc"
 		copied.Spec.Deploy.NamespaceLabels["team"] = "mutated-team"
+		copied.Spec.Deploy.ClusterRef.Name = "mutated-cluster"
+		copied.Spec.Deploy.ClusterRef.KubeconfigSecretRef.Name = "mutated-secret"
 		copied.Spec.ServiceConfig.Env[0].Value = "mutated-val"
 		copied.Spec.Features.Overrides["new_ui"] = "false"
 		copied.Status.Services[0] = "mutated-status-svc"
@@ -82,6 +91,8 @@ func TestEnvironmentDeepCopyProperty(t *testing.T) {
 
 		require.Equal(ht, svcName, env.Spec.Deploy.ChangedServices[0])
 		require.Equal(ht, "platform", env.Spec.Deploy.NamespaceLabels["team"])
+		require.Equal(ht, "spoke-west", env.Spec.Deploy.ClusterRef.Name)
+		require.Equal(ht, "spoke-west-kubeconfig", env.Spec.Deploy.ClusterRef.KubeconfigSecretRef.Name)
 		require.Equal(ht, envVal, env.Spec.ServiceConfig.Env[0].Value)
 		require.Equal(ht, "true", env.Spec.Features.Overrides["new_ui"])
 		require.Equal(ht, svcName, env.Status.Services[0])
@@ -118,11 +129,23 @@ func TestPreviewGroupDeepCopyProperty(t *testing.T) {
 
 		pg := &PreviewGroup{
 			Spec: PreviewGroupSpec{
+				ClusterRef: &ClusterTargetRef{
+					Name: "group-spoke",
+					KubeconfigSecretRef: &SecretRef{
+						Name: "group-spoke-secret",
+					},
+				},
 				Services: []PreviewGroupServiceSpec{
 					{
 						Name: svcName,
 						Env: []EnvVar{
 							{Name: envKey, Value: envVal},
+						},
+						ClusterRef: &ClusterTargetRef{
+							Name: "svc-spoke",
+							KubeconfigSecretRef: &SecretRef{
+								Name: "svc-spoke-secret",
+							},
 						},
 					},
 				},
@@ -166,6 +189,8 @@ func TestPreviewGroupDeepCopyProperty(t *testing.T) {
 		require.Equal(ht, condMsg, copied.Status.Conditions[0].Message)
 
 		// Mutate slices on copy and verify original is untouched
+		copied.Spec.ClusterRef.Name = "mutated-group-spoke"
+		copied.Spec.Services[0].ClusterRef.Name = "mutated-svc-spoke"
 		copied.Spec.Services[0].Name = "mutated"
 		copied.Spec.Services[0].Env[0].Value = "mutated-env"
 		copied.Spec.TopologyOverrides[0].To = "mutated-to"
@@ -173,6 +198,8 @@ func TestPreviewGroupDeepCopyProperty(t *testing.T) {
 		copied.Status.Conditions[0].Message = "mutated-cond"
 		copied.Status.DiscoveredIngressPaths[0].Hops[1] = "mutated-hop"
 
+		require.Equal(ht, "group-spoke", pg.Spec.ClusterRef.Name)
+		require.Equal(ht, "svc-spoke", pg.Spec.Services[0].ClusterRef.Name)
 		require.Equal(ht, svcName, pg.Spec.Services[0].Name)
 		require.Equal(ht, envVal, pg.Spec.Services[0].Env[0].Value)
 		require.Equal(ht, svcName, pg.Spec.TopologyOverrides[0].To)

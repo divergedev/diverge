@@ -20,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/multicluster"
 )
 
 type mockFetcher struct {
@@ -758,4 +759,49 @@ func TestDirectDeployer_WithAllowedKinds_CustomAllowlist(t *testing.T) {
 	d.WithAllowedKinds(map[string]bool{"Deployment": true})
 	err = d.Deploy(context.Background(), env)
 	require.NoError(t, err)
+}
+
+func TestDirectDeployer_MultiClusterSpokeDeployStatusTeardown(t *testing.T) {
+	ctx := context.Background()
+	s := testScheme()
+	hubClient := fake.NewClientBuilder().WithScheme(s).Build()
+	spokeClient := fake.NewClientBuilder().WithScheme(s).Build()
+
+	resolver := &multicluster.StaticResolver{
+		Hub: &multicluster.Target{Name: "local", IsRemote: false, Client: hubClient},
+		Spokes: map[string]*multicluster.Target{
+			"us-west-burst": {Name: "us-west-burst", IsRemote: true, Client: spokeClient},
+		},
+	}
+
+	dep := testDeploymentUnstructured("orders-preview", "")
+	d := NewDirectDeployer(hubClient, &mockFetcher{objects: []unstructured.Unstructured{dep}}, WithClusterClients(resolver))
+
+	env := testEnv("pr-federated", "team-orders", "same")
+	env.Spec.Deploy.ClusterRef = &v1alpha1.ClusterTargetRef{
+		Name: "us-west-burst",
+		KubeconfigSecretRef: &v1alpha1.SecretRef{
+			Name: "spoke-west-kubeconfig",
+		},
+	}
+
+	require.NoError(t, d.Deploy(ctx, env))
+
+	// Workload must exist on spoke WITHOUT cross-cluster OwnerReferences, and NOT on hub.
+	var hubDep appsv1.Deployment
+	err := hubClient.Get(ctx, client.ObjectKey{Name: "orders-preview", Namespace: "team-orders"}, &hubDep)
+	assert.True(t, apierrors.IsNotFound(err))
+
+	var spokeDep appsv1.Deployment
+	require.NoError(t, spokeClient.Get(ctx, client.ObjectKey{Name: "orders-preview", Namespace: "team-orders"}, &spokeDep))
+	assert.Empty(t, spokeDep.OwnerReferences, "cross-cluster OwnerReferences must not be set on spoke workloads")
+
+	statuses, err := d.Status(ctx, env)
+	require.NoError(t, err)
+	require.Len(t, statuses, 1)
+	assert.Equal(t, "orders-preview", statuses[0].Name)
+
+	require.NoError(t, d.Teardown(ctx, env))
+	err = spokeClient.Get(ctx, client.ObjectKey{Name: "orders-preview", Namespace: "team-orders"}, &spokeDep)
+	assert.True(t, apierrors.IsNotFound(err))
 }

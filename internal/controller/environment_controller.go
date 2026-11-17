@@ -30,6 +30,7 @@ import (
 	"github.com/divergedev/diverge/internal/events"
 	"github.com/divergedev/diverge/internal/finops"
 	"github.com/divergedev/diverge/internal/metrics"
+	"github.com/divergedev/diverge/internal/multicluster"
 	"github.com/divergedev/diverge/internal/notifier"
 	"github.com/divergedev/diverge/internal/routing"
 	divtesting "github.com/divergedev/diverge/internal/testing"
@@ -55,8 +56,27 @@ type EnvironmentReconciler struct {
 	AsyncProvisioner async.Provisioner
 	FeatureProvider  features.FeatureProvider
 	BudgetAlerter    *finops.BudgetAlertDispatcher
+	ClusterClients   multicluster.Resolver
 	SetupJobImage    string
 	SetupRunner      SetupRunner
+}
+
+func (r *EnvironmentReconciler) resolveTargetCluster(ctx context.Context, env *divergeiov1alpha1.Environment) (client.Client, string, bool, error) {
+	if !multicluster.IsRemoteEnv(env) {
+		return r.Client, multicluster.LocalClusterName, false, nil
+	}
+	resolver := r.ClusterClients
+	if resolver == nil && r.Client != nil {
+		resolver = multicluster.NewManager(r.Client, nil, nil, r.Scheme)
+	}
+	if resolver == nil {
+		return nil, "", false, fmt.Errorf("multi-cluster resolver is not configured")
+	}
+	target, err := resolver.Resolve(ctx, env)
+	if err != nil {
+		return nil, "", false, err
+	}
+	return target.Client, target.Name, target.IsRemote, nil
 }
 
 // +kubebuilder:rbac:groups=divergedev.com,resources=environments,verbs=get;list;watch;create;update;patch;delete

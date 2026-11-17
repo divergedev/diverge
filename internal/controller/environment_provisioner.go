@@ -25,6 +25,7 @@ import (
 	"github.com/divergedev/diverge/config/banner"
 	"github.com/divergedev/diverge/internal/async"
 	internaldb "github.com/divergedev/diverge/internal/database"
+	"github.com/divergedev/diverge/internal/multicluster"
 	pkgdb "github.com/divergedev/diverge/pkg/database"
 	"github.com/divergedev/diverge/pkg/features"
 	"github.com/divergedev/diverge/pkg/registry"
@@ -77,6 +78,36 @@ func (r *EnvironmentReconciler) reconcileProvisioning(ctx context.Context, env *
 			return res, true, retErr
 		}
 	}
+
+	// 4.5. Resolve target cluster (local hub or remote spoke via clusterRef)
+	_, resolvedCluster, _, clusterErr := r.resolveTargetCluster(ctx, env)
+	if clusterErr != nil {
+		if ve, ok := multicluster.IsValidationError(clusterErr); ok {
+			if ve.Reason == "CrossNamespaceRef" {
+				r.Recorder.Event(env, "Warning", "SecurityViolation", ve.Message)
+			} else {
+				r.Recorder.Event(env, "Warning", "ClusterRefInvalid", ve.Message)
+				env.Status.Phase = divergeiov1alpha1.PhaseFailed
+			}
+			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+				Type:    "SecretRefValid",
+				Status:  metav1.ConditionFalse,
+				Reason:  ve.Reason,
+				Message: ve.Message,
+			})
+			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, nil, 0)
+			return res, true, retErr
+		}
+		meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+			Type:    "NamespaceReady",
+			Status:  metav1.ConditionFalse,
+			Reason:  "ClusterResolveFailed",
+			Message: clusterErr.Error(),
+		})
+		res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, clusterErr, 0)
+		return res, true, retErr
+	}
+	env.Status.TargetCluster = resolvedCluster
 
 	// 5. Ensure namespace
 	if err := r.ensureNamespace(ctx, env); err != nil {
@@ -627,6 +658,11 @@ func closeDatabaseProvider(p pkgdb.DatabaseProvider) {
 func (r *EnvironmentReconciler) ensureBannerConfigMap(ctx context.Context, env *divergeiov1alpha1.Environment) error {
 	bannerSpec := env.Spec.Routing.Banner
 
+	targetClient, _, isRemote, err := r.resolveTargetCluster(ctx, env)
+	if err != nil {
+		return err
+	}
+
 	targetNS := env.Namespace
 	if env.Spec.Deploy.Namespace == "create" {
 		targetNS = env.PreviewNamespace()
@@ -639,8 +675,8 @@ func (r *EnvironmentReconciler) ensureBannerConfigMap(ctx context.Context, env *
 
 	if bannerSpec == nil || !bannerSpec.Enabled {
 		existing := &corev1.ConfigMap{}
-		if err := r.Get(ctx, types.NamespacedName{Name: cmName, Namespace: targetNS}, existing); err == nil {
-			if err := r.Delete(ctx, existing); err != nil {
+		if err := targetClient.Get(ctx, types.NamespacedName{Name: cmName, Namespace: targetNS}, existing); err == nil {
+			if err := targetClient.Delete(ctx, existing); err != nil {
 				return fmt.Errorf("failed to delete banner configmap: %w", err)
 			}
 		}
@@ -658,7 +694,7 @@ func (r *EnvironmentReconciler) ensureBannerConfigMap(ctx context.Context, env *
 		},
 	}
 
-	if targetNS == env.Namespace {
+	if !isRemote && targetNS == env.Namespace {
 		if err := controllerutil.SetControllerReference(env, cm, r.Scheme); err != nil {
 			return fmt.Errorf("failed to set owner reference: %w", err)
 		}
@@ -689,7 +725,7 @@ func (r *EnvironmentReconciler) ensureBannerConfigMap(ctx context.Context, env *
 	}
 	script = strings.ReplaceAll(script, "{{CONFIG_JSON}}", string(configJSON))
 
-	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
+	_, err = controllerutil.CreateOrUpdate(ctx, targetClient, cm, func() error {
 		if cm.Data == nil {
 			cm.Data = make(map[string]string)
 		}
@@ -703,6 +739,11 @@ func (r *EnvironmentReconciler) ensureBannerConfigMap(ctx context.Context, env *
 }
 
 func (r *EnvironmentReconciler) ensureDatabaseEnvSecret(ctx context.Context, env *divergeiov1alpha1.Environment, envVars map[string]string) error {
+	targetClient, _, isRemote, err := r.resolveTargetCluster(ctx, env)
+	if err != nil {
+		return err
+	}
+
 	secretName := sanitizeK8sName(fmt.Sprintf("diverge-db-env-%s", env.Name), env.Name, 63)
 
 	targetNS := env.Namespace
@@ -717,14 +758,14 @@ func (r *EnvironmentReconciler) ensureDatabaseEnvSecret(ctx context.Context, env
 		},
 	}
 
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
+	_, err = controllerutil.CreateOrUpdate(ctx, targetClient, secret, func() error {
 		if secret.Labels == nil {
 			secret.Labels = make(map[string]string)
 		}
 		secret.Labels["divergedev.com/environment"] = truncateLabel(env.Name)
 		secret.Labels["divergedev.com/managed-by"] = "diverge"
 
-		if targetNS == env.Namespace {
+		if !isRemote && targetNS == env.Namespace {
 			if r.Scheme != nil {
 				if err := controllerutil.SetControllerReference(env, secret, r.Scheme); err != nil {
 					return err

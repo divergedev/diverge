@@ -12,7 +12,8 @@ export const queryKeys = {
   agentTask: (ns: string, name: string) => ['agentTask', ns, name] as const,
   hookJobs: (ns: string, envName: string) => ['hookJobs', ns, envName] as const,
   clusterInfo: ['clusterInfo'] as const,
-  costSummary: (ns?: string) => ['costSummary', ns || null] as const,
+  costSummary: (ns?: string, windowDays = 30, includeHistorical = false) =>
+    ['costSummary', ns || null, windowDays, includeHistorical] as const,
   currentUser: ['currentUser'] as const,
   permissions: (ns?: string) => ['permissions', ns ?? 'all'] as const,
 }
@@ -59,10 +60,20 @@ export function useGetClusterInfo(namespace?: string) {
   })
 }
 
-export function useGetCostSummary(namespace?: string) {
+export function useGetCostSummary(
+  namespace?: string,
+  options?: { windowDays?: number; includeHistorical?: boolean },
+) {
+  const windowDays = options?.windowDays ?? 30
+  const includeHistorical = options?.includeHistorical ?? false
   return useQuery({
-    queryKey: queryKeys.costSummary(namespace),
-    queryFn: () => clusterClient.getCostSummary({ namespace: namespace ?? '' }),
+    queryKey: queryKeys.costSummary(namespace, windowDays, includeHistorical),
+    queryFn: () =>
+      clusterClient.getCostSummary({
+        namespace: namespace ?? '',
+        windowDays,
+        includeHistorical,
+      }),
     refetchInterval: 10000,
   })
 }

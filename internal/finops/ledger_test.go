@@ -1,0 +1,181 @@
+package finops
+
+import (
+	"context"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/metrics"
+)
+
+func ledgerTestScheme(t *testing.T) *runtime.Scheme {
+	t.Helper()
+	s := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(s))
+	require.NoError(t, v1alpha1.AddToScheme(s))
+	return s
+}
+
+func TestRecordEnvironmentTeardown_DedupPruneAndTrend(t *testing.T) {
+	ctx := context.Background()
+	scheme := ledgerTestScheme(t)
+	cl := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	now := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	rateCard := metrics.DefaultCostRateCard()
+
+	// 1. Expired record (>30 days old) should be pruned when a newer record arrives.
+	staleEnv := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			UID:               types.UID("uid-stale"),
+			Name:              "pr-stale",
+			Namespace:         "team-core",
+			CreationTimestamp: metav1.NewTime(now.AddDate(0, 0, -40)),
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "github", Branch: "feat/old", MR: 10},
+			Deploy: v1alpha1.EnvironmentDeploy{ChangedServices: []string{"api"}},
+		},
+	}
+	require.NoError(t, RecordEnvironmentTeardown(ctx, cl, staleEnv, now.AddDate(0, 0, -35), rateCard))
+
+	// 2. Closed PR environment that ran 6 hours (4h active, 2h hibernated) on a remote spoke cluster.
+	closedEnv := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			UID:               types.UID("uid-closed-42"),
+			Name:              "pr-42",
+			Namespace:         "team-core",
+			CreationTimestamp: metav1.NewTime(now.Add(-30 * time.Hour)),
+			Annotations: map[string]string{
+				AnnotationBaselineServiceCount:      "4",
+				metrics.AnnotationHibernatedSeconds: "7200", // 2 hours
+			},
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "github", Project: "acme/shop", Branch: "feat/checkout", MR: 42},
+			Deploy: v1alpha1.EnvironmentDeploy{
+				ChangedServices: []string{"checkout"},
+				ClusterRef: &v1alpha1.ClusterTargetRef{
+					Name: "us-west-burst",
+					KubeconfigSecretRef: &v1alpha1.SecretRef{
+						Name: "spoke-kubeconfig",
+					},
+				},
+			},
+			Database: v1alpha1.EnvironmentDatabase{Mode: "schema"},
+		},
+	}
+	termAt := now.Add(-24 * time.Hour)
+	require.NoError(t, RecordEnvironmentTeardown(ctx, cl, closedEnv, termAt, rateCard))
+	// Recording twice with same UID is idempotent.
+	require.NoError(t, RecordEnvironmentTeardown(ctx, cl, closedEnv, termAt, rateCard))
+
+	records := ListHistoricalRecords(ctx, cl, nil, "team-core", now, 30, 2*time.Second)
+	require.Len(t, records, 1, "stale >30d record pruned and duplicate UID collapsed")
+	rec := records[0]
+	assert.Equal(t, "pr-42", rec.Name)
+	assert.Equal(t, "us-west-burst", rec.Cluster)
+	assert.Equal(t, "42", rec.MR)
+	assert.InDelta(t, 6.0, rec.UptimeHours, 0.01)
+	assert.InDelta(t, 4.0, rec.ActiveHours, 0.01)
+	assert.InDelta(t, 2.0, rec.HibernatedHours, 0.01)
+	assert.Greater(t, rec.AccruedCostUSD, 0.0)
+	assert.Greater(t, rec.HibernationSavingsUSD, 0.0)
+	assert.Greater(t, rec.DeltaRoutingSavingsUSD, 0.0)
+
+	// 3. Add a live federated environment and verify BuildCostSummary populates ByCluster, DailyTrend, and HistoricalConsumers.
+	liveSpokeEnv := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			UID:               types.UID("uid-live-99"),
+			Name:              "pr-99",
+			Namespace:         "team-core",
+			CreationTimestamp: metav1.NewTime(now.Add(-3 * time.Hour)),
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "github", Project: "acme/shop", Branch: "feat/cart", MR: 99},
+			Deploy: v1alpha1.EnvironmentDeploy{
+				ChangedServices: []string{"cart"},
+				ClusterRef: &v1alpha1.ClusterTargetRef{
+					Name: "us-west-burst",
+					KubeconfigSecretRef: &v1alpha1.SecretRef{
+						Name: "spoke-kubeconfig",
+					},
+				},
+			},
+		},
+		Status: v1alpha1.EnvironmentStatus{
+			Phase:         v1alpha1.PhaseRunning,
+			TargetCluster: "us-west-burst",
+		},
+	}
+	require.NoError(t, cl.Create(ctx, liveSpokeEnv))
+
+	summary7d, err := BuildCostSummary(ctx, SummaryOptions{
+		Namespace:         "team-core",
+		Client:            cl,
+		Now:               now,
+		RateCard:          &rateCard,
+		IncludeHistorical: true,
+		WindowDays:        7,
+	})
+	require.NoError(t, err)
+	require.Len(t, summary7d.ByCluster, 1)
+	assert.Equal(t, "us-west-burst", summary7d.ByCluster[0].Cluster)
+	assert.Equal(t, int32(1), summary7d.ByCluster[0].ActiveEnvironments)
+	require.Len(t, summary7d.TopConsumers, 1)
+	assert.Equal(t, "us-west-burst", summary7d.TopConsumers[0].Cluster)
+
+	assert.Equal(t, int32(1), summary7d.HistoricalEnvironments)
+	assert.InDelta(t, rec.AccruedCostUSD, summary7d.HistoricalAccruedCostUsd, 1e-6)
+	assert.InDelta(t, rec.HibernationSavingsUSD+rec.DeltaRoutingSavingsUSD, summary7d.HistoricalSavingsUsd, 1e-6)
+	require.Len(t, summary7d.HistoricalConsumers, 1)
+	assert.True(t, summary7d.HistoricalConsumers[0].Historical)
+	assert.Equal(t, "pr-42", summary7d.HistoricalConsumers[0].Name)
+	assert.Equal(t, "us-west-burst", summary7d.HistoricalConsumers[0].Cluster)
+
+	require.Len(t, summary7d.DailyTrend, 7)
+	var trendSum float64
+	var terminatedCount int32
+	for _, pt := range summary7d.DailyTrend {
+		trendSum += pt.AccruedCostUsd
+		terminatedCount += pt.TerminatedEnvironments
+	}
+	assert.Equal(t, int32(1), terminatedCount)
+	assert.InDelta(t, summary7d.TotalAccruedCostUsd+summary7d.HistoricalAccruedCostUsd, trendSum, 1e-6)
+}
+
+func TestMergeAndPruneLedger_MaxEntriesCap(t *testing.T) {
+	now := time.Date(2026, 11, 17, 0, 0, 0, 0, time.UTC)
+	cutoff := now.AddDate(0, 0, -30)
+	existing := make([]HistoricalEnvironmentRecord, 0, 10)
+	for i := 0; i < 10; i++ {
+		existing = append(existing, HistoricalEnvironmentRecord{
+			UID:          fmt.Sprintf("u-%d", i),
+			Name:         fmt.Sprintf("pr-%d", i),
+			Namespace:    "ns",
+			CreatedAt:    now.Add(-time.Duration(20-i) * time.Hour),
+			TerminatedAt: now.Add(-time.Duration(10-i) * time.Hour),
+		})
+	}
+	incoming := HistoricalEnvironmentRecord{
+		UID:          "u-newest",
+		Name:         "pr-newest",
+		Namespace:    "ns",
+		CreatedAt:    now.Add(-1 * time.Hour),
+		TerminatedAt: now,
+	}
+	capped := mergeAndPruneLedger(existing, incoming, cutoff, 5)
+	require.Len(t, capped, 5)
+	assert.Equal(t, "pr-newest", capped[len(capped)-1].Name)
+	assert.Equal(t, "pr-6", capped[0].Name)
+}

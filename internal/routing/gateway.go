@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/multicluster"
 )
 
 // GatewayRouter implements Router using Gateway API HTTPRoute resources.
@@ -24,8 +25,32 @@ import (
 // traffic to preview environment services, mirroring the GRPCRouter
 // pattern for HTTP traffic.
 type GatewayRouter struct {
-	Client    client.Client
-	Namespace string
+	Client         client.Client
+	Namespace      string
+	ClusterClients multicluster.Resolver
+	scopedRemote   bool
+}
+
+func (r *GatewayRouter) routerForEnv(ctx context.Context, env *v1alpha1.Environment) (*GatewayRouter, error) {
+	if r.scopedRemote || !multicluster.IsRemoteEnv(env) {
+		return r, nil
+	}
+	resolver := r.ClusterClients
+	if resolver == nil && r.Client != nil {
+		resolver = multicluster.NewManager(r.Client, nil, nil, r.Client.Scheme())
+	}
+	if resolver == nil {
+		return nil, fmt.Errorf("multi-cluster resolver is not configured")
+	}
+	target, err := resolver.Resolve(ctx, env)
+	if err != nil {
+		return nil, err
+	}
+	return &GatewayRouter{
+		Client:       target.Client,
+		Namespace:    r.Namespace,
+		scopedRemote: true,
+	}, nil
 }
 
 var _ Router = (*GatewayRouter)(nil)
@@ -54,6 +79,14 @@ var managedRouteAnnotationKeys = []string{
 // Supports both HTTPRoute (default) and GRPCRoute (when protocol=grpc).
 // Also creates GAMMA mesh routes (parentRef=Service) for east-west traffic.
 func (r *GatewayRouter) Reconcile(ctx context.Context, env *v1alpha1.Environment) error {
+	scoped, err := r.routerForEnv(ctx, env)
+	if err != nil {
+		return fmt.Errorf("failed to resolve target cluster for gateway routing: %w", err)
+	}
+	if scoped != r {
+		return scoped.Reconcile(ctx, env)
+	}
+
 	logger := log.FromContext(ctx).WithName("gateway-router")
 
 	headerKey := env.Spec.Routing.HeaderKey
@@ -373,6 +406,20 @@ func (r *GatewayRouter) reconcileRoute(ctx context.Context, env *v1alpha1.Enviro
 		}
 	}
 	rules = append(rules, rule)
+	if isServiceParent {
+		fallbackPort := backendPort
+		if p, ok := parentRef["port"].(int64); ok && p > 0 {
+			fallbackPort = p
+		}
+		rules = append(rules, map[string]interface{}{
+			"backendRefs": []interface{}{
+				map[string]interface{}{
+					"name": resolvedParentName,
+					"port": fallbackPort,
+				},
+			},
+		})
+	}
 
 	spec := map[string]interface{}{
 		"parentRefs": []interface{}{parentRef},
@@ -898,6 +945,17 @@ func isServiceName(name string) bool {
 // Teardown deletes all HTTPRoute, GRPCRoute, Certificate, and ReferenceGrant resources
 // associated with the environment by selecting on the divergedev.com/environment label.
 func (r *GatewayRouter) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
+	scoped, err := r.routerForEnv(ctx, env)
+	if err != nil {
+		if _, isVal := multicluster.IsValidationError(err); isVal {
+			return nil
+		}
+		return fmt.Errorf("failed to resolve target cluster for gateway teardown: %w", err)
+	}
+	if scoped != r {
+		return scoped.Teardown(ctx, env)
+	}
+
 	logger := log.FromContext(ctx).WithName("gateway-router")
 	ns := r.namespace(env)
 

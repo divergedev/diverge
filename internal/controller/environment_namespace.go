@@ -10,12 +10,18 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 )
 
 func (r *EnvironmentReconciler) ensureNamespace(ctx context.Context, env *divergeiov1alpha1.Environment) error {
+	targetClient, _, isRemote, err := r.resolveTargetCluster(ctx, env)
+	if err != nil {
+		return err
+	}
+
 	if env.Spec.Deploy.Namespace == "create" {
 		labels := map[string]string{
 			"divergedev.com/environment": env.Name,
@@ -33,7 +39,7 @@ func (r *EnvironmentReconciler) ensureNamespace(ctx context.Context, env *diverg
 				Name: env.PreviewNamespace(),
 			},
 		}
-		_, err := controllerutil.CreateOrUpdate(ctx, r.Client, ns, func() error {
+		_, err := controllerutil.CreateOrUpdate(ctx, targetClient, ns, func() error {
 			ns.Labels = labels
 			if ns.Labels == nil {
 				ns.Labels = make(map[string]string)
@@ -78,7 +84,7 @@ func (r *EnvironmentReconciler) ensureNamespace(ctx context.Context, env *diverg
 				}},
 			},
 		}
-		if err := r.Create(ctx, limitRange); err != nil && !apierrors.IsAlreadyExists(err) {
+		if err := targetClient.Create(ctx, limitRange); err != nil && !apierrors.IsAlreadyExists(err) {
 			return fmt.Errorf("failed to create limit range: %w", err)
 		}
 
@@ -100,7 +106,7 @@ func (r *EnvironmentReconciler) ensureNamespace(ctx context.Context, env *diverg
 				},
 			},
 		}
-		if err := r.Create(ctx, quota); err != nil && !apierrors.IsAlreadyExists(err) {
+		if err := targetClient.Create(ctx, quota); err != nil && !apierrors.IsAlreadyExists(err) {
 			return fmt.Errorf("failed to create resource quota: %w", err)
 		}
 
@@ -131,10 +137,34 @@ func (r *EnvironmentReconciler) ensureNamespace(ctx context.Context, env *diverg
 				}},
 			},
 		}
-		if err := r.Create(ctx, netpol); err != nil && !apierrors.IsAlreadyExists(err) {
+		if err := targetClient.Create(ctx, netpol); err != nil && !apierrors.IsAlreadyExists(err) {
 			return fmt.Errorf("failed to create network policy: %w", err)
 		}
+		return nil
 	}
-	// "same" mode: namespace already exists (it's where the CR lives), nothing to do
+
+	// On a remote spoke cluster in "same" namespace mode, ensure the target namespace exists
+	// without mutating an already-present shared namespace.
+	if isRemote && env.Namespace != "" {
+		var spokeNS corev1.Namespace
+		if err := targetClient.Get(ctx, types.NamespacedName{Name: env.Namespace}, &spokeNS); err != nil {
+			if apierrors.IsNotFound(err) {
+				createNS := &corev1.Namespace{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: env.Namespace,
+						Labels: map[string]string{
+							"divergedev.com/managed-by": "diverge",
+						},
+					},
+				}
+				if createErr := targetClient.Create(ctx, createNS); createErr != nil && !apierrors.IsAlreadyExists(createErr) {
+					return fmt.Errorf("failed to create spoke namespace %s: %w", env.Namespace, createErr)
+				}
+				return nil
+			}
+			return fmt.Errorf("failed to verify spoke namespace %s: %w", env.Namespace, err)
+		}
+	}
+
 	return nil
 }

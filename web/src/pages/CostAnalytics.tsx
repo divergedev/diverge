@@ -103,6 +103,8 @@ function compareConsumerItems(
 
 export default function CostAnalytics() {
   const [selectedNamespace, setSelectedNamespace] = useState('')
+  const [windowDays, setWindowDays] = useState<7 | 30>(30)
+  const [includeHistorical, setIncludeHistorical] = useState(false)
   const [sortState, setSortState] = useState<{ key: SortKey; direction: SortDirection }>({
     key: 'hourly',
     direction: 'descending',
@@ -112,13 +114,19 @@ export default function CostAnalytics() {
   const svcTableCaptionId = useId()
   const consumersTableId = useId()
   const consumersCaptionId = useId()
+  const trendTitleId = useId()
+  const trendDescId = useId()
+  const trendTableCaptionId = useId()
 
   const tableRef = useRef<HTMLTableElement | null>(null)
   const tbodyRef = useRef<HTMLTableSectionElement | null>(null)
   const sortStatusRef = useRef<HTMLParagraphElement | null>(null)
 
   const { data: clusterInfo } = useGetClusterInfo()
-  const { data: summary, isLoading, error } = useGetCostSummary(selectedNamespace || undefined)
+  const { data: summary, isLoading, error } = useGetCostSummary(selectedNamespace || undefined, {
+    windowDays,
+    includeHistorical,
+  })
 
   const performColumnSort = (sourceButton: HTMLButtonElement) => {
     const table = tableRef.current
@@ -189,12 +197,32 @@ export default function CostAnalytics() {
   const namespaces = clusterInfo?.namespaces ?? []
   const byNamespace = summary?.byNamespace ?? []
   const byService = summary?.byService ?? []
+  const byCluster = summary?.byCluster ?? []
+  const dailyTrend = summary?.dailyTrend ?? []
   const topConsumers = summary?.topConsumers ?? []
+  const historicalConsumers = summary?.historicalConsumers ?? []
+  const combinedConsumers = useMemo(
+    () => (includeHistorical ? [...topConsumers, ...historicalConsumers] : topConsumers),
+    [topConsumers, historicalConsumers, includeHistorical],
+  )
   const sortedConsumers = useMemo(
-    () => [...topConsumers].sort((a, b) => compareConsumerItems(a, b, sortState.key, sortState.direction)),
-    [topConsumers, sortState],
+    () => [...combinedConsumers].sort((a, b) => compareConsumerItems(a, b, sortState.key, sortState.direction)),
+    [combinedConsumers, sortState],
   )
   const rateCard = summary?.rateCard
+  const hasRemoteClusters = byCluster.some((cl) => cl.cluster && cl.cluster !== 'local')
+  const trendTotals = useMemo(() => {
+    let accrued = 0
+    let saved = 0
+    let maxDaily = 0
+    for (const pt of dailyTrend) {
+      const daySaved = pt.hibernationSavingsUsd + pt.deltaRoutingSavingsUsd
+      accrued += pt.accruedCostUsd
+      saved += daySaved
+      maxDaily = Math.max(maxDaily, pt.accruedCostUsd, daySaved)
+    }
+    return { accrued, saved, maxDaily: maxDaily > 0 ? maxDaily : 0.01 }
+  }, [dailyTrend])
 
   const totalSavingsHourly = (summary?.hibernationSavingsHourlyUsd ?? 0) + (summary?.deltaRoutingSavingsHourlyUsd ?? 0)
   const budgetWarnings = byNamespace.filter((ns) => ns.budgetWarning)
@@ -388,7 +416,168 @@ export default function CostAnalytics() {
         </Card>
       </div>
 
-      {topConsumers.length === 0 && byNamespace.length === 0 ? (
+      {hasRemoteClusters && (
+        <Card>
+          <CardHeader className="pb-2">
+            <h2 className="text-sm font-semibold leading-none tracking-tight">Federated Cluster Attribution</h2>
+          </CardHeader>
+          <CardContent className="flex flex-wrap gap-2">
+            {byCluster.map((cl) => (
+              <div
+                key={cl.cluster || 'local'}
+                className="inline-flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-1.5 text-xs font-mono"
+              >
+                <span className="font-semibold">{cl.cluster || 'local'}</span>
+                <span className="text-muted-foreground">
+                  {cl.activeEnvironments} active · {cl.hibernatedEnvironments} idle
+                </span>
+                <span>{formatHourlyCostUSD(cl.hourlyCostUsd)}</span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {dailyTrend.length > 0 && (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between gap-4 flex-wrap">
+            <div>
+              <h2 className="text-base font-semibold leading-none tracking-tight">
+                Historical Spend &amp; Savings Trend ({windowDays}d)
+              </h2>
+              <p className="text-xs text-muted-foreground mt-1">
+                Daily UTC accrued preview spend versus hibernation and delta-routing savings, including torn-down PRs
+              </p>
+            </div>
+            <div className="flex items-center gap-1.5" role="group" aria-label="Historical trend window">
+              <Button
+                type="button"
+                size="sm"
+                variant={windowDays === 7 ? 'secondary' : 'outline'}
+                aria-pressed={windowDays === 7}
+                onClick={() => setWindowDays(7)}
+                className="min-h-9 px-3"
+              >
+                7d
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={windowDays === 30 ? 'secondary' : 'outline'}
+                aria-pressed={windowDays === 30}
+                onClick={() => setWindowDays(30)}
+                className="min-h-9 px-3"
+              >
+                30d
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <figure className="space-y-3">
+              <svg
+                role="img"
+                aria-labelledby={trendTitleId}
+                aria-describedby={trendDescId}
+                viewBox="0 0 720 160"
+                className="w-full h-40 overflow-visible"
+              >
+                <title id={trendTitleId}>
+                  Daily preview spend and savings over the last {windowDays} days
+                </title>
+                <desc id={trendDescId}>
+                  Total accrued spend {formatCurrencyUSD(trendTotals.accrued)} and total savings{' '}
+                  {formatCurrencyUSD(trendTotals.saved)} across {dailyTrend.length} UTC days.
+                </desc>
+                <line x1={0} y1={140} x2={720} y2={140} stroke="currentColor" strokeOpacity={0.15} />
+                {dailyTrend.map((pt, idx) => {
+                  const slotWidth = 720 / Math.max(dailyTrend.length, 1)
+                  const barWidth = Math.max(2, Math.min(12, slotWidth * 0.36))
+                  const xBase = idx * slotWidth + (slotWidth - barWidth * 2 - 2) / 2
+                  const spendHeight = Math.min(130, (pt.accruedCostUsd / trendTotals.maxDaily) * 130)
+                  const daySaved = pt.hibernationSavingsUsd + pt.deltaRoutingSavingsUsd
+                  const savedHeight = Math.min(130, (daySaved / trendTotals.maxDaily) * 130)
+                  return (
+                    <g key={pt.date}>
+                      <rect
+                        x={xBase}
+                        y={140 - spendHeight}
+                        width={barWidth}
+                        height={Math.max(spendHeight, pt.accruedCostUsd > 0 ? 2 : 0)}
+                        rx={1.5}
+                        fill="currentColor"
+                        className="text-primary/80"
+                      />
+                      <rect
+                        x={xBase + barWidth + 2}
+                        y={140 - savedHeight}
+                        width={barWidth}
+                        height={Math.max(savedHeight, daySaved > 0 ? 2 : 0)}
+                        rx={1.5}
+                        fill="currentColor"
+                        className="text-emerald-500/80"
+                      />
+                    </g>
+                  )
+                })}
+              </svg>
+              <figcaption className="flex items-center justify-between gap-3 flex-wrap text-xs text-muted-foreground">
+                <span className="flex items-center gap-4 flex-wrap">
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="inline-block h-2.5 w-2.5 rounded-sm bg-primary/80" aria-hidden="true" />
+                    Window Accrued Spend: <strong className="font-mono text-foreground">{formatCurrencyUSD(trendTotals.accrued)}</strong>
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="inline-block h-2.5 w-2.5 rounded-sm bg-emerald-500/80" aria-hidden="true" />
+                    Window Savings: <strong className="font-mono text-emerald-600 dark:text-emerald-400">{formatCurrencyUSD(trendTotals.saved)}</strong>
+                  </span>
+                </span>
+                <span className="font-mono">
+                  Closed PRs recorded: {summary?.historicalEnvironments ?? 0} ({formatCurrencyUSD(summary?.historicalAccruedCostUsd ?? 0)} accrued)
+                </span>
+              </figcaption>
+            </figure>
+
+            <details className="mt-3 rounded-md border px-3 py-2 text-xs">
+              <summary className="cursor-pointer font-medium select-none py-1">
+                View daily spend and savings data table ({dailyTrend.length} days)
+              </summary>
+              <div className="finops-table-wrapper mt-2">
+                <table className="w-full text-xs">
+                  <caption id={trendTableCaptionId} className="visually-hidden">
+                    Daily UTC preview spend, hibernation and delta routing savings, and environment counts
+                  </caption>
+                  <thead>
+                    <tr className="border-b text-left text-muted-foreground">
+                      <th scope="col" className="py-1.5 pr-3 font-medium">Date (UTC)</th>
+                      <th scope="col" className="py-1.5 px-3 font-medium">Accrued Spend</th>
+                      <th scope="col" className="py-1.5 px-3 font-medium">Savings</th>
+                      <th scope="col" className="py-1.5 px-3 font-medium">Active Envs</th>
+                      <th scope="col" className="py-1.5 pl-3 font-medium">Closed PRs</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dailyTrend.map((pt) => (
+                      <tr key={pt.date} className="border-b last:border-0">
+                        <th scope="row" className="py-1.5 pr-3 font-mono font-medium text-left">
+                          <time dateTime={pt.date}>{pt.date}</time>
+                        </th>
+                        <td className="py-1.5 px-3 font-mono">{formatCurrencyUSD(pt.accruedCostUsd)}</td>
+                        <td className="py-1.5 px-3 font-mono text-emerald-600 dark:text-emerald-400">
+                          {formatCurrencyUSD(pt.hibernationSavingsUsd + pt.deltaRoutingSavingsUsd)}
+                        </td>
+                        <td className="py-1.5 px-3 font-mono">{pt.activeEnvironments}</td>
+                        <td className="py-1.5 pl-3 font-mono">{pt.terminatedEnvironments}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          </CardContent>
+        </Card>
+      )}
+
+      {sortedConsumers.length === 0 && byNamespace.length === 0 && (summary?.historicalEnvironments ?? 0) === 0 ? (
         <EmptyState
           icon={Layers}
           title="No preview usage recorded yet"
@@ -528,12 +717,25 @@ export default function CostAnalytics() {
                   Click column headers to sort environments by burn rate, accrued spend, or uptime
                 </p>
               </div>
-              {rateCard && (
-                <div className="text-xs font-mono text-muted-foreground bg-muted px-2.5 py-1 rounded">
-                  Rate card: ${rateCard.vcpuHourUsd.toFixed(3)}/vCPU-hr · ${rateCard.memoryGibHourUsd.toFixed(3)}/GiB-hr ·
-                  {' '}${rateCard.databaseSchemaHourUsd.toFixed(3)}/schema-hr · ${rateCard.databaseDedicatedHourUsd.toFixed(3)}/DB-hr
-                </div>
-              )}
+              <div className="flex items-center gap-2 flex-wrap">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={includeHistorical ? 'secondary' : 'outline'}
+                  aria-pressed={includeHistorical}
+                  onClick={() => setIncludeHistorical((prev) => !prev)}
+                  className="min-h-9"
+                >
+                  Include closed PRs
+                  {(summary?.historicalEnvironments ?? 0) > 0 ? ` (${summary?.historicalEnvironments})` : ''}
+                </Button>
+                {rateCard && (
+                  <div className="text-xs font-mono text-muted-foreground bg-muted px-2.5 py-1 rounded">
+                    Rate card: ${rateCard.vcpuHourUsd.toFixed(3)}/vCPU-hr · ${rateCard.memoryGibHourUsd.toFixed(3)}/GiB-hr ·
+                    {' '}${rateCard.databaseSchemaHourUsd.toFixed(3)}/schema-hr · ${rateCard.databaseDedicatedHourUsd.toFixed(3)}/DB-hr
+                  </div>
+                )}
+              </div>
             </CardHeader>
             <CardContent>
               <div tabIndex={0} role="region" aria-labelledby={consumersCaptionId} className="finops-table-wrapper">
@@ -615,14 +817,31 @@ export default function CostAnalytics() {
                   </thead>
                   <tbody ref={tbodyRef}>
                     {sortedConsumers.map((item) => (
-                      <tr key={`${item.namespace}/${item.name}`} className="border-b last:border-0">
+                      <tr
+                        key={`${item.namespace}/${item.name}/${item.historical ? item.terminatedAt || 'hist' : 'live'}`}
+                        className="border-b last:border-0"
+                      >
                         <th scope="row" data-value={item.name} className="py-2.5 px-3 font-medium text-left">
-                          <Link
-                            to={`/environments/${item.namespace}/${item.name}`}
-                            className="text-primary hover:underline font-mono"
-                          >
-                            {item.name}
-                          </Link>
+                          {item.historical ? (
+                            <span className="font-mono text-muted-foreground">{item.name}</span>
+                          ) : (
+                            <Link
+                              to={`/environments/${item.namespace}/${item.name}`}
+                              className="text-primary hover:underline font-mono"
+                            >
+                              {item.name}
+                            </Link>
+                          )}
+                          {item.historical && (
+                            <span className="ml-2 inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[11px] font-sans font-medium text-muted-foreground">
+                              Closed
+                            </span>
+                          )}
+                          {item.cluster && item.cluster !== 'local' && (
+                            <span className="ml-2 inline-flex items-center rounded-full bg-sky-500/10 px-2 py-0.5 text-[11px] font-mono font-medium text-sky-700 dark:text-sky-400">
+                              {item.cluster}
+                            </span>
+                          )}
                           {item.costSource === 'opencost' && (
                             <span className="ml-2 inline-flex items-center rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-sans font-medium text-emerald-700 dark:text-emerald-400">
                               Live

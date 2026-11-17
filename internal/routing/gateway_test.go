@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/multicluster"
 )
 
 func TestGatewayRouter_Reconcile_CreatesHTTPRoutes(t *testing.T) {
@@ -552,10 +553,13 @@ func TestGatewayRouter_Reconcile_MeshRoutes(t *testing.T) {
 	require.NoError(t, err)
 
 	rules, _, _ := unstructured.NestedSlice(u.Object, "spec", "rules")
-	require.Len(t, rules, 1)
+	require.Len(t, rules, 2)
 
 	_, found, _ := unstructured.NestedSlice(rules[0].(map[string]interface{}), "filters")
 	assert.False(t, found, "mesh route should not have filters")
+	fallbackRefs, _, _ := unstructured.NestedSlice(rules[1].(map[string]interface{}), "backendRefs")
+	require.Len(t, fallbackRefs, 1)
+	assert.Equal(t, "web-svc", fallbackRefs[0].(map[string]interface{})["name"])
 }
 
 func TestGatewayRouter_Reconcile_StickyCookie(t *testing.T) {
@@ -1136,11 +1140,14 @@ func TestGatewayRouter_Reconcile_MeshServiceNamedGateway(t *testing.T) {
 	assert.Equal(t, "Service", parent["kind"])
 	assert.Equal(t, "", parent["group"])
 
-	// Mesh route must NOT strip the routing header
+	// Mesh route must NOT strip the routing header and must preserve baseline catch-all fallback
 	rules, _, _ := unstructured.NestedSlice(meshRoute.Object, "spec", "rules")
-	require.Len(t, rules, 1)
+	require.Len(t, rules, 2)
 	_, hasFilters, _ := unstructured.NestedSlice(rules[0].(map[string]interface{}), "filters")
 	assert.False(t, hasFilters, "GAMMA mesh route for payment-gateway must not have edge header-stripping filters")
+	fallbackRefs, _, _ := unstructured.NestedSlice(rules[1].(map[string]interface{}), "backendRefs")
+	require.Len(t, fallbackRefs, 1)
+	assert.Equal(t, "payment-gateway", fallbackRefs[0].(map[string]interface{})["name"])
 }
 
 func TestGatewayRouter_Reconcile_ParentRefDisambiguation_ProdIngressGateway(t *testing.T) {
@@ -1566,8 +1573,12 @@ func TestGatewayRouter_DefaultGatewayTLSAndDiscoverySafety(t *testing.T) {
 		assert.Equal(t, int64(80), parents[0].(map[string]interface{})["port"])
 
 		rules, _, _ := unstructured.NestedSlice(meshRoute.Object, "spec", "rules")
+		require.Len(t, rules, 2, "GAMMA Service route must include preview header rule and baseline Service catch-all fallback rule")
 		backends, _, _ := unstructured.NestedSlice(rules[0].(map[string]interface{}), "backendRefs")
 		assert.Equal(t, int64(8080), backends[0].(map[string]interface{})["port"])
+		fallbackBackends, _, _ := unstructured.NestedSlice(rules[1].(map[string]interface{}), "backendRefs")
+		assert.Equal(t, "orders-svc", fallbackBackends[0].(map[string]interface{})["name"])
+		assert.Equal(t, int64(80), fallbackBackends[0].(map[string]interface{})["port"])
 	})
 
 	t.Run("preserves existing Gateway route when default Gateway lookup returns Forbidden", func(t *testing.T) {
@@ -1741,4 +1752,51 @@ func TestGatewayRouter_DefaultGatewayTLSAndDiscoverySafety(t *testing.T) {
 		require.Len(t, parents, 1)
 		assert.Equal(t, "default", parents[0].(map[string]interface{})["namespace"])
 	})
+}
+
+func TestGatewayRouter_MultiClusterSpokeReconcileAndTeardown(t *testing.T) {
+	ctx := context.Background()
+	hubClient := fake.NewClientBuilder().Build()
+	spokeClient := fake.NewClientBuilder().Build()
+
+	r := &GatewayRouter{
+		Client: hubClient,
+		ClusterClients: &multicluster.StaticResolver{
+			Hub: &multicluster.Target{Name: "local", IsRemote: false, Client: hubClient},
+			Spokes: map[string]*multicluster.Target{
+				"eu-spoke": {Name: "eu-spoke", IsRemote: true, Client: spokeClient},
+			},
+		},
+	}
+
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-77",
+			Namespace: "checkout",
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Deploy: v1alpha1.EnvironmentDeploy{
+				ChangedServices: []string{"api"},
+				ClusterRef: &v1alpha1.ClusterTargetRef{
+					Name:                "eu-spoke",
+					KubeconfigSecretRef: &v1alpha1.SecretRef{Name: "eu-kubeconfig"},
+				},
+			},
+		},
+	}
+
+	require.NoError(t, r.Reconcile(ctx, env))
+
+	hubRoute := &unstructured.Unstructured{}
+	hubRoute.SetAPIVersion("gateway.networking.k8s.io/v1")
+	hubRoute.SetKind("HTTPRoute")
+	assert.True(t, apierrors.IsNotFound(hubClient.Get(ctx, client.ObjectKey{Name: "pr-77-api", Namespace: "checkout"}, hubRoute)))
+
+	spokeRoute := &unstructured.Unstructured{}
+	spokeRoute.SetAPIVersion("gateway.networking.k8s.io/v1")
+	spokeRoute.SetKind("HTTPRoute")
+	require.NoError(t, spokeClient.Get(ctx, client.ObjectKey{Name: "pr-77-api", Namespace: "checkout"}, spokeRoute))
+
+	require.NoError(t, r.Teardown(ctx, env))
+	assert.True(t, apierrors.IsNotFound(spokeClient.Get(ctx, client.ObjectKey{Name: "pr-77-api", Namespace: "checkout"}, spokeRoute)))
 }
