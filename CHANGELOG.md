@@ -1,5 +1,22 @@
 # Changelog
 
+## [v0.27.0] - 2026-11-18
+
+### 🚀 Highlights & New Features
+
+#### 🌍 Multi-Cluster Preview Federation (`spec.deploy.clusterRef` & `PreviewGroupSpec.ClusterRef`) (`#345`)
+- **Hub-and-Spoke Client Manager & SSRF-Hardened Kubeconfig Validation (`internal/multicluster/manager.go`, `api/v1alpha1/`) (#345)**: Added `ClusterTargetRef` (`name` + same-namespace `kubeconfigSecretRef`, defaulting to key `kubeconfig` then `value`) on `Environment.spec.deploy.clusterRef`, `PreviewGroup.spec.clusterRef`, and `PreviewGroup.spec.services[].clusterRef`, with immutable write-ahead `status.targetCluster` pinning, admission webhook immutability checks (including deleting resources and `"local"` sentinel reservation), SHA-256 cached spoke clients, HTTPS enforcement, dial-time private/loopback/link-local SSRF blocking, `HTTP_PROXY`/`HTTPS_PROXY` bypass prevention, and exec/auth-provider plugin rejection.
+- **Federated Workload, Routing, Database & `StreamLogs` Execution (`internal/deployer/`, `internal/routing/`, `internal/database/cnpg/`, `internal/controller/`, `internal/server/`, `charts/diverge/`) (#345)**: Extended `DirectDeployer` (fetching source `ConfigMap` manifests from the hub while deploying workloads and ownership-verified 15-kind teardowns on the target spoke), `KEDAHTTPScaledObjectDeployer`, `GatewayRouter`, `IstioRouter`, `CNPGDatabaseProvider`, in-cluster `configmap` feature flags, migration/post-deploy hooks (with `divergedev.com/force-teardown: "true"` escape hatch), and `diverge-server` `StreamLogs` (`server.rbac.multiClusterSecrets` / `server.rbac.multiClusterSecretNames`, denying Macaroon spoke log access) to operate seamlessly across federated spoke clusters.
+
+#### 📈 Historical FinOps Ledger & 7d / 30d Trend Analytics (`#345`)
+- **30-Day Per-Namespace FinOps Teardown Ledger (`internal/finops/ledger.go`, `internal/finops/summary.go`, `internal/metrics/cost.go`, `internal/controller/environment_teardown.go`) (#345)**: Snapshots torn-down `Environment` lifetime, active vs. hibernated hours, accrued spend, hibernation savings, and causal `DeltaIntervals` `PreviewGroup` delta-routing savings into per-namespace `diverge-finops-ledger` `ConfigMap`s (`records.json`, 30-day retention, 500-entry cap, UID deduplication, `BillableEndAt` capping, and explicit `0` rate-card preservation).
+- **Historical `diverge cost` Flags & `/analytics` Daily Trend Chart (`internal/cli/cost.go`, `api/proto/diverge/v1alpha1/cluster.proto`, `web/src/pages/CostAnalytics.tsx`) (#345)**: Added `include_history` and `window_days` to `ClusterService.GetCostSummary`, `--history` and `--window-days` (`1`–`30`, with `0` defaulting to `30`) to `diverge cost`, and interactive `7d` / `30d` daily spend & savings trend bars plus Active + Closed consumer toggles in the Web Dashboard.
+
+#### 🕸️ Istio Ambient + Waypoint East-West GAMMA E2E Conformance (`#345`)
+- **Ambient `ztunnel` + Waypoint L7 GAMMA Conformance (`test/e2e/setup_istio.sh`, `test/e2e/istio_test.go`, `.github/workflows/e2e-istio.yml`) (#345)**: Upgraded the Istio E2E conformance suite to run Istio `ambient` profile (`istio.io/dataplane-mode=ambient` + `istioctl waypoint apply --enroll-namespace`), validating north-south Gateway header routing, east-west GAMMA pod-to-pod `X-Preview-Env` propagation through the L7 waypoint proxy, and clean route teardown without unauthorized hub informer cache waits.
+
+---
+
 ## [v0.26.0] - 2026-11-16
 
 ### 🚀 Highlights & New Features

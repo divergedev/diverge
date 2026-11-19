@@ -103,6 +103,7 @@ The `Environment` Custom Resource represents a single preview environment in Kub
 | `deploy.mode` | Deployment strategy: `delta` (only changed services) or `full` (all services). |
 | `deploy.changedServices` | List of service names detected as changed by the Changeset Detector. |
 | `deploy.baselineRef` | The reference environment to fall back to (e.g., `staging`). |
+| `deploy.clusterRef` | Optional remote spoke cluster target (`name` + same-namespace `kubeconfigSecretRef`, defaulting to key `kubeconfig` then `value`). Immutable once `status.targetCluster` is assigned. |
 | `routing.mode` | The routing strategy: `header`, `namespace`, or `subdomain`. |
 | `routing.headerKey` | The HTTP header key used for routing (e.g., `x-diverge-env`). |
 | `routing.headerValue` | The value of the HTTP header indicating this specific environment. |
@@ -162,6 +163,7 @@ Diverge includes an OpenFeature-compatible feature flags engine. For details and
 | `databaseStatus` | Status of the database provisioning step. |
 | `featureConfigMap` | Name of the generated Kubernetes ConfigMap containing flagd definitions (when using `configmap` provider). |
 | `featureEnvVars` | Key-value map of environment variables injected into preview workloads for zero-code OpenFeature SDK configuration. |
+| `targetCluster` | Resolved target cluster identifier (`"local"` on the hub cluster, or the remote spoke cluster name). |
 | `createdAt` | Timestamp when the environment was created. |
 | `expiresAt` | Timestamp when the environment will be deleted (if TTL is set). |
 
@@ -226,6 +228,8 @@ Key parameters:
 | `proxy.replicaCount` | `1` | Number of proxy replicas. |
 | `routing.defaultMode` | `header` | Default routing mode if not specified. |
 | `database.defaultMode` | `shared` | Default database mode if not specified. |
+| `server.rbac.multiClusterSecrets` | `false` | Allow `diverge-server` to read spoke-cluster kubeconfig `Secret`s for multi-cluster `StreamLogs`. |
+| `server.rbac.multiClusterSecretNames` | `[]` | Optional allowlist of explicit spoke kubeconfig `Secret` names for `diverge-server` RBAC `resourceNames` scoping. |
 
 ## CLI & Binary Flags Configuration
 

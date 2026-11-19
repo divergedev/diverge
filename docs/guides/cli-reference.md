@@ -7,6 +7,7 @@ The `diverge` CLI manages your local development environments and interacts with
 | Command | Description |
 |---------|-------------|
 | `diverge completion [bash\|zsh\|fish\|powershell]` | Generate shell completion scripts with live `Environment` and `AgentTask` tab-completion |
+| `diverge cost [summary\|top]` | Inspect real-time and 30-day historical FinOps spend, savings, quotas, and CSV/JSON/YAML chargeback exports (alias: `diverge finops`) |
 | `diverge create` | Create an environment from the current branch |
 | `diverge curl <env> [path]` | Send an HTTP request routed to a preview environment (`--compare-baseline` for side-by-side diff) |
 | `diverge delete <name>` | Delete an environment |
@@ -299,6 +300,38 @@ diverge top --once -A
 
 # Export machine-readable fleet snapshot as JSON
 diverge top -o json -A
+```
+
+### `diverge cost`
+
+Compute real-time and 30-day historical FinOps cloud spend across preview environments (alias: `diverge finops`), including idle hibernation savings, `PreviewGroup` delta-routing savings, autonomous `AgentTask` LLM spend, per-namespace quota utilization, closed/deleted environment history from `diverge-finops-ledger`, and optional OpenCost / Kubecost live allocation enrichment. Supports both ConnectRPC execution (`--server-url` / `DIVERGE_SERVER_URL`, requiring no local kubeconfig) and direct Kubernetes API execution.
+
+**Usage:** `diverge cost [summary|top] [flags]` (Alias: `diverge finops`)
+
+**Flags:**
+- `-A, --all-namespaces` — Aggregate FinOps metrics across all namespaces
+- `-o, --output` — Output format: `table` (default), `json`, `yaml`, or `csv`
+- `--top` — Maximum environment consumers to display (`0` for unlimited; default: `10`)
+- `--sort` — Sort consumers by: `hourly` (default), `accrued`, `projected`, or `uptime`
+- `--history` — Include closed/deleted preview environments from the 30-day historical FinOps ledger
+- `--window-days` — Historical FinOps trend and ledger lookback window in UTC days (`1`–`30`, `0` defaults to `30`; default: `30`)
+- `--server-url` — Diverge ConnectRPC server URL (optional; uses `DIVERGE_SERVER_URL`, falling back to kubeconfig when empty)
+- `--opencost-url` — OpenCost / Kubecost Allocation API URL (defaults to `DIVERGE_OPENCOST_URL`)
+- `--fail-on-budget-warning` — Exit non-zero when any namespace exceeds its FinOps budget warning threshold
+
+**Examples:**
+```bash
+# Show FinOps summary and top 10 preview consumers in current namespace
+diverge cost
+
+# Include closed/deleted environments over a 7-day lookback window across all namespaces
+diverge cost -A --history --window-days 7 --sort accrued
+
+# Export full CSV chargeback report (live + historical) across all namespaces
+diverge cost -A --history --top 0 -o csv > finops-report.csv
+
+# Gate CI on namespace FinOps budget warnings via diverge-server
+diverge cost -n staging --server-url https://diverge.example.com --fail-on-budget-warning
 ```
 
 ### `diverge verify`
