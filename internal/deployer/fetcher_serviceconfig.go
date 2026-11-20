@@ -287,15 +287,28 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 //  3. Empty string (no database injection)
 func resolveDBSecret(env *v1alpha1.Environment) string {
 	db := env.Spec.Database
+	providerAnno := strings.TrimSpace(env.Annotations["divergedev.com/database-provider"])
+	isNeon := db.Mode == "neon" || providerAnno == "neon" || strings.TrimSpace(env.Status.DatabaseProvider) == "neon"
+
+	// For Neon CoW branching, connectionRef holds the hub-side Neon API credentials Secret,
+	// NOT the application DATABASE_URL; preview pods always consume diverge-db-env-<env.Name>.
+	if isNeon {
+		if env.Status.DatabaseStatus != "" || len(env.Status.Conditions) == 0 {
+			return sanitizeDBEnvSecretName(fmt.Sprintf("diverge-db-env-%s", env.Name), env.Name, 63)
+		}
+		return ""
+	}
 
 	// Primary path: user-provided connection secret
 	if db.ConnectionRef != "" {
 		return db.ConnectionRef
 	}
 
-	// Auto-provisioned secret for schema mode (when database provisioning has
+	// Auto-provisioned secret for schema and branching modes (when database provisioning has
 	// recorded status or when evaluated standalone without controller status conditions)
-	if db.Mode == "schema" && (env.Status.DatabaseStatus != "" || len(env.Status.Conditions) == 0) {
+	isAutoEnvSecretMode := db.Mode == "schema" || db.Mode == "cnpg" || db.Mode == "snapshot" || db.Mode == "fresh" ||
+		providerAnno == "cnpg" || providerAnno == "snapshot" || providerAnno == "fresh" || providerAnno == "schema"
+	if isAutoEnvSecretMode && (env.Status.DatabaseStatus != "" || len(env.Status.Conditions) == 0) {
 		return sanitizeDBEnvSecretName(fmt.Sprintf("diverge-db-env-%s", env.Name), env.Name, 63)
 	}
 

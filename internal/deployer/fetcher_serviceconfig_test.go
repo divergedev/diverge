@@ -272,3 +272,29 @@ func TestServiceConfigFetcher_AsyncEnvVarsAndHibernatedReplicas(t *testing.T) {
 	assert.Equal(t, "preview:pr-101", envMap["REDIS_NAMESPACE"])
 	assert.Equal(t, "orders-pr-101", envMap["KAFKA_CONSUMER_GROUP"])
 }
+
+func TestResolveDBSecret_NeonUsesManagedEnvSecretNotAPICredentials(t *testing.T) {
+	expectedManaged := sanitizeDBEnvSecretName("diverge-db-env-pr-42", "pr-42", 63)
+
+	// While Neon branch is still provisioning (Conditions non-empty, DatabaseStatus empty),
+	// resolveDBSecret must return "" rather than mounting hub API credentials (neon-api-creds)
+	// or a not-yet-created diverge-db-env-pr-42 Secret.
+	provisioningEnv := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "pr-42", Namespace: "payments"},
+		Spec: v1alpha1.EnvironmentSpec{
+			Database: v1alpha1.EnvironmentDatabase{
+				Mode:          "neon",
+				ConnectionRef: "neon-api-creds",
+			},
+		},
+		Status: v1alpha1.EnvironmentStatus{
+			Conditions: []metav1.Condition{{Type: "DatabaseReady", Status: metav1.ConditionFalse}},
+		},
+	}
+	assert.Equal(t, "", resolveDBSecret(provisioningEnv))
+
+	// Once Neon branch is ready (DatabaseStatus populated), pods consume diverge-db-env-pr-42.
+	readyEnv := provisioningEnv.DeepCopy()
+	readyEnv.Status.DatabaseStatus = "Neon branch diverge-pr-42-a1b2c3d4 (br-1) is ready"
+	assert.Equal(t, expectedManaged, resolveDBSecret(readyEnv))
+}

@@ -44,6 +44,7 @@ var messageDescriptions = map[string]string{
 	"diverge.v1alpha1.ConfigImage":               "Container image template settings.",
 	"diverge.v1alpha1.ConfigHelm":                "Optional Helm chart location.",
 	"diverge.v1alpha1.ConfigEnvironmentSettings": "Default environment settings.",
+	"diverge.v1alpha1.ConfigClusterRefSettings":  "Remote spoke cluster target settings for federated preview deployments.",
 	"diverge.v1alpha1.ConfigAtlasSettings":       "Atlas schema management and migration settings.",
 	"diverge.v1alpha1.ConfigFeatureSettings":     "Feature flag overrides and remote configuration.",
 	"diverge.v1alpha1.ConfigDevSettings":         "Local development conflict resolution settings (diverge dev).",
@@ -121,6 +122,18 @@ var fieldConstraints = map[string]fieldConstraint{
 	"diverge.v1alpha1.ConfigDeploySettings.namespace": {
 		enum: []string{"same", "create"},
 	},
+	"diverge.v1alpha1.ConfigDeploySettings.cluster_ref": {
+		description: "Optional remote spoke cluster target for federated preview deployments.",
+	},
+	"diverge.v1alpha1.ConfigClusterRefSettings.name": {
+		description: "Logical spoke cluster identifier surfaced in status, CLI, and FinOps reports (defaults to kubeconfig_secret_name when omitted).",
+	},
+	"diverge.v1alpha1.ConfigClusterRefSettings.kubeconfig_secret_name": {
+		description: "Same-namespace Kubernetes Secret name holding the target spoke kubeconfig.",
+	},
+	"diverge.v1alpha1.ConfigClusterRefSettings.kubeconfig_secret_key": {
+		description: "Secret data key holding the kubeconfig (defaults to 'kubeconfig', falling back to 'value').",
+	},
 	"diverge.v1alpha1.ConfigRoutingSettings.mode": {
 		enum: []string{"header", "namespace", "subdomain"},
 	},
@@ -131,7 +144,7 @@ var fieldConstraints = map[string]fieldConstraint{
 		pattern: "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$",
 	},
 	"diverge.v1alpha1.ConfigDatabaseSettings.mode": {
-		enum: []string{"shared", "schema", "snapshot", "fresh"},
+		enum: []string{"shared", "schema", "snapshot", "fresh", "cnpg", "neon"},
 	},
 	"diverge.v1alpha1.ConfigDatabaseSettings.atlas": {
 		description: "Atlas schema management and migration settings.",

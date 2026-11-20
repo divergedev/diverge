@@ -97,6 +97,13 @@ export default function EnvironmentDetail() {
   const baselineFingerprint = annotations['divergedev.com/baseline-fingerprint'] || ''
   const dbMode = env.spec?.database?.mode && env.spec.database.mode !== 'none' ? env.spec.database.mode : ''
   const dbProvider = env.status?.databaseProvider || ''
+  const targetCluster = (
+    env.status?.targetCluster ||
+    env.spec?.deploy?.clusterRef?.name ||
+    env.spec?.deploy?.clusterRef?.kubeconfigSecretRef?.name ||
+    'local'
+  ).trim() || 'local'
+  const isRemoteCluster = targetCluster !== 'local'
   const asyncRoutes = env.spec?.routing?.asyncRoutes ?? []
   const asyncEnvVars = env.status?.asyncEnvVars ?? {}
   const asyncEnvEntries = Object.entries(asyncEnvVars)
@@ -236,6 +243,11 @@ export default function EnvironmentDetail() {
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-bold">{env.name}</h1>
             <StatusBadge phase={env.status?.phase ?? ''} />
+            {isRemoteCluster && (
+              <span className="inline-flex items-center rounded-full bg-sky-500/10 px-2.5 py-0.5 text-xs font-mono font-medium text-sky-600 dark:text-sky-400">
+                {targetCluster}
+              </span>
+            )}
           </div>
           <p className="text-muted-foreground">{env.namespace}</p>
         </div>
@@ -367,6 +379,10 @@ export default function EnvironmentDetail() {
                   <span className="font-mono font-medium">
                     {serviceCount} {serviceCount === 1 ? 'service' : 'services'}
                   </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Target Cluster</span>
+                  <span className="font-mono font-medium">{targetCluster}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">Hibernation</span>

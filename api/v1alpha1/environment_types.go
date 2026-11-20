@@ -222,8 +222,8 @@ type BannerSpec struct {
 
 // EnvironmentDatabase defines the database configuration
 type EnvironmentDatabase struct {
-	// +kubebuilder:validation:Enum=shared;schema;snapshot;fresh
-	Mode          string            `json:"mode,omitempty"` // shared, schema, snapshot, fresh
+	// +kubebuilder:validation:Enum=shared;schema;snapshot;fresh;cnpg;neon
+	Mode          string            `json:"mode,omitempty"` // shared, schema, snapshot, fresh, cnpg, neon
 	ConnectionRef string            `json:"connectionRef,omitempty"`
 	SeedSource    string            `json:"seedSource,omitempty"`
 	MigrationJob  *MigrationJobSpec `json:"migrationJob,omitempty"`

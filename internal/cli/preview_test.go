@@ -310,3 +310,73 @@ func TestPreviewCreate_AtlasFlagConflict(t *testing.T) {
 		t.Errorf("unexpected error message: %v", err)
 	}
 }
+
+func TestPreviewCreateAndStatus_ClusterFederation(t *testing.T) {
+	s := runtime.NewScheme()
+	_ = divergeiov1alpha1.AddToScheme(s)
+
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+	app := &App{Namespace: "default", Client: c}
+
+	// Missing --cluster-secret when targeting a remote spoke fails fast
+	badCmd := newPreviewCreateCmd(app)
+	badCmd.SetArgs([]string{
+		"--name", "mr-fed",
+		"--service", "orders=ghcr.io/acme/orders:mr-fed",
+		"--cluster", "us-west-burst",
+	})
+	if err := badCmd.Execute(); err == nil {
+		t.Fatal("expected error when --cluster is set to remote spoke without --cluster-secret")
+	}
+
+	// Valid --cluster + --cluster-secret populates PreviewGroup.Spec.Deploy.ClusterRef
+	okCmd := newPreviewCreateCmd(app)
+	var createOut bytes.Buffer
+	okCmd.SetOut(&createOut)
+	okCmd.SetArgs([]string{
+		"--name", "mr-fed",
+		"--service", "orders=ghcr.io/acme/orders:mr-fed",
+		"--cluster", "us-west-burst",
+		"--cluster-secret", "spoke-west-kubeconfig",
+	})
+	if err := okCmd.Execute(); err != nil {
+		t.Fatalf("unexpected preview create error: %v", err)
+	}
+
+	var pg divergeiov1alpha1.PreviewGroup
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "mr-fed"}, &pg); err != nil {
+		t.Fatalf("failed to fetch created PreviewGroup: %v", err)
+	}
+	if pg.Spec.ClusterRef == nil || pg.Spec.ClusterRef.Name != "us-west-burst" {
+		t.Fatalf("PreviewGroup ClusterRef = %+v, want us-west-burst", pg.Spec.ClusterRef)
+	}
+	if pg.Spec.ClusterRef.KubeconfigSecretRef == nil || pg.Spec.ClusterRef.KubeconfigSecretRef.Name != "spoke-west-kubeconfig" {
+		t.Fatalf("PreviewGroup KubeconfigSecretRef = %+v, want spoke-west-kubeconfig", pg.Spec.ClusterRef.KubeconfigSecretRef)
+	}
+
+	// Simulate status reconciliation and verify preview status renders target cluster
+	pg.Status.Phase = divergeiov1alpha1.PreviewGroupPhaseRunning
+	pg.Status.Services = []divergeiov1alpha1.PreviewGroupServiceStatus{
+		{
+			Name:          "orders",
+			Phase:         divergeiov1alpha1.PhaseRunning,
+			Namespace:     "default",
+			TargetCluster: "us-west-burst",
+		},
+	}
+	if err := c.Status().Update(context.Background(), &pg); err != nil {
+		// fake client without status subresource falls back to Update
+		_ = c.Update(context.Background(), &pg)
+	}
+
+	var statusBuf bytes.Buffer
+	if err := runPreviewStatus(context.Background(), app, "mr-fed", &statusBuf); err != nil {
+		t.Fatalf("runPreviewStatus failed: %v", err)
+	}
+	if !bytes.Contains(statusBuf.Bytes(), []byte("Cluster: us-west-burst")) {
+		t.Errorf("expected top-level Cluster line in preview status, got:\n%s", statusBuf.String())
+	}
+	if !bytes.Contains(statusBuf.Bytes(), []byte("CLUSTER")) {
+		t.Errorf("expected CLUSTER table column in preview status, got:\n%s", statusBuf.String())
+	}
+}

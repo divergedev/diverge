@@ -49,10 +49,18 @@ message ConfigEnvironmentSettings {
   ConfigDevSettings dev = 6;
 }
 
+// ConfigClusterRefSettings configures a remote spoke cluster target in .diverge.yaml.
+message ConfigClusterRefSettings {
+  string name = 1;
+  string kubeconfig_secret_name = 2;
+  string kubeconfig_secret_key = 3;
+}
+
 // ConfigDeploySettings defines deployment mode and namespace strategy.
 message ConfigDeploySettings {
   string mode = 1;
   string namespace = 2;
+  ConfigClusterRefSettings cluster_ref = 3;
 }
 
 // ConfigRoutingSettings defines traffic routing strategy for preview environments.

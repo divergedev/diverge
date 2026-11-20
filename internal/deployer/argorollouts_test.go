@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/multicluster"
 	"github.com/divergedev/diverge/pkg/registry"
 )
 
@@ -201,4 +202,90 @@ func TestArgoRolloutsDeployer_ConditionsFallbackAndCreateNamespace(t *testing.T)
 	require.NoError(t, err)
 	require.Len(t, statuses, 1)
 	assert.Equal(t, "Degraded", statuses[0].Health)
+}
+
+func TestArgoRolloutsDeployer_FederatedSpokeLifecycle(t *testing.T) {
+	ctx := context.Background()
+	hubClient := fake.NewClientBuilder().Build()
+	spokeClient := fake.NewClientBuilder().Build()
+
+	resolver := &multicluster.StaticResolver{
+		Hub: &multicluster.Target{Name: "local", IsRemote: false, Client: hubClient},
+		Spokes: map[string]*multicluster.Target{
+			"us-west-burst": {Name: "us-west-burst", IsRemote: true, Client: spokeClient},
+		},
+	}
+
+	dep := &ArgoRolloutsDeployer{
+		Client:         hubClient,
+		ClusterClients: resolver,
+	}
+
+	env := &v1alpha1.Environment{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "divergedev.com/v1alpha1",
+			Kind:       "Environment",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-federated",
+			Namespace: "team-orders",
+			UID:       "uid-hub-env",
+			Annotations: map[string]string{
+				AnnotationRolloutAnalysis: "true",
+			},
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Deploy: v1alpha1.EnvironmentDeploy{
+				Namespace: "same",
+				ClusterRef: &v1alpha1.ClusterTargetRef{
+					Name: "us-west-burst",
+					KubeconfigSecretRef: &v1alpha1.SecretRef{
+						Name: "spoke-west-kubeconfig",
+					},
+				},
+			},
+			ServiceConfig: &v1alpha1.ServicePreviewConfig{
+				ServiceName: "orders",
+				Image:       "ghcr.io/acme/orders:pr-federated",
+				Port:        8080,
+			},
+		},
+	}
+
+	require.NoError(t, dep.Deploy(ctx, env))
+
+	// Hub cluster must NOT receive Rollout or Service
+	hubRollout := &unstructured.Unstructured{}
+	hubRollout.SetGroupVersionKind(rolloutGVK)
+	assert.Error(t, hubClient.Get(ctx, client.ObjectKey{Name: "pr-federated-orders", Namespace: "team-orders"}, hubRollout))
+
+	// Spoke cluster MUST receive Rollout, AnalysisTemplate, and Service WITHOUT cross-cluster OwnerReferences
+	spokeRollout := &unstructured.Unstructured{}
+	spokeRollout.SetGroupVersionKind(rolloutGVK)
+	require.NoError(t, spokeClient.Get(ctx, client.ObjectKey{Name: "pr-federated-orders", Namespace: "team-orders"}, spokeRollout))
+	assert.Empty(t, spokeRollout.GetOwnerReferences(), "cross-cluster OwnerReferences must never be set on spoke Rollouts")
+
+	spokeSvc := &unstructured.Unstructured{}
+	spokeSvc.SetGroupVersionKind(coreServiceGVK)
+	require.NoError(t, spokeClient.Get(ctx, client.ObjectKey{Name: "pr-federated-orders", Namespace: "team-orders"}, spokeSvc))
+	assert.Empty(t, spokeSvc.GetOwnerReferences(), "cross-cluster OwnerReferences must never be set on spoke Services")
+
+	spokeTmpl := &unstructured.Unstructured{}
+	spokeTmpl.SetGroupVersionKind(analysisTemplateGVK)
+	require.NoError(t, spokeClient.Get(ctx, client.ObjectKey{Name: "pr-federated-orders-verify", Namespace: "team-orders"}, spokeTmpl))
+	assert.Empty(t, spokeTmpl.GetOwnerReferences(), "cross-cluster OwnerReferences must never be set on spoke AnalysisTemplates")
+
+	// Status queries spoke cluster
+	require.NoError(t, unstructured.SetNestedField(spokeRollout.Object, "Healthy", "status", "phase"))
+	require.NoError(t, spokeClient.Update(ctx, spokeRollout))
+	statuses, err := dep.Status(ctx, env)
+	require.NoError(t, err)
+	require.Len(t, statuses, 1)
+	assert.Equal(t, "Healthy", statuses[0].Health)
+
+	// Teardown cleans up spoke cluster resources
+	require.NoError(t, dep.Teardown(ctx, env))
+	assert.Error(t, spokeClient.Get(ctx, client.ObjectKey{Name: "pr-federated-orders", Namespace: "team-orders"}, spokeRollout))
+	assert.Error(t, spokeClient.Get(ctx, client.ObjectKey{Name: "pr-federated-orders", Namespace: "team-orders"}, spokeSvc))
+	assert.Error(t, spokeClient.Get(ctx, client.ObjectKey{Name: "pr-federated-orders-verify", Namespace: "team-orders"}, spokeTmpl))
 }

@@ -16,7 +16,7 @@ The `diverge` CLI manages your local development environments and interacts with
 | `diverge dev intercept <service>` | Intercept a service in a preview group |
 | `diverge dev release <service>` | Stop intercepting a service |
 | `diverge diff` | Detect which services changed relative to a base branch |
-| `diverge doctor [env-name]` | Run root-cause diagnostics (`DIV-101`–`DIV-110`) across workloads, migrations, and `AgentTask`s |
+| `diverge doctor [env-name]` | Run root-cause diagnostics (`DIV-101`–`DIV-111`) across hub and federated spoke workloads, migrations, and `AgentTask`s |
 | `diverge env export` | Export environment variables for a service |
 | `diverge graph show` | Display the service topology graph |
 | `diverge graph validate` | Validate topology for cycles, orphans, and unreachable services |
@@ -217,7 +217,7 @@ diverge completion powershell | Out-String | Invoke-Expression
 
 ### `diverge doctor`
 
-Run automated root-cause diagnostics across `Environment` CRs, database migration jobs, `AgentTask` sandboxes, and Kubernetes pods. Emits structured diagnostic error codes (`DIV-101` through `DIV-110`) with direct links to the [Troubleshooting Playbook](troubleshooting.md#diagnostic-error-codes-div-101--div-110).
+Run automated root-cause diagnostics across `Environment` CRs, database migration jobs, `AgentTask` sandboxes, and Kubernetes pods on both the hub cluster and federated spoke clusters. Emits structured diagnostic error codes (`DIV-101` through `DIV-111`) with direct links to the [Troubleshooting Playbook](troubleshooting.md#diagnostic-error-codes-div-101--div-111).
 
 **Usage:** `diverge doctor [environment] [flags]`
 

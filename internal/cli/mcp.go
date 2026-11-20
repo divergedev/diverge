@@ -306,7 +306,7 @@ var agentTaskToolMetadata = map[string]mcpToolMeta{
 		},
 	},
 	"diverge_get_cost_summary": {
-		description: "Get FinOps hourly burn, monthly run-rate, hibernation and delta-routing savings, AgentTask LLM spend, namespace quota utilization, and top PR/environment consumers.",
+		description: costSummaryToolDescription,
 		annotations: mcp.ToolAnnotation{
 			Title:           "Get FinOps Cost Summary",
 			ReadOnlyHint:    mcp.ToBoolPtr(true),

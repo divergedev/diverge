@@ -91,6 +91,12 @@ export default function PreviewGroupDetail() {
     : undefined
 
   const services = pg.status?.services ?? []
+  const specServicesByName = new Map((pg.spec?.services ?? []).map((s) => [s.name, s]))
+  const groupTargetCluster = (
+    pg.spec?.clusterRef?.name ||
+    pg.spec?.clusterRef?.kubeconfigSecretRef?.name ||
+    'local'
+  ).trim() || 'local'
   const serviceCount = pg.status?.serviceCount || services.length || 0
   const conditions = pg.status?.conditions ?? []
 
@@ -229,6 +235,10 @@ export default function PreviewGroupDetail() {
                 <span className="text-muted-foreground">Service Count</span>
                 <span>{serviceCount}</span>
               </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Target Cluster</span>
+                <span className="font-mono text-xs">{groupTargetCluster}</span>
+              </div>
             </CardContent>
           </Card>
 
@@ -244,6 +254,7 @@ export default function PreviewGroupDetail() {
                       <TableHead>Service</TableHead>
                       <TableHead>Phase</TableHead>
                       <TableHead>Environment</TableHead>
+                      <TableHead>Cluster</TableHead>
                       <TableHead>Changed Services</TableHead>
                       <TableHead>URL</TableHead>
                       <TableHead>Message</TableHead>
@@ -253,6 +264,13 @@ export default function PreviewGroupDetail() {
                     {services.map((svc) => {
                       const targetNs = svc.namespace || namespace
                       const safeSvcUrl = isSafeExternalUrl(svc.url) ? svc.url : undefined
+                      const specSvc = specServicesByName.get(svc.name)
+                      const svcCluster = (
+                        svc.targetCluster ||
+                        specSvc?.clusterRef?.name ||
+                        specSvc?.clusterRef?.kubeconfigSecretRef?.name ||
+                        groupTargetCluster
+                      ).trim() || 'local'
                       return (
                         <TableRow key={svc.name}>
                           <TableCell className="font-mono text-xs font-medium">
@@ -272,6 +290,9 @@ export default function PreviewGroupDetail() {
                             ) : (
                               <span className="text-muted-foreground text-xs">—</span>
                             )}
+                          </TableCell>
+                          <TableCell>
+                            <span className="font-mono text-xs">{svcCluster}</span>
                           </TableCell>
                           <TableCell>
                             {svc.changedServices && svc.changedServices.length > 0 ? (

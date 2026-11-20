@@ -45,6 +45,11 @@ func TestMCPCostSummaryTool_RegisteredAndTruncatesTopConsumers(t *testing.T) {
 				{Name: "pr-2", Namespace: "payments", HourlyCostUsd: 0.036},
 				{Name: "pr-3", Namespace: "payments", HourlyCostUsd: 0.000, Hibernated: true},
 			},
+			HistoricalConsumers: []*divergev1alpha1.EnvironmentCostItem{
+				{Name: "pr-10", Namespace: "payments", Phase: "Closed", AccruedCostUsd: 1.25},
+				{Name: "pr-11", Namespace: "payments", Phase: "Closed", AccruedCostUsd: 0.90},
+				{Name: "pr-12", Namespace: "payments", Phase: "Closed", AccruedCostUsd: 0.45},
+			},
 		},
 	}
 
@@ -61,8 +66,10 @@ func TestMCPCostSummaryTool_RegisteredAndTruncatesTopConsumers(t *testing.T) {
 		Params: mcp.CallToolParams{
 			Name: "diverge_get_cost_summary",
 			Arguments: map[string]any{
-				"namespace": "payments",
-				"top_limit": 2,
+				"namespace":          "payments",
+				"top_limit":          2,
+				"include_historical": true,
+				"window_days":        7,
 			},
 		},
 	})
@@ -70,6 +77,8 @@ func TestMCPCostSummaryTool_RegisteredAndTruncatesTopConsumers(t *testing.T) {
 	assert.False(t, res.IsError)
 	require.NotNil(t, mockCluster.lastReq)
 	assert.Equal(t, "payments", mockCluster.lastReq.Namespace)
+	assert.True(t, mockCluster.lastReq.IncludeHistorical)
+	assert.Equal(t, int32(7), mockCluster.lastReq.WindowDays)
 
 	require.Len(t, res.Content, 1)
 	textContent, ok := res.Content[0].(mcp.TextContent)
@@ -81,9 +90,29 @@ func TestMCPCostSummaryTool_RegisteredAndTruncatesTopConsumers(t *testing.T) {
 	consumers, ok := decoded["topConsumers"].([]any)
 	require.True(t, ok)
 	assert.Len(t, consumers, 2)
+	histConsumers, ok := decoded["historicalConsumers"].([]any)
+	require.True(t, ok)
+	assert.Len(t, histConsumers, 2)
+
+	// top_limit: 0 returns unlimited consumers
+	resUnlimited, err := srvTool.Handler(context.Background(), mcp.CallToolRequest{
+		Params: mcp.CallToolParams{
+			Name: "diverge_get_cost_summary",
+			Arguments: map[string]any{
+				"top_limit":          0,
+				"include_historical": true,
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.False(t, resUnlimited.IsError)
+	var decodedUnlimited map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resUnlimited.Content[0].(mcp.TextContent).Text), &decodedUnlimited))
+	assert.Len(t, decodedUnlimited["topConsumers"].([]any), 3)
+	assert.Len(t, decodedUnlimited["historicalConsumers"].([]any), 3)
 }
 
-func TestMCPCostSummaryTool_NilClientAndErrorPropagation(t *testing.T) {
+func TestMCPCostSummaryTool_ValidationAndErrorPropagation(t *testing.T) {
 	reg := mcpruntime.NewToolRegistry()
 	registerCostSummaryTool(reg, nil)
 	handler, ok := reg.Lookup("diverge_get_cost_summary")
@@ -96,4 +125,27 @@ func TestMCPCostSummaryTool_NilClientAndErrorPropagation(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, res.IsError)
 	assert.Contains(t, string(res.Content), "not configured")
+
+	regWithClient := mcpruntime.NewToolRegistry()
+	registerCostSummaryTool(regWithClient, &mockClusterClient{resp: &divergev1alpha1.GetCostSummaryResponse{}})
+	h, ok := regWithClient.Lookup("diverge_get_cost_summary")
+	require.True(t, ok)
+
+	badWindow, err := h(context.Background(), mcpruntime.ToolRequest{
+		ToolName:  "diverge_get_cost_summary",
+		Arguments: []byte(`{"window_days": 90}`),
+	})
+	require.NoError(t, err)
+	assert.True(t, badWindow.IsError)
+	assert.Contains(t, string(badWindow.Content), "window_days must be between 0 and 30")
+
+	badLimit, err := h(context.Background(), mcpruntime.ToolRequest{
+		ToolName:  "diverge_get_cost_summary",
+		Arguments: []byte(`{"top_limit": -1}`),
+	})
+	require.NoError(t, err)
+	assert.True(t, badLimit.IsError)
+	var errPayload map[string]string
+	require.NoError(t, json.Unmarshal(badLimit.Content, &errPayload))
+	assert.Contains(t, errPayload["error"], "top_limit must be >= 0")
 }

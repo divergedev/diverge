@@ -86,7 +86,9 @@
                 "shared",
                 "schema",
                 "snapshot",
-                "fresh"
+                "fresh",
+                "cnpg",
+                "neon"
               ]
             },
             "seed_source": {
@@ -98,6 +100,25 @@
         "deploy": {
           "type": "object",
           "properties": {
+            "cluster_ref": {
+              "description": "Optional remote spoke cluster target for federated preview deployments.",
+              "type": "object",
+              "properties": {
+                "kubeconfig_secret_key": {
+                  "description": "Secret data key holding the kubeconfig (defaults to 'kubeconfig', falling back to 'value').",
+                  "type": "string"
+                },
+                "kubeconfig_secret_name": {
+                  "description": "Same-namespace Kubernetes Secret name holding the target spoke kubeconfig.",
+                  "type": "string"
+                },
+                "name": {
+                  "description": "Logical spoke cluster identifier surfaced in status, CLI, and FinOps reports (defaults to kubeconfig_secret_name when omitted).",
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
             "mode": {
               "type": "string",
               "enum": [
@@ -304,7 +325,9 @@
                   "shared",
                   "schema",
                   "snapshot",
-                  "fresh"
+                  "fresh",
+                  "cnpg",
+                  "neon"
                 ]
               },
               "seed_source": {
@@ -316,6 +339,25 @@
           "deploy": {
             "type": "object",
             "properties": {
+              "cluster_ref": {
+                "description": "Optional remote spoke cluster target for federated preview deployments.",
+                "type": "object",
+                "properties": {
+                  "kubeconfig_secret_key": {
+                    "description": "Secret data key holding the kubeconfig (defaults to 'kubeconfig', falling back to 'value').",
+                    "type": "string"
+                  },
+                  "kubeconfig_secret_name": {
+                    "description": "Same-namespace Kubernetes Secret name holding the target spoke kubeconfig.",
+                    "type": "string"
+                  },
+                  "name": {
+                    "description": "Logical spoke cluster identifier surfaced in status, CLI, and FinOps reports (defaults to kubeconfig_secret_name when omitted).",
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
               "mode": {
                 "type": "string",
                 "enum": [
@@ -533,7 +575,9 @@
                   "shared",
                   "schema",
                   "snapshot",
-                  "fresh"
+                  "fresh",
+                  "cnpg",
+                  "neon"
                 ]
               },
               "seed_source": {
@@ -545,6 +589,25 @@
           "deploy": {
             "type": "object",
             "properties": {
+              "cluster_ref": {
+                "description": "Optional remote spoke cluster target for federated preview deployments.",
+                "type": "object",
+                "properties": {
+                  "kubeconfig_secret_key": {
+                    "description": "Secret data key holding the kubeconfig (defaults to 'kubeconfig', falling back to 'value').",
+                    "type": "string"
+                  },
+                  "kubeconfig_secret_name": {
+                    "description": "Same-namespace Kubernetes Secret name holding the target spoke kubeconfig.",
+                    "type": "string"
+                  },
+                  "name": {
+                    "description": "Logical spoke cluster identifier surfaced in status, CLI, and FinOps reports (defaults to kubeconfig_secret_name when omitted).",
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
               "mode": {
                 "type": "string",
                 "enum": [

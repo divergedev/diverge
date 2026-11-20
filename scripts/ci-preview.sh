@@ -21,6 +21,8 @@ INPUT_HEADER_VALUE="${INPUT_HEADER_VALUE:-}"
 INPUT_TTL="${INPUT_TTL:-4h}"
 INPUT_NAMESPACE="${INPUT_NAMESPACE:-${NAMESPACE:-default}}"
 NAMESPACE="$INPUT_NAMESPACE"
+INPUT_CLUSTER="${INPUT_CLUSTER:-}"
+INPUT_CLUSTER_SECRET="${INPUT_CLUSTER_SECRET:-}"
 INPUT_BASE_URL="${INPUT_BASE_URL:-}"
 INPUT_WAIT="${INPUT_WAIT:-false}"
 INPUT_WAIT_TIMEOUT="${INPUT_WAIT_TIMEOUT:-180s}"
@@ -295,6 +297,12 @@ case "$INPUT_ACTION" in
     if [[ "$INPUT_PR_NUMBER" =~ ^[0-9]+$ ]] && [[ "$INPUT_PR_NUMBER" -gt 0 ]]; then
       CREATE_ARGS+=(--mr "$INPUT_PR_NUMBER")
     fi
+    if [[ -n "$INPUT_CLUSTER" ]]; then
+      CREATE_ARGS+=(--cluster "$INPUT_CLUSTER")
+    fi
+    if [[ -n "$INPUT_CLUSTER_SECRET" ]]; then
+      CREATE_ARGS+=(--cluster-secret "$INPUT_CLUSTER_SECRET")
+    fi
     if [[ "$INPUT_DRY_RUN" == "true" ]]; then
       CREATE_ARGS+=(--dry-run)
     fi
@@ -342,6 +350,7 @@ case "$INPUT_ACTION" in
         echo "| Field | Value |"
         echo "| :--- | :--- |"
         echo "| **Preview Name** | \`${PREVIEW_NAME}\` |"
+        echo "| **Target Cluster** | \`${INPUT_CLUSTER:-local}\` |"
         echo "| **Preview URL** | ${PREVIEW_URL:-N/A} |"
         echo "| **Routing Header** | \`${ROUTING_HEADER}\` |"
         echo "| **Changed Services** | \`${SERVICES_JSON}\` |"

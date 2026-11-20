@@ -20,6 +20,7 @@ import (
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/config"
 	"github.com/divergedev/diverge/internal/git"
+	"github.com/divergedev/diverge/internal/multicluster"
 )
 
 // newPreviewCmd creates the `diverge preview` parent command with
@@ -74,6 +75,8 @@ func newPreviewCreateCmd(app *App) *cobra.Command {
 		atlasBlocking    bool
 		atlasDestructive string
 		atlasArgs        []string
+		clusterName      string
+		clusterSecret    string
 	)
 
 	cmd := &cobra.Command{
@@ -125,8 +128,8 @@ Examples:
   diverge preview create --service payments-api=img:8080 --dry-run`,
 		// editorconfig-checker-enable
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPreviewCreate(cmd, app, name, services, headerKey, headerValue, ttl, mrNumber, dryRun, migrationImage, migrationArgs, migrationBlock,
-				atlasMode, atlasEngine, atlasDir, atlasSchema, atlasConfigMap, atlasImage, atlasBlocking, atlasDestructive, atlasArgs)
+			return runPreviewCreateWithCluster(cmd, app, name, services, headerKey, headerValue, ttl, mrNumber, dryRun, migrationImage, migrationArgs, migrationBlock,
+				atlasMode, atlasEngine, atlasDir, atlasSchema, atlasConfigMap, atlasImage, atlasBlocking, atlasDestructive, atlasArgs, clusterName, clusterSecret)
 		},
 	}
 
@@ -137,6 +140,8 @@ Examples:
 	cmd.Flags().StringVar(&ttl, "ttl", "", "auto-delete after duration (e.g. 72h)")
 	cmd.Flags().IntVar(&mrNumber, "mr", 0, "MR/PR number")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print PreviewGroup YAML without creating")
+	cmd.Flags().StringVar(&clusterName, "cluster", "", "target spoke cluster name for the preview group (or 'local' to force hub)")
+	cmd.Flags().StringVar(&clusterSecret, "cluster-secret", "", "same-namespace Secret (<name> or <name>/<key>) holding spoke kubeconfig")
 	cmd.Flags().StringVar(&migrationImage, "migration-image", "", "container image for database migration Job")
 	cmd.Flags().StringSliceVar(&migrationArgs, "migration-args", nil, "arguments for the migration container")
 	cmd.Flags().BoolVar(&migrationBlock, "migration-blocking", true, "block deployment until migration completes")
@@ -155,8 +160,8 @@ Examples:
 	return cmd
 }
 
-func runPreviewCreate(cmd *cobra.Command, app *App, name string, services []string, headerKey, headerValue, ttl string, mrNumber int, dryRun bool, migrationImage string, migrationArgs []string, migrationBlock bool,
-	atlasMode, atlasEngine, atlasDir, atlasSchema, atlasConfigMap, atlasImage string, atlasBlocking bool, atlasDestructive string, atlasArgs []string) error {
+func runPreviewCreateWithCluster(cmd *cobra.Command, app *App, name string, services []string, headerKey, headerValue, ttl string, mrNumber int, dryRun bool, migrationImage string, migrationArgs []string, migrationBlock bool,
+	atlasMode, atlasEngine, atlasDir, atlasSchema, atlasConfigMap, atlasImage string, atlasBlocking bool, atlasDestructive string, atlasArgs []string, clusterName, clusterSecret string) error {
 	// Detect git context
 	gitCtx, err := git.Detect()
 	if err != nil {
@@ -207,6 +212,18 @@ func runPreviewCreate(cmd *cobra.Command, app *App, name string, services []stri
 		pg.Spec.Lifecycle = &divergeiov1alpha1.PreviewGroupLifecycle{
 			TTL: &metav1.Duration{Duration: d},
 		}
+	}
+
+	// Target cluster (from .diverge.yaml defaults/preview if present, overridden by --cluster / --cluster-secret)
+	if cfg, cfgErr := config.Load(".diverge.yaml"); cfgErr == nil && cfg != nil {
+		pg.Spec.ClusterRef = cfg.Resolve("preview", nil).Deploy.ClusterRef.ToClusterTargetRef()
+	}
+	if strings.TrimSpace(clusterName) != "" || strings.TrimSpace(clusterSecret) != "" {
+		clusterRef, cErr := config.ParseClusterFlags(clusterName, clusterSecret)
+		if cErr != nil {
+			return fmt.Errorf("invalid cluster target flags: %w", cErr)
+		}
+		pg.Spec.ClusterRef = clusterRef
 	}
 
 	hasAtlas := cmd.Flags().Changed("atlas-dir") || cmd.Flags().Changed("atlas-schema") || cmd.Flags().Changed("atlas-configmap") || cmd.Flags().Changed("atlas-mode") || cmd.Flags().Changed("atlas-engine") || cmd.Flags().Changed("atlas-image") || cmd.Flags().Changed("atlas-args")
@@ -423,6 +440,9 @@ func runPreviewStatus(ctx context.Context, app *App, name string, out io.Writer)
 		_, _ = fmt.Fprintf(out, "   Routing: %s\n", pg.Spec.Routing.Mode)
 	}
 	_, _ = fmt.Fprintf(out, "   Source: %s/%s @ %s\n", pg.Spec.Source.Provider, pg.Spec.Source.Project, pg.Spec.Source.Branch)
+	if pg.Spec.ClusterRef != nil {
+		_, _ = fmt.Fprintf(out, "   Cluster: %s\n", multicluster.DesiredClusterName(pg.Spec.ClusterRef))
+	}
 
 	if pg.Status.ExpiresAt != nil {
 		remaining := time.Until(pg.Status.ExpiresAt.Time)
@@ -433,18 +453,43 @@ func runPreviewStatus(ctx context.Context, app *App, name string, out io.Writer)
 		}
 	}
 
+	hasRemoteSvc := false
+	for _, svc := range pg.Status.Services {
+		if tc := strings.TrimSpace(svc.TargetCluster); tc != "" && tc != multicluster.LocalClusterName {
+			hasRemoteSvc = true
+			break
+		}
+	}
+
 	// Services table
 	_, _ = fmt.Fprintln(out)
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintf(w, "   SERVICE\tNAMESPACE\tPHASE\tURL\n")
-	_, _ = fmt.Fprintf(w, "   ───────\t─────────\t─────\t───\n")
-	for _, svc := range pg.Status.Services {
-		icon := phaseEmoji(string(svc.Phase))
-		url := svc.URL
-		if url == "" {
-			url = "-"
+	if hasRemoteSvc {
+		_, _ = fmt.Fprintf(w, "   SERVICE\tNAMESPACE\tCLUSTER\tPHASE\tURL\n")
+		_, _ = fmt.Fprintf(w, "   ───────\t─────────\t───────\t─────\t───\n")
+		for _, svc := range pg.Status.Services {
+			icon := phaseEmoji(string(svc.Phase))
+			url := svc.URL
+			if url == "" {
+				url = "-"
+			}
+			cluster := strings.TrimSpace(svc.TargetCluster)
+			if cluster == "" {
+				cluster = multicluster.LocalClusterName
+			}
+			_, _ = fmt.Fprintf(w, "   %s %s\t%s\t%s\t%s\t%s\n", icon, svc.Name, svc.Namespace, cluster, svc.Phase, url)
 		}
-		_, _ = fmt.Fprintf(w, "   %s %s\t%s\t%s\t%s\n", icon, svc.Name, svc.Namespace, svc.Phase, url)
+	} else {
+		_, _ = fmt.Fprintf(w, "   SERVICE\tNAMESPACE\tPHASE\tURL\n")
+		_, _ = fmt.Fprintf(w, "   ───────\t─────────\t─────\t───\n")
+		for _, svc := range pg.Status.Services {
+			icon := phaseEmoji(string(svc.Phase))
+			url := svc.URL
+			if url == "" {
+				url = "-"
+			}
+			_, _ = fmt.Fprintf(w, "   %s %s\t%s\t%s\t%s\n", icon, svc.Name, svc.Namespace, svc.Phase, url)
+		}
 	}
 	_ = w.Flush()
 

@@ -203,4 +203,37 @@ describe('PreviewGroupDetail', () => {
       expect(deleteCalled).toBe(true)
     })
   })
+
+  it('renders federated spoke target cluster for PreviewGroup and services', async () => {
+    server.use(
+      http.post('*/diverge.v1alpha1.PreviewGroupService/GetPreviewGroup', () =>
+        HttpResponse.json({
+          previewGroup: {
+            ...mockPreviewGroup.previewGroup,
+            spec: {
+              ...mockPreviewGroup.previewGroup.spec,
+              clusterRef: {
+                name: 'eu-central-spoke',
+                kubeconfigSecretRef: { name: 'eu-spoke-kubeconfig' },
+              },
+            },
+            status: {
+              ...mockPreviewGroup.previewGroup.status,
+              services: [
+                {
+                  ...mockPreviewGroup.previewGroup.status.services[0],
+                  targetCluster: 'eu-central-spoke',
+                },
+              ],
+            },
+          },
+        }),
+      ),
+    )
+
+    renderPage()
+
+    expect(await screen.findByText('Target Cluster')).toBeInTheDocument()
+    expect(screen.getAllByText('eu-central-spoke').length).toBeGreaterThanOrEqual(2)
+  })
 })

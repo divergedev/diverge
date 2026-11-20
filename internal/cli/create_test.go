@@ -629,3 +629,32 @@ func TestBuildEnvironmentWithInvalidFeatures(t *testing.T) {
 	assert.Nil(t, env)
 	assert.Contains(t, err.Error(), "invalid features configuration")
 }
+
+func TestBuildEnvironmentWithClusterRef(t *testing.T) {
+	gitCtx := &git.GitContext{
+		Provider: "github",
+		Project:  "divergedev/diverge",
+		Branch:   "feat/federation",
+	}
+
+	resolved := &config.ResolvedSettings{
+		EnvironmentSettings: config.EnvironmentSettings{
+			Deploy: config.DeploySettings{
+				Mode:      "delta",
+				Namespace: "create",
+				ClusterRef: &config.ClusterRefSettings{
+					Name:                 "us-west-burst",
+					KubeconfigSecretName: "spoke-west-kubeconfig",
+				},
+			},
+		},
+	}
+
+	app := &App{Namespace: "diverge-system"}
+	env, err := buildEnvironment(context.Background(), "preview-mr-88", gitCtx, resolved, nil, app, 88)
+	require.NoError(t, err)
+	require.NotNil(t, env.Spec.Deploy.ClusterRef)
+	assert.Equal(t, "us-west-burst", env.Spec.Deploy.ClusterRef.Name)
+	require.NotNil(t, env.Spec.Deploy.ClusterRef.KubeconfigSecretRef)
+	assert.Equal(t, "spoke-west-kubeconfig", env.Spec.Deploy.ClusterRef.KubeconfigSecretRef.Name)
+}

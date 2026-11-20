@@ -15,11 +15,15 @@ const TTL_OPTIONS = [
   { label: 'No limit', value: '' },
 ]
 
+const DNS_1123_RE = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/
+
 export function CreateEnvironmentModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [name, setName] = useState('')
   const [namespace, setNamespace] = useState('default')
   const [branch, setBranch] = useState('')
   const [ttl, setTtl] = useState('86400s')
+  const [targetCluster, setTargetCluster] = useState('')
+  const [clusterSecret, setClusterSecret] = useState('')
   const [error, setError] = useState('')
   const navigate = useNavigate()
   const create = useCreateEnvironment()
@@ -33,6 +37,25 @@ export function CreateEnvironmentModal({ open, onClose }: { open: boolean; onClo
       return
     }
 
+    const trimmedCluster = targetCluster.trim()
+    const trimmedSecret = clusterSecret.trim()
+    if (trimmedCluster && !DNS_1123_RE.test(trimmedCluster)) {
+      setError('Target cluster must be lowercase alphanumeric with hyphens')
+      return
+    }
+    if (trimmedSecret && !DNS_1123_RE.test(trimmedSecret)) {
+      setError('Spoke kubeconfig secret must be lowercase alphanumeric with hyphens')
+      return
+    }
+    if (trimmedCluster && trimmedCluster !== 'local' && !trimmedSecret) {
+      setError('Spoke kubeconfig secret is required when targeting a remote cluster')
+      return
+    }
+    if (trimmedSecret && trimmedCluster === 'local') {
+      setError('Target cluster "local" cannot specify a spoke kubeconfig secret')
+      return
+    }
+
     try {
       await create.mutateAsync({
         name,
@@ -40,6 +63,14 @@ export function CreateEnvironmentModal({ open, onClose }: { open: boolean; onClo
         spec: {
           source: branch ? { branch } : undefined,
           lifecycle: ttl ? { ttl: { seconds: BigInt(parseInt(ttl)) } } : undefined,
+          deploy: (trimmedCluster || trimmedSecret)
+            ? {
+                clusterRef: {
+                  ...(trimmedCluster ? { name: trimmedCluster } : {}),
+                  ...(trimmedSecret ? { kubeconfigSecretRef: { name: trimmedSecret } } : {}),
+                },
+              }
+            : undefined,
         },
       })
       onClose()
@@ -65,6 +96,24 @@ export function CreateEnvironmentModal({ open, onClose }: { open: boolean; onClo
           <div>
             <label className="text-sm font-medium mb-1 block">Branch</label>
             <Input value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="feature/my-branch (optional)" />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="text-sm font-medium mb-1 block">Target Cluster</label>
+              <Input
+                value={targetCluster}
+                onChange={(e) => setTargetCluster(e.target.value)}
+                placeholder="local (optional spoke)"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium mb-1 block">Spoke Kubeconfig Secret</label>
+              <Input
+                value={clusterSecret}
+                onChange={(e) => setClusterSecret(e.target.value)}
+                placeholder="spoke-kubeconfig"
+              />
+            </div>
           </div>
           <div>
             <label className="text-sm font-medium mb-1 block">TTL</label>

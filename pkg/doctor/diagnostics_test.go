@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/multicluster"
 )
 
 func TestDoctor_Healthy(t *testing.T) {
@@ -734,5 +735,117 @@ func TestDoctor_DiagnoseInvariants_PBT(t *testing.T) {
 			require.NotEmpty(ht, iss.Remediation)
 			require.True(ht, strings.HasPrefix(iss.DocsURL, DocsBaseURL+"#div-1"), "unexpected DocsURL %q", iss.DocsURL)
 		}
+	})
+}
+
+func TestDoctor_FederatedSpokeDiagnostics(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, divergeiov1alpha1.AddToScheme(scheme))
+
+	t.Run("missing or invalid spoke kubeconfig emits DIV-111", func(t *testing.T) {
+		env := &divergeiov1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "pr-broken-spoke",
+				Namespace: "team-orders",
+			},
+			Spec: divergeiov1alpha1.EnvironmentSpec{
+				Deploy: divergeiov1alpha1.EnvironmentDeploy{
+					Namespace: "create",
+					ClusterRef: &divergeiov1alpha1.ClusterTargetRef{
+						Name: "us-west-burst",
+						KubeconfigSecretRef: &divergeiov1alpha1.SecretRef{
+							Name: "missing-spoke-secret",
+						},
+					},
+				},
+			},
+		}
+
+		hubClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(env).Build()
+		diagnoser := NewDiagnoser(hubClient)
+
+		report, err := diagnoser.Diagnose(context.Background(), "team-orders", "pr-broken-spoke")
+		require.NoError(t, err)
+		assert.False(t, report.Healthy)
+		require.Len(t, report.Issues, 1)
+		assert.Equal(t, CodeSpokeClusterUnreachable, report.Issues[0].Code)
+		assert.Equal(t, SeverityCritical, report.Issues[0].Severity)
+		assert.Equal(t, "Environment/pr-broken-spoke (Cluster/us-west-burst)", report.Issues[0].Component)
+		assert.Equal(t, DocsBaseURL+"#div-111-spoke-cluster-unreachable", report.Issues[0].DocsURL)
+		assert.Contains(t, report.Issues[0].Details, "missing-spoke-secret")
+	})
+
+	t.Run("healthy spoke connection inspects remote pods and tags cluster component", func(t *testing.T) {
+		env := &divergeiov1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "pr-spoke-crash",
+				Namespace: "team-orders",
+			},
+			Spec: divergeiov1alpha1.EnvironmentSpec{
+				Deploy: divergeiov1alpha1.EnvironmentDeploy{
+					Namespace: "create",
+					ClusterRef: &divergeiov1alpha1.ClusterTargetRef{
+						Name: "us-west-burst",
+						KubeconfigSecretRef: &divergeiov1alpha1.SecretRef{
+							Name: "spoke-west-kubeconfig",
+						},
+					},
+				},
+			},
+			Status: divergeiov1alpha1.EnvironmentStatus{
+				Phase:         divergeiov1alpha1.PhaseRunning,
+				TargetCluster: "us-west-burst",
+			},
+		}
+
+		spokePod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "orders-7f8b9-xyz",
+				Namespace: env.PreviewNamespace(),
+				Labels: map[string]string{
+					"divergedev.com/environment": "pr-spoke-crash",
+				},
+			},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{
+					{
+						Name: "orders",
+						State: corev1.ContainerState{
+							Waiting: &corev1.ContainerStateWaiting{
+								Reason:  "CrashLoopBackOff",
+								Message: "dial tcp: database refused connection",
+							},
+						},
+					},
+				},
+			},
+		}
+
+		hubClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(env).Build()
+		spokeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(spokePod).Build()
+
+		resolver := &multicluster.StaticResolver{
+			Hub: &multicluster.Target{Name: "local", IsRemote: false, Client: hubClient},
+			Spokes: map[string]*multicluster.Target{
+				"us-west-burst": {Name: "us-west-burst", IsRemote: true, Client: spokeClient},
+			},
+		}
+
+		diagnoser := NewDiagnoser(hubClient).WithClusterResolver(resolver)
+		report, err := diagnoser.Diagnose(context.Background(), "team-orders", "pr-spoke-crash")
+		require.NoError(t, err)
+		assert.False(t, report.Healthy)
+		require.Len(t, report.Issues, 1)
+		assert.Equal(t, CodeCrashLoopBackOff, report.Issues[0].Code)
+		assert.Equal(t, "Container/orders (orders-7f8b9-xyz@us-west-burst)", report.Issues[0].Component)
+
+		// Also verify namespace-wide diagnose (empty envName) inspects remote spoke environments
+		nsReport, err := diagnoser.Diagnose(context.Background(), "team-orders", "")
+		require.NoError(t, err)
+		assert.False(t, nsReport.Healthy)
+		require.Len(t, nsReport.Issues, 1)
+		assert.Equal(t, CodeCrashLoopBackOff, nsReport.Issues[0].Code)
 	})
 }

@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/multicluster"
 )
 
 func formatAge(t time.Time) string {
@@ -80,7 +81,7 @@ func newListCmd(app *App) *cobra.Command {
 			}
 
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 3, ' ', 0)
-			_, _ = fmt.Fprintln(w, "NAME\tPHASE\tAGE\tURL\tMR\tSERVICES")
+			_, _ = fmt.Fprintln(w, "NAME\tPHASE\tCLUSTER\tAGE\tURL\tMR\tSERVICES")
 
 			for _, env := range envList.Items {
 				phase := string(env.Status.Phase)
@@ -101,9 +102,12 @@ func newListCmd(app *App) *cobra.Command {
 
 				mr := fmt.Sprintf("%d", env.Spec.Source.MR)
 
-				_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+				cluster := multicluster.ClusterName(&env)
+
+				_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 					env.Name,
 					phase,
+					cluster,
 					age,
 					env.Status.URL,
 					mr,

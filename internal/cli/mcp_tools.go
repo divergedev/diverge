@@ -658,7 +658,7 @@ func customTools() []mcpruntime.ToolDefinition {
 		},
 		{
 			Name:        "diverge_get_cost_summary",
-			Description: "Get FinOps hourly burn, monthly run-rate, hibernation and delta-routing savings, AgentTask LLM spend, namespace quota utilization, and top PR/environment consumers.",
+			Description: costSummaryToolDescription,
 			InputSchema: costSummarySchema,
 		},
 	}

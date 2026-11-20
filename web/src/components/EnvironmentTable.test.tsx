@@ -25,4 +25,13 @@ describe('EnvironmentTable', () => {
     render(<EnvironmentTable environments={[driftedEnv]} isLoading={false} />)
     expect(screen.getByText('Drifted')).toBeInTheDocument()
   })
+
+  it('Renders remote spoke cluster badge when environment targets a federated cluster', () => {
+    const spokeEnv = createMockEnvironment({ name: 'spoke-env' })
+    if (spokeEnv.status) {
+      spokeEnv.status.targetCluster = 'us-west-burst'
+    }
+    render(<EnvironmentTable environments={[spokeEnv]} isLoading={false} />)
+    expect(screen.getByText('us-west-burst')).toBeInTheDocument()
+  })
 })

@@ -44,4 +44,17 @@ describe('CreateEnvironmentModal', () => {
       expect(onClose).toHaveBeenCalled()
     }, { timeout: 10000 })
   }, 15000)
+
+  it('Validates remote target cluster requires spoke kubeconfig secret', async () => {
+    const user = userEvent.setup()
+    render(<CreateEnvironmentModal open={true} onClose={() => {}} />)
+
+    await user.type(screen.getByPlaceholderText('my-feature'), 'fed-preview')
+    await user.type(screen.getByPlaceholderText('local (optional spoke)'), 'us-west-burst')
+    await user.click(screen.getByText('Create'))
+
+    expect(
+      screen.getByText('Spoke kubeconfig secret is required when targeting a remote cluster'),
+    ).toBeInTheDocument()
+  })
 })

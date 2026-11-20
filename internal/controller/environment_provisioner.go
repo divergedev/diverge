@@ -250,6 +250,7 @@ func (r *EnvironmentReconciler) reconcileProvisioningWithTarget(ctx context.Cont
 		isBranchingMode := env.Spec.Database.Mode == "snapshot" ||
 			env.Spec.Database.Mode == "cnpg" ||
 			env.Spec.Database.Mode == "fresh" ||
+			env.Spec.Database.Mode == "neon" ||
 			env.Annotations["divergedev.com/database-provider"] != ""
 		if (env.Spec.Database.ConnectionRef == "" || isBranchingMode) && (len(dbStatus.EnvVars) > 0 || env.Spec.Database.Mode == "schema") {
 			envVars := dbStatus.EnvVars
@@ -343,12 +344,20 @@ func (r *EnvironmentReconciler) reconcileProvisioningWithTarget(ctx context.Cont
 			}
 		}
 	} else {
+		provMsg := "Database is provisioning"
+		if dbStatus != nil && strings.TrimSpace(dbStatus.Message) != "" {
+			provMsg = dbStatus.Message
+		}
 		meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 			Type:    "DatabaseReady",
 			Status:  metav1.ConditionFalse,
 			Reason:  "DatabaseProvisioning",
-			Message: "Database is provisioning",
+			Message: provMsg,
 		})
+		if resolvedDBName == "neon" || env.Spec.Database.Mode == "neon" || strings.TrimSpace(env.Annotations["divergedev.com/database-provider"]) == "neon" {
+			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, nil, 3*time.Second)
+			return ctx, res, true, retErr
+		}
 	}
 
 	// 7. Ensure routing
@@ -636,6 +645,7 @@ var allowedEnvDatabaseProviders = map[string]bool{
 	"cnpg":     true,
 	"fresh":    true,
 	"snapshot": true,
+	"neon":     true,
 	"schema":   true,
 	"noop":     true,
 	"none":     true,
@@ -695,7 +705,7 @@ func (r *EnvironmentReconciler) resolveDatabaseProviderWithContext(ctx context.C
 				return nil, "", fmt.Errorf("unsupported database provider annotation %q", explicit)
 			}
 			candidate = explicit
-		} else if (mode == "snapshot" || mode == "cnpg" || mode == "fresh") && isDefaultOrNoopDBProvider(r.DatabaseProvider) {
+		} else if (mode == "snapshot" || mode == "cnpg" || mode == "fresh" || mode == "neon") && isDefaultOrNoopDBProvider(r.DatabaseProvider) {
 			candidate = mode
 		}
 

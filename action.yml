@@ -26,6 +26,14 @@ inputs:
     description: "Default Kubernetes namespace for preview resources"
     required: false
     default: "default"
+  cluster:
+    description: "Optional logical spoke cluster name for multi-cluster preview federation (or 'local' to force hub)"
+    required: false
+    default: ""
+  cluster-secret:
+    description: "Optional same-namespace Secret (<name> or <name>/<key>) holding the spoke cluster kubeconfig"
+    required: false
+    default: ""
   preview-name:
     description: "Explicit PreviewGroup name override (default: pr-<number> or branch slug)"
     required: false
@@ -196,6 +204,8 @@ runs:
         INPUT_CONFIG: ${{ inputs.config }}
         INPUT_KUBECONFIG: ${{ inputs.kubeconfig }}
         INPUT_NAMESPACE: ${{ inputs.namespace }}
+        INPUT_CLUSTER: ${{ inputs.cluster }}
+        INPUT_CLUSTER_SECRET: ${{ inputs.cluster-secret }}
         INPUT_PREVIEW_NAME: ${{ inputs.preview-name }}
         INPUT_BASE_REF: ${{ inputs.base-ref || (github.base_ref && format('origin/{0}', github.base_ref)) || 'origin/main' }}
         INPUT_BRANCH: ${{ inputs.branch || github.head_ref || github.ref_name }}
