@@ -10,10 +10,11 @@
 
 #### 📈 Historical FinOps Ledger & 7d / 30d Trend Analytics (`#345`)
 - **30-Day Per-Namespace FinOps Teardown Ledger (`internal/finops/ledger.go`, `internal/finops/summary.go`, `internal/metrics/cost.go`, `internal/controller/environment_teardown.go`) (#345)**: Snapshots torn-down `Environment` lifetime, active vs. hibernated hours, accrued spend, hibernation savings, and causal `DeltaIntervals` `PreviewGroup` delta-routing savings into per-namespace `diverge-finops-ledger` `ConfigMap`s (`records.json`, 30-day retention, 500-entry cap, UID deduplication, `BillableEndAt` capping, and explicit `0` rate-card preservation).
-- **Historical `diverge cost` Flags & `/analytics` Daily Trend Chart (`internal/cli/cost.go`, `api/proto/diverge/v1alpha1/cluster.proto`, `web/src/pages/CostAnalytics.tsx`) (#345)**: Added `include_history` and `window_days` to `ClusterService.GetCostSummary`, `--history` and `--window-days` (`1`–`30`, with `0` defaulting to `30`) to `diverge cost`, and interactive `7d` / `30d` daily spend & savings trend bars plus Active + Closed consumer toggles in the Web Dashboard.
+- **Historical `diverge cost` Flags & `/analytics` Daily Trend Chart (`internal/cli/cost.go`, `api/proto/diverge/v1alpha1/cluster.proto`, `web/src/pages/CostAnalytics.tsx`) (#345)**: Added `include_historical` and `window_days` to `ClusterService.GetCostSummary`, `--history` and `--window-days` (`1`–`30`, with `0` defaulting to `30`) to `diverge cost`, and interactive `7d` / `30d` daily spend & savings trend bars plus Active + Closed consumer toggles in the Web Dashboard.
 
 #### 🕸️ Istio Ambient + Waypoint East-West GAMMA E2E Conformance (`#345`)
 - **Ambient `ztunnel` + Waypoint L7 GAMMA Conformance (`test/e2e/setup_istio.sh`, `test/e2e/istio_test.go`, `.github/workflows/e2e-istio.yml`) (#345)**: Upgraded the Istio E2E conformance suite to run Istio `ambient` profile (`istio.io/dataplane-mode=ambient` + `istioctl waypoint apply --enroll-namespace`), validating north-south Gateway header routing, east-west GAMMA pod-to-pod `X-Preview-Env` propagation through the L7 waypoint proxy, and clean route teardown without unauthorized hub informer cache waits.
+- **Container Builder Security Upgrade (`Dockerfile`, `Dockerfile.agent-runner`) (#346)**: Upgraded multi-arch Go builder images to `golang:1.26.11` (`sha256:4165ee6bf3b7811fd7b40373290405c83d0167dcb87ee5f29c427cdcef45ff8f`) to remediate Go `stdlib` `CVE-2026-97054`.
 
 ---
 

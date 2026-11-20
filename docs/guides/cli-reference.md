@@ -315,7 +315,7 @@ Compute real-time and 30-day historical FinOps cloud spend across preview enviro
 - `--sort` — Sort consumers by: `hourly` (default), `accrued`, `projected`, or `uptime`
 - `--history` — Include closed/deleted preview environments from the 30-day historical FinOps ledger
 - `--window-days` — Historical FinOps trend and ledger lookback window in UTC days (`1`–`30`, `0` defaults to `30`; default: `30`)
-- `--server-url` — Diverge ConnectRPC server URL (optional; uses `DIVERGE_SERVER_URL`, falling back to kubeconfig when empty)
+- `--server-url` — Diverge ConnectRPC server URL (optional; when empty, uses the kubeconfig cluster and falls back to `DIVERGE_SERVER_URL` only when Kubernetes client setup fails)
 - `--opencost-url` — OpenCost / Kubecost Allocation API URL (defaults to `DIVERGE_OPENCOST_URL`)
 - `--fail-on-budget-warning` — Exit non-zero when any namespace exceeds its FinOps budget warning threshold
 
