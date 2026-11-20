@@ -294,6 +294,9 @@ case "$INPUT_ACTION" in
       --ttl "$INPUT_TTL"
       -n "$INPUT_NAMESPACE"
     )
+    if [[ -n "$INPUT_CONFIG" ]] && { [[ "$INPUT_CONFIG" != ".diverge.yaml" ]] || [[ -f "$INPUT_CONFIG" ]]; }; then
+      CREATE_ARGS+=(--config "$INPUT_CONFIG")
+    fi
     if [[ "$INPUT_PR_NUMBER" =~ ^[0-9]+$ ]] && [[ "$INPUT_PR_NUMBER" -gt 0 ]]; then
       CREATE_ARGS+=(--mr "$INPUT_PR_NUMBER")
     fi
@@ -343,6 +346,23 @@ case "$INPUT_ACTION" in
     emit_output "routing-header-json" "$ROUTING_HEADER_JSON"
     emit_output "preview-url" "$PREVIEW_URL"
 
+    EFFECTIVE_CLUSTER=""
+    if [[ "$INPUT_DRY_RUN" != "true" ]]; then
+      EFFECTIVE_CLUSTER="$("$KUBECTL_BIN" get previewgroup "$PREVIEW_NAME" -n "$INPUT_NAMESPACE" -o jsonpath='{.spec.clusterRef.name}' 2>/dev/null || true)"
+      if [[ -z "$EFFECTIVE_CLUSTER" ]]; then
+        EFFECTIVE_CLUSTER="$("$KUBECTL_BIN" get previewgroup "$PREVIEW_NAME" -n "$INPUT_NAMESPACE" -o jsonpath='{.spec.clusterRef.kubeconfigSecretRef.name}' 2>/dev/null || true)"
+      fi
+    fi
+    if [[ -z "$EFFECTIVE_CLUSTER" ]]; then
+      if [[ -n "$INPUT_CLUSTER" ]]; then
+        EFFECTIVE_CLUSTER="$INPUT_CLUSTER"
+      elif [[ -n "$INPUT_CLUSTER_SECRET" ]]; then
+        EFFECTIVE_CLUSTER="${INPUT_CLUSTER_SECRET%%/*}"
+      else
+        EFFECTIVE_CLUSTER="local"
+      fi
+    fi
+
     if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]] && { [[ -w "$GITHUB_STEP_SUMMARY" ]] || [[ -w "$(dirname "$GITHUB_STEP_SUMMARY")" ]]; }; then
       {
         echo "### 🚀 Diverge Preview Environment: \`${PREVIEW_NAME}\`"
@@ -350,7 +370,7 @@ case "$INPUT_ACTION" in
         echo "| Field | Value |"
         echo "| :--- | :--- |"
         echo "| **Preview Name** | \`${PREVIEW_NAME}\` |"
-        echo "| **Target Cluster** | \`${INPUT_CLUSTER:-local}\` |"
+        echo "| **Target Cluster** | \`${EFFECTIVE_CLUSTER}\` |"
         echo "| **Preview URL** | ${PREVIEW_URL:-N/A} |"
         echo "| **Routing Header** | \`${ROUTING_HEADER}\` |"
         echo "| **Changed Services** | \`${SERVICES_JSON}\` |"

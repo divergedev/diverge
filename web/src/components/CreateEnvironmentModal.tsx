@@ -16,6 +16,7 @@ const TTL_OPTIONS = [
 ]
 
 const DNS_1123_RE = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/
+const DNS_SUBDOMAIN_RE = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$/
 
 export function CreateEnvironmentModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [name, setName] = useState('')
@@ -39,12 +40,12 @@ export function CreateEnvironmentModal({ open, onClose }: { open: boolean; onClo
 
     const trimmedCluster = targetCluster.trim()
     const trimmedSecret = clusterSecret.trim()
-    if (trimmedCluster && !DNS_1123_RE.test(trimmedCluster)) {
+    if (trimmedCluster && (trimmedCluster.length > 63 || !DNS_1123_RE.test(trimmedCluster))) {
       setError('Target cluster must be lowercase alphanumeric with hyphens')
       return
     }
-    if (trimmedSecret && !DNS_1123_RE.test(trimmedSecret)) {
-      setError('Spoke kubeconfig secret must be lowercase alphanumeric with hyphens')
+    if (trimmedSecret && (trimmedSecret.length > 253 || !DNS_SUBDOMAIN_RE.test(trimmedSecret))) {
+      setError('Spoke kubeconfig secret must be a valid Kubernetes DNS subdomain name')
       return
     }
     if (trimmedCluster && trimmedCluster !== 'local' && !trimmedSecret) {
@@ -58,19 +59,22 @@ export function CreateEnvironmentModal({ open, onClose }: { open: boolean; onClo
 
     try {
       await create.mutateAsync({
-        name,
         namespace,
-        spec: {
-          source: branch ? { branch } : undefined,
-          lifecycle: ttl ? { ttl: { seconds: BigInt(parseInt(ttl)) } } : undefined,
-          deploy: (trimmedCluster || trimmedSecret)
-            ? {
-                clusterRef: {
-                  ...(trimmedCluster ? { name: trimmedCluster } : {}),
-                  ...(trimmedSecret ? { kubeconfigSecretRef: { name: trimmedSecret } } : {}),
-                },
-              }
-            : undefined,
+        environment: {
+          name,
+          namespace,
+          spec: {
+            source: branch ? { branch } : undefined,
+            lifecycle: ttl ? { ttl: { seconds: BigInt(parseInt(ttl)) } } : undefined,
+            deploy: (trimmedCluster || trimmedSecret)
+              ? {
+                  clusterRef: {
+                    ...(trimmedCluster ? { name: trimmedCluster } : {}),
+                    ...(trimmedSecret ? { kubeconfigSecretRef: { name: trimmedSecret } } : {}),
+                  },
+                }
+              : undefined,
+          },
         },
       })
       onClose()

@@ -823,7 +823,32 @@ func TestDoctor_FederatedSpokeDiagnostics(t *testing.T) {
 			},
 		}
 
-		hubClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(env).Build()
+		hubMigrationPod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "atlas-migrate-pr-spoke-crash",
+				Namespace: "team-orders",
+				Labels: map[string]string{
+					"divergedev.com/environment": "pr-spoke-crash",
+				},
+			},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodFailed,
+				ContainerStatuses: []corev1.ContainerStatus{
+					{
+						Name: "atlas",
+						State: corev1.ContainerState{
+							Terminated: &corev1.ContainerStateTerminated{
+								ExitCode: 1,
+								Reason:   "Error",
+								Message:  "migration syntax error",
+							},
+						},
+					},
+				},
+			},
+		}
+
+		hubClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(env, hubMigrationPod).Build()
 		spokeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(spokePod).Build()
 
 		resolver := &multicluster.StaticResolver{
@@ -837,15 +862,16 @@ func TestDoctor_FederatedSpokeDiagnostics(t *testing.T) {
 		report, err := diagnoser.Diagnose(context.Background(), "team-orders", "pr-spoke-crash")
 		require.NoError(t, err)
 		assert.False(t, report.Healthy)
-		require.Len(t, report.Issues, 1)
+		require.Len(t, report.Issues, 2)
 		assert.Equal(t, CodeCrashLoopBackOff, report.Issues[0].Code)
 		assert.Equal(t, "Container/orders (orders-7f8b9-xyz@us-west-burst)", report.Issues[0].Component)
+		assert.Equal(t, CodeContainerExit, report.Issues[1].Code)
+		assert.Contains(t, report.Issues[1].Component, "atlas-migrate-pr-spoke-crash")
 
-		// Also verify namespace-wide diagnose (empty envName) inspects remote spoke environments
+		// Also verify namespace-wide diagnose (empty envName) inspects both hub and remote spoke pods
 		nsReport, err := diagnoser.Diagnose(context.Background(), "team-orders", "")
 		require.NoError(t, err)
 		assert.False(t, nsReport.Healthy)
-		require.Len(t, nsReport.Issues, 1)
-		assert.Equal(t, CodeCrashLoopBackOff, nsReport.Issues[0].Code)
+		require.Len(t, nsReport.Issues, 2)
 	})
 }

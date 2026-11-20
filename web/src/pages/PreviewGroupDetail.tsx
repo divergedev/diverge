@@ -92,11 +92,10 @@ export default function PreviewGroupDetail() {
 
   const services = pg.status?.services ?? []
   const specServicesByName = new Map((pg.spec?.services ?? []).map((s) => [s.name, s]))
-  const groupTargetCluster = (
-    pg.spec?.clusterRef?.name ||
-    pg.spec?.clusterRef?.kubeconfigSecretRef?.name ||
+  const groupTargetCluster =
+    pg.spec?.clusterRef?.name?.trim() ||
+    pg.spec?.clusterRef?.kubeconfigSecretRef?.name?.trim() ||
     'local'
-  ).trim() || 'local'
   const serviceCount = pg.status?.serviceCount || services.length || 0
   const conditions = pg.status?.conditions ?? []
 
@@ -265,12 +264,12 @@ export default function PreviewGroupDetail() {
                       const targetNs = svc.namespace || namespace
                       const safeSvcUrl = isSafeExternalUrl(svc.url) ? svc.url : undefined
                       const specSvc = specServicesByName.get(svc.name)
-                      const svcCluster = (
-                        svc.targetCluster ||
-                        specSvc?.clusterRef?.name ||
-                        specSvc?.clusterRef?.kubeconfigSecretRef?.name ||
-                        groupTargetCluster
-                      ).trim() || 'local'
+                      const svcCluster =
+                        svc.targetCluster?.trim() ||
+                        specSvc?.clusterRef?.name?.trim() ||
+                        specSvc?.clusterRef?.kubeconfigSecretRef?.name?.trim() ||
+                        groupTargetCluster ||
+                        'local'
                       return (
                         <TableRow key={svc.name}>
                           <TableCell className="font-mono text-xs font-medium">

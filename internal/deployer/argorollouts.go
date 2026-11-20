@@ -283,7 +283,7 @@ func (d *ArgoRolloutsDeployer) Deploy(ctx context.Context, env *v1alpha1.Environ
 		strings.TrimSpace(env.Annotations[AnnotationRolloutReplayTrace]) != ""
 
 	if shouldGenerateAnalysis {
-		tmpl := d.buildAnalysisTemplate(env, targetNS, generatedTemplateName, serviceName, isRemote)
+		tmpl := d.buildAnalysisTemplate(env, targetNS, generatedTemplateName, targetName, stableSvcName, serviceName, port, isRemote)
 		if err := d.applyOrCreate(ctx, targetClient, analysisTemplateGVK, tmpl); err != nil {
 			return fmt.Errorf("failed to apply analysis template: %w", err)
 		}
@@ -306,7 +306,7 @@ func (d *ArgoRolloutsDeployer) Deploy(ctx context.Context, env *v1alpha1.Environ
 }
 
 // buildAnalysisTemplate constructs the pre-promotion Argo Rollouts AnalysisTemplate for an environment.
-func (d *ArgoRolloutsDeployer) buildAnalysisTemplate(env *v1alpha1.Environment, targetNS, templateName, serviceName string, isRemote bool) *unstructured.Unstructured {
+func (d *ArgoRolloutsDeployer) buildAnalysisTemplate(env *v1alpha1.Environment, targetNS, templateName, targetName, stableSvcName, serviceName string, port int64, isRemote bool) *unstructured.Unstructured {
 	tmpl := &unstructured.Unstructured{}
 	tmpl.SetGroupVersionKind(analysisTemplateGVK)
 	d.setMetadataAndOwner(tmpl, env, targetNS, templateName, serviceName, isRemote)
@@ -325,25 +325,82 @@ func (d *ArgoRolloutsDeployer) buildAnalysisTemplate(env *v1alpha1.Environment, 
 		serviceAccount = defaultRolloutServiceAccount
 	}
 
+	headerKey := strings.TrimSpace(env.Spec.Routing.HeaderKey)
+	if headerKey == "" {
+		headerKey = "x-diverge-env"
+	}
+	headerValue := strings.TrimSpace(env.Spec.Routing.HeaderValue)
+	if headerValue == "" {
+		headerValue = env.Name
+	}
+	gatewayURL := strings.TrimSpace(env.Status.URL)
+	if gatewayURL == "" {
+		gatewayURL = strings.TrimSpace(env.Spec.Routing.ExternalURL)
+	}
+	subdomainRouted := strings.EqualFold(strings.TrimSpace(env.Spec.Routing.Mode), "subdomain")
+	canarySvcURL := fmt.Sprintf("http://%s.%s.svc:%d", targetName, targetNS, port)
+	stableSvcURL := fmt.Sprintf("http://%s.%s.svc:%d", stableSvcName, targetNS, port)
+
 	var args []interface{}
 	if replayTrace != "" {
-		args = []interface{}{
-			"replay",
-			env.Name,
-			"-n",
-			env.Namespace,
-			"--from",
-			replayTrace,
+		if isRemote {
+			args = []interface{}{
+				"replay",
+				env.Name,
+				"-n",
+				targetNS,
+				"--from",
+				replayTrace,
+				"--header-key",
+				headerKey,
+				"--header-value",
+				headerValue,
+			}
+			if gatewayURL != "" && !subdomainRouted {
+				args = append(args, "--base-url", gatewayURL)
+			} else {
+				args = append(args, "--base-url", stableSvcURL, "--preview-url", canarySvcURL)
+			}
+		} else {
+			args = []interface{}{
+				"replay",
+				env.Name,
+				"-n",
+				env.Namespace,
+				"--from",
+				replayTrace,
+			}
 		}
 	} else {
-		args = []interface{}{
-			"verify",
-			env.Name,
-			"-n",
-			env.Namespace,
-			"--path",
-			verifyPath,
-			"--compare-baseline",
+		if isRemote {
+			args = []interface{}{
+				"verify",
+				env.Name,
+				"-n",
+				targetNS,
+				"--path",
+				verifyPath,
+				"--skip-doctor",
+				"--header-key",
+				headerKey,
+				"--header-value",
+				headerValue,
+			}
+			if gatewayURL != "" && !subdomainRouted {
+				args = append(args, "--base-url", gatewayURL, "--compare-baseline")
+			} else {
+				args = append(args, "--base-url", canarySvcURL)
+			}
+		} else {
+			args = []interface{}{
+				"verify",
+				env.Name,
+				"-n",
+				env.Namespace,
+				"--path",
+				verifyPath,
+				"--compare-baseline",
+			}
 		}
 	}
 
@@ -559,7 +616,8 @@ func (d *ArgoRolloutsDeployer) buildRollout(env *v1alpha1.Environment, targetNS,
 
 // Teardown deletes the Argo Rollout, generated AnalysisTemplate, and Service for the environment.
 func (d *ArgoRolloutsDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
-	if d.Client == nil && d.ClusterClients == nil {
+	pinned, hasPinned := multicluster.TargetFromContext(ctx)
+	if d.Client == nil && d.ClusterClients == nil && (!hasPinned || pinned == nil || pinned.Client == nil) {
 		return nil
 	}
 

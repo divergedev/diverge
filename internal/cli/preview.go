@@ -2,8 +2,10 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -75,6 +77,7 @@ func newPreviewCreateCmd(app *App) *cobra.Command {
 		atlasBlocking    bool
 		atlasDestructive string
 		atlasArgs        []string
+		configPath       string
 		clusterName      string
 		clusterSecret    string
 	)
@@ -128,11 +131,12 @@ Examples:
   diverge preview create --service payments-api=img:8080 --dry-run`,
 		// editorconfig-checker-enable
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPreviewCreateWithCluster(cmd, app, name, services, headerKey, headerValue, ttl, mrNumber, dryRun, migrationImage, migrationArgs, migrationBlock,
+			return runPreviewCreateWithCluster(cmd, app, configPath, name, services, headerKey, headerValue, ttl, mrNumber, dryRun, migrationImage, migrationArgs, migrationBlock,
 				atlasMode, atlasEngine, atlasDir, atlasSchema, atlasConfigMap, atlasImage, atlasBlocking, atlasDestructive, atlasArgs, clusterName, clusterSecret)
 		},
 	}
 
+	cmd.Flags().StringVarP(&configPath, "config", "c", ".diverge.yaml", "path to config file")
 	cmd.Flags().StringVar(&name, "name", "", "override preview group name (default: auto from MR/branch)")
 	cmd.Flags().StringSliceVar(&services, "service", nil, "service spec: name:image[:port] or name (baseline)")
 	cmd.Flags().StringVar(&headerKey, "header-key", "x-preview-env", "routing header key")
@@ -160,7 +164,7 @@ Examples:
 	return cmd
 }
 
-func runPreviewCreateWithCluster(cmd *cobra.Command, app *App, name string, services []string, headerKey, headerValue, ttl string, mrNumber int, dryRun bool, migrationImage string, migrationArgs []string, migrationBlock bool,
+func runPreviewCreateWithCluster(cmd *cobra.Command, app *App, configPath, name string, services []string, headerKey, headerValue, ttl string, mrNumber int, dryRun bool, migrationImage string, migrationArgs []string, migrationBlock bool,
 	atlasMode, atlasEngine, atlasDir, atlasSchema, atlasConfigMap, atlasImage string, atlasBlocking bool, atlasDestructive string, atlasArgs []string, clusterName, clusterSecret string) error {
 	// Detect git context
 	gitCtx, err := git.Detect()
@@ -215,8 +219,23 @@ func runPreviewCreateWithCluster(cmd *cobra.Command, app *App, name string, serv
 	}
 
 	// Target cluster (from .diverge.yaml defaults/preview if present, overridden by --cluster / --cluster-secret)
-	if cfg, cfgErr := config.Load(".diverge.yaml"); cfgErr == nil && cfg != nil {
-		pg.Spec.ClusterRef = cfg.Resolve("preview", nil).Deploy.ClusterRef.ToClusterTargetRef()
+	if strings.TrimSpace(configPath) == "" {
+		configPath = ".diverge.yaml"
+	}
+	cfg, cfgErr := config.Load(configPath)
+	if cfgErr != nil {
+		if cmd.Flags().Changed("config") || !errors.Is(cfgErr, os.ErrNotExist) {
+			return fmt.Errorf("failed to load config %s: %w", configPath, cfgErr)
+		}
+	} else if cfg != nil {
+		if err := cfg.Validate(); err != nil {
+			return fmt.Errorf("invalid config %s: %w", configPath, err)
+		}
+		resolved := cfg.Resolve("preview", nil)
+		if err := resolved.Validate(); err != nil {
+			return fmt.Errorf("invalid preview config %s: %w", configPath, err)
+		}
+		pg.Spec.ClusterRef = resolved.Deploy.ClusterRef.ToClusterTargetRef()
 	}
 	if strings.TrimSpace(clusterName) != "" || strings.TrimSpace(clusterSecret) != "" {
 		clusterRef, cErr := config.ParseClusterFlags(clusterName, clusterSecret)

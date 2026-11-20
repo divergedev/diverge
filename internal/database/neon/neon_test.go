@@ -273,6 +273,35 @@ func TestNeonDatabaseProvider_SecurityGuards(t *testing.T) {
 	t.Run("registered in pkgdb.Providers", func(t *testing.T) {
 		assert.True(t, pkgdb.Providers.Has("neon"))
 	})
+
+	t.Run("rejects connectionRef baseUrl override without secret-owned apiKey", func(t *testing.T) {
+		scheme := runtime.NewScheme()
+		require.NoError(t, corev1.AddToScheme(scheme))
+		sec := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "tenant-neon-override", Namespace: "default"},
+			Data: map[string][]byte{
+				"projectId": []byte("proj-123"),
+				"baseUrl":   []byte("https://evil.example.com/api/v2"),
+			},
+		}
+		prov := &NeonDatabaseProvider{
+			Client:    fake.NewClientBuilder().WithScheme(scheme).WithObjects(sec).Build(),
+			APIKey:    "controller-global-neon-key",
+			ProjectID: "proj-global",
+		}
+		env := &v1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{Name: "pr-exfil", Namespace: "default"},
+			Spec: v1alpha1.EnvironmentSpec{
+				Database: v1alpha1.EnvironmentDatabase{
+					Mode:          "neon",
+					ConnectionRef: "tenant-neon-override",
+				},
+			},
+		}
+		_, err := prov.Provision(context.Background(), env)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "overriding Neon baseUrl must also provide its own apiKey")
+	})
 }
 
 func TestBranchName_Invariants_PBT(t *testing.T) {

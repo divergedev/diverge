@@ -251,6 +251,8 @@ func (r *EnvironmentReconciler) reconcileProvisioningWithTarget(ctx context.Cont
 			env.Spec.Database.Mode == "cnpg" ||
 			env.Spec.Database.Mode == "fresh" ||
 			env.Spec.Database.Mode == "neon" ||
+			resolvedDBName == "neon" ||
+			strings.TrimSpace(env.Status.DatabaseProvider) == "neon" ||
 			env.Annotations["divergedev.com/database-provider"] != ""
 		if (env.Spec.Database.ConnectionRef == "" || isBranchingMode) && (len(dbStatus.EnvVars) > 0 || env.Spec.Database.Mode == "schema") {
 			envVars := dbStatus.EnvVars
@@ -354,7 +356,7 @@ func (r *EnvironmentReconciler) reconcileProvisioningWithTarget(ctx context.Cont
 			Reason:  "DatabaseProvisioning",
 			Message: provMsg,
 		})
-		if resolvedDBName == "neon" || env.Spec.Database.Mode == "neon" || strings.TrimSpace(env.Annotations["divergedev.com/database-provider"]) == "neon" {
+		if isNeonDBProvider(resolvedDBName, r.DatabaseProvider, env) {
 			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, nil, 3*time.Second)
 			return ctx, res, true, retErr
 		}
@@ -738,7 +740,37 @@ func (r *EnvironmentReconciler) resolveDatabaseProviderWithContext(ctx context.C
 			return prov, candidate, nil
 		}
 	}
-	return r.DatabaseProvider, "", nil
+	return r.DatabaseProvider, databaseProviderName(r.DatabaseProvider), nil
+}
+
+func databaseProviderName(p pkgdb.DatabaseProvider) string {
+	if p == nil {
+		return ""
+	}
+	if named, ok := p.(interface{ ProviderName() string }); ok {
+		return strings.TrimSpace(named.ProviderName())
+	}
+	if inst, ok := p.(*internaldb.InstrumentedDatabaseProvider); ok {
+		if inner := databaseProviderName(inst.Inner); inner != "" {
+			return inner
+		}
+		if strings.EqualFold(strings.TrimSpace(inst.Mode), "neon") {
+			return "neon"
+		}
+	}
+	return ""
+}
+
+func isNeonDBProvider(resolvedDBName string, configured pkgdb.DatabaseProvider, env *divergeiov1alpha1.Environment) bool {
+	if resolvedDBName == "neon" || databaseProviderName(configured) == "neon" {
+		return true
+	}
+	if env == nil {
+		return false
+	}
+	return env.Spec.Database.Mode == "neon" ||
+		strings.TrimSpace(env.Status.DatabaseProvider) == "neon" ||
+		strings.TrimSpace(env.Annotations["divergedev.com/database-provider"]) == "neon"
 }
 
 func isDefaultOrNoopDBProvider(p pkgdb.DatabaseProvider) bool {

@@ -96,8 +96,8 @@ jobs:
 | `image-tag` | `""` | Image tag for changed services (when omitted, defaults to resolved `preview-name`, e.g. `pr-<number>` or branch slug) |
 | `header-key` | `x-diverge-env` | HTTP routing header key |
 | `ttl` | `4h` | Preview environment TTL |
-| `cluster` | `""` | Optional logical spoke cluster name (`local` or federated spoke name) |
-| `cluster-secret` | `""` | Same-namespace Kubernetes Secret holding the spoke kubeconfig when targeting a remote `cluster` |
+| `cluster` | `""` | Optional logical spoke cluster name (`local` or federated spoke name; *requires `v0.28.0+`*) |
+| `cluster-secret` | `""` | Same-namespace Kubernetes Secret holding the spoke kubeconfig when targeting a remote `cluster` (*requires `v0.28.0+`*) |
 | `base-url` | `""` | Optional gateway base URL to emit `preview-url` (`?_diverge_env=`) |
 | `wait` | `false` | Wait for `PreviewGroup` `Ready` condition (automatically runs `diverge doctor` on timeout) |
 | `verify` | `false` | Run `diverge verify` after deploy and write scorecard to `$GITHUB_STEP_SUMMARY` |

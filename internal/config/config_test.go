@@ -722,4 +722,44 @@ func TestClusterRefSettings_ParsingResolutionAndValidation(t *testing.T) {
 		assert.Equal(t, "spoke-secret", validRef.KubeconfigSecretRef.Name)
 		assert.Equal(t, "kubeconfig.yaml", validRef.KubeconfigSecretRef.Key)
 	})
+
+	t.Run("partial env override inherits default secret and secret-free local default normalizes before merge", func(t *testing.T) {
+		partialYAML := "version: \"1\"\n" +
+			"defaults:\n" +
+			"  deploy:\n" +
+			"    cluster_ref:\n" +
+			"      name: us-west-spoke\n" +
+			"      kubeconfig_secret_name: spoke-us-west\n" +
+			"environments:\n" +
+			"  canary:\n" +
+			"    deploy:\n" +
+			"      cluster_ref:\n" +
+			"        name: us-west-canary\n"
+		partialCfg, err := Parse([]byte(partialYAML))
+		require.NoError(t, err)
+		require.NoError(t, partialCfg.Validate())
+		res := partialCfg.Resolve("canary", nil)
+		require.NoError(t, res.Validate())
+		assert.Equal(t, "us-west-canary", res.Deploy.ClusterRef.Name)
+		assert.Equal(t, "spoke-us-west", res.Deploy.ClusterRef.KubeconfigSecretName)
+
+		localDefaultYAML := "version: \"1\"\n" +
+			"defaults:\n" +
+			"  deploy:\n" +
+			"    cluster_ref:\n" +
+			"      name: local\n" +
+			"environments:\n" +
+			"  burst:\n" +
+			"    deploy:\n" +
+			"      cluster_ref:\n" +
+			"        kubeconfig_secret_name: spoke-burst-kubeconfig\n"
+		localCfg, err := Parse([]byte(localDefaultYAML))
+		require.NoError(t, err)
+		require.NoError(t, localCfg.Validate())
+		assert.Nil(t, localCfg.Resolve("preview", nil).Deploy.ClusterRef.ToClusterTargetRef())
+		burstRef := localCfg.Resolve("burst", nil).Deploy.ClusterRef.ToClusterTargetRef()
+		require.NotNil(t, burstRef)
+		assert.Empty(t, burstRef.Name)
+		assert.Equal(t, "spoke-burst-kubeconfig", burstRef.KubeconfigSecretRef.Name)
+	})
 }

@@ -274,6 +274,16 @@ func TestArgoRolloutsDeployer_FederatedSpokeLifecycle(t *testing.T) {
 	spokeTmpl.SetGroupVersionKind(analysisTemplateGVK)
 	require.NoError(t, spokeClient.Get(ctx, client.ObjectKey{Name: "pr-federated-orders-verify", Namespace: "team-orders"}, spokeTmpl))
 	assert.Empty(t, spokeTmpl.GetOwnerReferences(), "cross-cluster OwnerReferences must never be set on spoke AnalysisTemplates")
+	metrics, found, err := unstructured.NestedSlice(spokeTmpl.Object, "spec", "metrics")
+	require.NoError(t, err)
+	require.True(t, found)
+	containers, found, err := unstructured.NestedSlice(metrics[0].(map[string]interface{}), "provider", "job", "spec", "template", "spec", "containers")
+	require.NoError(t, err)
+	require.True(t, found)
+	spokeArgs := containers[0].(map[string]interface{})["args"].([]interface{})
+	assert.Contains(t, spokeArgs, "--skip-doctor")
+	assert.Contains(t, spokeArgs, "--base-url")
+	assert.Contains(t, spokeArgs, "http://pr-federated-orders.team-orders.svc:8080")
 
 	// Status queries spoke cluster
 	require.NoError(t, unstructured.SetNestedField(spokeRollout.Object, "Healthy", "status", "phase"))
@@ -283,8 +293,14 @@ func TestArgoRolloutsDeployer_FederatedSpokeLifecycle(t *testing.T) {
 	require.Len(t, statuses, 1)
 	assert.Equal(t, "Healthy", statuses[0].Health)
 
-	// Teardown cleans up spoke cluster resources
-	require.NoError(t, dep.Teardown(ctx, env))
+	// Teardown via pinned context works even when Client and ClusterClients are nil
+	pinnedCtx := multicluster.WithTarget(ctx, &multicluster.Target{
+		Name:     "us-west-burst",
+		IsRemote: true,
+		Client:   spokeClient,
+	})
+	nilClientsDep := &ArgoRolloutsDeployer{}
+	require.NoError(t, nilClientsDep.Teardown(pinnedCtx, env))
 	assert.Error(t, spokeClient.Get(ctx, client.ObjectKey{Name: "pr-federated-orders", Namespace: "team-orders"}, spokeRollout))
 	assert.Error(t, spokeClient.Get(ctx, client.ObjectKey{Name: "pr-federated-orders", Namespace: "team-orders"}, spokeSvc))
 	assert.Error(t, spokeClient.Get(ctx, client.ObjectKey{Name: "pr-federated-orders-verify", Namespace: "team-orders"}, spokeTmpl))

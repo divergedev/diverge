@@ -38,12 +38,11 @@ export function EnvironmentTable({ environments, isLoading }: { environments: En
           const isDrifted = Boolean(
             env.status?.conditions?.some((c) => c.type === 'BaselineDriftDetected' && c.status === 'True'),
           )
-          const targetCluster = (
-            env.status?.targetCluster ||
-            env.spec?.deploy?.clusterRef?.name ||
-            env.spec?.deploy?.clusterRef?.kubeconfigSecretRef?.name ||
+          const targetCluster =
+            env.status?.targetCluster?.trim() ||
+            env.spec?.deploy?.clusterRef?.name?.trim() ||
+            env.spec?.deploy?.clusterRef?.kubeconfigSecretRef?.name?.trim() ||
             ''
-          ).trim()
           const isRemoteCluster = Boolean(targetCluster && targetCluster !== 'local')
           return (
             <TableRow key={`${env.namespace}/${env.name}`}>

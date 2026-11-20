@@ -36,7 +36,7 @@ const (
 	AnnotationParentBranch = "divergedev.com/neon-parent-branch"
 
 	maxNeonResponseBytes = 2 << 20 // 2 MiB
-	maxBranchPages       = 10
+	maxBranchPages       = 50
 	defaultHTTPTimeout   = 15 * time.Second
 )
 
@@ -68,6 +68,11 @@ type NeonDatabaseProvider struct {
 }
 
 var _ pkgdb.DatabaseProvider = (*NeonDatabaseProvider)(nil)
+
+// ProviderName returns the canonical database provider identifier ("neon").
+func (p *NeonDatabaseProvider) ProviderName() string {
+	return "neon"
+}
 
 type resolvedNeonConfig struct {
 	apiKey         string
@@ -178,8 +183,19 @@ func (p *NeonDatabaseProvider) resolveConfig(ctx context.Context, env *v1alpha1.
 			if err := p.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: secretName}, &sec); err != nil {
 				return nil, fmt.Errorf("fetching Neon connectionRef secret %s/%s: %w", ns, secretName, err)
 			}
-			if v := firstSecretVal(sec.Data, "apiKey", "api-key", "NEON_API_KEY"); v != "" {
-				cfg.apiKey = v
+			secretAPIKey := firstSecretVal(sec.Data, "apiKey", "api-key", "NEON_API_KEY")
+			secretBaseURL := firstSecretVal(sec.Data, "baseUrl", "base-url", "NEON_API_BASE_URL")
+			if secretBaseURL != "" && secretAPIKey == "" && cfg.apiKey != "" {
+				controllerBase := cfg.baseURL
+				if controllerBase == "" {
+					controllerBase = DefaultBaseURL
+				}
+				if !strings.EqualFold(strings.TrimRight(secretBaseURL, "/"), strings.TrimRight(controllerBase, "/")) {
+					return nil, errors.New("connectionRef secret overriding Neon baseUrl must also provide its own apiKey")
+				}
+			}
+			if secretAPIKey != "" {
+				cfg.apiKey = secretAPIKey
 			}
 			if v := firstSecretVal(sec.Data, "projectId", "project-id", "NEON_PROJECT_ID"); v != "" {
 				cfg.projectID = v
@@ -193,8 +209,8 @@ func (p *NeonDatabaseProvider) resolveConfig(ctx context.Context, env *v1alpha1.
 			if v := firstSecretVal(sec.Data, "roleName", "role-name", "NEON_ROLE_NAME"); v != "" {
 				cfg.roleName = v
 			}
-			if v := firstSecretVal(sec.Data, "baseUrl", "base-url", "NEON_API_BASE_URL"); v != "" {
-				cfg.baseURL = v
+			if secretBaseURL != "" {
+				cfg.baseURL = secretBaseURL
 			}
 		}
 
@@ -380,11 +396,11 @@ func (p *NeonDatabaseProvider) findBranchByName(ctx context.Context, cfg *resolv
 		}
 		next := strings.TrimSpace(listResp.Pagination.Next)
 		if next == "" || next == cursor {
-			break
+			return nil, nil
 		}
 		cursor = next
 	}
-	return nil, nil
+	return nil, fmt.Errorf("neon branch listing exceeded %d pages without exhausting pagination while searching for %q", maxBranchPages, branchName)
 }
 
 func isNeonBranchReady(state string) bool {

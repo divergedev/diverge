@@ -238,7 +238,7 @@ Diverge binaries can be configured via CLI flags:
 ### Controller (`diverge-controller`)
 | Flag | Default | Description |
 |---|---|---|
-| `--deploy-provider` | `noop` | Deployment provider (`direct`, `argocd`, `argo-rollouts`, `knative`, `keda`, `noop`). |
+| `--deploy-provider` | `noop` | Deployment provider (`direct`, `argocd`, `argo-rollouts`, `knative`, `noop`). |
 | `--routing-provider` | `gateway` | Routing provider (`gateway`, `istio`, `composite`, `noop`, or comma-separated list like `gateway,istio`). |
 | `--database-provider` | `none` | Database provider (`schema`, `cnpg`, `neon`, `none`). |
 | `--notifier-provider` | `noop` | Notification provider (`github`, `gitlab`, `noop`). |

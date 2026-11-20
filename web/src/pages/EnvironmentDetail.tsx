@@ -97,12 +97,11 @@ export default function EnvironmentDetail() {
   const baselineFingerprint = annotations['divergedev.com/baseline-fingerprint'] || ''
   const dbMode = env.spec?.database?.mode && env.spec.database.mode !== 'none' ? env.spec.database.mode : ''
   const dbProvider = env.status?.databaseProvider || ''
-  const targetCluster = (
-    env.status?.targetCluster ||
-    env.spec?.deploy?.clusterRef?.name ||
-    env.spec?.deploy?.clusterRef?.kubeconfigSecretRef?.name ||
+  const targetCluster =
+    env.status?.targetCluster?.trim() ||
+    env.spec?.deploy?.clusterRef?.name?.trim() ||
+    env.spec?.deploy?.clusterRef?.kubeconfigSecretRef?.name?.trim() ||
     'local'
-  ).trim() || 'local'
   const isRemoteCluster = targetCluster !== 'local'
   const asyncRoutes = env.spec?.routing?.asyncRoutes ?? []
   const asyncEnvVars = env.status?.asyncEnvVars ?? {}

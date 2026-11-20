@@ -72,19 +72,19 @@ type ClusterRefSettings struct {
 	KubeconfigSecretKey  string `yaml:"kubeconfig_secret_key,omitempty"`
 }
 
-// Validate checks ClusterRefSettings invariants.
+// Validate checks complete ClusterRefSettings invariants (after inheritance/merging).
 func (c *ClusterRefSettings) Validate() error {
 	if c == nil {
 		return nil
+	}
+	if err := c.ValidatePartial(); err != nil {
+		return err
 	}
 	name := strings.TrimSpace(c.Name)
 	secName := strings.TrimSpace(c.KubeconfigSecretName)
 	secKey := strings.TrimSpace(c.KubeconfigSecretKey)
 	if secName == "" && secKey == "" && (name == "" || name == "local") {
 		return nil
-	}
-	if len(name) > 63 {
-		return fmt.Errorf("cluster_ref name must be at most 63 characters, got %d", len(name))
 	}
 	if secName == "" {
 		return fmt.Errorf("cluster_ref kubeconfig_secret_name is required when targeting remote cluster %q", name)
@@ -94,6 +94,26 @@ func (c *ClusterRefSettings) Validate() error {
 		resolved = secName
 	}
 	if strings.EqualFold(resolved, "local") {
+		return fmt.Errorf("cluster_ref cannot resolve to reserved cluster name %q", "local")
+	}
+	return nil
+}
+
+// ValidatePartial checks partial override invariants before merging with defaults.
+func (c *ClusterRefSettings) ValidatePartial() error {
+	if c == nil {
+		return nil
+	}
+	name := strings.TrimSpace(c.Name)
+	secName := strings.TrimSpace(c.KubeconfigSecretName)
+	secKey := strings.TrimSpace(c.KubeconfigSecretKey)
+	if len(name) > 63 {
+		return fmt.Errorf("cluster_ref name must be at most 63 characters, got %d", len(name))
+	}
+	if strings.EqualFold(name, "local") && (secName != "" || secKey != "") {
+		return fmt.Errorf("cluster_ref cannot resolve to reserved cluster name %q", "local")
+	}
+	if name == "" && strings.EqualFold(secName, "local") {
 		return fmt.Errorf("cluster_ref cannot resolve to reserved cluster name %q", "local")
 	}
 	return nil
@@ -357,8 +377,13 @@ func (c *Config) Validate() error {
 	}
 	for name, env := range c.Environments {
 		if env.Deploy.ClusterRef != nil {
-			if err := env.Deploy.ClusterRef.Validate(); err != nil {
+			if err := env.Deploy.ClusterRef.ValidatePartial(); err != nil {
 				return fmt.Errorf("environments[%s].deploy.cluster_ref: %w", name, err)
+			}
+			if resolved := c.Resolve(name, nil); resolved != nil && resolved.Deploy.ClusterRef != nil {
+				if err := resolved.Deploy.ClusterRef.Validate(); err != nil {
+					return fmt.Errorf("environments[%s].deploy.cluster_ref: %w", name, err)
+				}
 			}
 		}
 		if env.Routing.Banner != nil {
@@ -384,7 +409,7 @@ func (c *Config) Validate() error {
 	}
 	for label, override := range c.LabelOverrides {
 		if override.Deploy.ClusterRef != nil {
-			if err := override.Deploy.ClusterRef.Validate(); err != nil {
+			if err := override.Deploy.ClusterRef.ValidatePartial(); err != nil {
 				return fmt.Errorf("label_overrides[%s].deploy.cluster_ref: %w", label, err)
 			}
 		}
@@ -479,8 +504,12 @@ func (c *Config) Resolve(envType string, labels []string) *ResolvedSettings {
 		EnvironmentSettings: c.Defaults,
 	}
 	if c.Defaults.Deploy.ClusterRef != nil {
-		cp := *c.Defaults.Deploy.ClusterRef
-		res.Deploy.ClusterRef = &cp
+		if isSecretFreeLocalClusterRef(c.Defaults.Deploy.ClusterRef) {
+			res.Deploy.ClusterRef = nil
+		} else {
+			cp := *c.Defaults.Deploy.ClusterRef
+			res.Deploy.ClusterRef = &cp
+		}
 	}
 
 	if env, ok := c.Environments[envType]; ok {
@@ -496,6 +525,16 @@ func (c *Config) Resolve(envType string, labels []string) *ResolvedSettings {
 	return res
 }
 
+func isSecretFreeLocalClusterRef(c *ClusterRefSettings) bool {
+	if c == nil {
+		return true
+	}
+	name := strings.TrimSpace(c.Name)
+	return strings.TrimSpace(c.KubeconfigSecretName) == "" &&
+		strings.TrimSpace(c.KubeconfigSecretKey) == "" &&
+		(name == "" || strings.EqualFold(name, "local"))
+}
+
 func mergeSettings(dst, src *EnvironmentSettings) {
 	// Deploy
 	if src.Deploy.Mode != "" {
@@ -506,7 +545,7 @@ func mergeSettings(dst, src *EnvironmentSettings) {
 	}
 	if src.Deploy.ClusterRef != nil {
 		cr := &ClusterRefSettings{}
-		if dst.Deploy.ClusterRef != nil {
+		if dst.Deploy.ClusterRef != nil && !isSecretFreeLocalClusterRef(dst.Deploy.ClusterRef) {
 			*cr = *dst.Deploy.ClusterRef
 		}
 		if src.Deploy.ClusterRef.Name != "" {

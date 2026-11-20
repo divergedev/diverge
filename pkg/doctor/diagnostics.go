@@ -182,7 +182,25 @@ func (d *Diagnoser) Diagnose(ctx context.Context, namespace, envName string) (*R
 			for _, target := range targetEnvs {
 				envObj := resolvedEnvs[target.Namespace+"/"+target.Name]
 				if envObj != nil && multicluster.IsRemoteEnv(envObj) {
-					d.inspectSpokeEnvironmentPods(ctx, target.Namespace, envObj, seenPods, report)
+					if !d.inspectSpokeEnvironmentPods(ctx, target.Namespace, envObj, seenPods, report) {
+						continue
+					}
+					hubNS := envObj.Namespace
+					if hubNS == "" {
+						hubNS = target.Namespace
+					}
+					hubPods, err := d.listEnvironmentPods(ctx, d.client, hubNS, target.Name)
+					if err != nil {
+						return nil, err
+					}
+					for i := range hubPods.Items {
+						podKey := "local/" + hubPods.Items[i].Namespace + "/" + hubPods.Items[i].Name
+						if _, exists := seenPods[podKey]; exists {
+							continue
+						}
+						seenPods[podKey] = struct{}{}
+						d.checkPod(&hubPods.Items[i], report)
+					}
 					continue
 				}
 
@@ -267,7 +285,7 @@ func (d *Diagnoser) inspectSpokeEnvironmentPods(
 	env *divergeiov1alpha1.Environment,
 	seenPods map[string]struct{},
 	report *Report,
-) {
+) bool {
 	clusterName := multicluster.ClusterName(env)
 	target, err := d.resolveSpokeTarget(ctx, env)
 	if err != nil {
@@ -280,7 +298,7 @@ func (d *Diagnoser) inspectSpokeEnvironmentPods(
 			Remediation: "Verify spec.deploy.clusterRef.kubeconfigSecretRef exists in the same namespace, contains a valid HTTPS kubeconfig, and is reachable from the Diverge hub.",
 			DocsURL:     DocsBaseURL + "#div-111-spoke-cluster-unreachable",
 		})
-		return
+		return false
 	}
 
 	podNS := env.Namespace
@@ -302,7 +320,7 @@ func (d *Diagnoser) inspectSpokeEnvironmentPods(
 			Remediation: "Verify spoke cluster API server reachability, TLS CA bundle, and RBAC permissions for the spoke kubeconfig Secret.",
 			DocsURL:     DocsBaseURL + "#div-111-spoke-cluster-unreachable",
 		})
-		return
+		return false
 	}
 
 	for i := range podList.Items {
@@ -313,6 +331,7 @@ func (d *Diagnoser) inspectSpokeEnvironmentPods(
 		seenPods[podKey] = struct{}{}
 		d.checkPodOnCluster(&podList.Items[i], clusterName, report)
 	}
+	return true
 }
 
 func (d *Diagnoser) inspectPreviewGroupChildren(
