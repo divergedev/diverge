@@ -1,4 +1,6 @@
 import { render, screen, waitFor } from '../test/utils'
+import { server } from '../test/mocks/server'
+import { http, HttpResponse } from 'msw'
 import { CreateEnvironmentModal } from './CreateEnvironmentModal'
 import userEvent from '@testing-library/user-event'
 
@@ -59,6 +61,21 @@ describe('CreateEnvironmentModal', () => {
   })
 
   it('Accepts dotted DNS subdomain secret name and nests environment in CreateEnvironmentRequest', async () => {
+    let capturedBody: Record<string, unknown> | undefined
+    server.use(
+      http.post('*/diverge.v1alpha1.EnvironmentService/CreateEnvironment', async ({ request }) => {
+        capturedBody = (await request.json()) as Record<string, unknown>
+        return HttpResponse.json({
+          environment: {
+            name: 'fed-dotted',
+            namespace: 'default',
+            spec: {},
+            status: { phase: 'Ready', services: [] },
+          },
+        })
+      }),
+    )
+
     const user = userEvent.setup()
     const onClose = vi.fn()
     render(<CreateEnvironmentModal open={true} onClose={onClose} />)
@@ -71,5 +88,26 @@ describe('CreateEnvironmentModal', () => {
     await waitFor(() => {
       expect(onClose).toHaveBeenCalled()
     }, { timeout: 10000 })
+
+    expect(capturedBody).toBeDefined()
+    expect(capturedBody).not.toHaveProperty('name')
+    expect(capturedBody).not.toHaveProperty('spec')
+    expect(capturedBody).toMatchObject({
+      namespace: 'default',
+      environment: {
+        name: 'fed-dotted',
+        namespace: 'default',
+        spec: {
+          deploy: {
+            clusterRef: {
+              name: 'us-west-burst',
+              kubeconfigSecretRef: {
+                name: 'spoke.west.kubeconfig',
+              },
+            },
+          },
+        },
+      },
+    })
   }, 15000)
 })

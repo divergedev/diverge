@@ -264,11 +264,11 @@ export default function PreviewGroupDetail() {
                       const targetNs = svc.namespace || namespace
                       const safeSvcUrl = isSafeExternalUrl(svc.url) ? svc.url : undefined
                       const specSvc = specServicesByName.get(svc.name)
+                      const effectiveSvcClusterRef = specSvc?.clusterRef ?? pg.spec?.clusterRef
                       const svcCluster =
                         svc.targetCluster?.trim() ||
-                        specSvc?.clusterRef?.name?.trim() ||
-                        specSvc?.clusterRef?.kubeconfigSecretRef?.name?.trim() ||
-                        groupTargetCluster ||
+                        effectiveSvcClusterRef?.name?.trim() ||
+                        effectiveSvcClusterRef?.kubeconfigSecretRef?.name?.trim() ||
                         'local'
                       return (
                         <TableRow key={svc.name}>

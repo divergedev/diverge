@@ -216,6 +216,13 @@ describe('PreviewGroupDetail', () => {
                 name: 'eu-central-spoke',
                 kubeconfigSecretRef: { name: 'eu-spoke-kubeconfig' },
               },
+              services: [
+                mockPreviewGroup.previewGroup.spec.services[0],
+                {
+                  ...mockPreviewGroup.previewGroup.spec.services[1],
+                  clusterRef: {},
+                },
+              ],
             },
             status: {
               ...mockPreviewGroup.previewGroup.status,
@@ -223,6 +230,11 @@ describe('PreviewGroupDetail', () => {
                 {
                   ...mockPreviewGroup.previewGroup.status.services[0],
                   targetCluster: 'eu-central-spoke',
+                },
+                {
+                  ...mockPreviewGroup.previewGroup.status.services[1],
+                  phase: 'Failed',
+                  reason: 'CreateFailed',
                 },
               ],
             },
@@ -234,6 +246,7 @@ describe('PreviewGroupDetail', () => {
     renderPage()
 
     expect(await screen.findByText('Target Cluster')).toBeInTheDocument()
-    expect(screen.getAllByText('eu-central-spoke').length).toBeGreaterThanOrEqual(2)
+    expect(screen.getAllByText('eu-central-spoke')).toHaveLength(2)
+    expect(screen.getByText('local')).toBeInTheDocument()
   })
 })
