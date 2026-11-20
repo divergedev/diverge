@@ -34,7 +34,7 @@ services:
 
 ### Turnkey Composite Action (Recommended)
 
-Use the official `divergedev/diverge@v0.27.0` GitHub Action to validate `.diverge.yaml`, run `diverge diff`, deploy a delta `PreviewGroup`, verify readiness and latency SLOs (`verify: "true"`), replay recorded traffic traces (`replay: "true"` with `replay-from` set to a `.jsonl` or `.har` trace file), optionally trigger self-healing `AgentTask` runs on failure (`auto-fix: "true"`), and expose routing headers to Playwright or Cypress:
+Use the official `divergedev/diverge@v0.28.0` GitHub Action to validate `.diverge.yaml`, run `diverge diff`, deploy a delta `PreviewGroup`, verify readiness and latency SLOs (`verify: "true"`), replay recorded traffic traces (`replay: "true"` with `replay-from` set to a `.jsonl` or `.har` trace file), optionally trigger self-healing `AgentTask` runs on failure (`auto-fix: "true"`), and expose routing headers to Playwright or Cypress:
 
 > [!WARNING]
 > **Sanitize replay traces before replaying in PR workflows**: Always scrub live credentials, PII, and sensitive request or response bodies from `.jsonl` / `.har` trace files using `diverge record` (with `--redact-body-field`) or `diverge replay sanitize` **before committing them to your repository**. Enabling `replay-strip-auth: "true"`, `replay-redact-query`, and `replay-redact-body-fields` in CI provides an additional in-flight safeguard during replay, not an alternative to pre-commit trace sanitization.
@@ -57,7 +57,7 @@ jobs:
 
       - name: Deploy Diverge Delta Preview
         id: diverge
-        uses: divergedev/diverge@v0.27.0
+        uses: divergedev/diverge@v0.28.0
         with:
           action: deploy
           kubeconfig: ${{ secrets.PREVIEW_KUBECONFIG }}
@@ -80,7 +80,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: divergedev/diverge@v0.27.0
+      - uses: divergedev/diverge@v0.28.0
         with:
           action: teardown
           kubeconfig: ${{ secrets.PREVIEW_KUBECONFIG }}
@@ -96,8 +96,8 @@ jobs:
 | `image-tag` | `""` | Image tag for changed services (when omitted, defaults to resolved `preview-name`, e.g. `pr-<number>` or branch slug) |
 | `header-key` | `x-diverge-env` | HTTP routing header key |
 | `ttl` | `4h` | Preview environment TTL |
-| `cluster` | `""` | Optional logical spoke cluster name (`local` or federated spoke name; *requires `v0.28.0+`*) |
-| `cluster-secret` | `""` | Same-namespace Kubernetes Secret holding the spoke kubeconfig when targeting a remote `cluster` (*requires `v0.28.0+`*) |
+| `cluster` | `""` | Optional logical spoke cluster name (`local` or federated spoke name) |
+| `cluster-secret` | `""` | Same-namespace Kubernetes Secret holding the spoke kubeconfig when targeting a remote `cluster` |
 | `base-url` | `""` | Optional gateway base URL to emit `preview-url` (`?_diverge_env=`) |
 | `wait` | `false` | Wait for `PreviewGroup` `Ready` condition (automatically runs `diverge doctor` on timeout) |
 | `verify` | `false` | Run `diverge verify` after deploy and write scorecard to `$GITHUB_STEP_SUMMARY` |
@@ -165,7 +165,7 @@ Include the official component (`templates/preview/template.yml`). It automatica
 
 ```yaml
 include:
-  - component: $CI_SERVER_FQDN/divergedev/diverge/preview@v0.27.0
+  - component: $CI_SERVER_FQDN/divergedev/diverge/preview@v0.28.0
     inputs:
       diverge_registry: "$CI_REGISTRY_IMAGE"
       diverge_base_url: "https://staging.example.com"
