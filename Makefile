@@ -17,6 +17,11 @@ CONTROLLER_GEN = go run sigs.k8s.io/controller-tools/cmd/controller-gen
 .PHONY: manifests
 manifests: ## Generate CRD, webhook, and RBAC manifests
 	$(CONTROLLER_GEN) crd webhook rbac:roleName=manager-role paths="./..." output:crd:dir=config/crd/bases
+	cp config/crd/bases/*.yaml charts/diverge/crds/
+
+.PHONY: schemas
+schemas: ## Regenerate .diverge.yaml JSON Schema files
+	UPDATE_SCHEMA=1 go test ./internal/config -run TestGenerateJSONSchema_MatchesCommittedSchemas
 
 .PHONY: proto
 proto: ## Generate protobuf code

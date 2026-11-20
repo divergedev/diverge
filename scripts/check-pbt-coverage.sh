@@ -36,6 +36,7 @@ REQUIRED_PBT_FILES=(
   "pkg/doctor/diagnostics_test.go"
   "pkg/sdk/storage_test.go"
   "internal/cli/init_test.go"
+  "internal/database/neon/neon_test.go"
 )
 
 for pbt_file in "${REQUIRED_PBT_FILES[@]}"; do

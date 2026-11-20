@@ -75,9 +75,9 @@ diverge route <service-name>
 
 ---
 
-## Diagnostic Error Codes (`DIV-101` – `DIV-110`)
+## Diagnostic Error Codes (`DIV-101` – `DIV-111`)
 
-When `diverge doctor` (or `diverge doctor --json`) inspects a namespace, preview `Environment`, or `AgentTask`, every finding includes a stable diagnostic code (`DIV-101` through `DIV-110`) and a direct documentation link (`https://divergedev.com/guides/troubleshooting/#...`) to the corresponding section below.
+When `diverge doctor` (or `diverge doctor --json`) inspects a namespace, preview `Environment`, or `AgentTask`, every finding includes a stable diagnostic code (`DIV-101` through `DIV-111`) and a direct documentation link (`https://divergedev.com/guides/troubleshooting/#...`) to the corresponding section below.
 
 | Code | Severity | Component | Summary |
 | :--- | :--- | :--- | :--- |
@@ -91,6 +91,7 @@ When `diverge doctor` (or `diverge doctor --json`) inspects a namespace, preview
 | [`DIV-108`](#div-108-oomkilled) | `CRITICAL` / `WARNING` | `Container/<name>` | Container terminated due to Out Of Memory (`OOMKilled`) |
 | [`DIV-109`](#div-109-container-exit) | `CRITICAL` / `WARNING` | `Container/<name>` | Container terminated with non-zero exit code |
 | [`DIV-110`](#div-110-agenttask-budget-or-failure) | `CRITICAL` / `WARNING` | `AgentTask/<name>` | `AgentTask` failed or paused due to LLM budget exceeded |
+| [`DIV-111`](#div-111-spoke-cluster-unreachable) | `CRITICAL` | `Environment/<name> (Cluster/<cluster>)` | Federated spoke cluster kubeconfig invalid, missing, or unreachable |
 
 ### DIV-101: Environment Failed
 
@@ -216,5 +217,19 @@ When `diverge doctor` (or `diverge doctor --json`) inspects a namespace, preview
   diverge task resume <task-name> --budget 15.00 --tokens 500000
   ```
   Or comment `/diverge resume` on the pull request after updating the budget on the `AgentTask`.
+
+### DIV-111: Spoke Cluster Unreachable
+
+- **Trigger**: An `Environment` targets a remote federated spoke cluster via `spec.deploy.clusterRef`, and either the kubeconfig `Secret` cannot be resolved/validated on the hub cluster or the spoke Kubernetes API server fails to respond to pod queries.
+- **Common Causes**:
+  - The kubeconfig `Secret` referenced by `spec.deploy.clusterRef.kubeconfigSecretRef` is missing in the environment's namespace, or lacks a `kubeconfig` / `value` key.
+  - The spoke kubeconfig uses an insecure `http://` endpoint, an `exec`/`auth-provider` plugin, or resolves to a loopback/link-local/private IP blocked by Diverge's SSRF guardrails.
+  - The spoke API server is unreachable from the hub network, TLS CA verification failed, or the spoke ServiceAccount token expired (`401`/`403`).
+- **Remediation**:
+  ```bash
+  kubectl get secret <spoke-kubeconfig-secret> -n <namespace> -o yaml
+  diverge doctor <env-name> -n <namespace>
+  ```
+  Ensure the kubeconfig `Secret` exists in the same namespace as the `Environment`, points to a valid `https://` spoke API endpoint with static token/client-cert credentials, and grants `pods` read/list RBAC in the target preview namespace.
 
 

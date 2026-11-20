@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/multicluster"
 	"github.com/divergedev/diverge/pkg/registry"
 )
 
@@ -201,4 +202,106 @@ func TestArgoRolloutsDeployer_ConditionsFallbackAndCreateNamespace(t *testing.T)
 	require.NoError(t, err)
 	require.Len(t, statuses, 1)
 	assert.Equal(t, "Degraded", statuses[0].Health)
+}
+
+func TestArgoRolloutsDeployer_FederatedSpokeLifecycle(t *testing.T) {
+	ctx := context.Background()
+	hubClient := fake.NewClientBuilder().Build()
+	spokeClient := fake.NewClientBuilder().Build()
+
+	resolver := &multicluster.StaticResolver{
+		Hub: &multicluster.Target{Name: "local", IsRemote: false, Client: hubClient},
+		Spokes: map[string]*multicluster.Target{
+			"us-west-burst": {Name: "us-west-burst", IsRemote: true, Client: spokeClient},
+		},
+	}
+
+	dep := &ArgoRolloutsDeployer{
+		Client:         hubClient,
+		ClusterClients: resolver,
+	}
+
+	env := &v1alpha1.Environment{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "divergedev.com/v1alpha1",
+			Kind:       "Environment",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-federated",
+			Namespace: "team-orders",
+			UID:       "uid-hub-env",
+			Annotations: map[string]string{
+				AnnotationRolloutAnalysis: "true",
+			},
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Deploy: v1alpha1.EnvironmentDeploy{
+				Namespace: "same",
+				ClusterRef: &v1alpha1.ClusterTargetRef{
+					Name: "us-west-burst",
+					KubeconfigSecretRef: &v1alpha1.SecretRef{
+						Name: "spoke-west-kubeconfig",
+					},
+				},
+			},
+			ServiceConfig: &v1alpha1.ServicePreviewConfig{
+				ServiceName: "orders",
+				Image:       "ghcr.io/acme/orders:pr-federated",
+				Port:        8080,
+			},
+		},
+	}
+
+	require.NoError(t, dep.Deploy(ctx, env))
+
+	// Hub cluster must NOT receive Rollout or Service
+	hubRollout := &unstructured.Unstructured{}
+	hubRollout.SetGroupVersionKind(rolloutGVK)
+	assert.Error(t, hubClient.Get(ctx, client.ObjectKey{Name: "pr-federated-orders", Namespace: "team-orders"}, hubRollout))
+
+	// Spoke cluster MUST receive Rollout, AnalysisTemplate, and Service WITHOUT cross-cluster OwnerReferences
+	spokeRollout := &unstructured.Unstructured{}
+	spokeRollout.SetGroupVersionKind(rolloutGVK)
+	require.NoError(t, spokeClient.Get(ctx, client.ObjectKey{Name: "pr-federated-orders", Namespace: "team-orders"}, spokeRollout))
+	assert.Empty(t, spokeRollout.GetOwnerReferences(), "cross-cluster OwnerReferences must never be set on spoke Rollouts")
+
+	spokeSvc := &unstructured.Unstructured{}
+	spokeSvc.SetGroupVersionKind(coreServiceGVK)
+	require.NoError(t, spokeClient.Get(ctx, client.ObjectKey{Name: "pr-federated-orders", Namespace: "team-orders"}, spokeSvc))
+	assert.Empty(t, spokeSvc.GetOwnerReferences(), "cross-cluster OwnerReferences must never be set on spoke Services")
+
+	spokeTmpl := &unstructured.Unstructured{}
+	spokeTmpl.SetGroupVersionKind(analysisTemplateGVK)
+	require.NoError(t, spokeClient.Get(ctx, client.ObjectKey{Name: "pr-federated-orders-verify", Namespace: "team-orders"}, spokeTmpl))
+	assert.Empty(t, spokeTmpl.GetOwnerReferences(), "cross-cluster OwnerReferences must never be set on spoke AnalysisTemplates")
+	metrics, found, err := unstructured.NestedSlice(spokeTmpl.Object, "spec", "metrics")
+	require.NoError(t, err)
+	require.True(t, found)
+	containers, found, err := unstructured.NestedSlice(metrics[0].(map[string]interface{}), "provider", "job", "spec", "template", "spec", "containers")
+	require.NoError(t, err)
+	require.True(t, found)
+	spokeArgs := containers[0].(map[string]interface{})["args"].([]interface{})
+	assert.Contains(t, spokeArgs, "--skip-doctor")
+	assert.Contains(t, spokeArgs, "--base-url")
+	assert.Contains(t, spokeArgs, "http://pr-federated-orders.team-orders.svc:8080")
+
+	// Status queries spoke cluster
+	require.NoError(t, unstructured.SetNestedField(spokeRollout.Object, "Healthy", "status", "phase"))
+	require.NoError(t, spokeClient.Update(ctx, spokeRollout))
+	statuses, err := dep.Status(ctx, env)
+	require.NoError(t, err)
+	require.Len(t, statuses, 1)
+	assert.Equal(t, "Healthy", statuses[0].Health)
+
+	// Teardown via pinned context works even when Client and ClusterClients are nil
+	pinnedCtx := multicluster.WithTarget(ctx, &multicluster.Target{
+		Name:     "us-west-burst",
+		IsRemote: true,
+		Client:   spokeClient,
+	})
+	nilClientsDep := &ArgoRolloutsDeployer{}
+	require.NoError(t, nilClientsDep.Teardown(pinnedCtx, env))
+	assert.Error(t, spokeClient.Get(ctx, client.ObjectKey{Name: "pr-federated-orders", Namespace: "team-orders"}, spokeRollout))
+	assert.Error(t, spokeClient.Get(ctx, client.ObjectKey{Name: "pr-federated-orders", Namespace: "team-orders"}, spokeSvc))
+	assert.Error(t, spokeClient.Get(ctx, client.ObjectKey{Name: "pr-federated-orders-verify", Namespace: "team-orders"}, spokeTmpl))
 }

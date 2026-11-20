@@ -32,6 +32,7 @@ import (
 	"github.com/divergedev/diverge/internal/controller"
 	"github.com/divergedev/diverge/internal/database"
 	_ "github.com/divergedev/diverge/internal/database/cnpg"
+	_ "github.com/divergedev/diverge/internal/database/neon"
 	"github.com/divergedev/diverge/internal/deployer"
 	"github.com/divergedev/diverge/internal/events"
 	"github.com/divergedev/diverge/internal/finops"
@@ -94,7 +95,7 @@ func main() {
 	flag.IntVar(&webhookPort, "webhook-port", 9443, "The port the webhook server binds to.")
 	flag.StringVar(&routingProvider, "routing-provider", "gateway", "The routing provider to use (gateway, istio, composite, noop, or comma-separated list like 'gateway,istio').")
 	flag.StringVar(&deployProvider, "deploy-provider", "noop", "Deployment provider (argocd|argo-rollouts|noop|direct|knative)")
-	flag.StringVar(&databaseProvider, "database-provider", "none", "Database provider (schema|cnpg|snapshot|fresh|none)")
+	flag.StringVar(&databaseProvider, "database-provider", "none", "Database provider (schema|cnpg|neon|snapshot|fresh|none)")
 	flag.StringVar(&notifierProvider, "notifier-provider", "noop", "Notification provider (gitlab|github|noop)")
 	flag.StringVar(&asyncProvider, "async-provider", "noop", "Async provisioning provider (noop, kafka, temporal, redis, valkey, webhook)")
 	flag.StringVar(&featureProvider, "feature-provider", "configmap", "Feature flag provider (configmap, noop)")

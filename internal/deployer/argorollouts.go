@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/multicluster"
 	"github.com/divergedev/diverge/pkg/registry"
 )
 
@@ -59,7 +60,8 @@ func init() {
 	provider := registry.Provider[Deployer]{
 		Create: func(deps registry.Deps) (Deployer, error) {
 			return &ArgoRolloutsDeployer{
-				Client: deps.Client,
+				Client:         deps.Client,
+				ClusterClients: multicluster.NewManager(deps.Client, deps.Clientset, deps.Config, deps.Scheme),
 			}, nil
 		},
 		Description: "Argo Rollouts progressive delivery with optional AnalysisTemplate verification",
@@ -71,7 +73,32 @@ func init() {
 // ArgoRolloutsDeployer deploys preview workloads as Argo Rollouts (`argoproj.io/v1alpha1` Rollout)
 // with an accompanying Kubernetes Service and optional pre-promotion AnalysisTemplate.
 type ArgoRolloutsDeployer struct {
-	Client client.Client
+	Client         client.Client
+	ClusterClients multicluster.Resolver
+}
+
+func (d *ArgoRolloutsDeployer) resolveClient(ctx context.Context, env *v1alpha1.Environment) (client.Client, bool, error) {
+	if pinned, ok := multicluster.TargetFromContext(ctx); ok && pinned != nil && pinned.Client != nil {
+		return pinned.Client, pinned.IsRemote, nil
+	}
+	if !multicluster.IsRemoteEnv(env) {
+		return d.Client, false, nil
+	}
+	resolver := d.ClusterClients
+	if resolver == nil && d.Client != nil {
+		resolver = multicluster.NewManager(d.Client, nil, nil, d.Client.Scheme())
+	}
+	if resolver == nil {
+		return nil, false, fmt.Errorf("multi-cluster resolver is not configured")
+	}
+	target, err := resolver.Resolve(ctx, env)
+	if err != nil {
+		return nil, false, err
+	}
+	if target == nil || target.Client == nil {
+		return nil, false, fmt.Errorf("resolved spoke cluster client is nil")
+	}
+	return target.Client, target.IsRemote, nil
 }
 
 var _ Deployer = (*ArgoRolloutsDeployer)(nil)
@@ -120,8 +147,8 @@ func (d *ArgoRolloutsDeployer) resolveStableServiceName(targetName, serviceName 
 	return boundK8sName(targetName + "-stable"), true
 }
 
-// setMetadataAndOwner populates standard Diverge metadata labels and same-namespace OwnerReferences on a resource.
-func (d *ArgoRolloutsDeployer) setMetadataAndOwner(obj *unstructured.Unstructured, env *v1alpha1.Environment, targetNS, name, serviceName string) {
+// setMetadataAndOwner populates standard Diverge metadata labels and local same-namespace OwnerReferences on a resource.
+func (d *ArgoRolloutsDeployer) setMetadataAndOwner(obj *unstructured.Unstructured, env *v1alpha1.Environment, targetNS, name, serviceName string, isRemote bool) {
 	obj.SetName(name)
 	obj.SetNamespace(targetNS)
 	obj.SetLabels(map[string]string{
@@ -130,7 +157,7 @@ func (d *ArgoRolloutsDeployer) setMetadataAndOwner(obj *unstructured.Unstructure
 		"divergedev.com/environment": env.Name,
 		"divergedev.com/service":     serviceName,
 	})
-	if env.Spec.Deploy.Namespace != "create" && targetNS == env.Namespace && env.UID != "" {
+	if !isRemote && env.Spec.Deploy.Namespace != "create" && targetNS == env.Namespace && env.UID != "" {
 		apiVersion := env.APIVersion
 		if apiVersion == "" {
 			apiVersion = "divergedev.com/v1alpha1"
@@ -151,17 +178,17 @@ func (d *ArgoRolloutsDeployer) setMetadataAndOwner(obj *unstructured.Unstructure
 }
 
 // applyOrCreate creates the resource if it does not exist or patches it via Server-Side Apply if it already exists.
-func (d *ArgoRolloutsDeployer) applyOrCreate(ctx context.Context, gvk schema.GroupVersionKind, obj *unstructured.Unstructured) error {
+func (d *ArgoRolloutsDeployer) applyOrCreate(ctx context.Context, targetClient client.Client, gvk schema.GroupVersionKind, obj *unstructured.Unstructured) error {
 	existing := &unstructured.Unstructured{}
 	existing.SetGroupVersionKind(gvk)
-	err := d.Client.Get(ctx, client.ObjectKey{Name: obj.GetName(), Namespace: obj.GetNamespace()}, existing)
+	err := targetClient.Get(ctx, client.ObjectKey{Name: obj.GetName(), Namespace: obj.GetNamespace()}, existing)
 	if err != nil {
 		if client.IgnoreNotFound(err) != nil {
 			return err
 		}
-		return d.Client.Create(ctx, obj)
+		return targetClient.Create(ctx, obj)
 	}
-	return d.Client.Apply(ctx, client.ApplyConfigurationFromUnstructured(obj), client.FieldOwner("diverge"), client.ForceOwnership)
+	return targetClient.Apply(ctx, client.ApplyConfigurationFromUnstructured(obj), client.FieldOwner("diverge"), client.ForceOwnership)
 }
 
 // ignoreNotFoundOrNoMatch ignores NotFound, NoMatch, and NotRegistered errors during cleanup operations.
@@ -173,10 +200,10 @@ func ignoreNotFoundOrNoMatch(err error) error {
 }
 
 // deleteManagedResource deletes a Kubernetes resource only if its labels confirm it is managed by Diverge for envName.
-func (d *ArgoRolloutsDeployer) deleteManagedResource(ctx context.Context, gvk schema.GroupVersionKind, targetNS, name, envName string) error {
+func (d *ArgoRolloutsDeployer) deleteManagedResource(ctx context.Context, targetClient client.Client, gvk schema.GroupVersionKind, targetNS, name, envName string) error {
 	existing := &unstructured.Unstructured{}
 	existing.SetGroupVersionKind(gvk)
-	err := d.Client.Get(ctx, client.ObjectKey{Name: name, Namespace: targetNS}, existing)
+	err := targetClient.Get(ctx, client.ObjectKey{Name: name, Namespace: targetNS}, existing)
 	if err != nil {
 		return ignoreNotFoundOrNoMatch(err)
 	}
@@ -184,14 +211,18 @@ func (d *ArgoRolloutsDeployer) deleteManagedResource(ctx context.Context, gvk sc
 	if labels["divergedev.com/managed-by"] != "diverge" || labels["divergedev.com/environment"] != envName {
 		return nil
 	}
-	return ignoreNotFoundOrNoMatch(d.Client.Delete(ctx, existing))
+	var delOpts []client.DeleteOption
+	if uid := existing.GetUID(); uid != "" {
+		delOpts = append(delOpts, client.Preconditions{UID: &uid})
+	}
+	return ignoreNotFoundOrNoMatch(targetClient.Delete(ctx, existing, delOpts...))
 }
 
 // buildService constructs a Kubernetes Service selecting the Rollout's pods.
-func (d *ArgoRolloutsDeployer) buildService(env *v1alpha1.Environment, targetNS, svcName, selectorApp, serviceName string, port int64) (*unstructured.Unstructured, error) {
+func (d *ArgoRolloutsDeployer) buildService(env *v1alpha1.Environment, targetNS, svcName, selectorApp, serviceName string, port int64, isRemote bool) (*unstructured.Unstructured, error) {
 	svc := &unstructured.Unstructured{}
 	svc.SetGroupVersionKind(coreServiceGVK)
-	d.setMetadataAndOwner(svc, env, targetNS, svcName, serviceName)
+	d.setMetadataAndOwner(svc, env, targetNS, svcName, serviceName, isRemote)
 	if err := unstructured.SetNestedMap(svc.Object, map[string]interface{}{
 		"app":                        selectorApp,
 		"divergedev.com/environment": env.Name,
@@ -213,25 +244,33 @@ func (d *ArgoRolloutsDeployer) buildService(env *v1alpha1.Environment, targetNS,
 
 // Deploy creates or updates the Kubernetes Service, optional AnalysisTemplate, and Argo Rollout for the environment.
 func (d *ArgoRolloutsDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) error {
+	targetClient, isRemote, err := d.resolveClient(ctx, env)
+	if err != nil {
+		return fmt.Errorf("failed to resolve target cluster: %w", err)
+	}
+	if targetClient == nil {
+		return fmt.Errorf("kubernetes client is required for argo-rollouts deployer")
+	}
+
 	targetNS, targetName, serviceName, image, port := d.resolveTarget(env)
 
 	// 1. Reconcile the backing Kubernetes Service so Gateway API / Istio / Activator Proxy can route to it.
-	svc, err := d.buildService(env, targetNS, targetName, targetName, serviceName, port)
+	svc, err := d.buildService(env, targetNS, targetName, targetName, serviceName, port, isRemote)
 	if err != nil {
 		return err
 	}
-	if err := d.applyOrCreate(ctx, coreServiceGVK, svc); err != nil {
+	if err := d.applyOrCreate(ctx, targetClient, coreServiceGVK, svc); err != nil {
 		return fmt.Errorf("failed to apply rollout service: %w", err)
 	}
 
 	// Reconcile a dedicated stable Service when targetName and serviceName are identical.
 	stableSvcName, manageStableSvc := d.resolveStableServiceName(targetName, serviceName)
 	if manageStableSvc {
-		stableSvc, err := d.buildService(env, targetNS, stableSvcName, targetName, serviceName, port)
+		stableSvc, err := d.buildService(env, targetNS, stableSvcName, targetName, serviceName, port, isRemote)
 		if err != nil {
 			return err
 		}
-		if err := d.applyOrCreate(ctx, coreServiceGVK, stableSvc); err != nil {
+		if err := d.applyOrCreate(ctx, targetClient, coreServiceGVK, stableSvc); err != nil {
 			return fmt.Errorf("failed to apply rollout stable service: %w", err)
 		}
 	}
@@ -244,22 +283,22 @@ func (d *ArgoRolloutsDeployer) Deploy(ctx context.Context, env *v1alpha1.Environ
 		strings.TrimSpace(env.Annotations[AnnotationRolloutReplayTrace]) != ""
 
 	if shouldGenerateAnalysis {
-		tmpl := d.buildAnalysisTemplate(env, targetNS, generatedTemplateName, serviceName)
-		if err := d.applyOrCreate(ctx, analysisTemplateGVK, tmpl); err != nil {
+		tmpl := d.buildAnalysisTemplate(env, targetNS, generatedTemplateName, targetName, stableSvcName, serviceName, port, isRemote)
+		if err := d.applyOrCreate(ctx, targetClient, analysisTemplateGVK, tmpl); err != nil {
 			return fmt.Errorf("failed to apply analysis template: %w", err)
 		}
 		if analysisTemplateName == "" {
 			analysisTemplateName = generatedTemplateName
 		}
 	} else if analysisTemplateName != generatedTemplateName {
-		if err := d.deleteManagedResource(ctx, analysisTemplateGVK, targetNS, generatedTemplateName, env.Name); err != nil {
+		if err := d.deleteManagedResource(ctx, targetClient, analysisTemplateGVK, targetNS, generatedTemplateName, env.Name); err != nil {
 			return fmt.Errorf("failed to delete stale analysis template: %w", err)
 		}
 	}
 
 	// 3. Reconcile the Argo Rollout resource.
-	rollout := d.buildRollout(env, targetNS, targetName, stableSvcName, serviceName, image, port, analysisTemplateName)
-	if err := d.applyOrCreate(ctx, rolloutGVK, rollout); err != nil {
+	rollout := d.buildRollout(env, targetNS, targetName, stableSvcName, serviceName, image, port, analysisTemplateName, isRemote)
+	if err := d.applyOrCreate(ctx, targetClient, rolloutGVK, rollout); err != nil {
 		return fmt.Errorf("failed to apply argo rollout: %w", err)
 	}
 
@@ -267,10 +306,10 @@ func (d *ArgoRolloutsDeployer) Deploy(ctx context.Context, env *v1alpha1.Environ
 }
 
 // buildAnalysisTemplate constructs the pre-promotion Argo Rollouts AnalysisTemplate for an environment.
-func (d *ArgoRolloutsDeployer) buildAnalysisTemplate(env *v1alpha1.Environment, targetNS, templateName, serviceName string) *unstructured.Unstructured {
+func (d *ArgoRolloutsDeployer) buildAnalysisTemplate(env *v1alpha1.Environment, targetNS, templateName, targetName, stableSvcName, serviceName string, port int64, isRemote bool) *unstructured.Unstructured {
 	tmpl := &unstructured.Unstructured{}
 	tmpl.SetGroupVersionKind(analysisTemplateGVK)
-	d.setMetadataAndOwner(tmpl, env, targetNS, templateName, serviceName)
+	d.setMetadataAndOwner(tmpl, env, targetNS, templateName, serviceName, isRemote)
 
 	verifyImg := strings.TrimSpace(env.Annotations[AnnotationRolloutVerifyImage])
 	if verifyImg == "" {
@@ -286,25 +325,82 @@ func (d *ArgoRolloutsDeployer) buildAnalysisTemplate(env *v1alpha1.Environment, 
 		serviceAccount = defaultRolloutServiceAccount
 	}
 
+	headerKey := strings.TrimSpace(env.Spec.Routing.HeaderKey)
+	if headerKey == "" {
+		headerKey = "x-diverge-env"
+	}
+	headerValue := strings.TrimSpace(env.Spec.Routing.HeaderValue)
+	if headerValue == "" {
+		headerValue = env.Name
+	}
+	gatewayURL := strings.TrimSpace(env.Status.URL)
+	if gatewayURL == "" {
+		gatewayURL = strings.TrimSpace(env.Spec.Routing.ExternalURL)
+	}
+	subdomainRouted := strings.EqualFold(strings.TrimSpace(env.Spec.Routing.Mode), "subdomain")
+	canarySvcURL := fmt.Sprintf("http://%s.%s.svc:%d", targetName, targetNS, port)
+	stableSvcURL := fmt.Sprintf("http://%s.%s.svc:%d", stableSvcName, targetNS, port)
+
 	var args []interface{}
 	if replayTrace != "" {
-		args = []interface{}{
-			"replay",
-			env.Name,
-			"-n",
-			env.Namespace,
-			"--from",
-			replayTrace,
+		if isRemote {
+			args = []interface{}{
+				"replay",
+				env.Name,
+				"-n",
+				targetNS,
+				"--from",
+				replayTrace,
+				"--header-key",
+				headerKey,
+				"--header-value",
+				headerValue,
+			}
+			if gatewayURL != "" && !subdomainRouted {
+				args = append(args, "--base-url", gatewayURL)
+			} else {
+				args = append(args, "--base-url", stableSvcURL, "--preview-url", canarySvcURL)
+			}
+		} else {
+			args = []interface{}{
+				"replay",
+				env.Name,
+				"-n",
+				env.Namespace,
+				"--from",
+				replayTrace,
+			}
 		}
 	} else {
-		args = []interface{}{
-			"verify",
-			env.Name,
-			"-n",
-			env.Namespace,
-			"--path",
-			verifyPath,
-			"--compare-baseline",
+		if isRemote {
+			args = []interface{}{
+				"verify",
+				env.Name,
+				"-n",
+				targetNS,
+				"--path",
+				verifyPath,
+				"--skip-doctor",
+				"--header-key",
+				headerKey,
+				"--header-value",
+				headerValue,
+			}
+			if gatewayURL != "" && !subdomainRouted {
+				args = append(args, "--base-url", gatewayURL, "--compare-baseline")
+			} else {
+				args = append(args, "--base-url", canarySvcURL)
+			}
+		} else {
+			args = []interface{}{
+				"verify",
+				env.Name,
+				"-n",
+				env.Namespace,
+				"--path",
+				verifyPath,
+				"--compare-baseline",
+			}
 		}
 	}
 
@@ -338,10 +434,10 @@ func (d *ArgoRolloutsDeployer) buildAnalysisTemplate(env *v1alpha1.Environment, 
 }
 
 // buildRollout constructs the Argo Rollouts Rollout resource for an environment.
-func (d *ArgoRolloutsDeployer) buildRollout(env *v1alpha1.Environment, targetNS, targetName, stableSvcName, serviceName, image string, port int64, analysisTemplateName string) *unstructured.Unstructured {
+func (d *ArgoRolloutsDeployer) buildRollout(env *v1alpha1.Environment, targetNS, targetName, stableSvcName, serviceName, image string, port int64, analysisTemplateName string, isRemote bool) *unstructured.Unstructured {
 	rollout := &unstructured.Unstructured{}
 	rollout.SetGroupVersionKind(rolloutGVK)
-	d.setMetadataAndOwner(rollout, env, targetNS, targetName, serviceName)
+	d.setMetadataAndOwner(rollout, env, targetNS, targetName, serviceName, isRemote)
 
 	replicas := int64(1)
 	if strings.EqualFold(strings.TrimSpace(env.Annotations["divergedev.com/hibernated"]), "true") {
@@ -520,32 +616,40 @@ func (d *ArgoRolloutsDeployer) buildRollout(env *v1alpha1.Environment, targetNS,
 
 // Teardown deletes the Argo Rollout, generated AnalysisTemplate, and Service for the environment.
 func (d *ArgoRolloutsDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment) error {
+	pinned, hasPinned := multicluster.TargetFromContext(ctx)
+	if d.Client == nil && d.ClusterClients == nil && (!hasPinned || pinned == nil || pinned.Client == nil) {
+		return nil
+	}
+
+	targetClient, _, err := d.resolveClient(ctx, env)
+	if err != nil {
+		if _, isVal := multicluster.IsValidationError(err); isVal && !multicluster.HasConfirmedRemoteTarget(env) {
+			return nil
+		}
+		return fmt.Errorf("failed to resolve target cluster for teardown: %w", err)
+	}
+	if targetClient == nil {
+		return nil
+	}
+
 	targetNS, targetName, serviceName, _, _ := d.resolveTarget(env)
 
-	rollout := &unstructured.Unstructured{}
-	rollout.SetGroupVersionKind(rolloutGVK)
-	rollout.SetName(targetName)
-	rollout.SetNamespace(targetNS)
-	if err := ignoreNotFoundOrNoMatch(d.Client.Delete(ctx, rollout)); err != nil {
+	if err := d.deleteManagedResource(ctx, targetClient, rolloutGVK, targetNS, targetName, env.Name); err != nil {
 		return fmt.Errorf("failed to delete argo rollout: %w", err)
 	}
 
 	generatedTemplateName := boundK8sName(targetName + "-verify")
-	if err := d.deleteManagedResource(ctx, analysisTemplateGVK, targetNS, generatedTemplateName, env.Name); err != nil {
+	if err := d.deleteManagedResource(ctx, targetClient, analysisTemplateGVK, targetNS, generatedTemplateName, env.Name); err != nil {
 		return fmt.Errorf("failed to delete analysis template: %w", err)
 	}
 
-	svc := &unstructured.Unstructured{}
-	svc.SetGroupVersionKind(coreServiceGVK)
-	svc.SetName(targetName)
-	svc.SetNamespace(targetNS)
-	if err := ignoreNotFoundOrNoMatch(d.Client.Delete(ctx, svc)); err != nil {
+	if err := d.deleteManagedResource(ctx, targetClient, coreServiceGVK, targetNS, targetName, env.Name); err != nil {
 		return fmt.Errorf("failed to delete rollout service: %w", err)
 	}
 
 	stableSvcName, manageStableSvc := d.resolveStableServiceName(targetName, serviceName)
 	if manageStableSvc {
-		if err := d.deleteManagedResource(ctx, coreServiceGVK, targetNS, stableSvcName, env.Name); err != nil {
+		if err := d.deleteManagedResource(ctx, targetClient, coreServiceGVK, targetNS, stableSvcName, env.Name); err != nil {
 			return fmt.Errorf("failed to delete rollout stable service: %w", err)
 		}
 	}
@@ -555,11 +659,24 @@ func (d *ArgoRolloutsDeployer) Teardown(ctx context.Context, env *v1alpha1.Envir
 
 // Status returns the current deployment health of the Argo Rollout for the environment.
 func (d *ArgoRolloutsDeployer) Status(ctx context.Context, env *v1alpha1.Environment) ([]ServiceStatus, error) {
+	targetClient, _, err := d.resolveClient(ctx, env)
+	if err != nil {
+		if !env.DeletionTimestamp.IsZero() {
+			if _, isVal := multicluster.IsValidationError(err); isVal && !multicluster.HasConfirmedRemoteTarget(env) {
+				return []ServiceStatus{}, nil
+			}
+		}
+		return nil, fmt.Errorf("failed to resolve target cluster for status: %w", err)
+	}
+	if targetClient == nil {
+		return nil, fmt.Errorf("kubernetes client is required for argo-rollouts deployer")
+	}
+
 	targetNS, targetName, serviceName, _, _ := d.resolveTarget(env)
 
 	rollout := &unstructured.Unstructured{}
 	rollout.SetGroupVersionKind(rolloutGVK)
-	err := d.Client.Get(ctx, client.ObjectKey{Name: targetName, Namespace: targetNS}, rollout)
+	err = targetClient.Get(ctx, client.ObjectKey{Name: targetName, Namespace: targetNS}, rollout)
 
 	status := ServiceStatus{
 		Name:       targetName,

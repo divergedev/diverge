@@ -291,6 +291,43 @@ func TestGenerate(t *testing.T) {
 				assert.False(t, kFound, "helm source should not have kustomize block")
 			},
 		},
+		{
+			name: "federated spoke cluster sets destination.name and omits destination.server",
+			env: &v1alpha1.Environment{
+				ObjectMeta: metav1.ObjectMeta{Name: "preview-mr-88", Namespace: "test-ns", UID: "uid"},
+				Spec: v1alpha1.EnvironmentSpec{
+					Source: v1alpha1.EnvironmentSource{Branch: "feat/federation", MR: 88},
+					Deploy: v1alpha1.EnvironmentDeploy{
+						Namespace: "create",
+						ClusterRef: &v1alpha1.ClusterTargetRef{
+							Name: "us-west-burst",
+							KubeconfigSecretRef: &v1alpha1.SecretRef{
+								Name: "spoke-west-kubeconfig",
+							},
+						},
+					},
+				},
+			},
+			changedServices: []string{"api"},
+			configs: map[string]ServiceConfig{
+				"api": {Name: "api", Tag: "sha-88", ChartPath: "charts/api"},
+			},
+			expectedApps: 1,
+			check: func(t *testing.T, env *v1alpha1.Environment, apps []*unstructured.Unstructured) {
+				app := apps[0]
+				destName, foundName, _ := unstructured.NestedString(app.Object, "spec", "destination", "name")
+				assert.True(t, foundName)
+				assert.Equal(t, "us-west-burst", destName)
+
+				_, foundServer, _ := unstructured.NestedString(app.Object, "spec", "destination", "server")
+				assert.False(t, foundServer, "Argo CD forbids setting both destination.server and destination.name")
+
+				destNS, _, _ := unstructured.NestedString(app.Object, "spec", "destination", "namespace")
+				assert.Equal(t, env.PreviewNamespace(), destNS)
+
+				assert.Equal(t, "us-west-burst", app.GetAnnotations()["divergedev.com/target-cluster"])
+			},
+		},
 	}
 
 	for _, tt := range tests {

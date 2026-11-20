@@ -23,13 +23,15 @@ import (
 
 func newCreateCmd(app *App) *cobra.Command {
 	var (
-		configPath  string
-		envName     string
-		envType     string
-		mrNumber    int
-		labels      string
-		dryRun      bool
-		withIngress bool
+		configPath    string
+		envName       string
+		envType       string
+		mrNumber      int
+		labels        string
+		dryRun        bool
+		withIngress   bool
+		clusterName   string
+		clusterSecret string
 	)
 
 	cmd := &cobra.Command{
@@ -42,7 +44,7 @@ and detecting the current git context (branch, provider, project).
 The environment name is generated deterministically from the MR/PR number
 or branch name, unless overridden with --name.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runCreate(cmd, args, app, configPath, envName, envType, mrNumber, labels, dryRun, withIngress)
+			return runCreateWithCluster(cmd, args, app, configPath, envName, envType, mrNumber, labels, dryRun, withIngress, clusterName, clusterSecret)
 		},
 	}
 	cmd.Flags().StringVarP(&configPath, "config", "c", ".diverge.yaml", "path to config file")
@@ -52,11 +54,13 @@ or branch name, unless overridden with --name.`,
 	cmd.Flags().StringVarP(&labels, "labels", "l", "", "comma-separated MR labels for overrides")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print Environment YAML without creating")
 	cmd.Flags().BoolVar(&withIngress, "with-ingress", true, "resolve and log ingress paths from service topology")
+	cmd.Flags().StringVar(&clusterName, "cluster", "", "target spoke cluster name (or 'local' to force hub)")
+	cmd.Flags().StringVar(&clusterSecret, "cluster-secret", "", "same-namespace Secret (<name> or <name>/<key>) holding spoke kubeconfig")
 
 	return cmd
 }
 
-func runCreate(cmd *cobra.Command, _ []string, app *App, configPath, envName, envType string, mrNumber int, labels string, dryRun, withIngress bool) error {
+func runCreateWithCluster(cmd *cobra.Command, _ []string, app *App, configPath, envName, envType string, mrNumber int, labels string, dryRun, withIngress bool, clusterName, clusterSecret string) error {
 	// Load config
 	cfg, err := config.Load(configPath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -96,6 +100,13 @@ func runCreate(cmd *cobra.Command, _ []string, app *App, configPath, envName, en
 	env, err := buildEnvironment(cmd.Context(), name, gitCtx, resolved, cfg, app, mrNumber)
 	if err != nil {
 		return fmt.Errorf("failed to build environment: %w", err)
+	}
+	if strings.TrimSpace(clusterName) != "" || strings.TrimSpace(clusterSecret) != "" {
+		overrideRef, cErr := config.ParseClusterFlags(clusterName, clusterSecret)
+		if cErr != nil {
+			return fmt.Errorf("invalid cluster target flags: %w", cErr)
+		}
+		env.Spec.Deploy.ClusterRef = overrideRef
 	}
 
 	// Resolve topology and log ingress paths (to stderr so dry-run YAML stays clean)
@@ -207,8 +218,9 @@ func buildEnvironment(ctx context.Context, name string, gitCtx *git.GitContext, 
 				MR:       mrNumber,
 			},
 			Deploy: v1alpha1.EnvironmentDeploy{
-				Mode:      resolved.Deploy.Mode,
-				Namespace: resolved.Deploy.Namespace,
+				Mode:       resolved.Deploy.Mode,
+				Namespace:  resolved.Deploy.Namespace,
+				ClusterRef: resolved.Deploy.ClusterRef.ToClusterTargetRef(),
 			},
 			Routing: v1alpha1.EnvironmentRouting{
 				Mode:        resolved.Routing.Mode,

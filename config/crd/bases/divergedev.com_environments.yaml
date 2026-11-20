@@ -159,6 +159,8 @@ spec:
                     - schema
                     - snapshot
                     - fresh
+                    - cnpg
+                    - neon
                     type: string
                   seedSource:
                     type: string

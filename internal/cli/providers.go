@@ -10,6 +10,8 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/divergedev/diverge/internal/async"
+	_ "github.com/divergedev/diverge/internal/database/cnpg"
+	_ "github.com/divergedev/diverge/internal/database/neon"
 	"github.com/divergedev/diverge/internal/deployer"
 	"github.com/divergedev/diverge/internal/notifier"
 	"github.com/divergedev/diverge/internal/routing"

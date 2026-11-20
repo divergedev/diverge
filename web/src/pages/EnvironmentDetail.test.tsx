@@ -337,4 +337,37 @@ describe('EnvironmentDetail', () => {
       expect(updatedAnnotations['divergedev.com/drift-policy']).toBe('sync')
     })
   })
+
+  it('renders federated spoke Target Cluster badge and Details row', async () => {
+    server.use(
+      http.post('*/diverge.v1alpha1.EnvironmentService/GetEnvironment', () =>
+        HttpResponse.json({
+          environment: {
+            ...mockEnv.environment,
+            spec: {
+              ...mockEnv.environment.spec,
+              deploy: {
+                clusterRef: {
+                  name: 'us-west-burst',
+                  kubeconfigSecretRef: { name: 'spoke-west-kubeconfig' },
+                },
+              },
+            },
+            status: {
+              ...mockEnv.environment.status,
+              targetCluster: 'us-west-burst',
+            },
+          },
+        }),
+      ),
+      http.post('*/diverge.v1alpha1.EnvironmentService/ListHookJobs', () =>
+        HttpResponse.json({ jobs: [] }),
+      ),
+    )
+
+    renderPage()
+
+    expect(await screen.findByText('Target Cluster')).toBeInTheDocument()
+    expect(screen.getAllByText('us-west-burst').length).toBeGreaterThanOrEqual(2)
+  })
 })

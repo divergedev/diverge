@@ -8,6 +8,7 @@ import (
 	"regexp"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/multicluster"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -70,6 +71,8 @@ func (g *Generator) Generate(
 	if destServer == "" {
 		destServer = "https://kubernetes.default.svc"
 	}
+	isRemoteCluster := multicluster.IsRemoteEnv(env)
+	targetClusterName := multicluster.DesiredClusterName(env.Spec.Deploy.ClusterRef)
 
 	project := g.Project
 	if project == "" {
@@ -100,6 +103,26 @@ func (g *Generator) Generate(
 			targetRevision = "HEAD"
 		}
 
+		destination := map[string]interface{}{
+			"namespace": destNamespace,
+		}
+		if isRemoteCluster {
+			// Argo CD rejects Applications that specify both destination.server and destination.name;
+			// federated environments target the registered spoke cluster by logical name.
+			destination["name"] = targetClusterName
+		} else {
+			destination["server"] = destServer
+		}
+
+		annotations := map[string]interface{}{
+			"divergedev.com/environment-namespace": env.Namespace,
+			"divergedev.com/source-branch":         env.Spec.Source.Branch,
+			"divergedev.com/source-mr":             fmt.Sprintf("%d", env.Spec.Source.MR),
+		}
+		if isRemoteCluster {
+			annotations["divergedev.com/target-cluster"] = targetClusterName
+		}
+
 		app := &unstructured.Unstructured{
 			Object: map[string]interface{}{
 				"apiVersion": "argoproj.io/v1alpha1",
@@ -113,22 +136,15 @@ func (g *Generator) Generate(
 						"divergedev.com/service":               svcNameLabel,
 						"divergedev.com/managed-by":            "diverge",
 					},
-					"annotations": map[string]interface{}{
-						"divergedev.com/environment-namespace": env.Namespace,
-						"divergedev.com/source-branch":         env.Spec.Source.Branch,
-						"divergedev.com/source-mr":             fmt.Sprintf("%d", env.Spec.Source.MR),
-					},
+					"annotations": annotations,
 					"finalizers": []interface{}{
 						"resources-finalizer.argocd.argoproj.io",
 					},
 				},
 				"spec": map[string]interface{}{
-					"project": project,
-					"source":  g.buildSource(cfg, targetRevision),
-					"destination": map[string]interface{}{
-						"server":    destServer,
-						"namespace": destNamespace,
-					},
+					"project":     project,
+					"source":      g.buildSource(cfg, targetRevision),
+					"destination": destination,
 					"syncPolicy": map[string]interface{}{
 						"automated": map[string]interface{}{
 							"prune":    true,

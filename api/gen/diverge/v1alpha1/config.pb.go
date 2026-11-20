@@ -390,18 +390,80 @@ func (x *ConfigEnvironmentSettings) GetDev() *ConfigDevSettings {
 	return nil
 }
 
+// ConfigClusterRefSettings configures a remote spoke cluster target in .diverge.yaml.
+type ConfigClusterRefSettings struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	Name                 string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	KubeconfigSecretName string                 `protobuf:"bytes,2,opt,name=kubeconfig_secret_name,json=kubeconfigSecretName,proto3" json:"kubeconfig_secret_name,omitempty"`
+	KubeconfigSecretKey  string                 `protobuf:"bytes,3,opt,name=kubeconfig_secret_key,json=kubeconfigSecretKey,proto3" json:"kubeconfig_secret_key,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *ConfigClusterRefSettings) Reset() {
+	*x = ConfigClusterRefSettings{}
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigClusterRefSettings) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigClusterRefSettings) ProtoMessage() {}
+
+func (x *ConfigClusterRefSettings) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigClusterRefSettings.ProtoReflect.Descriptor instead.
+func (*ConfigClusterRefSettings) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *ConfigClusterRefSettings) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ConfigClusterRefSettings) GetKubeconfigSecretName() string {
+	if x != nil {
+		return x.KubeconfigSecretName
+	}
+	return ""
+}
+
+func (x *ConfigClusterRefSettings) GetKubeconfigSecretKey() string {
+	if x != nil {
+		return x.KubeconfigSecretKey
+	}
+	return ""
+}
+
 // ConfigDeploySettings defines deployment mode and namespace strategy.
 type ConfigDeploySettings struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Mode          string                 `protobuf:"bytes,1,opt,name=mode,proto3" json:"mode,omitempty"`
-	Namespace     string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	state         protoimpl.MessageState    `protogen:"open.v1"`
+	Mode          string                    `protobuf:"bytes,1,opt,name=mode,proto3" json:"mode,omitempty"`
+	Namespace     string                    `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	ClusterRef    *ConfigClusterRefSettings `protobuf:"bytes,3,opt,name=cluster_ref,json=clusterRef,proto3" json:"cluster_ref,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ConfigDeploySettings) Reset() {
 	*x = ConfigDeploySettings{}
-	mi := &file_diverge_v1alpha1_config_proto_msgTypes[5]
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -413,7 +475,7 @@ func (x *ConfigDeploySettings) String() string {
 func (*ConfigDeploySettings) ProtoMessage() {}
 
 func (x *ConfigDeploySettings) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_config_proto_msgTypes[5]
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -426,7 +488,7 @@ func (x *ConfigDeploySettings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigDeploySettings.ProtoReflect.Descriptor instead.
 func (*ConfigDeploySettings) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{5}
+	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ConfigDeploySettings) GetMode() string {
@@ -443,6 +505,13 @@ func (x *ConfigDeploySettings) GetNamespace() string {
 	return ""
 }
 
+func (x *ConfigDeploySettings) GetClusterRef() *ConfigClusterRefSettings {
+	if x != nil {
+		return x.ClusterRef
+	}
+	return nil
+}
+
 // ConfigRoutingSettings defines traffic routing strategy for preview environments.
 type ConfigRoutingSettings struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
@@ -457,7 +526,7 @@ type ConfigRoutingSettings struct {
 
 func (x *ConfigRoutingSettings) Reset() {
 	*x = ConfigRoutingSettings{}
-	mi := &file_diverge_v1alpha1_config_proto_msgTypes[6]
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -469,7 +538,7 @@ func (x *ConfigRoutingSettings) String() string {
 func (*ConfigRoutingSettings) ProtoMessage() {}
 
 func (x *ConfigRoutingSettings) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_config_proto_msgTypes[6]
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -482,7 +551,7 @@ func (x *ConfigRoutingSettings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigRoutingSettings.ProtoReflect.Descriptor instead.
 func (*ConfigRoutingSettings) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{6}
+	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ConfigRoutingSettings) GetMode() string {
@@ -533,7 +602,7 @@ type ConfigBannerSettings struct {
 
 func (x *ConfigBannerSettings) Reset() {
 	*x = ConfigBannerSettings{}
-	mi := &file_diverge_v1alpha1_config_proto_msgTypes[7]
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -545,7 +614,7 @@ func (x *ConfigBannerSettings) String() string {
 func (*ConfigBannerSettings) ProtoMessage() {}
 
 func (x *ConfigBannerSettings) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_config_proto_msgTypes[7]
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -558,7 +627,7 @@ func (x *ConfigBannerSettings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigBannerSettings.ProtoReflect.Descriptor instead.
 func (*ConfigBannerSettings) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{7}
+	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ConfigBannerSettings) GetEnabled() bool {
@@ -603,7 +672,7 @@ type ConfigDatabaseSettings struct {
 
 func (x *ConfigDatabaseSettings) Reset() {
 	*x = ConfigDatabaseSettings{}
-	mi := &file_diverge_v1alpha1_config_proto_msgTypes[8]
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -615,7 +684,7 @@ func (x *ConfigDatabaseSettings) String() string {
 func (*ConfigDatabaseSettings) ProtoMessage() {}
 
 func (x *ConfigDatabaseSettings) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_config_proto_msgTypes[8]
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -628,7 +697,7 @@ func (x *ConfigDatabaseSettings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigDatabaseSettings.ProtoReflect.Descriptor instead.
 func (*ConfigDatabaseSettings) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{8}
+	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ConfigDatabaseSettings) GetMode() string {
@@ -685,7 +754,7 @@ type ConfigAtlasSettings struct {
 
 func (x *ConfigAtlasSettings) Reset() {
 	*x = ConfigAtlasSettings{}
-	mi := &file_diverge_v1alpha1_config_proto_msgTypes[9]
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -697,7 +766,7 @@ func (x *ConfigAtlasSettings) String() string {
 func (*ConfigAtlasSettings) ProtoMessage() {}
 
 func (x *ConfigAtlasSettings) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_config_proto_msgTypes[9]
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -710,7 +779,7 @@ func (x *ConfigAtlasSettings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigAtlasSettings.ProtoReflect.Descriptor instead.
 func (*ConfigAtlasSettings) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{9}
+	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ConfigAtlasSettings) GetMode() string {
@@ -793,7 +862,7 @@ type ConfigAtlasPolicySettings struct {
 
 func (x *ConfigAtlasPolicySettings) Reset() {
 	*x = ConfigAtlasPolicySettings{}
-	mi := &file_diverge_v1alpha1_config_proto_msgTypes[10]
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -805,7 +874,7 @@ func (x *ConfigAtlasPolicySettings) String() string {
 func (*ConfigAtlasPolicySettings) ProtoMessage() {}
 
 func (x *ConfigAtlasPolicySettings) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_config_proto_msgTypes[10]
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -818,7 +887,7 @@ func (x *ConfigAtlasPolicySettings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigAtlasPolicySettings.ProtoReflect.Descriptor instead.
 func (*ConfigAtlasPolicySettings) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{10}
+	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ConfigAtlasPolicySettings) GetDestructive() string {
@@ -839,7 +908,7 @@ type ConfigLifecycleSettings struct {
 
 func (x *ConfigLifecycleSettings) Reset() {
 	*x = ConfigLifecycleSettings{}
-	mi := &file_diverge_v1alpha1_config_proto_msgTypes[11]
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -851,7 +920,7 @@ func (x *ConfigLifecycleSettings) String() string {
 func (*ConfigLifecycleSettings) ProtoMessage() {}
 
 func (x *ConfigLifecycleSettings) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_config_proto_msgTypes[11]
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -864,7 +933,7 @@ func (x *ConfigLifecycleSettings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigLifecycleSettings.ProtoReflect.Descriptor instead.
 func (*ConfigLifecycleSettings) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{11}
+	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ConfigLifecycleSettings) GetTtl() string {
@@ -893,7 +962,7 @@ type ConfigFeatureSettings struct {
 
 func (x *ConfigFeatureSettings) Reset() {
 	*x = ConfigFeatureSettings{}
-	mi := &file_diverge_v1alpha1_config_proto_msgTypes[12]
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -905,7 +974,7 @@ func (x *ConfigFeatureSettings) String() string {
 func (*ConfigFeatureSettings) ProtoMessage() {}
 
 func (x *ConfigFeatureSettings) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_config_proto_msgTypes[12]
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -918,7 +987,7 @@ func (x *ConfigFeatureSettings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigFeatureSettings.ProtoReflect.Descriptor instead.
 func (*ConfigFeatureSettings) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{12}
+	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ConfigFeatureSettings) GetProvider() string {
@@ -952,7 +1021,7 @@ type ConfigDevSettings struct {
 
 func (x *ConfigDevSettings) Reset() {
 	*x = ConfigDevSettings{}
-	mi := &file_diverge_v1alpha1_config_proto_msgTypes[13]
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -964,7 +1033,7 @@ func (x *ConfigDevSettings) String() string {
 func (*ConfigDevSettings) ProtoMessage() {}
 
 func (x *ConfigDevSettings) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_config_proto_msgTypes[13]
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -977,7 +1046,7 @@ func (x *ConfigDevSettings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigDevSettings.ProtoReflect.Descriptor instead.
 func (*ConfigDevSettings) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{13}
+	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ConfigDevSettings) GetOnConflict() string {
@@ -1005,7 +1074,7 @@ type ConfigEnvironmentType struct {
 
 func (x *ConfigEnvironmentType) Reset() {
 	*x = ConfigEnvironmentType{}
-	mi := &file_diverge_v1alpha1_config_proto_msgTypes[14]
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1017,7 +1086,7 @@ func (x *ConfigEnvironmentType) String() string {
 func (*ConfigEnvironmentType) ProtoMessage() {}
 
 func (x *ConfigEnvironmentType) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_config_proto_msgTypes[14]
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1030,7 +1099,7 @@ func (x *ConfigEnvironmentType) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigEnvironmentType.ProtoReflect.Descriptor instead.
 func (*ConfigEnvironmentType) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{14}
+	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ConfigEnvironmentType) GetDeploy() *ConfigDeploySettings {
@@ -1112,7 +1181,7 @@ type ConfigLabelOverride struct {
 
 func (x *ConfigLabelOverride) Reset() {
 	*x = ConfigLabelOverride{}
-	mi := &file_diverge_v1alpha1_config_proto_msgTypes[15]
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1124,7 +1193,7 @@ func (x *ConfigLabelOverride) String() string {
 func (*ConfigLabelOverride) ProtoMessage() {}
 
 func (x *ConfigLabelOverride) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_config_proto_msgTypes[15]
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1137,7 +1206,7 @@ func (x *ConfigLabelOverride) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigLabelOverride.ProtoReflect.Descriptor instead.
 func (*ConfigLabelOverride) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{15}
+	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ConfigLabelOverride) GetDeploy() *ConfigDeploySettings {
@@ -1202,7 +1271,7 @@ type ConfigNotifications struct {
 
 func (x *ConfigNotifications) Reset() {
 	*x = ConfigNotifications{}
-	mi := &file_diverge_v1alpha1_config_proto_msgTypes[16]
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1214,7 +1283,7 @@ func (x *ConfigNotifications) String() string {
 func (*ConfigNotifications) ProtoMessage() {}
 
 func (x *ConfigNotifications) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_config_proto_msgTypes[16]
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1227,7 +1296,7 @@ func (x *ConfigNotifications) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigNotifications.ProtoReflect.Descriptor instead.
 func (*ConfigNotifications) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{16}
+	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ConfigNotifications) GetProvider() string {
@@ -1268,7 +1337,7 @@ type ConfigTopology struct {
 
 func (x *ConfigTopology) Reset() {
 	*x = ConfigTopology{}
-	mi := &file_diverge_v1alpha1_config_proto_msgTypes[17]
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1280,7 +1349,7 @@ func (x *ConfigTopology) String() string {
 func (*ConfigTopology) ProtoMessage() {}
 
 func (x *ConfigTopology) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_config_proto_msgTypes[17]
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1293,7 +1362,7 @@ func (x *ConfigTopology) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigTopology.ProtoReflect.Descriptor instead.
 func (*ConfigTopology) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{17}
+	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *ConfigTopology) GetPrometheus() *ConfigPrometheus {
@@ -1322,7 +1391,7 @@ type ConfigPrometheus struct {
 
 func (x *ConfigPrometheus) Reset() {
 	*x = ConfigPrometheus{}
-	mi := &file_diverge_v1alpha1_config_proto_msgTypes[18]
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1334,7 +1403,7 @@ func (x *ConfigPrometheus) String() string {
 func (*ConfigPrometheus) ProtoMessage() {}
 
 func (x *ConfigPrometheus) ProtoReflect() protoreflect.Message {
-	mi := &file_diverge_v1alpha1_config_proto_msgTypes[18]
+	mi := &file_diverge_v1alpha1_config_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1347,7 +1416,7 @@ func (x *ConfigPrometheus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigPrometheus.ProtoReflect.Descriptor instead.
 func (*ConfigPrometheus) Descriptor() ([]byte, []int) {
-	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{18}
+	return file_diverge_v1alpha1_config_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *ConfigPrometheus) GetAddress() string {
@@ -1468,10 +1537,16 @@ const file_diverge_v1alpha1_config_proto_rawDesc = "" +
 	"\bdatabase\x18\x03 \x01(\v2(.diverge.v1alpha1.ConfigDatabaseSettingsR\bdatabase\x12G\n" +
 	"\tlifecycle\x18\x04 \x01(\v2).diverge.v1alpha1.ConfigLifecycleSettingsR\tlifecycle\x12C\n" +
 	"\bfeatures\x18\x05 \x01(\v2'.diverge.v1alpha1.ConfigFeatureSettingsR\bfeatures\x125\n" +
-	"\x03dev\x18\x06 \x01(\v2#.diverge.v1alpha1.ConfigDevSettingsR\x03dev\"H\n" +
+	"\x03dev\x18\x06 \x01(\v2#.diverge.v1alpha1.ConfigDevSettingsR\x03dev\"\x98\x01\n" +
+	"\x18ConfigClusterRefSettings\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x124\n" +
+	"\x16kubeconfig_secret_name\x18\x02 \x01(\tR\x14kubeconfigSecretName\x122\n" +
+	"\x15kubeconfig_secret_key\x18\x03 \x01(\tR\x13kubeconfigSecretKey\"\x95\x01\n" +
 	"\x14ConfigDeploySettings\x12\x12\n" +
 	"\x04mode\x18\x01 \x01(\tR\x04mode\x12\x1c\n" +
-	"\tnamespace\x18\x02 \x01(\tR\tnamespace\"\xd1\x01\n" +
+	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12K\n" +
+	"\vcluster_ref\x18\x03 \x01(\v2*.diverge.v1alpha1.ConfigClusterRefSettingsR\n" +
+	"clusterRef\"\xd1\x01\n" +
 	"\x15ConfigRoutingSettings\x12\x12\n" +
 	"\x04mode\x18\x01 \x01(\tR\x04mode\x12-\n" +
 	"\x12baseline_namespace\x18\x02 \x01(\tR\x11baselineNamespace\x12\x1d\n" +
@@ -1578,74 +1653,76 @@ func file_diverge_v1alpha1_config_proto_rawDescGZIP() []byte {
 	return file_diverge_v1alpha1_config_proto_rawDescData
 }
 
-var file_diverge_v1alpha1_config_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
+var file_diverge_v1alpha1_config_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_diverge_v1alpha1_config_proto_goTypes = []any{
 	(*DivergeConfig)(nil),             // 0: diverge.v1alpha1.DivergeConfig
 	(*ConfigService)(nil),             // 1: diverge.v1alpha1.ConfigService
 	(*ConfigImage)(nil),               // 2: diverge.v1alpha1.ConfigImage
 	(*ConfigHelm)(nil),                // 3: diverge.v1alpha1.ConfigHelm
 	(*ConfigEnvironmentSettings)(nil), // 4: diverge.v1alpha1.ConfigEnvironmentSettings
-	(*ConfigDeploySettings)(nil),      // 5: diverge.v1alpha1.ConfigDeploySettings
-	(*ConfigRoutingSettings)(nil),     // 6: diverge.v1alpha1.ConfigRoutingSettings
-	(*ConfigBannerSettings)(nil),      // 7: diverge.v1alpha1.ConfigBannerSettings
-	(*ConfigDatabaseSettings)(nil),    // 8: diverge.v1alpha1.ConfigDatabaseSettings
-	(*ConfigAtlasSettings)(nil),       // 9: diverge.v1alpha1.ConfigAtlasSettings
-	(*ConfigAtlasPolicySettings)(nil), // 10: diverge.v1alpha1.ConfigAtlasPolicySettings
-	(*ConfigLifecycleSettings)(nil),   // 11: diverge.v1alpha1.ConfigLifecycleSettings
-	(*ConfigFeatureSettings)(nil),     // 12: diverge.v1alpha1.ConfigFeatureSettings
-	(*ConfigDevSettings)(nil),         // 13: diverge.v1alpha1.ConfigDevSettings
-	(*ConfigEnvironmentType)(nil),     // 14: diverge.v1alpha1.ConfigEnvironmentType
-	(*ConfigLabelOverride)(nil),       // 15: diverge.v1alpha1.ConfigLabelOverride
-	(*ConfigNotifications)(nil),       // 16: diverge.v1alpha1.ConfigNotifications
-	(*ConfigTopology)(nil),            // 17: diverge.v1alpha1.ConfigTopology
-	(*ConfigPrometheus)(nil),          // 18: diverge.v1alpha1.ConfigPrometheus
-	nil,                               // 19: diverge.v1alpha1.DivergeConfig.ServicesEntry
-	nil,                               // 20: diverge.v1alpha1.DivergeConfig.EnvironmentsEntry
-	nil,                               // 21: diverge.v1alpha1.DivergeConfig.LabelOverridesEntry
-	nil,                               // 22: diverge.v1alpha1.ConfigFeatureSettings.OverridesEntry
-	(*AsyncRouteSpec)(nil),            // 23: diverge.v1alpha1.AsyncRouteSpec
+	(*ConfigClusterRefSettings)(nil),  // 5: diverge.v1alpha1.ConfigClusterRefSettings
+	(*ConfigDeploySettings)(nil),      // 6: diverge.v1alpha1.ConfigDeploySettings
+	(*ConfigRoutingSettings)(nil),     // 7: diverge.v1alpha1.ConfigRoutingSettings
+	(*ConfigBannerSettings)(nil),      // 8: diverge.v1alpha1.ConfigBannerSettings
+	(*ConfigDatabaseSettings)(nil),    // 9: diverge.v1alpha1.ConfigDatabaseSettings
+	(*ConfigAtlasSettings)(nil),       // 10: diverge.v1alpha1.ConfigAtlasSettings
+	(*ConfigAtlasPolicySettings)(nil), // 11: diverge.v1alpha1.ConfigAtlasPolicySettings
+	(*ConfigLifecycleSettings)(nil),   // 12: diverge.v1alpha1.ConfigLifecycleSettings
+	(*ConfigFeatureSettings)(nil),     // 13: diverge.v1alpha1.ConfigFeatureSettings
+	(*ConfigDevSettings)(nil),         // 14: diverge.v1alpha1.ConfigDevSettings
+	(*ConfigEnvironmentType)(nil),     // 15: diverge.v1alpha1.ConfigEnvironmentType
+	(*ConfigLabelOverride)(nil),       // 16: diverge.v1alpha1.ConfigLabelOverride
+	(*ConfigNotifications)(nil),       // 17: diverge.v1alpha1.ConfigNotifications
+	(*ConfigTopology)(nil),            // 18: diverge.v1alpha1.ConfigTopology
+	(*ConfigPrometheus)(nil),          // 19: diverge.v1alpha1.ConfigPrometheus
+	nil,                               // 20: diverge.v1alpha1.DivergeConfig.ServicesEntry
+	nil,                               // 21: diverge.v1alpha1.DivergeConfig.EnvironmentsEntry
+	nil,                               // 22: diverge.v1alpha1.DivergeConfig.LabelOverridesEntry
+	nil,                               // 23: diverge.v1alpha1.ConfigFeatureSettings.OverridesEntry
+	(*AsyncRouteSpec)(nil),            // 24: diverge.v1alpha1.AsyncRouteSpec
 }
 var file_diverge_v1alpha1_config_proto_depIdxs = []int32{
-	19, // 0: diverge.v1alpha1.DivergeConfig.services:type_name -> diverge.v1alpha1.DivergeConfig.ServicesEntry
+	20, // 0: diverge.v1alpha1.DivergeConfig.services:type_name -> diverge.v1alpha1.DivergeConfig.ServicesEntry
 	4,  // 1: diverge.v1alpha1.DivergeConfig.defaults:type_name -> diverge.v1alpha1.ConfigEnvironmentSettings
-	20, // 2: diverge.v1alpha1.DivergeConfig.environments:type_name -> diverge.v1alpha1.DivergeConfig.EnvironmentsEntry
-	21, // 3: diverge.v1alpha1.DivergeConfig.label_overrides:type_name -> diverge.v1alpha1.DivergeConfig.LabelOverridesEntry
-	16, // 4: diverge.v1alpha1.DivergeConfig.notifications:type_name -> diverge.v1alpha1.ConfigNotifications
-	17, // 5: diverge.v1alpha1.DivergeConfig.topology:type_name -> diverge.v1alpha1.ConfigTopology
+	21, // 2: diverge.v1alpha1.DivergeConfig.environments:type_name -> diverge.v1alpha1.DivergeConfig.EnvironmentsEntry
+	22, // 3: diverge.v1alpha1.DivergeConfig.label_overrides:type_name -> diverge.v1alpha1.DivergeConfig.LabelOverridesEntry
+	17, // 4: diverge.v1alpha1.DivergeConfig.notifications:type_name -> diverge.v1alpha1.ConfigNotifications
+	18, // 5: diverge.v1alpha1.DivergeConfig.topology:type_name -> diverge.v1alpha1.ConfigTopology
 	2,  // 6: diverge.v1alpha1.ConfigService.image:type_name -> diverge.v1alpha1.ConfigImage
 	3,  // 7: diverge.v1alpha1.ConfigService.helm:type_name -> diverge.v1alpha1.ConfigHelm
-	23, // 8: diverge.v1alpha1.ConfigService.async_routes:type_name -> diverge.v1alpha1.AsyncRouteSpec
-	5,  // 9: diverge.v1alpha1.ConfigEnvironmentSettings.deploy:type_name -> diverge.v1alpha1.ConfigDeploySettings
-	6,  // 10: diverge.v1alpha1.ConfigEnvironmentSettings.routing:type_name -> diverge.v1alpha1.ConfigRoutingSettings
-	8,  // 11: diverge.v1alpha1.ConfigEnvironmentSettings.database:type_name -> diverge.v1alpha1.ConfigDatabaseSettings
-	11, // 12: diverge.v1alpha1.ConfigEnvironmentSettings.lifecycle:type_name -> diverge.v1alpha1.ConfigLifecycleSettings
-	12, // 13: diverge.v1alpha1.ConfigEnvironmentSettings.features:type_name -> diverge.v1alpha1.ConfigFeatureSettings
-	13, // 14: diverge.v1alpha1.ConfigEnvironmentSettings.dev:type_name -> diverge.v1alpha1.ConfigDevSettings
-	7,  // 15: diverge.v1alpha1.ConfigRoutingSettings.banner:type_name -> diverge.v1alpha1.ConfigBannerSettings
-	9,  // 16: diverge.v1alpha1.ConfigDatabaseSettings.atlas:type_name -> diverge.v1alpha1.ConfigAtlasSettings
-	10, // 17: diverge.v1alpha1.ConfigAtlasSettings.policy:type_name -> diverge.v1alpha1.ConfigAtlasPolicySettings
-	22, // 18: diverge.v1alpha1.ConfigFeatureSettings.overrides:type_name -> diverge.v1alpha1.ConfigFeatureSettings.OverridesEntry
-	5,  // 19: diverge.v1alpha1.ConfigEnvironmentType.deploy:type_name -> diverge.v1alpha1.ConfigDeploySettings
-	6,  // 20: diverge.v1alpha1.ConfigEnvironmentType.routing:type_name -> diverge.v1alpha1.ConfigRoutingSettings
-	8,  // 21: diverge.v1alpha1.ConfigEnvironmentType.database:type_name -> diverge.v1alpha1.ConfigDatabaseSettings
-	11, // 22: diverge.v1alpha1.ConfigEnvironmentType.lifecycle:type_name -> diverge.v1alpha1.ConfigLifecycleSettings
-	12, // 23: diverge.v1alpha1.ConfigEnvironmentType.features:type_name -> diverge.v1alpha1.ConfigFeatureSettings
-	13, // 24: diverge.v1alpha1.ConfigEnvironmentType.dev:type_name -> diverge.v1alpha1.ConfigDevSettings
-	5,  // 25: diverge.v1alpha1.ConfigLabelOverride.deploy:type_name -> diverge.v1alpha1.ConfigDeploySettings
-	6,  // 26: diverge.v1alpha1.ConfigLabelOverride.routing:type_name -> diverge.v1alpha1.ConfigRoutingSettings
-	8,  // 27: diverge.v1alpha1.ConfigLabelOverride.database:type_name -> diverge.v1alpha1.ConfigDatabaseSettings
-	11, // 28: diverge.v1alpha1.ConfigLabelOverride.lifecycle:type_name -> diverge.v1alpha1.ConfigLifecycleSettings
-	12, // 29: diverge.v1alpha1.ConfigLabelOverride.features:type_name -> diverge.v1alpha1.ConfigFeatureSettings
-	13, // 30: diverge.v1alpha1.ConfigLabelOverride.dev:type_name -> diverge.v1alpha1.ConfigDevSettings
-	18, // 31: diverge.v1alpha1.ConfigTopology.prometheus:type_name -> diverge.v1alpha1.ConfigPrometheus
-	1,  // 32: diverge.v1alpha1.DivergeConfig.ServicesEntry.value:type_name -> diverge.v1alpha1.ConfigService
-	14, // 33: diverge.v1alpha1.DivergeConfig.EnvironmentsEntry.value:type_name -> diverge.v1alpha1.ConfigEnvironmentType
-	15, // 34: diverge.v1alpha1.DivergeConfig.LabelOverridesEntry.value:type_name -> diverge.v1alpha1.ConfigLabelOverride
-	35, // [35:35] is the sub-list for method output_type
-	35, // [35:35] is the sub-list for method input_type
-	35, // [35:35] is the sub-list for extension type_name
-	35, // [35:35] is the sub-list for extension extendee
-	0,  // [0:35] is the sub-list for field type_name
+	24, // 8: diverge.v1alpha1.ConfigService.async_routes:type_name -> diverge.v1alpha1.AsyncRouteSpec
+	6,  // 9: diverge.v1alpha1.ConfigEnvironmentSettings.deploy:type_name -> diverge.v1alpha1.ConfigDeploySettings
+	7,  // 10: diverge.v1alpha1.ConfigEnvironmentSettings.routing:type_name -> diverge.v1alpha1.ConfigRoutingSettings
+	9,  // 11: diverge.v1alpha1.ConfigEnvironmentSettings.database:type_name -> diverge.v1alpha1.ConfigDatabaseSettings
+	12, // 12: diverge.v1alpha1.ConfigEnvironmentSettings.lifecycle:type_name -> diverge.v1alpha1.ConfigLifecycleSettings
+	13, // 13: diverge.v1alpha1.ConfigEnvironmentSettings.features:type_name -> diverge.v1alpha1.ConfigFeatureSettings
+	14, // 14: diverge.v1alpha1.ConfigEnvironmentSettings.dev:type_name -> diverge.v1alpha1.ConfigDevSettings
+	5,  // 15: diverge.v1alpha1.ConfigDeploySettings.cluster_ref:type_name -> diverge.v1alpha1.ConfigClusterRefSettings
+	8,  // 16: diverge.v1alpha1.ConfigRoutingSettings.banner:type_name -> diverge.v1alpha1.ConfigBannerSettings
+	10, // 17: diverge.v1alpha1.ConfigDatabaseSettings.atlas:type_name -> diverge.v1alpha1.ConfigAtlasSettings
+	11, // 18: diverge.v1alpha1.ConfigAtlasSettings.policy:type_name -> diverge.v1alpha1.ConfigAtlasPolicySettings
+	23, // 19: diverge.v1alpha1.ConfigFeatureSettings.overrides:type_name -> diverge.v1alpha1.ConfigFeatureSettings.OverridesEntry
+	6,  // 20: diverge.v1alpha1.ConfigEnvironmentType.deploy:type_name -> diverge.v1alpha1.ConfigDeploySettings
+	7,  // 21: diverge.v1alpha1.ConfigEnvironmentType.routing:type_name -> diverge.v1alpha1.ConfigRoutingSettings
+	9,  // 22: diverge.v1alpha1.ConfigEnvironmentType.database:type_name -> diverge.v1alpha1.ConfigDatabaseSettings
+	12, // 23: diverge.v1alpha1.ConfigEnvironmentType.lifecycle:type_name -> diverge.v1alpha1.ConfigLifecycleSettings
+	13, // 24: diverge.v1alpha1.ConfigEnvironmentType.features:type_name -> diverge.v1alpha1.ConfigFeatureSettings
+	14, // 25: diverge.v1alpha1.ConfigEnvironmentType.dev:type_name -> diverge.v1alpha1.ConfigDevSettings
+	6,  // 26: diverge.v1alpha1.ConfigLabelOverride.deploy:type_name -> diverge.v1alpha1.ConfigDeploySettings
+	7,  // 27: diverge.v1alpha1.ConfigLabelOverride.routing:type_name -> diverge.v1alpha1.ConfigRoutingSettings
+	9,  // 28: diverge.v1alpha1.ConfigLabelOverride.database:type_name -> diverge.v1alpha1.ConfigDatabaseSettings
+	12, // 29: diverge.v1alpha1.ConfigLabelOverride.lifecycle:type_name -> diverge.v1alpha1.ConfigLifecycleSettings
+	13, // 30: diverge.v1alpha1.ConfigLabelOverride.features:type_name -> diverge.v1alpha1.ConfigFeatureSettings
+	14, // 31: diverge.v1alpha1.ConfigLabelOverride.dev:type_name -> diverge.v1alpha1.ConfigDevSettings
+	19, // 32: diverge.v1alpha1.ConfigTopology.prometheus:type_name -> diverge.v1alpha1.ConfigPrometheus
+	1,  // 33: diverge.v1alpha1.DivergeConfig.ServicesEntry.value:type_name -> diverge.v1alpha1.ConfigService
+	15, // 34: diverge.v1alpha1.DivergeConfig.EnvironmentsEntry.value:type_name -> diverge.v1alpha1.ConfigEnvironmentType
+	16, // 35: diverge.v1alpha1.DivergeConfig.LabelOverridesEntry.value:type_name -> diverge.v1alpha1.ConfigLabelOverride
+	36, // [36:36] is the sub-list for method output_type
+	36, // [36:36] is the sub-list for method input_type
+	36, // [36:36] is the sub-list for extension type_name
+	36, // [36:36] is the sub-list for extension extendee
+	0,  // [0:36] is the sub-list for field type_name
 }
 
 func init() { file_diverge_v1alpha1_config_proto_init() }
@@ -1654,16 +1731,16 @@ func file_diverge_v1alpha1_config_proto_init() {
 		return
 	}
 	file_diverge_v1alpha1_environment_proto_init()
-	file_diverge_v1alpha1_config_proto_msgTypes[7].OneofWrappers = []any{}
-	file_diverge_v1alpha1_config_proto_msgTypes[9].OneofWrappers = []any{}
-	file_diverge_v1alpha1_config_proto_msgTypes[11].OneofWrappers = []any{}
+	file_diverge_v1alpha1_config_proto_msgTypes[8].OneofWrappers = []any{}
+	file_diverge_v1alpha1_config_proto_msgTypes[10].OneofWrappers = []any{}
+	file_diverge_v1alpha1_config_proto_msgTypes[12].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_diverge_v1alpha1_config_proto_rawDesc), len(file_diverge_v1alpha1_config_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   23,
+			NumMessages:   24,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

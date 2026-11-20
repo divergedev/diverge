@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/multicluster"
 )
 
 // Severity indicates the urgency of a diagnosed issue.
@@ -29,16 +30,17 @@ const DocsBaseURL = "https://divergedev.com/guides/troubleshooting/"
 
 // Diagnostic error codes for Diverge doctor issues.
 const (
-	CodeEnvironmentFailed    = "DIV-101"
-	CodeMigrationFailed      = "DIV-102"
-	CodeConditionFalse       = "DIV-103"
-	CodePodUnschedulable     = "DIV-104"
-	CodeCrashLoopBackOff     = "DIV-105"
-	CodeImagePullBackOff     = "DIV-106"
-	CodeContainerConfigError = "DIV-107"
-	CodeOOMKilled            = "DIV-108"
-	CodeContainerExit        = "DIV-109"
-	CodeAgentTaskFailure     = "DIV-110"
+	CodeEnvironmentFailed       = "DIV-101"
+	CodeMigrationFailed         = "DIV-102"
+	CodeConditionFalse          = "DIV-103"
+	CodePodUnschedulable        = "DIV-104"
+	CodeCrashLoopBackOff        = "DIV-105"
+	CodeImagePullBackOff        = "DIV-106"
+	CodeContainerConfigError    = "DIV-107"
+	CodeOOMKilled               = "DIV-108"
+	CodeContainerExit           = "DIV-109"
+	CodeAgentTaskFailure        = "DIV-110"
+	CodeSpokeClusterUnreachable = "DIV-111"
 )
 
 // Issue describes a detected cluster or workload problem and suggested remediation.
@@ -63,12 +65,37 @@ type Report struct {
 
 // Diagnoser inspects Kubernetes workloads and Diverge CRDs.
 type Diagnoser struct {
-	client client.Client
+	client          client.Client
+	clusterResolver multicluster.Resolver
 }
 
 // NewDiagnoser creates a fresh Diagnoser instance.
 func NewDiagnoser(c client.Client) *Diagnoser {
 	return &Diagnoser{client: c}
+}
+
+// WithClusterResolver overrides multi-cluster spoke client resolution on the Diagnoser.
+func (d *Diagnoser) WithClusterResolver(r multicluster.Resolver) *Diagnoser {
+	d.clusterResolver = r
+	return d
+}
+
+func (d *Diagnoser) resolveSpokeTarget(ctx context.Context, env *divergeiov1alpha1.Environment) (*multicluster.Target, error) {
+	resolver := d.clusterResolver
+	if resolver == nil && d.client != nil {
+		resolver = multicluster.NewManager(d.client, nil, nil, d.client.Scheme())
+	}
+	if resolver == nil {
+		return nil, fmt.Errorf("multi-cluster resolver is not configured")
+	}
+	target, err := resolver.Resolve(ctx, env)
+	if err != nil {
+		return nil, err
+	}
+	if target == nil || target.Client == nil {
+		return nil, fmt.Errorf("resolved spoke cluster client is nil")
+	}
+	return target, nil
 }
 
 // Diagnose inspects the specified namespace (and optional environment) for failures.
@@ -85,6 +112,7 @@ func (d *Diagnoser) Diagnose(ctx context.Context, namespace, envName string) (*R
 	if d.client != nil {
 		targetEnvs := make([]client.ObjectKey, 0, 1)
 		seenTargetEnvs := make(map[string]struct{})
+		resolvedEnvs := make(map[string]*divergeiov1alpha1.Environment)
 		addTargetEnv := func(ns, name string) {
 			if name == "" {
 				return
@@ -98,6 +126,17 @@ func (d *Diagnoser) Diagnose(ctx context.Context, namespace, envName string) (*R
 				targetEnvs = append(targetEnvs, client.ObjectKey{Namespace: ns, Name: name})
 			}
 		}
+		recordResolvedEnv := func(env *divergeiov1alpha1.Environment) {
+			if env == nil {
+				return
+			}
+			ns := env.Namespace
+			if ns == "" {
+				ns = namespace
+			}
+			envCopy := env.DeepCopy()
+			resolvedEnvs[ns+"/"+env.Name] = envCopy
+		}
 
 		if envName != "" {
 			addTargetEnv(namespace, envName)
@@ -107,15 +146,17 @@ func (d *Diagnoser) Diagnose(ctx context.Context, namespace, envName string) (*R
 				if !apierrors.IsNotFound(err) {
 					return nil, fmt.Errorf("failed to get environment %s: %w", envName, err)
 				}
-				if err := d.inspectPreviewGroupChildren(ctx, namespace, envName, report, addTargetEnv); err != nil {
+				if err := d.inspectPreviewGroupChildren(ctx, namespace, envName, report, addTargetEnv, recordResolvedEnv); err != nil {
 					return nil, err
 				}
 			} else {
+				recordResolvedEnv(&env)
 				d.checkEnvironment(&env, report)
 			}
 		}
 
-		// 2. Inspect Pods in the target namespace(s)
+		// 2. Inspect Pods in the target namespace(s) (including federated spoke clusters)
+		seenPods := make(map[string]struct{})
 		if envName == "" {
 			var podList corev1.PodList
 			if err := d.client.List(ctx, &podList, client.InNamespace(namespace)); err != nil {
@@ -124,28 +165,62 @@ func (d *Diagnoser) Diagnose(ctx context.Context, namespace, envName string) (*R
 			for i := range podList.Items {
 				d.checkPod(&podList.Items[i], report)
 			}
-		} else {
-			seenPods := make(map[string]struct{})
-			for _, target := range targetEnvs {
-				var podList corev1.PodList
-				listOpts := []client.ListOption{
-					client.InNamespace(target.Namespace),
-					client.MatchingLabels{"divergedev.com/environment": target.Name},
+
+			var envList divergeiov1alpha1.EnvironmentList
+			if err := d.client.List(ctx, &envList, client.InNamespace(namespace)); err != nil {
+				if !meta.IsNoMatchError(err) && !runtime.IsNotRegisteredError(err) {
+					return nil, fmt.Errorf("failed to list environments in namespace %s: %w", namespace, err)
 				}
-				if err := d.client.List(ctx, &podList, listOpts...); err != nil {
-					return nil, fmt.Errorf("failed to list pods in namespace %s: %w", target.Namespace, err)
-				}
-				if len(podList.Items) == 0 {
-					legacyOpts := []client.ListOption{
-						client.InNamespace(target.Namespace),
-						client.MatchingLabels{"diverge.io/environment": target.Name},
+			} else {
+				for i := range envList.Items {
+					if multicluster.IsRemoteEnv(&envList.Items[i]) {
+						d.inspectSpokeEnvironmentPods(ctx, namespace, &envList.Items[i], seenPods, report)
 					}
-					if err := d.client.List(ctx, &podList, legacyOpts...); err != nil {
-						return nil, fmt.Errorf("failed to list pods in namespace %s: %w", target.Namespace, err)
+				}
+			}
+		} else {
+			for _, target := range targetEnvs {
+				envObj := resolvedEnvs[target.Namespace+"/"+target.Name]
+				if envObj != nil && multicluster.IsRemoteEnv(envObj) {
+					if !d.inspectSpokeEnvironmentPods(ctx, target.Namespace, envObj, seenPods, report) {
+						continue
+					}
+					hubNS := envObj.Namespace
+					if hubNS == "" {
+						hubNS = target.Namespace
+					}
+					hubPods, err := d.listEnvironmentPods(ctx, d.client, hubNS, target.Name)
+					if err != nil {
+						return nil, err
+					}
+					for i := range hubPods.Items {
+						podKey := "local/" + hubPods.Items[i].Namespace + "/" + hubPods.Items[i].Name
+						if _, exists := seenPods[podKey]; exists {
+							continue
+						}
+						seenPods[podKey] = struct{}{}
+						d.checkPod(&hubPods.Items[i], report)
+					}
+					continue
+				}
+
+				podNS := target.Namespace
+				if envObj != nil && envObj.Spec.Deploy.Namespace == "create" {
+					podNS = envObj.PreviewNamespace()
+				}
+
+				podList, err := d.listEnvironmentPods(ctx, d.client, podNS, target.Name)
+				if err != nil {
+					return nil, err
+				}
+				if len(podList.Items) == 0 && podNS != target.Namespace {
+					podList, err = d.listEnvironmentPods(ctx, d.client, target.Namespace, target.Name)
+					if err != nil {
+						return nil, err
 					}
 				}
 				for i := range podList.Items {
-					podKey := podList.Items[i].Namespace + "/" + podList.Items[i].Name
+					podKey := "local/" + podList.Items[i].Namespace + "/" + podList.Items[i].Name
 					if _, exists := seenPods[podKey]; exists {
 						continue
 					}
@@ -183,11 +258,88 @@ func (d *Diagnoser) Diagnose(ctx context.Context, namespace, envName string) (*R
 	return report, nil
 }
 
+func (d *Diagnoser) listEnvironmentPods(ctx context.Context, c client.Client, podNS, envName string) (corev1.PodList, error) {
+	var podList corev1.PodList
+	listOpts := []client.ListOption{
+		client.InNamespace(podNS),
+		client.MatchingLabels{"divergedev.com/environment": envName},
+	}
+	if err := c.List(ctx, &podList, listOpts...); err != nil {
+		return podList, fmt.Errorf("failed to list pods in namespace %s: %w", podNS, err)
+	}
+	if len(podList.Items) == 0 {
+		legacyOpts := []client.ListOption{
+			client.InNamespace(podNS),
+			client.MatchingLabels{"diverge.io/environment": envName},
+		}
+		if err := c.List(ctx, &podList, legacyOpts...); err != nil {
+			return podList, fmt.Errorf("failed to list pods in namespace %s: %w", podNS, err)
+		}
+	}
+	return podList, nil
+}
+
+func (d *Diagnoser) inspectSpokeEnvironmentPods(
+	ctx context.Context,
+	fallbackNS string,
+	env *divergeiov1alpha1.Environment,
+	seenPods map[string]struct{},
+	report *Report,
+) bool {
+	clusterName := multicluster.ClusterName(env)
+	target, err := d.resolveSpokeTarget(ctx, env)
+	if err != nil {
+		report.Issues = append(report.Issues, Issue{
+			Code:        CodeSpokeClusterUnreachable,
+			Severity:    SeverityCritical,
+			Component:   fmt.Sprintf("Environment/%s (Cluster/%s)", env.Name, clusterName),
+			Summary:     fmt.Sprintf("Spoke cluster %q could not be resolved", clusterName),
+			Details:     err.Error(),
+			Remediation: "Verify spec.deploy.clusterRef.kubeconfigSecretRef exists in the same namespace, contains a valid HTTPS kubeconfig, and is reachable from the Diverge hub.",
+			DocsURL:     DocsBaseURL + "#div-111-spoke-cluster-unreachable",
+		})
+		return false
+	}
+
+	podNS := env.Namespace
+	if podNS == "" {
+		podNS = fallbackNS
+	}
+	if env.Spec.Deploy.Namespace == "create" {
+		podNS = env.PreviewNamespace()
+	}
+
+	podList, err := d.listEnvironmentPods(ctx, target.Client, podNS, env.Name)
+	if err != nil {
+		report.Issues = append(report.Issues, Issue{
+			Code:        CodeSpokeClusterUnreachable,
+			Severity:    SeverityCritical,
+			Component:   fmt.Sprintf("Environment/%s (Cluster/%s)", env.Name, clusterName),
+			Summary:     fmt.Sprintf("Failed to query workloads on spoke cluster %q", clusterName),
+			Details:     err.Error(),
+			Remediation: "Verify spoke cluster API server reachability, TLS CA bundle, and RBAC permissions for the spoke kubeconfig Secret.",
+			DocsURL:     DocsBaseURL + "#div-111-spoke-cluster-unreachable",
+		})
+		return false
+	}
+
+	for i := range podList.Items {
+		podKey := clusterName + "/" + podList.Items[i].Namespace + "/" + podList.Items[i].Name
+		if _, exists := seenPods[podKey]; exists {
+			continue
+		}
+		seenPods[podKey] = struct{}{}
+		d.checkPodOnCluster(&podList.Items[i], clusterName, report)
+	}
+	return true
+}
+
 func (d *Diagnoser) inspectPreviewGroupChildren(
 	ctx context.Context,
 	namespace, pgName string,
 	report *Report,
 	addTargetEnv func(ns, name string),
+	recordResolvedEnv func(env *divergeiov1alpha1.Environment),
 ) error {
 	checkedEnvs := make(map[string]struct{})
 	checkChildEnv := func(env *divergeiov1alpha1.Environment) {
@@ -201,6 +353,9 @@ func (d *Diagnoser) inspectPreviewGroupChildren(
 		}
 		checkedEnvs[k] = struct{}{}
 		addTargetEnv(ns, env.Name)
+		if recordResolvedEnv != nil {
+			recordResolvedEnv(env)
+		}
 		d.checkEnvironment(env, report)
 	}
 
@@ -317,6 +472,17 @@ func (d *Diagnoser) checkEnvironment(env *divergeiov1alpha1.Environment, report 
 }
 
 func (d *Diagnoser) checkPod(pod *corev1.Pod, report *Report) {
+	d.checkPodOnCluster(pod, "", report)
+}
+
+func (d *Diagnoser) checkPodOnCluster(pod *corev1.Pod, clusterName string, report *Report) {
+	podComponent := fmt.Sprintf("Pod/%s", pod.Name)
+	podLabel := pod.Name
+	if clusterName != "" && clusterName != multicluster.LocalClusterName {
+		podComponent = fmt.Sprintf("Cluster/%s/Pod/%s", clusterName, pod.Name)
+		podLabel = fmt.Sprintf("%s@%s", pod.Name, clusterName)
+	}
+
 	// Check Phase
 	if pod.Status.Phase == corev1.PodPending {
 		for _, cond := range pod.Status.Conditions {
@@ -324,7 +490,7 @@ func (d *Diagnoser) checkPod(pod *corev1.Pod, report *Report) {
 				report.Issues = append(report.Issues, Issue{
 					Code:        CodePodUnschedulable,
 					Severity:    SeverityCritical,
-					Component:   fmt.Sprintf("Pod/%s", pod.Name),
+					Component:   podComponent,
 					Summary:     "Pod unschedulable (insufficient resources or node selector mismatch)",
 					Details:     cond.Message,
 					Remediation: "Verify node capacity or adjust CPU/memory requests in diverge.yaml.",
@@ -336,12 +502,12 @@ func (d *Diagnoser) checkPod(pod *corev1.Pod, report *Report) {
 
 	// Check Init Container Statuses
 	for _, cs := range pod.Status.InitContainerStatuses {
-		d.checkContainerStatus(pod.Name, cs, true, report)
+		d.checkContainerStatus(podLabel, cs, true, report)
 	}
 
 	// Check App Container Statuses
 	for _, cs := range pod.Status.ContainerStatuses {
-		d.checkContainerStatus(pod.Name, cs, false, report)
+		d.checkContainerStatus(podLabel, cs, false, report)
 	}
 }
 

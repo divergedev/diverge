@@ -51,7 +51,8 @@ export const handlers = [
   }),
   http.post('*/diverge.v1alpha1.EnvironmentService/CreateEnvironment', async ({ request }) => {
     const body = await request.json() as Record<string, unknown>
-    const name = (body as { name?: string }).name ?? 'new-env'
+    const nested = body.environment as { name?: string } | undefined
+    const name = nested?.name ?? 'new-env'
     return HttpResponse.json({
       environment: mockEnvironment(name),
     })

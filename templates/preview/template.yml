@@ -20,6 +20,14 @@ spec:
       description: "Default Kubernetes namespace for preview workloads"
       type: string
       default: "default"
+    diverge_cluster:
+      description: "Optional logical spoke cluster name for multi-cluster preview federation"
+      type: string
+      default: ""
+    diverge_cluster_secret:
+      description: "Optional same-namespace Secret (<name> or <name>/<key>) holding the spoke cluster kubeconfig"
+      type: string
+      default: ""
     diverge_base_url:
       description: "Optional staging/gateway URL to construct a shareable ?_diverge_env= preview URL"
       type: string
@@ -98,6 +106,8 @@ diverge:preview:
     DIVERGE_TTL: $[[ inputs.diverge_ttl ]]
     DIVERGE_REGISTRY: $[[ inputs.diverge_registry ]]
     DIVERGE_NAMESPACE: $[[ inputs.diverge_namespace ]]
+    DIVERGE_CLUSTER: $[[ inputs.diverge_cluster ]]
+    DIVERGE_CLUSTER_SECRET: $[[ inputs.diverge_cluster_secret ]]
     DIVERGE_BASE_URL: $[[ inputs.diverge_base_url ]]
     DIVERGE_VERIFY: $[[ inputs.diverge_verify ]]
     DIVERGE_VERIFY_PATH: $[[ inputs.diverge_verify_path ]]
@@ -186,6 +196,41 @@ diverge:preview:
         lifecycle:
           ttl: "${DIVERGE_TTL}"
           cleanupOnMerge: true
+      EOF
+
+      if [ -n "${DIVERGE_CLUSTER:-}" ] && [ "${DIVERGE_CLUSTER}" != "local" ] && [ -z "${DIVERGE_CLUSTER_SECRET:-}" ]; then
+        echo "Error: diverge_cluster_secret is required when diverge_cluster is set to a remote cluster" >&2
+        exit 1
+      fi
+      if [ -n "${DIVERGE_CLUSTER_SECRET:-}" ]; then
+        SEC_NAME="${DIVERGE_CLUSTER_SECRET%%/*}"
+        SEC_KEY=""
+        case "${DIVERGE_CLUSTER_SECRET}" in
+          */*) SEC_KEY="${DIVERGE_CLUSTER_SECRET#*/}" ;;
+        esac
+        case "${DIVERGE_CLUSTER:-}" in
+          *[!a-zA-Z0-9._-]*) echo "Error: invalid diverge_cluster value" >&2; exit 1 ;;
+        esac
+        case "${SEC_NAME}" in
+          ""|*[!a-zA-Z0-9._-]*) echo "Error: invalid diverge_cluster_secret name" >&2; exit 1 ;;
+        esac
+        case "${SEC_KEY}" in
+          *[!a-zA-Z0-9._-]*) echo "Error: invalid diverge_cluster_secret key" >&2; exit 1 ;;
+        esac
+        cat <<EOF >> previewgroup.yaml
+        clusterRef:
+          name: "${DIVERGE_CLUSTER:-$SEC_NAME}"
+          kubeconfigSecretRef:
+            name: "${SEC_NAME}"
+      EOF
+        if [ -n "${SEC_KEY}" ]; then
+          cat <<EOF >> previewgroup.yaml
+            key: "${SEC_KEY}"
+      EOF
+        fi
+      fi
+
+      cat <<EOF >> previewgroup.yaml
         services:
       EOF
 

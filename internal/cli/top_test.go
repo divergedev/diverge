@@ -279,4 +279,53 @@ func TestTopBaselineDriftState(t *testing.T) {
 	require.Len(t, snap.Environments, 1)
 	assert.True(t, snap.Environments[0].Drifted)
 	assert.Equal(t, "⚠️ drift", snap.Environments[0].State)
+	assert.Equal(t, "local", snap.Environments[0].Cluster)
+}
+
+func TestTopFederatedSpokeClusterColumn(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, divergeiov1alpha1.AddToScheme(scheme))
+
+	spokeEnv := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-108-spoke",
+			Namespace: "default",
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Deploy: divergeiov1alpha1.EnvironmentDeploy{
+				ClusterRef: &divergeiov1alpha1.ClusterTargetRef{
+					Name: "eu-central-spoke",
+					KubeconfigSecretRef: &divergeiov1alpha1.SecretRef{
+						Name: "eu-spoke-kubeconfig",
+					},
+				},
+			},
+		},
+		Status: divergeiov1alpha1.EnvironmentStatus{
+			Phase:         divergeiov1alpha1.PhaseRunning,
+			TargetCluster: "eu-central-spoke",
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(spokeEnv).Build()
+	app := &App{Namespace: "default", NoColor: true, Client: fakeClient}
+
+	tableCmd := NewRootCmd(app)
+	var tableOut bytes.Buffer
+	tableCmd.SetOut(&tableOut)
+	tableCmd.SetArgs([]string{"top", "--once"})
+	require.NoError(t, tableCmd.Execute())
+	assert.Contains(t, tableOut.String(), "CLUSTER")
+	assert.Contains(t, tableOut.String(), "eu-central-spoke")
+
+	jsonCmd := NewRootCmd(app)
+	var jsonOut bytes.Buffer
+	jsonCmd.SetOut(&jsonOut)
+	jsonCmd.SetArgs([]string{"top", "--once", "-o", "json"})
+	require.NoError(t, jsonCmd.Execute())
+
+	var snap TopSnapshot
+	require.NoError(t, json.Unmarshal(jsonOut.Bytes(), &snap))
+	require.Len(t, snap.Environments, 1)
+	assert.Equal(t, "eu-central-spoke", snap.Environments[0].Cluster)
 }

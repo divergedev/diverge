@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/multicluster"
 )
 
 const (
@@ -46,6 +47,7 @@ type TopSummary struct {
 type TopEnvironmentRow struct {
 	Name          string  `json:"name" yaml:"name"`
 	Namespace     string  `json:"namespace" yaml:"namespace"`
+	Cluster       string  `json:"cluster,omitempty" yaml:"cluster,omitempty"`
 	Phase         string  `json:"phase" yaml:"phase"`
 	TTL           string  `json:"ttl" yaml:"ttl"`
 	State         string  `json:"state" yaml:"state"`
@@ -321,6 +323,7 @@ func collectTopSnapshot(ctx context.Context, c client.Client, namespace string) 
 		snap.Environments = append(snap.Environments, TopEnvironmentRow{
 			Name:          env.Name,
 			Namespace:     env.Namespace,
+			Cluster:       multicluster.ClusterName(env),
 			Phase:         phase,
 			TTL:           ttl,
 			State:         state,
@@ -466,20 +469,49 @@ func renderTopSnapshot(out io.Writer, snap *TopSnapshot, outputFormat string, no
 	if len(snap.Environments) == 0 {
 		_, _ = fmt.Fprintln(out, "  No environments found.")
 	} else {
-		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
-		_, _ = fmt.Fprintln(w, "  NAME\tNAMESPACE\tSTATUS\tTTL\tSTATE\tCOST/HR\tURL")
+		hasRemote := false
 		for _, env := range snap.Environments {
-			_, _ = fmt.Fprintf(
-				w,
-				"  %s\t%s\t%s\t%s\t%s\t$%.3f/hr\t%s\n",
-				env.Name,
-				env.Namespace,
-				colorStatus(env.Phase, noColor),
-				colorTTL(env.TTL, noColor),
-				env.State,
-				env.HourlyCostUSD,
-				env.URL,
-			)
+			if c := strings.TrimSpace(env.Cluster); c != "" && c != multicluster.LocalClusterName {
+				hasRemote = true
+				break
+			}
+		}
+		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
+		if hasRemote {
+			_, _ = fmt.Fprintln(w, "  NAME\tNAMESPACE\tCLUSTER\tSTATUS\tTTL\tSTATE\tCOST/HR\tURL")
+			for _, env := range snap.Environments {
+				cluster := strings.TrimSpace(env.Cluster)
+				if cluster == "" {
+					cluster = multicluster.LocalClusterName
+				}
+				_, _ = fmt.Fprintf(
+					w,
+					"  %s\t%s\t%s\t%s\t%s\t%s\t$%.3f/hr\t%s\n",
+					env.Name,
+					env.Namespace,
+					cluster,
+					colorStatus(env.Phase, noColor),
+					colorTTL(env.TTL, noColor),
+					env.State,
+					env.HourlyCostUSD,
+					env.URL,
+				)
+			}
+		} else {
+			_, _ = fmt.Fprintln(w, "  NAME\tNAMESPACE\tSTATUS\tTTL\tSTATE\tCOST/HR\tURL")
+			for _, env := range snap.Environments {
+				_, _ = fmt.Fprintf(
+					w,
+					"  %s\t%s\t%s\t%s\t%s\t$%.3f/hr\t%s\n",
+					env.Name,
+					env.Namespace,
+					colorStatus(env.Phase, noColor),
+					colorTTL(env.TTL, noColor),
+					env.State,
+					env.HourlyCostUSD,
+					env.URL,
+				)
+			}
 		}
 		_ = w.Flush()
 	}

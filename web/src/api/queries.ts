@@ -96,7 +96,7 @@ export function useListPermissions(namespace?: string) {
 export function useCreateEnvironment() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (req: { name: string; namespace: string; spec: Record<string, unknown> }) =>
+    mutationFn: (req: Parameters<typeof environmentClient.createEnvironment>[0]) =>
       environmentClient.createEnvironment(req),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['environments'] }) },
   })

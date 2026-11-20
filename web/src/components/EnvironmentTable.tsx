@@ -38,6 +38,12 @@ export function EnvironmentTable({ environments, isLoading }: { environments: En
           const isDrifted = Boolean(
             env.status?.conditions?.some((c) => c.type === 'BaselineDriftDetected' && c.status === 'True'),
           )
+          const targetCluster =
+            env.status?.targetCluster?.trim() ||
+            env.spec?.deploy?.clusterRef?.name?.trim() ||
+            env.spec?.deploy?.clusterRef?.kubeconfigSecretRef?.name?.trim() ||
+            ''
+          const isRemoteCluster = Boolean(targetCluster && targetCluster !== 'local')
           return (
             <TableRow key={`${env.namespace}/${env.name}`}>
               <TableCell>
@@ -48,6 +54,11 @@ export function EnvironmentTable({ environments, isLoading }: { environments: En
               <TableCell className="text-muted-foreground">{env.namespace}</TableCell>
               <TableCell>
                 <StatusBadge phase={env.status?.phase ?? ''} />
+                {isRemoteCluster && (
+                  <span className="ml-2 inline-flex items-center rounded-full bg-sky-500/10 px-2 py-0.5 text-xs font-mono font-medium text-sky-600 dark:text-sky-400">
+                    {targetCluster}
+                  </span>
+                )}
                 {isEnvironmentHibernated(env) && (
                   <span className="ml-2 inline-flex items-center rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-500">
                     Hibernated

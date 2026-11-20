@@ -18,6 +18,7 @@ internal/async/temporal_register.go
 internal/async/webhook_register.go
 internal/async/providers.go
 internal/database/cnpg/cnpg_register.go
+internal/database/neon/neon_register.go
 internal/database/noop_register.go
 internal/database/schemaprovider/schema_register.go
 internal/deployer/argocd_register.go
