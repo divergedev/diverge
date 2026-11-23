@@ -32,8 +32,14 @@ import (
 	"github.com/divergedev/diverge/pkg/registry"
 )
 
+const annotationSharedGroupDB = "divergedev.com/shared-group-db"
+
+func isPreviewGroupChildEnvironment(env *divergeiov1alpha1.Environment) bool {
+	return env != nil && env.Labels != nil && env.Labels[labelManagedBy] == "diverge-previewgroup"
+}
+
 func (r *EnvironmentReconciler) notifyFailed(ctx context.Context, env *divergeiov1alpha1.Environment, msg string) {
-	if r.Notifier == nil {
+	if r.Notifier == nil || isPreviewGroupChildEnvironment(env) {
 		return
 	}
 	tCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -185,29 +191,43 @@ func (r *EnvironmentReconciler) reconcileProvisioningWithTarget(ctx context.Cont
 	}
 
 	// 6. Ensure database
-	tCtxDB, cancelDB := context.WithTimeout(ctx, 15*time.Second)
-	defer cancelDB()
-	dbProv, resolvedDBName, err := r.resolveDatabaseProviderWithContext(tCtxDB, env, false)
-	if dbProv != nil && dbProv != r.DatabaseProvider {
-		defer closeDatabaseProvider(dbProv)
-	}
 	var dbStatus *pkgdb.DatabaseResult
-	if err == nil && dbProv != nil {
-		if env.Status.DatabaseProvider == "" && resolvedDBName != "" {
-			env.Status.DatabaseProvider = resolvedDBName
+	var resolvedDBName string
+	if env.Annotations != nil && env.Annotations[annotationSharedGroupDB] == "true" {
+		// Database lifecycle and diverge-db-env-<env> Secret are owned by the parent PreviewGroup.
+		sharedDSN := r.readSharedGroupDatabaseDSN(ctx, env)
+		dbStatus = &pkgdb.DatabaseResult{
+			DSN:              sharedDSN,
+			Ready:            true,
+			SetupSQLExecuted: true,
+			Message:          "Using shared PreviewGroup database",
 		}
-		dbStatus, err = dbProv.Provision(tCtxDB, env)
-	}
-	if err != nil {
-		meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
-			Type:    "DatabaseReady",
-			Status:  metav1.ConditionFalse,
-			Reason:  "DatabaseProvisionFailed",
-			Message: err.Error(),
-		})
-		r.notifyFailed(ctx, env, err.Error())
-		res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
-		return ctx, res, true, retErr
+	} else {
+		tCtxDB, cancelDB := context.WithTimeout(ctx, 15*time.Second)
+		defer cancelDB()
+		var dbProv pkgdb.DatabaseProvider
+		var err error
+		dbProv, resolvedDBName, err = r.resolveDatabaseProviderWithContext(tCtxDB, env, false)
+		if dbProv != nil && dbProv != r.DatabaseProvider {
+			defer closeDatabaseProvider(dbProv)
+		}
+		if err == nil && dbProv != nil {
+			if env.Status.DatabaseProvider == "" && resolvedDBName != "" {
+				env.Status.DatabaseProvider = resolvedDBName
+			}
+			dbStatus, err = dbProv.Provision(tCtxDB, env)
+		}
+		if err != nil {
+			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+				Type:    "DatabaseReady",
+				Status:  metav1.ConditionFalse,
+				Reason:  "DatabaseProvisionFailed",
+				Message: err.Error(),
+			})
+			r.notifyFailed(ctx, env, err.Error())
+			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
+			return ctx, res, true, retErr
+		}
 	}
 	if dbStatus != nil && dbStatus.Ready {
 		// Run SetupSQL if configured and not already executed in-process by the provider
@@ -946,4 +966,21 @@ func (r *EnvironmentReconciler) ensureDatabaseEnvSecret(ctx context.Context, env
 		return fmt.Errorf("failed to create or update database env secret: %w", err)
 	}
 	return nil
+}
+
+func (r *EnvironmentReconciler) readSharedGroupDatabaseDSN(ctx context.Context, env *divergeiov1alpha1.Environment) string {
+	targetClient, _, _, err := r.resolveTargetCluster(ctx, env)
+	if err != nil || targetClient == nil {
+		return ""
+	}
+	secretName := sanitizeK8sName(fmt.Sprintf("diverge-db-env-%s", env.Name), env.Name, 63)
+	targetNS := env.Namespace
+	if env.Spec.Deploy.Namespace == "create" {
+		targetNS = env.PreviewNamespace()
+	}
+	var sec corev1.Secret
+	if err := targetClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: targetNS}, &sec); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(sec.Data["DATABASE_URL"]))
 }

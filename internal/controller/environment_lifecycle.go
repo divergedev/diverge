@@ -14,6 +14,7 @@ import (
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/metrics"
+	"github.com/divergedev/diverge/internal/previewgroup"
 )
 
 func (r *EnvironmentReconciler) reconcileLifecycle(ctx context.Context, env *divergeiov1alpha1.Environment, statusBase *divergeiov1alpha1.Environment, oldPhase divergeiov1alpha1.EnvironmentPhase) (time.Duration, ctrl.Result, bool, error) {
@@ -31,20 +32,25 @@ func (r *EnvironmentReconciler) reconcileLifecycle(ctx context.Context, env *div
 	}
 
 	if env.Spec.Lifecycle.TTL != nil {
-		expiryTime := env.Status.CreatedAt.Add(env.Spec.Lifecycle.TTL.Duration)
+		anchorTime := previewgroup.EffectiveTTLAnchor(env.Status.CreatedAt, env.Annotations)
+		expiryTime := anchorTime.Add(env.Spec.Lifecycle.TTL.Duration)
 		env.Status.ExpiresAt = &metav1.Time{Time: expiryTime}
-		if time.Now().After(expiryTime) {
-			logger.Info("Environment TTL expired, triggering deletion")
-			deleteCtx, cancelDelete := context.WithTimeout(ctx, 15*time.Second)
-			err := r.Delete(deleteCtx, env)
-			cancelDelete()
-			if err != nil {
-				return 0, ctrl.Result{}, true, fmt.Errorf("failed to delete expired environment: %w", err)
+		// Child Environments of a PreviewGroup never self-delete independently; PreviewGroupReconciler
+		// enforces the group-wide TTL (including group-level ttl-renewed-at renewals) atomically.
+		if !isPreviewGroupChildEnvironment(env) {
+			if time.Now().After(expiryTime) {
+				logger.Info("Environment TTL expired, triggering deletion")
+				deleteCtx, cancelDelete := context.WithTimeout(ctx, 15*time.Second)
+				err := r.Delete(deleteCtx, env)
+				cancelDelete()
+				if err != nil {
+					return 0, ctrl.Result{}, true, fmt.Errorf("failed to delete expired environment: %w", err)
+				}
+				return 0, ctrl.Result{}, true, nil
 			}
-			return 0, ctrl.Result{}, true, nil
+			// C1: Requeue when TTL expires so the controller wakes up to delete
+			requeueAfter = time.Until(expiryTime)
 		}
-		// C1: Requeue when TTL expires so the controller wakes up to delete
-		requeueAfter = time.Until(expiryTime)
 	}
 
 	now := time.Now()
@@ -67,7 +73,7 @@ func (r *EnvironmentReconciler) reconcileLifecycle(ctx context.Context, env *div
 		}
 	}
 
-	if r.Notifier != nil && oldPhase != newPhase {
+	if r.Notifier != nil && oldPhase != newPhase && !isPreviewGroupChildEnvironment(env) {
 		switch newPhase {
 		case divergeiov1alpha1.PhaseRunning:
 			if r.StatusReporter != nil {
@@ -115,7 +121,7 @@ func (r *EnvironmentReconciler) reconcileLifecycle(ctx context.Context, env *div
 					Summary:     fmt.Sprintf("Failed to trigger: %v", err),
 					CompletedAt: &now,
 				}
-				if r.StatusReporter != nil {
+				if r.StatusReporter != nil && !isPreviewGroupChildEnvironment(env) {
 					commitState := "failed"
 					if env.Spec.Testing == nil || !env.Spec.Testing.Required {
 						commitState = "success"
@@ -132,7 +138,7 @@ func (r *EnvironmentReconciler) reconcileLifecycle(ctx context.Context, env *div
 					StartedAt: &now,
 				}
 				r.Recorder.Event(env, "Normal", "TestsTriggered", "Test run triggered")
-				if r.StatusReporter != nil {
+				if r.StatusReporter != nil && !isPreviewGroupChildEnvironment(env) {
 					notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 					_ = r.StatusReporter.PostCommitStatus(notifyCtx, env, "pending", "Tests running...")
 					cancel()
@@ -164,7 +170,7 @@ func (r *EnvironmentReconciler) reconcileLifecycle(ctx context.Context, env *div
 				ts.CompletedAt = &now
 				logger.Info("Test run timed out", "runID", ts.RunID)
 				r.Recorder.Event(env, "Warning", "TestsTimedOut", "Test run timed out")
-				if r.StatusReporter != nil {
+				if r.StatusReporter != nil && !isPreviewGroupChildEnvironment(env) {
 					commitState := "failed"
 					if !testRequired {
 						commitState = "success" // non-blocking: don't prevent merge
@@ -195,7 +201,7 @@ func (r *EnvironmentReconciler) reconcileLifecycle(ctx context.Context, env *div
 						now := metav1.Now()
 						ts.CompletedAt = &now
 						r.Recorder.Event(env, "Normal", "TestsPassed", result.Summary)
-						if r.StatusReporter != nil {
+						if r.StatusReporter != nil && !isPreviewGroupChildEnvironment(env) {
 							notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 							_ = r.StatusReporter.PostCommitStatus(notifyCtx, env, "success", result.Summary)
 							cancel()
@@ -204,7 +210,7 @@ func (r *EnvironmentReconciler) reconcileLifecycle(ctx context.Context, env *div
 						now := metav1.Now()
 						ts.CompletedAt = &now
 						r.Recorder.Event(env, "Warning", "TestsFailed", result.Summary)
-						if r.StatusReporter != nil {
+						if r.StatusReporter != nil && !isPreviewGroupChildEnvironment(env) {
 							commitState := "failed"
 							if !testRequired {
 								commitState = "success" // non-blocking

@@ -130,14 +130,33 @@ func TestMCPPreviewGroupJoinAndLeaveTools(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.False(t, res2.IsError, string(res2.Content))
-	assert.Contains(t, string(res2.Content), `"deleted_group":false`)
+	var leaveOut struct {
+		RemovedServices   []string `json:"removed_services"`
+		RemainingServices []string `json:"remaining_services"`
+		DeletedGroup      bool     `json:"deleted_group"`
+	}
+	require.NoError(t, json.Unmarshal(res2.Content, &leaveOut))
+	assert.False(t, leaveOut.DeletedGroup)
+	assert.Equal(t, []string{"payments-api"}, leaveOut.RemovedServices)
+	assert.Equal(t, []string{"web-app"}, leaveOut.RemainingServices)
 
 	// 3. Leave Frontend by environment_names -> last active service leaves, deletes group
 	res3, err := leaveHandler(context.Background(), mcpruntime.ToolRequest{
-		Arguments: json.RawMessage(`{"group_name": "feat-checkout", "environment_names": ["pr-web-101"]}`),
+		Arguments: json.RawMessage(`{"group_name": "feat-checkout", "environment_names": ["default/pr-web-101"]}`),
 	})
 	require.NoError(t, err)
 	assert.False(t, res3.IsError, string(res3.Content))
 	assert.Contains(t, string(res3.Content), `"deleted_group":true`)
 	assert.Empty(t, pgSvc.groups)
+
+	// 4. Verify allowDestructive gates diverge_leave_preview_group while keeping diverge_join_preview_group
+	safeSrv := newMCPServer(envClient, pgClient, nil, false)
+	safeTools := safeSrv.ListTools()
+	assert.Contains(t, safeTools, "diverge_join_preview_group")
+	assert.NotContains(t, safeTools, "diverge_leave_preview_group")
+
+	destrSrv := newMCPServer(envClient, pgClient, nil, true)
+	destrTools := destrSrv.ListTools()
+	assert.Contains(t, destrTools, "diverge_join_preview_group")
+	assert.Contains(t, destrTools, "diverge_leave_preview_group")
 }

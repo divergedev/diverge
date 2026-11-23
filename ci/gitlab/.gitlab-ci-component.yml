@@ -138,9 +138,10 @@ diverge:preview:
       apk add --no-cache bash curl git jq ca-certificates >/dev/null 2>&1 || true
       PREVIEW_NAME="mr-${CI_MERGE_REQUEST_IID}"
       if [ -n "${DIVERGE_GROUP:-}" ]; then
-        PREVIEW_NAME="$(printf '%s' "${DIVERGE_GROUP}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[\/_.]+/-/g; s/[^a-z0-9-]+/-/g; s/-+/-/g; s/^-+//; s/-+$//')"
+        TRIMMED_GROUP="$(printf '%s' "${DIVERGE_GROUP}" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+        PREVIEW_NAME="$(printf '%s' "${TRIMMED_GROUP}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[\/_.]+/-/g; s/[^a-z0-9-]+/-/g; s/-+/-/g; s/^-+//; s/-+$//')"
         if [ "${#PREVIEW_NAME}" -gt 63 ]; then
-          DIGEST="$(printf '%s' "${DIVERGE_GROUP}" | sha256sum | cut -c1-8)"
+          DIGEST="$(printf '%s' "${TRIMMED_GROUP}" | sha256sum | cut -c1-8)"
           PREFIX="$(printf '%s' "${PREVIEW_NAME}" | cut -c1-54 | sed -E 's/-+$//')"
           PREVIEW_NAME="${PREFIX:-pg}-${DIGEST}"
         fi
@@ -178,6 +179,12 @@ diverge:preview:
 
       if [ -z "$DIVERGE_SERVICES" ]; then
         echo "No changed services detected; skipping preview deployment."
+        if [ -n "${DIVERGE_GROUP:-}" ] && [ -n "${CI_MERGE_REQUEST_IID:-}" ]; then
+          if ! command -v diverge >/dev/null 2>&1; then
+            curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/main/install.sh | sh
+          fi
+          diverge preview leave "${DIVERGE_GROUP}" -n "${DIVERGE_NAMESPACE}" --project "${CI_PROJECT_PATH}" --mr "${CI_MERGE_REQUEST_IID}" || true
+        fi
         {
           echo "DIVERGE_PREVIEW_NAME=${PREVIEW_NAME}"
           echo "DIVERGE_CHANGED_SERVICES_CSV="
@@ -204,13 +211,17 @@ diverge:preview:
         fi
         set -- preview join "${DIVERGE_GROUP}" \
           -n "${DIVERGE_NAMESPACE}" \
-          --header-key "${DIVERGE_HEADER_KEY}" \
-          --header-value "${HEADER_VALUE}" \
-          --ttl "${DIVERGE_TTL}" \
           --provider gitlab \
           --project "${CI_PROJECT_PATH}" \
           --mr "${CI_MERGE_REQUEST_IID}" \
+          --prune-mr \
           --branch "${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}"
+        if [ "${DIVERGE_HEADER_KEY}" != "x-diverge-env" ]; then
+          set -- "$@" --header-key "${DIVERGE_HEADER_KEY}"
+        fi
+        if [ -n "${DIVERGE_TTL:-}" ] && [ "${DIVERGE_TTL}" != "4h" ]; then
+          set -- "$@" --ttl "${DIVERGE_TTL}"
+        fi
         if [ -n "${DIVERGE_BASE_URL:-}" ]; then
           set -- "$@" --base-url "${DIVERGE_BASE_URL}"
         fi

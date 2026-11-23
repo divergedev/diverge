@@ -143,7 +143,7 @@ func buildJob(cfg HookJobConfig) *batchv1.Job {
 		},
 	}
 
-	if cfg.Owner != nil && !cfg.SkipOwnerRef {
+	if cfg.Owner != nil && !cfg.SkipOwnerRef && cfg.Owner.GetUID() != "" {
 		// Just a simple owner ref, assuming no scheme needed here if we do it manually,
 		// but controllerutil.SetControllerReference is better if scheme is provided.
 		// Since we don't pass scheme to buildJob, we'll manually append an OwnerReference.
@@ -188,16 +188,18 @@ func createDSNSecret(ctx context.Context, c client.Client, name, namespace, dsn 
 		},
 	}
 
-	// Assuming owner is an Environment
-	t := true
-	secret.OwnerReferences = append(secret.OwnerReferences, metav1.OwnerReference{
-		APIVersion:         "divergedev.com/v1alpha1",
-		Kind:               "Environment",
-		Name:               owner.GetName(),
-		UID:                owner.GetUID(),
-		Controller:         &t,
-		BlockOwnerDeletion: &t,
-	})
+	// Attach Environment OwnerReference when owner is persisted in Kubernetes (non-empty UID)
+	if owner != nil && owner.GetUID() != "" {
+		t := true
+		secret.OwnerReferences = append(secret.OwnerReferences, metav1.OwnerReference{
+			APIVersion:         "divergedev.com/v1alpha1",
+			Kind:               "Environment",
+			Name:               owner.GetName(),
+			UID:                owner.GetUID(),
+			Controller:         &t,
+			BlockOwnerDeletion: &t,
+		})
+	}
 
 	err := c.Create(ctx, secret)
 	if err != nil {

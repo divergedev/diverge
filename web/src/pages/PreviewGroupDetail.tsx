@@ -15,6 +15,7 @@ import { isSafeExternalUrl } from '@/lib/utils'
 import {
   GROUP_MEMBERS_ANNOTATION,
   formatGroupMemberBadge,
+  isAbortedConflictError,
   parseGroupMembers,
   serializeGroupMembers,
 } from '@/lib/previewgroup'
@@ -98,9 +99,20 @@ export default function PreviewGroupDetail() {
         return
       }
       try {
-        await deletePg.mutateAsync({ namespace: effectiveNs || '_cluster', name: pg.name })
+        await deletePg.mutateAsync({
+          namespace: effectiveNs || '_cluster',
+          name: pg.name,
+          ifMatchResourceVersion: pg.resourceVersion || undefined,
+        })
         navigate('/preview-groups')
       } catch (err) {
+        if (isAbortedConflictError(err)) {
+          await refetch()
+          setMutationError(
+            'Preview group changed while detaching (another service may have joined). State refreshed — review services and try again.',
+          )
+          return
+        }
         setMutationError(err instanceof Error ? err.message : 'Failed to delete preview group')
       }
       return
@@ -115,6 +127,25 @@ export default function PreviewGroupDetail() {
         delete nextAnnotations[GROUP_MEMBERS_ANNOTATION]
       }
 
+      let nextSource = pg.spec?.source
+      if (nextSource && nextSource.mr > 0 && keptMembers.length > 0) {
+        const curProj = (nextSource.project || '').toLowerCase()
+        const stillHasCreator = keptMembers.some(
+          (m) => (m.project || '').toLowerCase() === curProj && m.mr === nextSource?.mr,
+        )
+        if (!stillHasCreator) {
+          const promoted = keptMembers.find((m) => (m.mr ?? 0) > 0 && m.project)
+          if (promoted) {
+            nextSource = {
+              provider: promoted.provider || nextSource.provider,
+              project: promoted.project,
+              mr: promoted.mr,
+              branch: promoted.branch || '',
+            } as typeof nextSource
+          }
+        }
+      }
+
       await updatePg.mutateAsync({
         previewGroup: {
           name: pg.name,
@@ -124,11 +155,19 @@ export default function PreviewGroupDetail() {
           annotations: nextAnnotations,
           spec: {
             ...pg.spec,
+            source: nextSource,
             services: remainingServices,
           },
         },
       })
     } catch (err) {
+      if (isAbortedConflictError(err)) {
+        await refetch()
+        setMutationError(
+          `Preview group was updated concurrently while detaching ${serviceName}. State refreshed — click Detach again.`,
+        )
+        return
+      }
       setMutationError(err instanceof Error ? err.message : `Failed to detach service ${serviceName}`)
     }
   }
@@ -152,9 +191,20 @@ export default function PreviewGroupDetail() {
   const specServices = pg.spec?.services ?? []
   const specServicesByName = new Map(specServices.map((s) => [s.name, s]))
   const statusByName = new Map(statusServices.map((s) => [s.name, s]))
-  const displayServiceNames = statusServices.length > 0
-    ? statusServices.map((s) => s.name)
-    : specServices.map((s) => s.name)
+  const seenSvcNames = new Set<string>()
+  const displayServiceNames: string[] = []
+  for (const s of specServices) {
+    if (s.name && !seenSvcNames.has(s.name)) {
+      seenSvcNames.add(s.name)
+      displayServiceNames.push(s.name)
+    }
+  }
+  for (const s of statusServices) {
+    if (s.name && !seenSvcNames.has(s.name)) {
+      seenSvcNames.add(s.name)
+      displayServiceNames.push(s.name)
+    }
+  }
 
   const members = parseGroupMembers(pg.annotations)
   const membersByService = new Map(members.map((m) => [m.service, m]))

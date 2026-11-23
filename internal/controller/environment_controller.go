@@ -181,7 +181,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		for _, route := range env.Spec.Routing.AsyncRoutes {
 			asyncActiveRoutes.WithLabelValues(string(route.Protocol)).Inc()
 		}
-		if r.Notifier != nil {
+		if r.Notifier != nil && !isPreviewGroupChildEnvironment(&env) {
 			tCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
 			if err := r.Notifier.PostEnvironmentCreated(tCtx, &env); err != nil {
@@ -189,7 +189,7 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				r.Recorder.Event(&env, "Warning", "NotificationFailed", err.Error())
 			}
 		}
-		if r.StatusReporter != nil {
+		if r.StatusReporter != nil && !isPreviewGroupChildEnvironment(&env) {
 			notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
 			if err := r.StatusReporter.PostCommitStatus(notifyCtx, &env, "pending", "Preview environment provisioning"); err != nil {

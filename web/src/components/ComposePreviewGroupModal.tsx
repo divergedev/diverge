@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { PartialMessage } from '@bufbuild/protobuf'
 import type { PreviewGroup, PreviewGroupServiceSpec } from '@/api/gen/diverge/v1alpha1/previewgroup_pb'
@@ -7,15 +7,20 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
-import { useCreatePreviewGroup, useListEnvironments, useUpdatePreviewGroup } from '@/api/queries'
+import { previewGroupClient } from '@/api/client'
+import { useCreatePreviewGroup, useListAllEnvironments, useUpdatePreviewGroup } from '@/api/queries'
 import {
   COMPOSED_GROUP_LABEL,
   DEFAULT_ROUTING_HEADER_KEY,
   GROUP_MEMBERS_ANNOTATION,
+  appendPreviewEnvParam,
   extractEnvironmentCandidate,
+  formatGroupMemberBadge,
+  isAbortedConflictError,
   normalizeGroupSlug,
   parseGroupMembers,
   previewGroupPath,
+  sameGroupMemberOwner,
   serializeGroupMembers,
   type GroupMemberRecord,
 } from '@/lib/previewgroup'
@@ -62,9 +67,19 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
   const formIdPrefix = useId()
   const navigate = useNavigate()
 
-  const { data: envData } = useListEnvironments()
+  const { data: envData } = useListAllEnvironments()
   const createGroup = useCreatePreviewGroup()
   const updateGroup = useUpdatePreviewGroup()
+  const sessionRef = useRef(0)
+
+  useEffect(() => {
+    sessionRef.current += 1
+  }, [open])
+
+  const handleDismiss = () => {
+    sessionRef.current += 1
+    onClose()
+  }
 
   const [name, setName] = useState('')
   const [nameTouched, setNameTouched] = useState(false)
@@ -91,17 +106,14 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
 
   const toggleCandidate = (key: string, branchSlug: string) => {
     setError('')
-    setSelectedEnvKeys((prev) => {
-      const exists = prev.includes(key)
-      const next = exists ? prev.filter((k) => k !== key) : [...prev, key]
-      if (!isJoinMode && !exists && !nameEditedManually && !name && branchSlug) {
-        const normalized = normalizeGroupSlug(branchSlug)
-        if (normalized) {
-          setName(normalized)
-        }
+    const isAdding = !selectedEnvKeys.includes(key)
+    setSelectedEnvKeys((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]))
+    if (!isJoinMode && isAdding && !nameEditedManually && !name && branchSlug) {
+      const normalized = normalizeGroupSlug(branchSlug)
+      if (normalized) {
+        setName(normalized)
       }
-      return next
-    })
+    }
   }
 
   const addCustomRow = () => {
@@ -182,7 +194,15 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
       return
     }
 
-    const chosenCandidates = candidates.filter((c) => selectedEnvKeys.includes(c.key))
+    const candidatesByKey = new Map(candidates.map((c) => [c.key, c]))
+    const missingEnvKeys = selectedEnvKeys.filter((k) => !candidatesByKey.has(k))
+    if (missingEnvKeys.length > 0) {
+      setError(
+        `Selected environment ${missingEnvKeys.join(', ')} is no longer available. Uncheck it or refresh your selection.`,
+      )
+      return
+    }
+    const chosenCandidates = selectedEnvKeys.map((k) => candidatesByKey.get(k)!)
     const incomingSpecs: PartialMessage<PreviewGroupServiceSpec>[] = []
     const incomingMembers = new Map<string, GroupMemberRecord>()
     const seenIncomingNames = new Set<string>()
@@ -242,55 +262,105 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
       return
     }
 
+    const submitSession = sessionRef.current
+    const isCurrentSession = () => open && sessionRef.current === submitSession
+
     try {
       if (isJoinMode && existingGroup) {
-        const priorServices: PartialMessage<PreviewGroupServiceSpec>[] = [...(existingGroup.spec?.services ?? [])]
-        for (const inc of incomingSpecs) {
-          const idx = priorServices.findIndex((s) => s.name === inc.name)
-          if (idx >= 0) {
-            priorServices[idx] = {
+        let currentGroup: PreviewGroup = existingGroup
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const existingMembers = parseGroupMembers(currentGroup.annotations)
+          const byService = new Map<string, GroupMemberRecord>()
+          for (const m of existingMembers) byService.set(m.service, m)
+
+          const effectiveSharedDbMode = sharedDbMode || currentGroup.spec?.database?.mode?.trim() || ''
+          const priorServices: PartialMessage<PreviewGroupServiceSpec>[] = (currentGroup.spec?.services ?? []).map(
+            (s) => ({
+              ...s,
+              database: effectiveSharedDbMode ? undefined : s.database,
+            }),
+          )
+
+          for (const inc of incomingSpecs) {
+            const normalizedInc: PartialMessage<PreviewGroupServiceSpec> = {
               ...inc,
-              clusterRef: inc.clusterRef ?? priorServices[idx].clusterRef,
+              database: effectiveSharedDbMode ? undefined : inc.database,
             }
+            const idx = priorServices.findIndex((s) => s.name === normalizedInc.name)
+            if (idx >= 0) {
+              const prevOwner = byService.get(normalizedInc.name ?? '')
+              const nextOwner = incomingMembers.get(normalizedInc.name ?? '')
+              if (
+                priorServices[idx].mode !== 'baseline' &&
+                normalizedInc.mode !== 'baseline' &&
+                !sameGroupMemberOwner(prevOwner, nextOwner)
+              ) {
+                const ownerLabel = formatGroupMemberBadge(prevOwner) || prevOwner?.environmentName || 'another MR'
+                throw new Error(
+                  `Service "${normalizedInc.name}" is already owned by ${ownerLabel} in group "${currentGroup.name}". Detach it first before replacing it.`,
+                )
+              }
+              priorServices[idx] = {
+                ...normalizedInc,
+                clusterRef: normalizedInc.clusterRef ?? priorServices[idx].clusterRef,
+                postDeploy: normalizedInc.postDeploy ?? priorServices[idx].postDeploy,
+              }
+            } else {
+              priorServices.push(normalizedInc)
+            }
+          }
+
+          for (const [svc, m] of incomingMembers) byService.set(svc, m)
+
+          const orderedMembers: GroupMemberRecord[] = []
+          for (const s of priorServices) {
+            if (s.mode === 'baseline' || !s.name) continue
+            const rec = byService.get(s.name)
+            if (rec) orderedMembers.push(rec)
+          }
+
+          const nextAnnotations: Record<string, string> = { ...(currentGroup.annotations ?? {}) }
+          if (orderedMembers.length > 0) {
+            nextAnnotations[GROUP_MEMBERS_ANNOTATION] = serializeGroupMembers(orderedMembers)
           } else {
-            priorServices.push(inc)
+            delete nextAnnotations[GROUP_MEMBERS_ANNOTATION]
+          }
+
+          try {
+            await updateGroup.mutateAsync({
+              previewGroup: {
+                name: currentGroup.name,
+                namespace: currentGroup.namespace || nsClean,
+                resourceVersion: currentGroup.resourceVersion,
+                labels: {
+                  ...(currentGroup.labels ?? {}),
+                  [COMPOSED_GROUP_LABEL]: 'true',
+                },
+                annotations: nextAnnotations,
+                spec: {
+                  ...currentGroup.spec,
+                  database: sharedDbMode ? { mode: sharedDbMode } : currentGroup.spec?.database,
+                  services: priorServices,
+                },
+              },
+            })
+            break
+          } catch (updateErr) {
+            if (attempt < 2 && isAbortedConflictError(updateErr)) {
+              const fresh = await previewGroupClient.getPreviewGroup({
+                namespace: currentGroup.namespace || nsClean,
+                name: currentGroup.name,
+              })
+              if (fresh.previewGroup) {
+                currentGroup = fresh.previewGroup
+                continue
+              }
+            }
+            throw updateErr
           }
         }
 
-        const existingMembers = parseGroupMembers(existingGroup.annotations)
-        const byService = new Map<string, GroupMemberRecord>()
-        for (const m of existingMembers) byService.set(m.service, m)
-        for (const [svc, m] of incomingMembers) byService.set(svc, m)
-
-        const orderedMembers: GroupMemberRecord[] = []
-        for (const s of priorServices) {
-          if (s.mode === 'baseline' || !s.name) continue
-          const rec = byService.get(s.name)
-          if (rec) orderedMembers.push(rec)
-        }
-
-        const nextAnnotations: Record<string, string> = { ...(existingGroup.annotations ?? {}) }
-        if (orderedMembers.length > 0) {
-          nextAnnotations[GROUP_MEMBERS_ANNOTATION] = serializeGroupMembers(orderedMembers)
-        }
-
-        await updateGroup.mutateAsync({
-          previewGroup: {
-            name: existingGroup.name,
-            namespace: existingGroup.namespace,
-            resourceVersion: existingGroup.resourceVersion,
-            labels: {
-              ...(existingGroup.labels ?? {}),
-              [COMPOSED_GROUP_LABEL]: 'true',
-            },
-            annotations: nextAnnotations,
-            spec: {
-              ...existingGroup.spec,
-              database: sharedDbMode ? { mode: sharedDbMode } : existingGroup.spec?.database,
-              services: priorServices,
-            },
-          },
-        })
+        if (!isCurrentSession()) return
         onClose()
         return
       }
@@ -298,11 +368,7 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
       const firstCandidate = chosenCandidates[0]
       const resolvedHeaderKey = headerKey.trim() || DEFAULT_ROUTING_HEADER_KEY
       const resolvedHeaderVal = headerValue.trim() || effectiveName
-      let resolvedExtUrl = externalUrl.trim()
-      if (resolvedExtUrl && !resolvedExtUrl.includes('_diverge_env=')) {
-        const sep = resolvedExtUrl.includes('?') ? '&' : '/?'
-        resolvedExtUrl = `${resolvedExtUrl.replace(/\/+$/, '')}${sep}_diverge_env=${encodeURIComponent(resolvedHeaderVal)}`
-      }
+      const resolvedExtUrl = appendPreviewEnvParam(externalUrl, resolvedHeaderVal)
 
       const orderedMembers: GroupMemberRecord[] = []
       for (const s of incomingSpecs) {
@@ -358,6 +424,7 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
         },
       })
 
+      if (!isCurrentSession()) return
       onClose()
       const created = res.previewGroup
       navigate(
@@ -367,6 +434,7 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
         }),
       )
     } catch (err) {
+      if (!isCurrentSession()) return
       setError(err instanceof Error ? err.message : 'Failed to save preview group')
     }
   }
@@ -387,7 +455,7 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
   const hasNameError = !isJoinMode && Boolean(error && error.toLowerCase().includes('name'))
 
   return (
-    <Dialog open={open} onClose={onClose}>
+    <Dialog open={open} onClose={handleDismiss}>
       <DialogContent className="max-w-2xl max-h-[88vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
@@ -465,7 +533,7 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
             ) : (
               <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
                 {candidates.map((cand) => {
-                  const cbId = `${formIdPrefix}-env-${cand.key.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+                  const cbId = `${formIdPrefix}-env-${encodeURIComponent(cand.key)}`
                   const checked = selectedEnvKeys.includes(cand.key)
                   return (
                     <div
@@ -755,7 +823,7 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
           )}
 
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={onClose}>
+            <Button type="button" variant="outline" onClick={handleDismiss}>
               Cancel
             </Button>
             <Button type="submit" disabled={isPending}>

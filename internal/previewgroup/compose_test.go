@@ -189,4 +189,132 @@ func TestJoinSharedGroupDatabaseOverride(t *testing.T) {
 	require.NotNil(t, res.PreviewGroup.Spec.Database)
 	assert.Equal(t, "neon", res.PreviewGroup.Spec.Database.Mode)
 	assert.Nil(t, res.PreviewGroup.Spec.Services[0].Database, "group-level database override clears per-service database")
+
+	// Joining a second service with its own DB into an already-shared-DB group clears incoming per-service DB
+	svc2WithOwnDB := v1alpha1.PreviewGroupServiceSpec{
+		Name:      "orders-api",
+		Namespace: "default",
+		Mode:      v1alpha1.ServiceModeImage,
+		Image:     "ghcr.io/acme/orders:pr-2",
+		Database: &v1alpha1.EnvironmentDatabase{
+			Mode: "schema",
+		},
+	}
+	res2, err := Join(ctx, c, JoinOptions{
+		GroupName: "shared-db-group",
+		Services:  []v1alpha1.PreviewGroupServiceSpec{svc2WithOwnDB},
+	})
+	require.NoError(t, err)
+	require.Len(t, res2.PreviewGroup.Spec.Services, 2)
+	assert.Nil(t, res2.PreviewGroup.Spec.Services[1].Database, "joining an existing shared-DB group clears incoming per-service DB")
+}
+
+func TestJoinCollisionGuardNamespaceLeaveHibernationAndTTLGuard(t *testing.T) {
+	ctx := context.Background()
+
+	envTeamA := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "pr-42", Namespace: "team-a"},
+		Spec: v1alpha1.EnvironmentSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "github", Project: "acme/checkout", MR: 42, Branch: "feat/x"},
+			ServiceConfig: &v1alpha1.ServicePreviewConfig{
+				ServiceName: "worker",
+				Namespace:   "team-a",
+				Image:       "ghcr.io/acme/checkout-worker:pr-42",
+			},
+		},
+	}
+	envTeamB := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "pr-42", Namespace: "team-b"},
+		Spec: v1alpha1.EnvironmentSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "github", Project: "acme/billing", MR: 99, Branch: "feat/x"},
+			ServiceConfig: &v1alpha1.ServicePreviewConfig{
+				ServiceName: "billing-api",
+				Namespace:   "team-b",
+				Image:       "ghcr.io/acme/billing-api:pr-99",
+			},
+		},
+	}
+
+	c := newTestClient(t, envTeamA, envTeamB)
+
+	svcA, memA, err := ServiceFromEnvironment(envTeamA)
+	require.NoError(t, err)
+	longTTL := 24 * time.Hour
+	resA, err := Join(ctx, c, JoinOptions{
+		GroupName:           "feat-x",
+		Services:            []v1alpha1.PreviewGroupServiceSpec{svcA},
+		Members:             []MemberRecord{memA},
+		Source:              &envTeamA.Spec.Source,
+		HeaderKey:           "x-custom-env",
+		HeaderKeyExplicit:   true,
+		HeaderValue:         "custom-val",
+		HeaderValueExplicit: true,
+		TTL:                 &longTTL,
+		TTLExplicit:         true,
+	})
+	require.NoError(t, err)
+	assert.True(t, resA.Created)
+
+	// Standalone envTeamA should be automatically hibernated while attached
+	var liveEnvA v1alpha1.Environment
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "pr-42", Namespace: "team-a"}, &liveEnvA))
+	assert.Equal(t, "true", liveEnvA.Annotations[AnnotationHibernated])
+	assert.Equal(t, "feat-x", liveEnvA.Annotations[AnnotationAttachedPreviewGroup])
+
+	// Cross-MR collision on service "worker" is rejected without AllowTakeover
+	collidingSvc := v1alpha1.PreviewGroupServiceSpec{
+		Name:      "worker",
+		Namespace: "team-b",
+		Mode:      v1alpha1.ServiceModeImage,
+		Image:     "ghcr.io/acme/billing-worker:pr-99",
+	}
+	_, err = Join(ctx, c, JoinOptions{
+		GroupName: "feat-x",
+		Services:  []v1alpha1.PreviewGroupServiceSpec{collidingSvc},
+		Source:    &envTeamB.Spec.Source,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already owned by acme/checkout#42")
+
+	// Joining non-colliding service with implicit 4h TTL & non-explicit header preserves 24h TTL and custom header
+	svcB, memB, err := ServiceFromEnvironment(envTeamB)
+	require.NoError(t, err)
+	shortTTL := 4 * time.Hour
+	resB, err := Join(ctx, c, JoinOptions{
+		GroupName:   "feat-x",
+		Services:    []v1alpha1.PreviewGroupServiceSpec{svcB},
+		Members:     []MemberRecord{memB},
+		Source:      &envTeamB.Spec.Source,
+		HeaderKey:   "x-diverge-env",
+		HeaderValue: "feat-x",
+		TTL:         &shortTTL,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "x-custom-env", resB.PreviewGroup.Spec.Routing.HeaderKey)
+	assert.Equal(t, "custom-val", resB.PreviewGroup.Spec.Routing.HeaderValue)
+	assert.Equal(t, 24*time.Hour, resB.PreviewGroup.Spec.Lifecycle.TTL.Duration)
+
+	// Namespace-qualified leave for team-a/pr-42 detaches ONLY team-a's worker (leaves team-b/pr-42 intact!)
+	// and promotes Spec.Source to acme/billing#99!
+	leaveRes, err := Leave(ctx, c, LeaveOptions{
+		GroupName:       "feat-x",
+		EnvironmentName: "team-a/pr-42",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"worker"}, leaveRes.RemovedServices)
+	assert.Equal(t, []string{"billing-api"}, leaveRes.RemainingServices)
+
+	// Standalone envTeamA wakes up once detached
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "pr-42", Namespace: "team-a"}, &liveEnvA))
+	assert.Empty(t, liveEnvA.Annotations[AnnotationHibernated])
+
+	var updatedPG v1alpha1.PreviewGroup
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "feat-x"}, &updatedPG))
+	assert.Equal(t, "acme/billing", updatedPG.Spec.Source.Project)
+	assert.Equal(t, 99, updatedPG.Spec.Source.MR)
+
+	// SyncMemberEnvironment on already-detached envTeamA must NOT re-add it
+	synced, err := SyncMemberEnvironment(ctx, c, &liveEnvA)
+	require.NoError(t, err)
+	assert.Empty(t, synced)
 }

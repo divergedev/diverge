@@ -5,7 +5,7 @@ import { queryKeys } from '@/api/queries'
 import type { Environment } from '@/api/gen/diverge/v1alpha1/environment_pb'
 import type { PreviewGroup } from '@/api/gen/diverge/v1alpha1/previewgroup_pb'
 import type { ListEnvironmentsResponse } from '@/api/gen/diverge/v1alpha1/environment_pb'
-import type { ListPreviewGroupsResponse } from '@/api/gen/diverge/v1alpha1/previewgroup_pb'
+import type { GetPreviewGroupResponse, ListPreviewGroupsResponse } from '@/api/gen/diverge/v1alpha1/previewgroup_pb'
 import { WatchEventType } from '@/api/gen/diverge/v1alpha1/types_pb'
 
 function backoff(attempt: number): number {
@@ -104,6 +104,18 @@ export function useWatchPreviewGroups(namespace?: string) {
                 return { ...old, previewGroups: list }
               },
             )
+            if (msg.type === WatchEventType.DELETED) {
+              qc.removeQueries({
+                queryKey: ['previewGroup'],
+                predicate: (q) => q.queryKey[2] === pg.name,
+              })
+            } else {
+              qc.setQueriesData(
+                { queryKey: ['previewGroup'], predicate: (q) => q.queryKey[2] === pg.name },
+                (old: GetPreviewGroupResponse | undefined) =>
+                  old ? ({ ...old, previewGroup: pg } as GetPreviewGroupResponse) : undefined,
+              )
+            }
           }
         } catch (err) {
           if (aborted) return

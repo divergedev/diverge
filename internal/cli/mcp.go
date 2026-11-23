@@ -372,8 +372,8 @@ func newMCPServerWithCluster(envClient divergev1alpha1connect.EnvironmentService
 			continue
 		}
 
-		// Only register if allowed (simple destructive check)
-		if !allowDestructive && strings.Contains(toolName, "delete") {
+		// Only register destructive tools (delete or group leave/teardown) when --allow-destructive is enabled
+		if !allowDestructive && (strings.Contains(toolName, "delete") || toolName == "diverge_leave_preview_group") {
 			continue
 		}
 

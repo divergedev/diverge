@@ -1,7 +1,12 @@
-import { createContext, useContext, useEffect, useId, useRef, useCallback, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useId, useRef, useCallback, useState, type ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 
-const DialogTitleIdContext = createContext<string | undefined>(undefined)
+interface DialogTitleContextValue {
+  titleId: string
+  setCustomTitleId: (id: string | undefined) => void
+}
+
+const DialogTitleIdContext = createContext<DialogTitleContextValue | undefined>(undefined)
 
 function isPointerOutsideDialog(e: { clientX: number; clientY: number }, dialog: HTMLDialogElement): boolean {
   const r = dialog.getBoundingClientRect()
@@ -14,7 +19,9 @@ function isPointerOutsideDialog(e: { clientX: number; clientY: number }, dialog:
 export function Dialog({ open, onClose, children }: { open: boolean; onClose: () => void; children: ReactNode }) {
   const ref = useRef<HTMLDialogElement>(null)
   const pressedOutsideRef = useRef(false)
-  const titleId = useId()
+  const defaultTitleId = useId()
+  const [customTitleId, setCustomTitleId] = useState<string | undefined>(undefined)
+  const effectiveTitleId = customTitleId ?? defaultTitleId
 
   useEffect(() => {
     const el = ref.current
@@ -51,10 +58,10 @@ export function Dialog({ open, onClose, children }: { open: boolean; onClose: ()
   }, [onClose, open])
 
   return (
-    <DialogTitleIdContext.Provider value={titleId}>
+    <DialogTitleIdContext.Provider value={{ titleId: defaultTitleId, setCustomTitleId }}>
       <dialog
         ref={ref}
-        aria-labelledby={titleId}
+        aria-labelledby={effectiveTitleId}
         className="backdrop:bg-black/50 bg-transparent p-0 m-auto max-w-[calc(100vw-2rem)]"
         onPointerDown={handlePointerDown}
         onPointerUp={handlePointerUp}
@@ -75,8 +82,14 @@ export function DialogHeader({ children, className }: { children: ReactNode; cla
 }
 
 export function DialogTitle({ children, className, id }: { children: ReactNode; className?: string; id?: string }) {
-  const ctxTitleId = useContext(DialogTitleIdContext)
-  return <h1 id={id ?? ctxTitleId} className={cn('text-lg font-semibold leading-none tracking-tight', className)}>{children}</h1>
+  const ctx = useContext(DialogTitleIdContext)
+  const setCustomTitleId = ctx?.setCustomTitleId
+  useEffect(() => {
+    if (!setCustomTitleId) return
+    setCustomTitleId(id)
+    return () => setCustomTitleId(undefined)
+  }, [setCustomTitleId, id])
+  return <h1 id={id ?? ctx?.titleId} className={cn('text-lg font-semibold leading-none tracking-tight', className)}>{children}</h1>
 }
 
 export function DialogDescription({ children, className }: { children: ReactNode; className?: string }) {

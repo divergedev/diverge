@@ -237,6 +237,42 @@ func AuthorizeAction(ctx context.Context, k8sClient kubernetes.Interface, auditL
 	}, "permission denied")
 }
 
+// AuthorizePreviewGroupServiceNamespace verifies that the caller is authorized to operate on a service
+// namespace referenced by a cluster-scoped PreviewGroup.
+//   - Macaroon tokens must be bound to svcNamespace and carry the matching previewgroups tool capability.
+//   - Kubernetes RBAC / OIDC principals are checked via SubjectAccessReview for environments in svcNamespace
+//     whenever svcNamespace differs from alreadyCheckedPrimaryNS.
+func AuthorizePreviewGroupServiceNamespace(
+	ctx context.Context,
+	k8sClient kubernetes.Interface,
+	auditLogger *AuditLogger,
+	verb, svcNamespace, alreadyCheckedPrimaryNS string,
+) error {
+	effNS := strings.TrimSpace(svcNamespace)
+	if effNS == "" {
+		effNS = "default"
+	}
+	user, ok := auth.UserInfoFromContext(ctx)
+	if !ok {
+		return connect.NewError(connect.CodeUnauthenticated, errors.New("not authenticated"))
+	}
+	if isMacaroonUser(user) {
+		if err := authorizeMacaroon(ctx, auditLogger, user, verb, effNS, "previewgroups", fmt.Sprintf("permission denied for service namespace %s", effNS)); err != nil {
+			return err
+		}
+		return nil
+	}
+	if effNS == alreadyCheckedPrimaryNS {
+		return nil
+	}
+	return checkSAR(ctx, k8sClient, auditLogger, user, &authorizationv1.ResourceAttributes{
+		Namespace: effNS,
+		Verb:      verb,
+		Group:     v1alpha1.GroupVersion.Group,
+		Resource:  "environments",
+	}, fmt.Sprintf("permission denied for service namespace %s", effNS))
+}
+
 // AuthorizeCostSummary checks authorization for reading cost and usage analytics.
 // Macaroon capability tokens must explicitly carry the diverge_get_cost_summary tool capability
 // in their bound namespace (without granting list/watch access to Environment resources);

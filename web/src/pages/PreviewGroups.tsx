@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { StatusBadge } from '@/components/StatusBadge'
 import { EmptyState } from '@/components/EmptyState'
 import { ComposePreviewGroupModal } from '@/components/ComposePreviewGroupModal'
-import { parseGroupMembers, previewGroupPath } from '@/lib/previewgroup'
+import { countDistinctGroupMRs, parseGroupMembers, previewGroupPath } from '@/lib/previewgroup'
 import { GitBranch, Plus } from 'lucide-react'
 
 export default function PreviewGroups() {
@@ -54,6 +54,7 @@ export default function PreviewGroups() {
           <TableBody>
             {groups.map((pg) => {
               const members = parseGroupMembers(pg.annotations)
+              const mrCount = countDistinctGroupMRs(members)
               const routing = pg.spec?.routing
               const header =
                 routing?.headerKey && routing?.headerValue
@@ -66,11 +67,15 @@ export default function PreviewGroups() {
                       <Link to={previewGroupPath(pg)} className="font-medium text-primary hover:underline">
                         {pg.name}
                       </Link>
-                      {members.length > 1 && (
+                      {mrCount > 1 ? (
                         <Badge variant="secondary" className="text-[10px]">
-                          {members.length} MRs
+                          {mrCount} MRs
                         </Badge>
-                      )}
+                      ) : members.length > 1 ? (
+                        <Badge variant="secondary" className="text-[10px]">
+                          {members.length} joined
+                        </Badge>
+                      ) : null}
                     </div>
                   </TableCell>
                   <TableCell className="text-muted-foreground font-mono text-xs">

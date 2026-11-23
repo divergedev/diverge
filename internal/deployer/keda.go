@@ -159,6 +159,11 @@ func (d *KEDADeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) er
 			"minReplicas", minRepl, "maxReplicas", maxRepl, "cooldown", cooldown)
 	}
 
+	// Force scale-to-zero when the Environment is explicitly hibernated (e.g. idle or attached to a PreviewGroup)
+	if env.Annotations["divergedev.com/hibernated"] == "true" {
+		minRepl = 0
+	}
+
 	if err := unstructured.SetNestedField(hso.Object, minRepl, "spec", "replicas", "min"); err != nil {
 		return fmt.Errorf("failed to set replicas.min: %w", err)
 	}

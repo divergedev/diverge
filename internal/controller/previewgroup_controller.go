@@ -29,13 +29,15 @@ import (
 	"github.com/divergedev/diverge/internal/metrics"
 	"github.com/divergedev/diverge/internal/multicluster"
 	"github.com/divergedev/diverge/internal/notifier"
+	"github.com/divergedev/diverge/internal/previewgroup"
 	"github.com/divergedev/diverge/pkg/database"
 )
 
 const (
-	previewGroupFinalizer = "divergedev.com/previewgroup-protection"
-	labelPreviewGroup     = "divergedev.com/previewgroup"
-	labelManagedBy        = "divergedev.com/managed-by"
+	previewGroupFinalizer   = "divergedev.com/previewgroup-protection"
+	labelPreviewGroup       = "divergedev.com/previewgroup"
+	labelManagedBy          = "divergedev.com/managed-by"
+	annotationCommentSource = "divergedev.com/comment-source"
 )
 
 // PreviewGroupReconciler reconciles a PreviewGroup object.
@@ -48,6 +50,7 @@ type PreviewGroupReconciler struct {
 	Notifier         notifier.PreviewGroupNotifier
 	StatusReporter   notifier.StatusReporter
 	DatabaseProvider database.DatabaseProvider
+	SetupRunner      SetupRunner
 	ClusterClients   multicluster.Resolver
 	EnableGAMMA      bool // Enable GAMMA mesh routing (requires Istio Ambient)
 }
@@ -106,10 +109,11 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		pg.Status.CreatedAt = &now
 	}
 
-	// Set TTL expiry
+	// Set TTL expiry anchored to max(CreatedAt, annotation["divergedev.com/ttl-renewed-at"])
 	var requeueAfter time.Duration
 	if pg.Spec.Lifecycle != nil && pg.Spec.Lifecycle.TTL != nil && pg.Status.CreatedAt != nil {
-		expiryTime := pg.Status.CreatedAt.Add(pg.Spec.Lifecycle.TTL.Duration)
+		anchorTime := previewgroup.EffectiveTTLAnchor(pg.Status.CreatedAt, pg.Annotations)
+		expiryTime := anchorTime.Add(pg.Spec.Lifecycle.TTL.Duration)
 		pg.Status.ExpiresAt = &metav1.Time{Time: expiryTime}
 		if time.Now().After(expiryTime) {
 			logger.Info("PreviewGroup TTL expired, triggering deletion")
@@ -170,6 +174,40 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, nil
 	}
 
+	// Provision a single shared group-level database when Spec.Database is configured on a concrete provider
+	groupDBVars, groupDBAnchorNS, groupDBHandled, groupDBReady, groupDBErr := r.reconcileGroupDatabase(ctx, &pg)
+	if groupDBHandled {
+		// Refresh statusBase ResourceVersion/metadata in case reconcileGroupDatabase persisted group-db annotations
+		statusBase.ResourceVersion = pg.ResourceVersion
+		statusBase.Annotations = pg.DeepCopy().Annotations
+		if groupDBErr != nil {
+			pg.Status.Phase = divergeiov1alpha1.PreviewGroupPhaseFailed
+			meta.SetStatusCondition(&pg.Status.Conditions, metav1.Condition{
+				Type:               "Ready",
+				Status:             metav1.ConditionFalse,
+				Reason:             "GroupDatabaseFailed",
+				Message:            fmt.Sprintf("Shared group database provisioning failed: %v", groupDBErr),
+				ObservedGeneration: pg.Generation,
+			})
+			_ = r.Status().Patch(ctx, &pg, client.MergeFrom(statusBase))
+			return ctrl.Result{}, groupDBErr
+		}
+		if !groupDBReady {
+			pg.Status.Phase = divergeiov1alpha1.PreviewGroupPhaseDeploying
+			meta.SetStatusCondition(&pg.Status.Conditions, metav1.Condition{
+				Type:               "Ready",
+				Status:             metav1.ConditionFalse,
+				Reason:             "GroupDatabaseProvisioning",
+				Message:            "Shared group database is provisioning",
+				ObservedGeneration: pg.Generation,
+			})
+			if err := r.Status().Patch(ctx, &pg, client.MergeFrom(statusBase)); err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to update PreviewGroup status: %w", err)
+			}
+			return ctrl.Result{RequeueAfter: 3 * time.Second}, nil
+		}
+	}
+
 	for _, svc := range pg.Spec.Services {
 		envName := childEnvironmentName(pg.Name, svc.Name)
 
@@ -196,8 +234,21 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			continue
 		}
 
+		var sharedDBSecretName string
+		if groupDBHandled && svc.Database == nil && len(groupDBVars) > 0 {
+			secName, secErr := r.ensureChildSharedDBSecret(ctx, &pg, svc, envName, targetNS, groupDBAnchorNS, groupDBVars)
+			if secErr != nil {
+				svcStatus.Phase = divergeiov1alpha1.PhaseFailed
+				svcStatus.Reason = "SharedDatabaseSecretFailed"
+				svcStatus.Message = secErr.Error()
+				serviceStatuses = append(serviceStatuses, svcStatus)
+				continue
+			}
+			sharedDBSecretName = secName
+		}
+
 		// Build the desired child Environment CR
-		desiredEnv := r.buildChildEnvironment(&pg, svc, envName, targetNS)
+		desiredEnv := r.buildChildEnvironmentWithSharedDB(&pg, svc, envName, targetNS, groupDBHandled && svc.Database == nil, sharedDBSecretName)
 
 		// Create or update
 		var existingEnv divergeiov1alpha1.Environment
@@ -246,11 +297,21 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			if r.needsUpdate(&existingEnv, desiredEnv) {
 				existingEnv.Spec = desiredEnv.Spec
 				existingEnv.Labels = desiredEnv.Labels
+				if existingEnv.Annotations == nil && len(desiredEnv.Annotations) > 0 {
+					existingEnv.Annotations = make(map[string]string)
+				}
 				if tp := desiredEnv.Annotations["divergedev.com/traceparent"]; tp != "" {
-					if existingEnv.Annotations == nil {
-						existingEnv.Annotations = make(map[string]string)
-					}
 					existingEnv.Annotations["divergedev.com/traceparent"] = tp
+				}
+				if renewed := desiredEnv.Annotations[previewgroup.AnnotationTTLRenewedAt]; renewed != "" {
+					existingEnv.Annotations[previewgroup.AnnotationTTLRenewedAt] = renewed
+				} else if existingEnv.Annotations != nil {
+					delete(existingEnv.Annotations, previewgroup.AnnotationTTLRenewedAt)
+				}
+				if desiredEnv.Annotations[annotationSharedGroupDB] == "true" {
+					existingEnv.Annotations[annotationSharedGroupDB] = "true"
+				} else if existingEnv.Annotations != nil {
+					delete(existingEnv.Annotations, annotationSharedGroupDB)
 				}
 				if err := r.Update(ctx, &existingEnv); err != nil {
 					return ctrl.Result{}, fmt.Errorf("failed to update child Environment %s/%s: %w", targetNS, envName, err)
@@ -300,6 +361,9 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		serviceStatuses = append(serviceStatuses, svcStatus)
 	}
 
+	// Reconcile standalone PR Environment hibernation/waking for attached/detached group members
+	r.syncMemberStandaloneEnvironments(ctx, &pg)
+
 	// Delete orphaned Environments (services removed from spec)
 	orphanCleanupErr := r.deleteOrphanedEnvironments(ctx, &pg, desiredEnvNames)
 	if orphanCleanupErr != nil {
@@ -336,36 +400,94 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 	meta.SetStatusCondition(&pg.Status.Conditions, readyCondition)
 
-	// Persist status
+	prevPhase := statusBase.Status.Phase
+	currentCommentSource := previewGroupCommentSourceKey(&pg)
+	prevCommentSource := ""
+	if pg.Annotations != nil {
+		prevCommentSource = strings.TrimSpace(pg.Annotations[annotationCommentSource])
+	}
+	sourcePromoted := false
+	if pg.Status.CommentID != 0 && prevCommentSource != "" && prevCommentSource != currentCommentSource {
+		// Creator MR left and Spec.Source promoted to a new MR (potentially in the same monorepo):
+		// reset CommentID so we post a fresh comment on the promoted MR instead of editing the closed PR's comment.
+		pg.Status.CommentID = 0
+		sourcePromoted = true
+	}
+
+	if r.StatusReporter != nil && pg.Status.Phase != prevPhase && strings.TrimSpace(pg.Spec.Source.CommitSHA) != "" {
+		var commitState, commitDesc string
+		switch pg.Status.Phase {
+		case divergeiov1alpha1.PreviewGroupPhaseRunning:
+			commitState = "success"
+			commitDesc = fmt.Sprintf("Preview group %s ready", pg.Name)
+		case divergeiov1alpha1.PreviewGroupPhaseFailed, divergeiov1alpha1.PreviewGroupPhaseDegraded:
+			commitState = "failed"
+			commitDesc = readyCondition.Message
+		}
+		if commitState != "" {
+			syntheticEnv := &divergeiov1alpha1.Environment{
+				ObjectMeta: metav1.ObjectMeta{Name: pg.Name},
+				Spec:       divergeiov1alpha1.EnvironmentSpec{Source: pg.Spec.Source},
+				Status:     divergeiov1alpha1.EnvironmentStatus{URL: pg.Spec.Routing.ExternalURL},
+			}
+			sCtx, cancelS := context.WithTimeout(ctx, 15*time.Second)
+			if sErr := r.StatusReporter.PostCommitStatus(sCtx, syntheticEnv, commitState, commitDesc); sErr != nil {
+				logger.Error(sErr, "failed to post preview group commit status")
+			}
+			cancelS()
+		}
+	}
+
+	// Run SCM notifications BEFORE Status().Patch so newly created Status.CommentID is persisted,
+	// and only emit notifications when phase, service statuses, or promoted source MR changed.
+	if r.Notifier != nil {
+		servicesChanged := !equality.Semantic.DeepEqual(statusBase.Status.Services, pg.Status.Services)
+		if pg.Status.Phase != prevPhase || sourcePromoted {
+			notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			switch pg.Status.Phase {
+			case divergeiov1alpha1.PreviewGroupPhaseRunning:
+				if err := r.Notifier.PostGroupReady(notifyCtx, &pg); err != nil {
+					logger.Error(err, "failed to post group ready notification")
+				}
+			case divergeiov1alpha1.PreviewGroupPhaseFailed, divergeiov1alpha1.PreviewGroupPhaseDegraded:
+				if err := r.Notifier.PostGroupFailed(notifyCtx, &pg, readyCondition.Reason); err != nil {
+					logger.Error(err, "failed to post group failed notification")
+				}
+			default:
+				if pg.Status.CommentID == 0 {
+					if err := r.Notifier.PostGroupCreated(notifyCtx, &pg); err != nil {
+						logger.Error(err, "failed to post group created notification")
+					}
+				} else {
+					if err := r.Notifier.UpdateGroupStatus(notifyCtx, &pg); err != nil {
+						logger.Error(err, "failed to update group status notification")
+					}
+				}
+			}
+			cancel()
+		} else if servicesChanged {
+			notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			if err := r.Notifier.UpdateGroupStatus(notifyCtx, &pg); err != nil {
+				logger.Error(err, "failed to update group status notification")
+			}
+			cancel()
+		}
+	}
+
+	// Persist status (including any updated Status.CommentID)
 	patch := client.MergeFrom(statusBase)
 	if err := r.Status().Patch(ctx, &pg, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to update PreviewGroup status: %w", err)
 	}
 
-	if r.Notifier != nil {
-		notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		if err := r.Notifier.UpdateGroupStatus(notifyCtx, &pg); err != nil {
-			logger.Error(err, "failed to update group status notification")
+	if pg.Status.CommentID != 0 && currentCommentSource != "" && prevCommentSource != currentCommentSource {
+		metaCopy := pg.DeepCopy()
+		baseMeta := metaCopy.DeepCopy()
+		if metaCopy.Annotations == nil {
+			metaCopy.Annotations = make(map[string]string)
 		}
-		cancel()
-
-		prevPhase := statusBase.Status.Phase
-		if pg.Status.Phase != prevPhase {
-			switch pg.Status.Phase {
-			case divergeiov1alpha1.PreviewGroupPhaseRunning:
-				notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-				if err := r.Notifier.PostGroupReady(notifyCtx, &pg); err != nil {
-					logger.Error(err, "failed to post group ready notification")
-				}
-				cancel()
-			case divergeiov1alpha1.PreviewGroupPhaseFailed, divergeiov1alpha1.PreviewGroupPhaseDegraded:
-				notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-				if err := r.Notifier.PostGroupFailed(notifyCtx, &pg, readyCondition.Reason); err != nil {
-					logger.Error(err, "failed to post group failed notification")
-				}
-				cancel()
-			}
-		}
+		metaCopy.Annotations[annotationCommentSource] = currentCommentSource
+		_ = r.Patch(ctx, metaCopy, client.MergeFrom(baseMeta))
 	}
 
 	if orphanCleanupErr != nil {
@@ -421,7 +543,12 @@ func (r *PreviewGroupReconciler) handleTeardown(ctx context.Context, pg *diverge
 				r.propagateForceTeardownToChild(ctx, child)
 			}
 
-			if r.DatabaseProvider != nil && child.Spec.Database.Mode != "" {
+			// When child has environmentFinalizer on a real cluster, EnvironmentReconciler.handleTeardown
+			// drains pods first and tears down per-service DBs dynamically. Only run fallback Teardown here
+			// when child has no finalizer (e.g. standalone PreviewGroup controller unit tests).
+			if r.DatabaseProvider != nil && child.Spec.Database.Mode != "" &&
+				child.Annotations[annotationSharedGroupDB] != "true" &&
+				!controllerutil.ContainsFinalizer(child, environmentFinalizer) {
 				dbCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 				if err := r.DatabaseProvider.Teardown(dbCtx, child); err != nil {
 					logger.Error(err, "failed to teardown database for child Environment", "name", child.Name)
@@ -445,6 +572,13 @@ func (r *PreviewGroupReconciler) handleTeardown(ctx context.Context, pg *diverge
 		logger.Info("Waiting for child Environments to terminate", "remaining", remaining)
 		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
 	}
+
+	// All child Environments have drained — tear down any shared group-level database and wake attached standalone PR Environments
+	if err := r.teardownGroupDatabase(ctx, pg); err != nil {
+		logger.Error(err, "failed to teardown shared group database", "group", pg.Name)
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, err
+	}
+	r.wakeUnclaimedStandaloneEnvironments(ctx, pg.Name, nil)
 
 	// All children gone — remove finalizer
 	if r.Notifier != nil {
@@ -471,13 +605,30 @@ func (r *PreviewGroupReconciler) buildChildEnvironment(
 	svc divergeiov1alpha1.PreviewGroupServiceSpec,
 	envName, targetNS string,
 ) *divergeiov1alpha1.Environment {
-	// Determine database config — service-level overrides group-level
+	return r.buildChildEnvironmentWithSharedDB(pg, svc, envName, targetNS, false, "")
+}
+
+func (r *PreviewGroupReconciler) buildChildEnvironmentWithSharedDB(
+	pg *divergeiov1alpha1.PreviewGroup,
+	svc divergeiov1alpha1.PreviewGroupServiceSpec,
+	envName, targetNS string,
+	useSharedGroupDB bool,
+	sharedDBSecretName string,
+) *divergeiov1alpha1.Environment {
+	// Determine database config — service-level overrides group-level.
+	// When useSharedGroupDB is true, PreviewGroupReconciler already provisioned the single shared database
+	// (and ran any group-level MigrationJob/Atlas once) and populated sharedDBSecretName in targetNS.
 	dbConfig := divergeiov1alpha1.EnvironmentDatabase{}
-	if pg.Spec.Database != nil {
-		dbConfig = *pg.Spec.Database
-	}
-	if svc.Database != nil {
-		dbConfig = *svc.Database
+	if useSharedGroupDB {
+		dbConfig.Mode = "shared"
+		dbConfig.ConnectionRef = sharedDBSecretName
+	} else {
+		if pg.Spec.Database != nil {
+			dbConfig = *pg.Spec.Database
+		}
+		if svc.Database != nil {
+			dbConfig = *svc.Database
+		}
 	}
 
 	// Build the routing config from group
@@ -549,9 +700,22 @@ func (r *PreviewGroupReconciler) buildChildEnvironment(
 	}
 
 	if tp := pg.Annotations["divergedev.com/traceparent"]; tp != "" {
-		env.Annotations = map[string]string{
-			"divergedev.com/traceparent": tp,
+		if env.Annotations == nil {
+			env.Annotations = make(map[string]string)
 		}
+		env.Annotations["divergedev.com/traceparent"] = tp
+	}
+	if renewed := pg.Annotations[previewgroup.AnnotationTTLRenewedAt]; renewed != "" {
+		if env.Annotations == nil {
+			env.Annotations = make(map[string]string)
+		}
+		env.Annotations[previewgroup.AnnotationTTLRenewedAt] = renewed
+	}
+	if useSharedGroupDB {
+		if env.Annotations == nil {
+			env.Annotations = make(map[string]string)
+		}
+		env.Annotations[annotationSharedGroupDB] = "true"
 	}
 
 	// Lifecycle — copy TTL/cleanup from group
@@ -581,7 +745,24 @@ func (r *PreviewGroupReconciler) needsUpdate(existing, desired *divergeiov1alpha
 	if tp := desired.Annotations["divergedev.com/traceparent"]; tp != "" && existing.Annotations["divergedev.com/traceparent"] != tp {
 		return true
 	}
+	if existing.Annotations[previewgroup.AnnotationTTLRenewedAt] != desired.Annotations[previewgroup.AnnotationTTLRenewedAt] {
+		return true
+	}
+	if (desired.Annotations[annotationSharedGroupDB] == "true") != (existing.Annotations[annotationSharedGroupDB] == "true") {
+		return true
+	}
 	return false
+}
+
+func previewGroupCommentSourceKey(pg *divergeiov1alpha1.PreviewGroup) string {
+	if pg == nil || pg.Spec.Source.MR <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s:%s#%d",
+		strings.ToLower(strings.TrimSpace(pg.Spec.Source.Provider)),
+		strings.ToLower(strings.TrimSpace(pg.Spec.Source.Project)),
+		pg.Spec.Source.MR,
+	)
 }
 
 // listChildEnvironments returns all Environments owned by this PreviewGroup.
@@ -664,6 +845,19 @@ func (r *PreviewGroupReconciler) deleteOrphanedEnvironments(ctx context.Context,
 				}
 				r.propagateForceTeardownToChild(ctx, child)
 			}
+			// When child has environmentFinalizer on a real cluster, EnvironmentReconciler.handleTeardown
+			// drains pods first and tears down per-service DBs dynamically. Only run fallback Teardown here
+			// when child has no finalizer (e.g. standalone PreviewGroup controller unit tests).
+			if r.DatabaseProvider != nil && child.Spec.Database.Mode != "" &&
+				child.Annotations[annotationSharedGroupDB] != "true" &&
+				!controllerutil.ContainsFinalizer(child, environmentFinalizer) {
+				dbCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+				if err := r.DatabaseProvider.Teardown(dbCtx, child); err != nil {
+					logger.Error(err, "failed to teardown database for child Environment", "name", child.Name)
+				}
+				cancel()
+			}
+
 			if err := r.Delete(ctx, child); err != nil && !apierrors.IsNotFound(err) {
 				errs = append(errs, fmt.Errorf("failed to delete orphaned Environment %s/%s: %w", child.Namespace, child.Name, err))
 				continue

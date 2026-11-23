@@ -1,11 +1,15 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/yaml"
 
@@ -28,7 +32,11 @@ func formatMemberOrigin(m previewgroup.MemberRecord) string {
 		parts = append(parts, m.Branch)
 	}
 	if m.EnvironmentName != "" {
-		parts = append(parts, fmt.Sprintf("env:%s", m.EnvironmentName))
+		if m.EnvironmentNamespace != "" {
+			parts = append(parts, fmt.Sprintf("env:%s/%s", m.EnvironmentNamespace, m.EnvironmentName))
+		} else {
+			parts = append(parts, fmt.Sprintf("env:%s", m.EnvironmentName))
+		}
 	}
 	if len(parts) == 0 {
 		if m.Namespace != "" {
@@ -50,6 +58,7 @@ func validateSharedDBMode(mode string) error {
 
 func newPreviewJoinCmd(app *App) *cobra.Command {
 	var (
+		configPath    string
 		services      []string
 		fromEnvs      []string
 		headerKey     string
@@ -64,6 +73,8 @@ func newPreviewJoinCmd(app *App) *cobra.Command {
 		dbSeedSource  string
 		clusterName   string
 		clusterSecret string
+		forceTakeover bool
+		pruneMR       bool
 		dryRun        bool
 	)
 
@@ -81,11 +92,11 @@ database across all services in the PreviewGroup.
 
 Examples:
   # Join from two existing PR/MR Environment CRs
-  diverge preview join feat-checkout --from-env pr-acme-web-app-101 --from-env pr-acme-payments-api-42
+  diverge preview join feat-checkout --from-env frontend/pr-acme-web-app-101 --from-env backend/pr-acme-payments-api-42
 
   # Join from a repo CI pipeline using the branch name as the shared group
   diverge preview join feat/checkout \
-    --service payments-api=ghcr.io/acme/payments-api:pr-42 \
+    --service payments-api=ghcr.io/acme/payments-api:sha-abc123 \
     --project acme/payments-api \
     --mr 42`,
 		// editorconfig-checker-enable
@@ -111,13 +122,44 @@ Examples:
 				ttlDur = &d
 			}
 
+			// Load optional .diverge.yaml defaults (cluster_ref, asyncRoutes, per-service database, routing header)
+			var cfg *config.Config
+			var resolvedCfg config.EnvironmentSettings
+			if strings.TrimSpace(configPath) == "" {
+				configPath = ".diverge.yaml"
+			}
+			loadedCfg, cfgErr := config.Load(configPath)
+			if cfgErr != nil {
+				if cmd.Flags().Changed("config") && !errors.Is(cfgErr, os.ErrNotExist) {
+					return fmt.Errorf("failed to load config %s: %w", configPath, cfgErr)
+				}
+				if cmd.Flags().Changed("config") && errors.Is(cfgErr, os.ErrNotExist) {
+					return fmt.Errorf("failed to load config %s: %w", configPath, cfgErr)
+				}
+			} else if loadedCfg != nil {
+				if vErr := loadedCfg.Validate(); vErr == nil {
+					res := loadedCfg.Resolve("preview", nil)
+					if rErr := res.Validate(); rErr == nil {
+						cfg = loadedCfg
+						resolvedCfg = res.EnvironmentSettings
+					}
+				}
+			}
+
 			var clusterRef *divergeiov1alpha1.ClusterTargetRef
-			if strings.TrimSpace(clusterName) != "" || strings.TrimSpace(clusterSecret) != "" {
+			clusterExplicit := cmd.Flags().Changed("cluster") || cmd.Flags().Changed("cluster-secret")
+			if clusterExplicit {
 				parsedCluster, cErr := config.ParseClusterFlags(clusterName, clusterSecret)
 				if cErr != nil {
 					return fmt.Errorf("invalid cluster target flags: %w", cErr)
 				}
 				clusterRef = parsedCluster
+			} else if resolvedCfg.Deploy.ClusterRef != nil {
+				clusterRef = resolvedCfg.Deploy.ClusterRef.ToClusterTargetRef()
+			}
+
+			if !cmd.Flags().Changed("header-key") && strings.TrimSpace(resolvedCfg.Routing.HeaderKey) != "" {
+				headerKey = strings.TrimSpace(resolvedCfg.Routing.HeaderKey)
 			}
 
 			ns := strings.TrimSpace(app.Namespace)
@@ -125,7 +167,6 @@ Examples:
 				ns = "default"
 			}
 
-			// Best-effort git detection so join works both inside repos and from any directory.
 			src := divergeiov1alpha1.EnvironmentSource{
 				Provider: "local",
 				Branch:   groupName,
@@ -158,13 +199,28 @@ Examples:
 			var members []previewgroup.MemberRecord
 
 			if len(services) > 0 {
-				parsed, pErr := parseServiceSpecs(services)
+				// Use defaultPort=0 so Kubernetes Service port auto-discovery works unless :port is explicitly given.
+				parsed, pErr := parseServiceSpecsWithDefaultPort(services, 0)
 				if pErr != nil {
 					return pErr
 				}
 				for i := range parsed {
 					if parsed[i].Namespace == "" {
 						parsed[i].Namespace = ns
+					}
+					if cfg != nil {
+						if svcCfg, ok := cfg.Services[parsed[i].Name]; ok && len(parsed[i].AsyncRoutes) == 0 && len(svcCfg.AsyncRoutes) > 0 {
+							parsed[i].AsyncRoutes = slices.Clone(svcCfg.AsyncRoutes)
+						}
+						if parsed[i].Mode != divergeiov1alpha1.ServiceModeBaseline &&
+							strings.TrimSpace(dbMode) == "" &&
+							parsed[i].Database == nil &&
+							strings.TrimSpace(resolvedCfg.Database.Mode) != "" {
+							parsed[i].Database = &divergeiov1alpha1.EnvironmentDatabase{
+								Mode:       strings.TrimSpace(resolvedCfg.Database.Mode),
+								SeedSource: strings.TrimSpace(resolvedCfg.Database.SeedSource),
+							}
+						}
 					}
 					svcSpecs = append(svcSpecs, parsed[i])
 					if parsed[i].Mode != divergeiov1alpha1.ServiceModeBaseline {
@@ -186,11 +242,9 @@ Examples:
 			}
 
 			for _, envRef := range fromEnvs {
-				envNS := ns
-				envName := strings.TrimSpace(envRef)
-				if slash := strings.Index(envName, "/"); slash > 0 {
-					envNS = strings.TrimSpace(envName[:slash])
-					envName = strings.TrimSpace(envName[slash+1:])
+				envNS, envName := previewgroup.SplitEnvironmentRef(envRef)
+				if envNS == "" {
+					envNS = ns
 				}
 				if envName == "" {
 					continue
@@ -210,6 +264,10 @@ Examples:
 				}
 			}
 
+			if len(svcSpecs) == 0 {
+				return fmt.Errorf("no valid services resolved to join PreviewGroup %q", groupName)
+			}
+
 			effHeaderVal := strings.TrimSpace(headerValue)
 			if effHeaderVal == "" {
 				effHeaderVal = groupName
@@ -225,6 +283,9 @@ Examples:
 				groupDB = &divergeiov1alpha1.EnvironmentDatabase{
 					Mode:       strings.ToLower(strings.TrimSpace(dbMode)),
 					SeedSource: strings.TrimSpace(dbSeedSource),
+				}
+				for i := range svcSpecs {
+					svcSpecs[i].Database = nil
 				}
 			}
 
@@ -245,6 +306,12 @@ Examples:
 					Database:   groupDB,
 					ClusterRef: clusterRef,
 				}
+				if ttlDur != nil {
+					previewObj.Spec.Lifecycle = &divergeiov1alpha1.PreviewGroupLifecycle{
+						TTL:            &metav1.Duration{Duration: *ttlDur},
+						CleanupOnMerge: true,
+					}
+				}
 				_ = previewgroup.SetMembers(previewObj, members)
 				data, mErr := yaml.Marshal(previewObj)
 				if mErr != nil {
@@ -255,28 +322,38 @@ Examples:
 			}
 
 			res, err := previewgroup.Join(cmd.Context(), c, previewgroup.JoinOptions{
-				GroupName:         groupName,
-				Namespace:         ns,
-				Services:          svcSpecs,
-				Members:           members,
-				Source:            &src,
-				HeaderKey:         headerKey,
-				HeaderKeyExplicit: cmd.Flags().Changed("header-key"),
-				HeaderValue:       effHeaderVal,
-				ExternalURL:       extURL,
-				TTL:               ttlDur,
-				GroupDatabase:     groupDB,
-				ClusterRef:        clusterRef,
+				GroupName:           groupName,
+				Namespace:           ns,
+				Services:            svcSpecs,
+				Members:             members,
+				Source:              &src,
+				HeaderKey:           headerKey,
+				HeaderKeyExplicit:   cmd.Flags().Changed("header-key"),
+				HeaderValue:         effHeaderVal,
+				HeaderValueExplicit: cmd.Flags().Changed("header-value"),
+				ExternalURL:         extURL,
+				TTL:                 ttlDur,
+				TTLExplicit:         cmd.Flags().Changed("ttl"),
+				GroupDatabase:       groupDB,
+				ClusterRef:          clusterRef,
+				ClusterRefExplicit:  clusterExplicit,
+				AllowTakeover:       forceTakeover,
+				PruneSameMR:         pruneMR,
 			})
 			if err != nil {
 				return fmt.Errorf("failed to join PreviewGroup %q: %w", groupName, err)
+			}
+
+			out := cmd.OutOrStdout()
+			if res.DeletedGroup {
+				_, _ = fmt.Fprintf(out, "🗑️  Pruned reverted services from PreviewGroup %q; no active preview services remain, so the group was deleted.\n", groupName)
+				return nil
 			}
 
 			action := "Joined"
 			if res.Created {
 				action = "Created"
 			}
-			out := cmd.OutOrStdout()
 			_, _ = fmt.Fprintf(out, "✅ %s PreviewGroup %q (%d total services)\n", action, res.PreviewGroup.Name, len(res.PreviewGroup.Spec.Services))
 			_, _ = fmt.Fprintf(out, "   Header: %s: %s\n", res.PreviewGroup.Spec.Routing.HeaderKey, res.PreviewGroup.Spec.Routing.HeaderValue)
 			if res.PreviewGroup.Spec.Routing.ExternalURL != "" {
@@ -287,6 +364,7 @@ Examples:
 		},
 	}
 
+	cmd.Flags().StringVarP(&configPath, "config", "c", ".diverge.yaml", "path to .diverge.yaml config file")
 	cmd.Flags().StringSliceVar(&services, "service", nil, "service spec: name=image[:port] or name (baseline)")
 	cmd.Flags().StringSliceVar(&fromEnvs, "from-env", nil, "join from existing Environment CR(s) (<name> or <namespace>/<name>)")
 	cmd.Flags().StringVar(&headerKey, "header-key", previewgroup.DefaultRoutingHeaderKey, "routing header key")
@@ -301,6 +379,8 @@ Examples:
 	cmd.Flags().StringVar(&dbSeedSource, "db-seed-source", "", "optional seed source when --db-mode is set")
 	cmd.Flags().StringVar(&clusterName, "cluster", "", "target spoke cluster name (or 'local' to force hub)")
 	cmd.Flags().StringVar(&clusterSecret, "cluster-secret", "", "same-namespace Secret (<name> or <name>/<key>) holding spoke kubeconfig")
+	cmd.Flags().BoolVar(&forceTakeover, "force", false, "allow replacing a service currently owned by another MR or environment")
+	cmd.Flags().BoolVar(&pruneMR, "prune-mr", false, "remove prior services contributed by the same --project and --mr that are no longer in --service")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print PreviewGroup YAML without applying")
 
 	return cmd
@@ -343,20 +423,18 @@ func newPreviewLeaveCmd(app *App) *cobra.Command {
 			out := cmd.OutOrStdout()
 			if len(fromEnvs) > 0 {
 				for _, envRef := range fromEnvs {
-					envName := strings.TrimSpace(envRef)
-					if slash := strings.Index(envName, "/"); slash >= 0 {
-						envName = strings.TrimSpace(envName[slash+1:])
-					}
+					envNS, envName := previewgroup.SplitEnvironmentRef(envRef)
 					if envName == "" {
 						continue
 					}
 					res, lErr := previewgroup.Leave(cmd.Context(), c, previewgroup.LeaveOptions{
-						GroupName:       groupName,
-						Namespace:       app.Namespace,
-						EnvironmentName: envName,
+						GroupName:            groupName,
+						Namespace:            app.Namespace,
+						EnvironmentName:      envName,
+						EnvironmentNamespace: envNS,
 					})
 					if lErr != nil {
-						return fmt.Errorf("failed to detach %q from PreviewGroup %q: %w", envName, groupName, lErr)
+						return fmt.Errorf("failed to detach %q from PreviewGroup %q: %w", envRef, groupName, lErr)
 					}
 					printLeaveResult(out, groupName, res)
 					if res.DeletedGroup || res.NotFound {
@@ -384,7 +462,7 @@ func newPreviewLeaveCmd(app *App) *cobra.Command {
 	}
 
 	cmd.Flags().StringSliceVar(&services, "service", nil, "service name(s) to detach from the preview group")
-	cmd.Flags().StringSliceVar(&fromEnvs, "from-env", nil, "Environment CR name(s) whose service should be detached")
+	cmd.Flags().StringSliceVar(&fromEnvs, "from-env", nil, "Environment CR name(s) (<name> or <namespace>/<name>) whose service should be detached")
 	cmd.Flags().IntVar(&mrNumber, "mr", 0, "PR/MR number whose contributed service(s) should be detached")
 	cmd.Flags().StringVar(&project, "project", "", "repository path when detaching by --mr (defaults to current git remote)")
 

@@ -55,18 +55,20 @@ func (r *EnvironmentReconciler) ensureAtlasCR(ctx context.Context, env *divergei
 	u.SetName(crName)
 	u.SetNamespace(env.Namespace)
 
-	// Set owner reference
-	t := true
-	u.SetOwnerReferences([]metav1.OwnerReference{
-		{
-			APIVersion:         "divergedev.com/v1alpha1",
-			Kind:               "Environment",
-			Name:               env.Name,
-			UID:                env.UID,
-			Controller:         &t,
-			BlockOwnerDeletion: &t,
-		},
-	})
+	// Set owner reference when owner is persisted in Kubernetes
+	if env.UID != "" {
+		t := true
+		u.SetOwnerReferences([]metav1.OwnerReference{
+			{
+				APIVersion:         "divergedev.com/v1alpha1",
+				Kind:               "Environment",
+				Name:               env.Name,
+				UID:                env.UID,
+				Controller:         &t,
+				BlockOwnerDeletion: &t,
+			},
+		})
+	}
 
 	spec := map[string]interface{}{
 		"urlFrom": map[string]interface{}{
@@ -358,7 +360,7 @@ func (r *EnvironmentReconciler) ensureAtlasJob(ctx context.Context, env *diverge
 // ensureConfigMapOwner attaches the Environment as an OwnerReference to the ConfigMap
 // if it was created and managed by Diverge CLI (labeled divergedev.com/managed-by: diverge).
 func (r *EnvironmentReconciler) ensureConfigMapOwner(ctx context.Context, env *divergeiov1alpha1.Environment, cmName string) {
-	if cmName == "" {
+	if cmName == "" || env.UID == "" {
 		return
 	}
 	var cm corev1.ConfigMap

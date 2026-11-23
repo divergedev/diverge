@@ -105,6 +105,8 @@ func main() {
 	flag.StringVar(&webhookSecretToken, "webhook-secret-token", "", "The secret token for authenticating webhooks (prefer DIVERGE_WEBHOOK_SECRET env var).")
 	flag.StringVar(&gitlabAllowedUsersRaw, "gitlab-allowed-users", "", "Comma-separated list of numeric GitLab user IDs authorized to execute /diverge MR slash commands (or set DIVERGE_GITLAB_ALLOWED_USERS).")
 	flag.StringVar(&defaultNamespace, "default-namespace", "default", "Default namespace to create environments in")
+	var enablePreviewGroups bool
+	flag.BoolVar(&enablePreviewGroups, "enable-previewgroups", true, "Enable the cluster-scoped PreviewGroup reconciler (set false in strictly namespace-scoped RBAC deployments)")
 
 	var kedaMinReplicas int64
 	var kedaMaxReplicas int64
@@ -173,14 +175,23 @@ func main() {
 		}
 	}()
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	mgrOpts := ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsserver.Options{BindAddress: metricsAddr},
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "divergedev.com",
 		WebhookServer:          webhookserver.NewServer(webhookserver.Options{Port: webhookPort}),
-	})
+	}
+	if !enablePreviewGroups {
+		// Prevent starting a cluster-wide PreviewGroup informer when rbac.namespaceScoped=true.
+		mgrOpts.Client = client.Options{
+			Cache: &client.CacheOptions{
+				DisableFor: []client.Object{&divergeiov1alpha1.PreviewGroup{}},
+			},
+		}
+	}
+	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), mgrOpts)
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
@@ -315,24 +326,28 @@ func main() {
 		os.Exit(1)
 	}
 
-	pgNotifierImpl, err := notifier.GroupProviders.Create(notifierProvider, deps)
-	if err != nil {
-		setupLog.Error(err, "creating preview group notifier", "provider", notifierProvider)
-		os.Exit(1)
-	}
+	if enablePreviewGroups {
+		pgNotifierImpl, err := notifier.GroupProviders.Create(notifierProvider, deps)
+		if err != nil {
+			setupLog.Error(err, "creating preview group notifier", "provider", notifierProvider)
+			os.Exit(1)
+		}
 
-	if err = (&controller.PreviewGroupReconciler{
-		Client:           mgr.GetClient(),
-		Scheme:           mgr.GetScheme(),
-		Recorder:         events.NewRecorder(mgr.GetEventRecorder("diverge-previewgroup")),
-		Notifier:         pgNotifierImpl,
-		StatusReporter:   statusReporterImpl,
-		DatabaseProvider: dbProviderImpl,
-		ClusterClients:   clusterMgr,
-		EnableGAMMA:      enableGAMMA,
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "PreviewGroup")
-		os.Exit(1)
+		if err = (&controller.PreviewGroupReconciler{
+			Client:           mgr.GetClient(),
+			Scheme:           mgr.GetScheme(),
+			Recorder:         events.NewRecorder(mgr.GetEventRecorder("diverge-previewgroup")),
+			Notifier:         pgNotifierImpl,
+			StatusReporter:   statusReporterImpl,
+			DatabaseProvider: dbProviderImpl,
+			ClusterClients:   clusterMgr,
+			EnableGAMMA:      enableGAMMA,
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "PreviewGroup")
+			os.Exit(1)
+		}
+	} else {
+		setupLog.Info("PreviewGroup reconciler disabled via --enable-previewgroups=false")
 	}
 
 	if enableAgentSandbox {
@@ -373,9 +388,11 @@ func main() {
 		setupLog.Error(err, "unable to create webhook", "webhook", "Environment")
 		os.Exit(1)
 	}
-	if err = divergeiov1alpha1.SetupPreviewGroupWebhookWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create webhook", "webhook", "PreviewGroup")
-		os.Exit(1)
+	if enablePreviewGroups {
+		if err = divergeiov1alpha1.SetupPreviewGroupWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "PreviewGroup")
+			os.Exit(1)
+		}
 	}
 	if err = divergeiov1alpha1.SetupAgentTaskWebhookWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create webhook", "webhook", "AgentTask")
@@ -401,16 +418,17 @@ func main() {
 		setupLog.Info("WARNING: GitLab MR slash commands are disabled because no allowed user IDs are configured; set --gitlab-allowed-users or DIVERGE_GITLAB_ALLOWED_USERS")
 	}
 	mgr.GetWebhookServer().Register("/gitlab-webhook", &webhook.GitLabWebhookHandler{
-		Client:            mgr.GetClient(),
-		Config:            webhookConfig,
-		ConfigFetcher:     glConfigFetcher,
-		Commenter:         glCommenter,
-		AllowedUsers:      gitlabAllowedUsers,
-		DefaultNS:         defaultNamespace,
-		SkipWithoutConfig: skipWithoutConfig,
+		Client:               mgr.GetClient(),
+		Config:               webhookConfig,
+		ConfigFetcher:        glConfigFetcher,
+		Commenter:            glCommenter,
+		AllowedUsers:         gitlabAllowedUsers,
+		DefaultNS:            defaultNamespace,
+		SkipWithoutConfig:    skipWithoutConfig,
+		DisablePreviewGroups: !enablePreviewGroups,
 	})
 
-	if notifierProvider == "gitlab" && notifierToken != "" {
+	if enablePreviewGroups && notifierProvider == "gitlab" && notifierToken != "" {
 		mgr.GetWebhookServer().Register("/gitlab-previewgroup-webhook", &webhook.GitLabPreviewGroupWebhookHandler{
 			Client:        mgr.GetClient(),
 			Config:        webhookConfig,
@@ -433,12 +451,13 @@ func main() {
 		setupLog.Info("WARNING: direct serviceconfig deployer requires .diverge.yaml, but no Git provider token is configured; set --notifier-provider (gitlab|github) and DIVERGE_NOTIFIER_TOKEN so webhooks can fetch .diverge.yaml")
 	}
 	mgr.GetWebhookServer().Register("/github-webhook", &webhook.GitHubWebhookHandler{
-		Client:            mgr.GetClient(),
-		Config:            webhookConfig,
-		ConfigFetcher:     ghConfigFetcher,
-		Commenter:         ghCommenter,
-		DefaultNS:         defaultNamespace,
-		SkipWithoutConfig: skipWithoutConfig,
+		Client:               mgr.GetClient(),
+		Config:               webhookConfig,
+		ConfigFetcher:        ghConfigFetcher,
+		Commenter:            ghCommenter,
+		DefaultNS:            defaultNamespace,
+		SkipWithoutConfig:    skipWithoutConfig,
+		DisablePreviewGroups: !enablePreviewGroups,
 	})
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {

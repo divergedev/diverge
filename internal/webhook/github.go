@@ -36,8 +36,9 @@ type GitHubWebhookHandler struct {
 	DefaultNS     string
 	// SkipWithoutConfig ignores events from projects with no .diverge.yaml on
 	// the source branch, for deployers that cannot run without one.
-	SkipWithoutConfig bool
-	Dedup             *DeliveryDedup
+	SkipWithoutConfig    bool
+	DisablePreviewGroups bool
+	Dedup                *DeliveryDedup
 }
 
 type GitHubPRPayload struct {
@@ -436,13 +437,22 @@ func (h *GitHubWebhookHandler) reconcileEnvironment(ctx context.Context, payload
 	})
 	if errors.Is(err, errNoDotDiverge) {
 		log.FromContext(ctx).WithName("github-webhook").Info("Skipping project without .diverge.yaml", "project", env.Spec.Source.Project, "ref", env.Spec.Source.Branch)
-		return client.IgnoreNotFound(h.Client.Delete(ctx, env))
+		if delErr := client.IgnoreNotFound(h.Client.Delete(ctx, env)); delErr != nil {
+			return delErr
+		}
+		if h.DisablePreviewGroups {
+			return nil
+		}
+		_, detachErr := previewgroup.DetachMemberByPR(ctx, h.Client, payload.Repository.FullName, payload.PullRequest.Number, ns+"/"+envName)
+		return detachErr
 	}
 	if err != nil {
 		return err
 	}
-	if _, syncErr := previewgroup.SyncMemberEnvironment(ctx, h.Client, env); syncErr != nil {
-		log.FromContext(ctx).WithName("github-webhook").Info("Warning: failed to sync Environment update to shared PreviewGroups", "env", env.Name, "error", syncErr)
+	if !h.DisablePreviewGroups {
+		if _, syncErr := previewgroup.SyncMemberEnvironment(ctx, h.Client, env); syncErr != nil {
+			return fmt.Errorf("failed to sync Environment %s/%s to shared PreviewGroups: %w", ns, env.Name, syncErr)
+		}
 	}
 	return nil
 }
@@ -463,7 +473,10 @@ func (h *GitHubWebhookHandler) deleteEnvironment(ctx context.Context, payload *G
 	if err := client.IgnoreNotFound(h.Client.Delete(ctx, env)); err != nil {
 		return err
 	}
-	_, err := previewgroup.DetachMemberByPR(ctx, h.Client, payload.Repository.FullName, payload.PullRequest.Number, envName)
+	if h.DisablePreviewGroups {
+		return nil
+	}
+	_, err := previewgroup.DetachMemberByPR(ctx, h.Client, payload.Repository.FullName, payload.PullRequest.Number, ns+"/"+envName)
 	return err
 }
 

@@ -372,17 +372,20 @@ func runPreviewCreateWithCluster(cmd *cobra.Command, app *App, configPath, name 
 			ttlDur = &d
 		}
 		res, joinErr := previewgroup.Join(cmd.Context(), c, previewgroup.JoinOptions{
-			GroupName:         pg.Name,
-			Namespace:         app.Namespace,
-			Services:          svcSpecs,
-			Source:            &pg.Spec.Source,
-			HeaderKey:         headerKey,
-			HeaderKeyExplicit: cmd.Flags().Changed("header-key"),
-			HeaderValue:       headerValue,
-			TTL:               ttlDur,
-			GroupDatabase:     pg.Spec.Database,
-			ClusterRef:        pg.Spec.ClusterRef,
-			ReplaceServices:   true,
+			GroupName:           pg.Name,
+			Namespace:           app.Namespace,
+			Services:            svcSpecs,
+			Source:              &pg.Spec.Source,
+			HeaderKey:           headerKey,
+			HeaderKeyExplicit:   cmd.Flags().Changed("header-key"),
+			HeaderValue:         headerValue,
+			HeaderValueExplicit: cmd.Flags().Changed("header-value"),
+			TTL:                 ttlDur,
+			TTLExplicit:         cmd.Flags().Changed("ttl"),
+			GroupDatabase:       pg.Spec.Database,
+			ClusterRef:          pg.Spec.ClusterRef,
+			ClusterRefExplicit:  cmd.Flags().Changed("cluster") || cmd.Flags().Changed("cluster-secret") || pg.Spec.ClusterRef != nil,
+			ReplaceServices:     true,
 		})
 		if joinErr != nil {
 			return fmt.Errorf("failed to upsert PreviewGroup: %w", joinErr)
@@ -412,6 +415,10 @@ func runPreviewCreateWithCluster(cmd *cobra.Command, app *App, configPath, name 
 // If no '=' is present, the service is treated as baseline.
 // The port is detected as the last segment if it's purely numeric.
 func parseServiceSpecs(services []string) ([]divergeiov1alpha1.PreviewGroupServiceSpec, error) {
+	return parseServiceSpecsWithDefaultPort(services, 8080)
+}
+
+func parseServiceSpecsWithDefaultPort(services []string, defaultPort int32) ([]divergeiov1alpha1.PreviewGroupServiceSpec, error) {
 	specs := make([]divergeiov1alpha1.PreviewGroupServiceSpec, 0, len(services))
 	for _, s := range services {
 		s = strings.TrimSpace(s)
@@ -433,7 +440,7 @@ func parseServiceSpecs(services []string) ([]divergeiov1alpha1.PreviewGroupServi
 
 		// Check if last colon-segment is a port number
 		var image string
-		var port int32 = 8080
+		port := defaultPort
 		lastColon := strings.LastIndex(rest, ":")
 		if lastColon > 0 {
 			maybePart := rest[lastColon+1:]
@@ -443,7 +450,7 @@ func parseServiceSpecs(services []string) ([]divergeiov1alpha1.PreviewGroupServi
 			} else {
 				// Not a port — whole thing is image (e.g. image:tag)
 				image = rest
-				port = 8080
+				port = defaultPort
 			}
 		} else {
 			image = rest
@@ -563,8 +570,15 @@ func runPreviewStatus(ctx context.Context, app *App, name string, out io.Writer)
 	var asyncRoutes []divergeiov1alpha1.AsyncRouteSpec
 	for _, svc := range pg.Status.Services {
 		if svc.EnvironmentName != "" {
+			childNS := strings.TrimSpace(svc.Namespace)
+			if childNS == "" {
+				childNS = app.Namespace
+			}
+			if childNS == "" {
+				childNS = "default"
+			}
 			var childEnv divergeiov1alpha1.Environment
-			if err := c.Get(ctx, types.NamespacedName{Name: svc.EnvironmentName, Namespace: app.Namespace}, &childEnv); err == nil {
+			if err := c.Get(ctx, types.NamespacedName{Name: svc.EnvironmentName, Namespace: childNS}, &childEnv); err == nil {
 				asyncRoutes = append(asyncRoutes, childEnv.Spec.Routing.AsyncRoutes...)
 			}
 		}
@@ -620,9 +634,19 @@ func runPreviewStatus(ctx context.Context, app *App, name string, out io.Writer)
 	var hookJobs batchv1.JobList
 	for _, svc := range pg.Status.Services {
 		if svc.EnvironmentName != "" {
+			jobNS := strings.TrimSpace(svc.Namespace)
+			if jobNS == "" {
+				jobNS = strings.TrimSpace(pg.Namespace)
+			}
+			if jobNS == "" {
+				jobNS = strings.TrimSpace(app.Namespace)
+			}
+			if jobNS == "" {
+				jobNS = "default"
+			}
 			var jobs batchv1.JobList
 			if err := c.List(ctx, &jobs,
-				client.InNamespace(pg.Namespace),
+				client.InNamespace(jobNS),
 				client.MatchingLabels{"divergedev.com/environment": truncateLabel(svc.EnvironmentName)},
 			); err != nil {
 				_, _ = fmt.Fprintf(out, "   ⚠️  Failed to list hooks: %v\n", err)

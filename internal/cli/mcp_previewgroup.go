@@ -12,6 +12,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/protocgen/proto2mcp/pkg/mcpruntime"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	divergev1alpha1 "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
@@ -79,6 +80,10 @@ var joinPreviewGroupSchema = json.RawMessage(`{
 			"type": "string",
 			"enum": ["shared", "schema", "snapshot", "fresh", "cnpg", "neon"],
 			"description": "Optional shared group-level database mode; omit to preserve each MR's own database config"
+		},
+		"force": {
+			"type": "boolean",
+			"description": "Allow replacing a service currently owned by another MR or Environment"
 		}
 	},
 	"required": ["group_name"],
@@ -104,7 +109,7 @@ var leavePreviewGroupSchema = json.RawMessage(`{
 		"environment_names": {
 			"type": "array",
 			"items": {"type": "string"},
-			"description": "Environment CR name(s) whose contributed service(s) should be detached"
+			"description": "Environment CR name(s) ('<name>' or '<namespace>/<name>') whose contributed service(s) should be detached"
 		},
 		"project": {
 			"type": "string",
@@ -190,12 +195,13 @@ func protoEnvToServiceSpec(env *divergev1alpha1.Environment, defaultNS string) (
 		return nil, previewgroup.MemberRecord{}, fmt.Errorf("environment %q has no container image configured", env.Name)
 	}
 
+	envNS := strings.TrimSpace(env.Namespace)
+	if envNS == "" {
+		envNS = defaultNS
+	}
 	ns := strings.TrimSpace(sc.GetNamespace())
 	if ns == "" {
-		ns = strings.TrimSpace(env.Namespace)
-	}
-	if ns == "" {
-		ns = defaultNS
+		ns = envNS
 	}
 
 	pgSvc := &divergev1alpha1.PreviewGroupServiceSpec{
@@ -224,14 +230,16 @@ func protoEnvToServiceSpec(env *divergev1alpha1.Environment, defaultNS string) (
 
 	src := spec.GetSource()
 	member := previewgroup.MemberRecord{
-		Service:         svcName,
-		Namespace:       ns,
-		Provider:        src.GetProvider(),
-		Project:         src.GetProject(),
-		MR:              int(src.GetMr()),
-		Branch:          src.GetBranch(),
-		EnvironmentName: env.Name,
-		UpdatedAt:       time.Now().UTC().Format(time.RFC3339),
+		Service:                    svcName,
+		Namespace:                  ns,
+		Provider:                   src.GetProvider(),
+		Project:                    src.GetProject(),
+		MR:                         int(src.GetMr()),
+		Branch:                     src.GetBranch(),
+		EnvironmentName:            env.Name,
+		EnvironmentNamespace:       envNS,
+		EnvironmentResourceVersion: env.ResourceVersion,
+		UpdatedAt:                  time.Now().UTC().Format(time.RFC3339),
 	}
 	return pgSvc, member, nil
 }
@@ -256,6 +264,7 @@ func registerPreviewGroupComposeTools(
 			ExternalURL        string                `json:"external_url"`
 			TTLSeconds         int64                 `json:"ttl_seconds"`
 			SharedDatabaseMode string                `json:"shared_database_mode"`
+			Force              bool                  `json:"force"`
 		}
 		if len(req.Arguments) > 0 {
 			if err := json.Unmarshal(req.Arguments, &params); err != nil {
@@ -290,11 +299,9 @@ func registerPreviewGroupComposeTools(
 			if envClient == nil {
 				return errorToolResult(errors.New("environment client is not configured")), nil
 			}
-			envNS := ns
-			envName := strings.TrimSpace(envRef)
-			if slash := strings.Index(envName, "/"); slash > 0 {
-				envNS = strings.TrimSpace(envName[:slash])
-				envName = strings.TrimSpace(envName[slash+1:])
+			envNS, envName := previewgroup.SplitEnvironmentRef(envRef)
+			if envNS == "" {
+				envNS = ns
 			}
 			if envName == "" {
 				continue
@@ -355,6 +362,10 @@ func registerPreviewGroupComposeTools(
 			}
 		}
 
+		if len(incomingSvcs) == 0 {
+			return errorToolResult(errors.New("no valid services resolved from environment_names or services")), nil
+		}
+
 		headerKey := strings.TrimSpace(params.HeaderKey)
 		if headerKey == "" {
 			headerKey = previewgroup.DefaultRoutingHeaderKey
@@ -373,7 +384,7 @@ func registerPreviewGroupComposeTools(
 
 		var finalPG *divergev1alpha1.PreviewGroup
 		created := false
-		for attempt := 0; attempt < 3; attempt++ {
+		for attempt := 0; attempt < 5; attempt++ {
 			getResp, getErr := pgClient.GetPreviewGroup(ctx, connect.NewRequest(&divergev1alpha1.GetPreviewGroupRequest{
 				Name:      groupName,
 				Namespace: ns,
@@ -409,18 +420,20 @@ func registerPreviewGroupComposeTools(
 						ordered = append(ordered, m)
 					}
 				}
-				membersJSON, _ := json.Marshal(ordered)
+				ann := map[string]string{
+					previewgroup.AnnotationTTLRenewedAt: nowStr,
+				}
+				if len(ordered) > 0 {
+					membersJSON, _ := json.Marshal(ordered)
+					ann[previewgroup.AnnotationGroupMembers] = string(membersJSON)
+				}
 				createResp, cErr := pgClient.CreatePreviewGroup(ctx, connect.NewRequest(&divergev1alpha1.CreatePreviewGroupRequest{
 					Namespace: ns,
 					PreviewGroup: &divergev1alpha1.PreviewGroup{
-						Name:      groupName,
-						Namespace: ns,
-						Labels: map[string]string{
-							previewgroup.LabelComposedGroup: "true",
-						},
-						Annotations: map[string]string{
-							previewgroup.AnnotationGroupMembers: string(membersJSON),
-						},
+						Name:        groupName,
+						Namespace:   ns,
+						Labels:      map[string]string{previewgroup.LabelComposedGroup: "true"},
+						Annotations: ann,
 						Spec: &divergev1alpha1.PreviewGroupSpec{
 							Source: src,
 							Routing: &divergev1alpha1.PreviewGroupRouting{
@@ -450,25 +463,64 @@ func registerPreviewGroupComposeTools(
 			}
 
 			cur := getResp.Msg.GetPreviewGroup()
-			spec := cur.GetSpec()
+			spec := proto.Clone(cur.GetSpec()).(*divergev1alpha1.PreviewGroupSpec)
 			if spec == nil {
 				spec = &divergev1alpha1.PreviewGroupSpec{}
 			}
+			existingMembers := parseProtoMembers(cur.GetAnnotations())
+			priorByService := make(map[string]previewgroup.MemberRecord, len(existingMembers))
+			for _, pm := range existingMembers {
+				if strings.TrimSpace(pm.Service) != "" {
+					priorByService[pm.Service] = pm
+				}
+			}
+
+			if sharedDB != nil {
+				spec.Database = sharedDB
+			}
+			hasActiveGroupDB := !isZeroProtoDatabase(spec.GetDatabase())
+
 			mergedSvcs := slices.Clone(spec.GetServices())
-			for _, inc := range incomingSvcs {
+			for _, origInc := range incomingSvcs {
+				inc := proto.Clone(origInc).(*divergev1alpha1.PreviewGroupServiceSpec)
+				if hasActiveGroupDB {
+					inc.Database = nil
+				}
 				idx := slices.IndexFunc(mergedSvcs, func(s *divergev1alpha1.PreviewGroupServiceSpec) bool {
 					return s.GetName() == inc.Name
 				})
 				if idx >= 0 {
+					if !params.Force {
+						if curOwner, owned := priorByService[inc.Name]; owned {
+							incMember := membersBySvc[inc.Name]
+							if !previewgroup.SameMemberOwner(curOwner, incMember) {
+								return errorToolResult(fmt.Errorf(
+									"service %q in PreviewGroup %q is already owned by %s; set force=true to replace it",
+									inc.Name, groupName, previewgroup.FormatOwnerSummary(curOwner),
+								)), nil
+							}
+						}
+					}
 					if inc.ClusterRef == nil && mergedSvcs[idx].GetClusterRef() != nil {
-						inc.ClusterRef = mergedSvcs[idx].GetClusterRef()
+						inc.ClusterRef = proto.Clone(mergedSvcs[idx].GetClusterRef()).(*divergev1alpha1.ClusterTargetRef)
+					}
+					if inc.PostDeploy == nil && mergedSvcs[idx].GetPostDeploy() != nil {
+						inc.PostDeploy = proto.Clone(mergedSvcs[idx].GetPostDeploy()).(*divergev1alpha1.PostDeploySpec)
 					}
 					mergedSvcs[idx] = inc
 				} else {
 					mergedSvcs = append(mergedSvcs, inc)
 				}
 			}
+			if sharedDB != nil {
+				for i := range mergedSvcs {
+					cp := proto.Clone(mergedSvcs[i]).(*divergev1alpha1.PreviewGroupServiceSpec)
+					cp.Database = nil
+					mergedSvcs[i] = cp
+				}
+			}
 			spec.Services = mergedSvcs
+
 			if spec.Routing == nil {
 				spec.Routing = &divergev1alpha1.PreviewGroupRouting{
 					Mode:        "header",
@@ -485,17 +537,19 @@ func registerPreviewGroupComposeTools(
 			if strings.TrimSpace(params.ExternalURL) != "" {
 				spec.Routing.ExternalUrl = strings.TrimSpace(params.ExternalURL)
 			}
+
+			ann := make(map[string]string, len(cur.GetAnnotations())+2)
+			for k, v := range cur.GetAnnotations() {
+				ann[k] = v
+			}
 			if params.TTLSeconds > 0 {
 				if spec.Lifecycle == nil {
 					spec.Lifecycle = &divergev1alpha1.PreviewGroupLifecycle{}
 				}
 				spec.Lifecycle.Ttl = durationpb.New(time.Duration(params.TTLSeconds) * time.Second)
-			}
-			if sharedDB != nil {
-				spec.Database = sharedDB
+				ann[previewgroup.AnnotationTTLRenewedAt] = nowStr
 			}
 
-			existingMembers := parseProtoMembers(cur.GetAnnotations())
 			byService := make(map[string]previewgroup.MemberRecord, len(existingMembers)+len(membersBySvc))
 			for _, m := range existingMembers {
 				byService[m.Service] = m
@@ -512,24 +566,27 @@ func registerPreviewGroupComposeTools(
 					ordered = append(ordered, m)
 				}
 			}
-			ann := make(map[string]string, len(cur.GetAnnotations())+1)
-			for k, v := range cur.GetAnnotations() {
-				ann[k] = v
-			}
 			if len(ordered) > 0 {
 				membersJSON, _ := json.Marshal(ordered)
 				ann[previewgroup.AnnotationGroupMembers] = string(membersJSON)
+			} else {
+				delete(ann, previewgroup.AnnotationGroupMembers)
 			}
+
 			lbl := make(map[string]string, len(cur.GetLabels())+1)
 			for k, v := range cur.GetLabels() {
 				lbl[k] = v
 			}
 			lbl[previewgroup.LabelComposedGroup] = "true"
 
+			reqNS := cur.Namespace
+			if reqNS == "" {
+				reqNS = ns
+			}
 			updResp, uErr := pgClient.UpdatePreviewGroup(ctx, connect.NewRequest(&divergev1alpha1.UpdatePreviewGroupRequest{
 				PreviewGroup: &divergev1alpha1.PreviewGroup{
 					Name:            cur.Name,
-					Namespace:       cur.Namespace,
+					Namespace:       reqNS,
 					ResourceVersion: cur.ResourceVersion,
 					Labels:          lbl,
 					Annotations:     ann,
@@ -598,131 +655,195 @@ func registerPreviewGroupComposeTools(
 			ns = "default"
 		}
 
-		getResp, getErr := pgClient.GetPreviewGroup(ctx, connect.NewRequest(&divergev1alpha1.GetPreviewGroupRequest{
-			Name:      groupName,
-			Namespace: ns,
-		}))
-		if getErr != nil {
-			if connect.CodeOf(getErr) == connect.CodeNotFound {
+		type envSelector struct {
+			ns   string
+			name string
+		}
+		var envSelectors []envSelector
+		for _, e := range params.EnvironmentNames {
+			eNS, eName := previewgroup.SplitEnvironmentRef(e)
+			if eName != "" {
+				envSelectors = append(envSelectors, envSelector{ns: eNS, name: eName})
+			}
+		}
+
+		for attempt := 0; attempt < 5; attempt++ {
+			getResp, getErr := pgClient.GetPreviewGroup(ctx, connect.NewRequest(&divergev1alpha1.GetPreviewGroupRequest{
+				Name:      groupName,
+				Namespace: ns,
+			}))
+			if getErr != nil {
+				if connect.CodeOf(getErr) == connect.CodeNotFound {
+					out, _ := json.Marshal(map[string]any{
+						"group_name": groupName,
+						"not_found":  true,
+					})
+					return &mcpruntime.CallToolResult{Content: json.RawMessage(out)}, nil
+				}
+				return errorToolResult(getErr), nil
+			}
+
+			cur := getResp.Msg.GetPreviewGroup()
+			members := parseProtoMembers(cur.GetAnnotations())
+			removeSet := make(map[string]bool)
+			for _, s := range params.ServiceNames {
+				if trimmed := strings.TrimSpace(s); trimmed != "" {
+					removeSet[trimmed] = true
+				}
+			}
+			projClean := strings.TrimSpace(params.Project)
+			for _, m := range members {
+				matchedEnv := false
+				for _, sel := range envSelectors {
+					if m.EnvironmentName == sel.name {
+						if sel.ns == "" {
+							matchedEnv = true
+							break
+						}
+						memEnvNS := strings.TrimSpace(m.EnvironmentNamespace)
+						if memEnvNS != "" && memEnvNS == sel.ns {
+							matchedEnv = true
+							break
+						}
+						if memEnvNS == "" && strings.TrimSpace(m.Namespace) == sel.ns {
+							matchedEnv = true
+							break
+						}
+					}
+				}
+				if matchedEnv {
+					removeSet[m.Service] = true
+					continue
+				}
+				if params.MR > 0 && m.MR == params.MR && (projClean == "" || strings.EqualFold(m.Project, projClean)) {
+					removeSet[m.Service] = true
+				}
+			}
+
+			var keptSvcs []*divergev1alpha1.PreviewGroupServiceSpec
+			var removed []string
+			var remainingActive []string
+			for _, svc := range cur.GetSpec().GetServices() {
+				if removeSet[svc.GetName()] {
+					removed = append(removed, svc.GetName())
+					continue
+				}
+				keptSvcs = append(keptSvcs, svc)
+				if svc.GetMode() != "baseline" {
+					remainingActive = append(remainingActive, svc.GetName())
+				}
+			}
+
+			if len(removed) == 0 {
 				out, _ := json.Marshal(map[string]any{
-					"group_name": groupName,
-					"not_found":  true,
+					"group_name":         cur.Name,
+					"removed_services":   []string{},
+					"remaining_services": remainingActive,
+					"deleted_group":      false,
 				})
 				return &mcpruntime.CallToolResult{Content: json.RawMessage(out)}, nil
 			}
-			return errorToolResult(getErr), nil
-		}
 
-		cur := getResp.Msg.GetPreviewGroup()
-		members := parseProtoMembers(cur.GetAnnotations())
-		removeSet := make(map[string]bool)
-		for _, s := range params.ServiceNames {
-			if trimmed := strings.TrimSpace(s); trimmed != "" {
-				removeSet[trimmed] = true
+			reqNS := cur.Namespace
+			if reqNS == "" {
+				reqNS = ns
 			}
-		}
-		envSet := make(map[string]bool, len(params.EnvironmentNames))
-		for _, e := range params.EnvironmentNames {
-			trimmed := strings.TrimSpace(e)
-			if slash := strings.Index(trimmed, "/"); slash >= 0 {
-				trimmed = strings.TrimSpace(trimmed[slash+1:])
-			}
-			if trimmed != "" {
-				envSet[trimmed] = true
-			}
-		}
-		projClean := strings.TrimSpace(params.Project)
-		for _, m := range members {
-			if envSet[m.EnvironmentName] {
-				removeSet[m.Service] = true
-				continue
-			}
-			if params.MR > 0 && m.MR == params.MR && (projClean == "" || strings.EqualFold(m.Project, projClean)) {
-				removeSet[m.Service] = true
-			}
-		}
 
-		var keptSvcs []*divergev1alpha1.PreviewGroupServiceSpec
-		var removed []string
-		var remainingActive []string
-		for _, svc := range cur.GetSpec().GetServices() {
-			if removeSet[svc.GetName()] {
-				removed = append(removed, svc.GetName())
-				continue
+			if len(remainingActive) == 0 {
+				delReq := connect.NewRequest(&divergev1alpha1.DeletePreviewGroupRequest{
+					Name:      cur.Name,
+					Namespace: reqNS,
+				})
+				if cur.ResourceVersion != "" {
+					delReq.Header().Set("If-Match", cur.ResourceVersion)
+				}
+				if _, delErr := pgClient.DeletePreviewGroup(ctx, delReq); delErr != nil {
+					if connect.CodeOf(delErr) == connect.CodeAborted {
+						continue
+					}
+					if connect.CodeOf(delErr) != connect.CodeNotFound {
+						return errorToolResult(delErr), nil
+					}
+				}
+				out, _ := json.Marshal(map[string]any{
+					"group_name":       cur.Name,
+					"removed_services": removed,
+					"deleted_group":    true,
+				})
+				return &mcpruntime.CallToolResult{Content: json.RawMessage(out)}, nil
 			}
-			keptSvcs = append(keptSvcs, svc)
-			if svc.GetMode() != "baseline" {
-				remainingActive = append(remainingActive, svc.GetName())
-			}
-		}
 
-		if len(removed) == 0 {
+			var keptMembers []previewgroup.MemberRecord
+			for _, m := range members {
+				if !removeSet[m.Service] {
+					keptMembers = append(keptMembers, m)
+				}
+			}
+			ann := make(map[string]string, len(cur.GetAnnotations()))
+			for k, v := range cur.GetAnnotations() {
+				ann[k] = v
+			}
+			if len(keptMembers) > 0 {
+				membersJSON, _ := json.Marshal(keptMembers)
+				ann[previewgroup.AnnotationGroupMembers] = string(membersJSON)
+			} else {
+				delete(ann, previewgroup.AnnotationGroupMembers)
+			}
+
+			spec := proto.Clone(cur.GetSpec()).(*divergev1alpha1.PreviewGroupSpec)
+			spec.Services = keptSvcs
+			// Promote Spec.Source when the creator MR leaves so SCM notifications move to an active remaining MR.
+			if spec.Source != nil && spec.Source.Mr > 0 && len(keptMembers) > 0 {
+				stillActive := false
+				for _, m := range keptMembers {
+					if strings.EqualFold(m.Project, spec.Source.Project) && m.MR == int(spec.Source.Mr) {
+						stillActive = true
+						break
+					}
+				}
+				if !stillActive {
+					for _, m := range keptMembers {
+						if m.MR > 0 && strings.TrimSpace(m.Project) != "" {
+							prov := strings.ToLower(strings.TrimSpace(m.Provider))
+							if prov == "" {
+								prov = spec.Source.Provider
+							}
+							spec.Source = &divergev1alpha1.EnvironmentSource{
+								Provider: prov,
+								Project:  m.Project,
+								Mr:       int32(m.MR),
+								Branch:   m.Branch,
+							}
+							break
+						}
+					}
+				}
+			}
+			if _, uErr := pgClient.UpdatePreviewGroup(ctx, connect.NewRequest(&divergev1alpha1.UpdatePreviewGroupRequest{
+				PreviewGroup: &divergev1alpha1.PreviewGroup{
+					Name:            cur.Name,
+					Namespace:       reqNS,
+					ResourceVersion: cur.ResourceVersion,
+					Labels:          cur.GetLabels(),
+					Annotations:     ann,
+					Spec:            spec,
+				},
+			})); uErr != nil {
+				if connect.CodeOf(uErr) == connect.CodeAborted {
+					continue
+				}
+				return errorToolResult(uErr), nil
+			}
+
 			out, _ := json.Marshal(map[string]any{
 				"group_name":         cur.Name,
-				"removed_services":   []string{},
+				"removed_services":   removed,
 				"remaining_services": remainingActive,
 				"deleted_group":      false,
 			})
 			return &mcpruntime.CallToolResult{Content: json.RawMessage(out)}, nil
 		}
 
-		if len(remainingActive) == 0 {
-			delNS := cur.Namespace
-			if delNS == "" {
-				delNS = ns
-			}
-			if _, delErr := pgClient.DeletePreviewGroup(ctx, connect.NewRequest(&divergev1alpha1.DeletePreviewGroupRequest{
-				Name:      cur.Name,
-				Namespace: delNS,
-			})); delErr != nil && connect.CodeOf(delErr) != connect.CodeNotFound {
-				return errorToolResult(delErr), nil
-			}
-			out, _ := json.Marshal(map[string]any{
-				"group_name":       cur.Name,
-				"removed_services": removed,
-				"deleted_group":    true,
-			})
-			return &mcpruntime.CallToolResult{Content: json.RawMessage(out)}, nil
-		}
-
-		var keptMembers []previewgroup.MemberRecord
-		for _, m := range members {
-			if !removeSet[m.Service] {
-				keptMembers = append(keptMembers, m)
-			}
-		}
-		ann := make(map[string]string, len(cur.GetAnnotations()))
-		for k, v := range cur.GetAnnotations() {
-			ann[k] = v
-		}
-		if len(keptMembers) > 0 {
-			membersJSON, _ := json.Marshal(keptMembers)
-			ann[previewgroup.AnnotationGroupMembers] = string(membersJSON)
-		} else {
-			delete(ann, previewgroup.AnnotationGroupMembers)
-		}
-
-		spec := cur.GetSpec()
-		spec.Services = keptSvcs
-		if _, uErr := pgClient.UpdatePreviewGroup(ctx, connect.NewRequest(&divergev1alpha1.UpdatePreviewGroupRequest{
-			PreviewGroup: &divergev1alpha1.PreviewGroup{
-				Name:            cur.Name,
-				Namespace:       cur.Namespace,
-				ResourceVersion: cur.ResourceVersion,
-				Labels:          cur.GetLabels(),
-				Annotations:     ann,
-				Spec:            spec,
-			},
-		})); uErr != nil {
-			return errorToolResult(uErr), nil
-		}
-
-		out, _ := json.Marshal(map[string]any{
-			"group_name":         cur.Name,
-			"removed_services":   removed,
-			"remaining_services": remainingActive,
-			"deleted_group":      false,
-		})
-		return &mcpruntime.CallToolResult{Content: json.RawMessage(out)}, nil
+		return errorToolResult(errors.New("conflict retries exhausted detaching from PreviewGroup")), nil
 	})
 }

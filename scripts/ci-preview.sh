@@ -81,7 +81,8 @@ emit_output() {
 }
 
 normalize_group_slug() {
-  local raw="$1"
+  local raw
+  raw="$(printf '%s' "$1" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
   local slug
   slug="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | sed -E 's/[\/_.]+/-/g; s/[^a-z0-9-]+/-/g; s/-+/-/g; s/^-+//; s/-+$//')"
   if [[ "${#slug}" -gt 63 ]]; then
@@ -100,6 +101,35 @@ normalize_group_slug() {
     fi
   fi
   printf '%s' "${slug:-preview}"
+}
+
+resolve_default_image_tag() {
+  local preview_name="$1"
+  if [[ -n "$INPUT_IMAGE_TAG" ]]; then
+    printf '%s' "$INPUT_IMAGE_TAG"
+    return
+  fi
+  if [[ -n "$INPUT_GROUP" ]]; then
+    if [[ -n "${GITHUB_SHA:-}" ]]; then
+      printf '%s' "${GITHUB_SHA:0:12}"
+      return
+    fi
+    if [[ -n "${CI_COMMIT_SHORT_SHA:-}" ]]; then
+      printf '%s' "$CI_COMMIT_SHORT_SHA"
+      return
+    fi
+    local git_sha
+    git_sha="$(git rev-parse --short=12 HEAD 2>/dev/null || true)"
+    if [[ -n "$git_sha" ]]; then
+      printf '%s' "$git_sha"
+      return
+    fi
+    if [[ -n "$INPUT_PR_NUMBER" ]]; then
+      printf 'pr-%s' "$INPUT_PR_NUMBER"
+      return
+    fi
+  fi
+  printf '%s' "$preview_name"
 }
 
 resolve_preview_name() {
@@ -128,12 +158,19 @@ extract_config_services() {
   local cfg="$1"
   [[ -f "$cfg" ]] || return 0
   awk '
-    /^services:[[:space:]]*$/ { in_services=1; next }
-    /^[^[:space:]#]/ { in_services=0 }
+    /^services:[[:space:]]*$/ { in_services=1; in_spec=0; next }
+    /^spec:[[:space:]]*$/ { in_spec=1; in_services=0; next }
+    /^[^[:space:]#]/ { in_services=0; in_spec=0 }
     in_services && /^  [a-zA-Z0-9._-]+:[[:space:]]*$/ {
       line=$0
       sub(/^[[:space:]]+/, "", line)
       sub(/:[[:space:]]*$/, "", line)
+      print line
+    }
+    in_spec && /^  serviceName:[[:space:]]*[a-zA-Z0-9._-]+[[:space:]]*$/ {
+      line=$0
+      sub(/^[[:space:]]*serviceName:[[:space:]]*/, "", line)
+      sub(/[[:space:]]*$/, "", line)
       print line
     }
   ' "$cfg"
@@ -279,6 +316,14 @@ case "$INPUT_ACTION" in
 
       if [[ "${#CHANGED_SERVICES[@]}" -eq 0 ]]; then
         echo "No service changes detected relative to ${INPUT_BASE_REF}; skipping preview deployment."
+        if [[ -n "$INPUT_GROUP" && "$INPUT_DRY_RUN" != "true" && "$INPUT_PR_NUMBER" =~ ^[0-9]+$ && "$INPUT_PR_NUMBER" -gt 0 ]]; then
+          SCM_PROJECT="${GITHUB_REPOSITORY:-${CI_PROJECT_PATH:-}}"
+          REVERT_LEAVE_ARGS=(preview leave "$INPUT_GROUP" -n "$INPUT_NAMESPACE" --mr "$INPUT_PR_NUMBER")
+          if [[ -n "$SCM_PROJECT" ]]; then
+            REVERT_LEAVE_ARGS+=(--project "$SCM_PROJECT")
+          fi
+          "$DIVERGE_BIN" "${REVERT_LEAVE_ARGS[@]}" || true
+        fi
         emit_output "preview-name" "$PREVIEW_NAME"
         emit_output "changed-services" "[]"
         emit_output "changed-count" "0"
@@ -289,7 +334,7 @@ case "$INPUT_ACTION" in
         exit 0
       fi
 
-      IMAGE_TAG="${INPUT_IMAGE_TAG:-$PREVIEW_NAME}"
+      IMAGE_TAG="$(resolve_default_image_tag "$PREVIEW_NAME")"
       for svc in "${CHANGED_SERVICES[@]}"; do
         if [[ -n "$INPUT_IMAGE_REGISTRY" ]]; then
           SVC_ARGS+=("--service" "${svc}=${INPUT_IMAGE_REGISTRY%/}/${svc}:${IMAGE_TAG}")
@@ -318,11 +363,20 @@ case "$INPUT_ACTION" in
     if [[ -n "$INPUT_GROUP" ]]; then
       JOIN_ARGS=(
         preview join "$INPUT_GROUP"
-        --header-key "$INPUT_HEADER_KEY"
-        --header-value "$HEADER_VALUE"
-        --ttl "$INPUT_TTL"
         -n "$INPUT_NAMESPACE"
       )
+      if [[ -n "$INPUT_CONFIG" ]] && { [[ "$INPUT_CONFIG" != ".diverge.yaml" ]] || [[ -f "$INPUT_CONFIG" ]]; }; then
+        JOIN_ARGS+=(--config "$INPUT_CONFIG")
+      fi
+      if [[ "$INPUT_HEADER_KEY" != "x-diverge-env" ]]; then
+        JOIN_ARGS+=(--header-key "$INPUT_HEADER_KEY")
+      fi
+      if [[ -n "$INPUT_HEADER_VALUE" ]]; then
+        JOIN_ARGS+=(--header-value "$INPUT_HEADER_VALUE")
+      fi
+      if [[ -n "$INPUT_TTL" && "$INPUT_TTL" != "4h" ]]; then
+        JOIN_ARGS+=(--ttl "$INPUT_TTL")
+      fi
       SCM_PROJECT="${GITHUB_REPOSITORY:-${CI_PROJECT_PATH:-}}"
       if [[ -n "$SCM_PROJECT" ]]; then
         JOIN_ARGS+=(--project "$SCM_PROJECT")
@@ -331,7 +385,7 @@ case "$INPUT_ACTION" in
         JOIN_ARGS+=(--branch "$INPUT_BRANCH")
       fi
       if [[ "$INPUT_PR_NUMBER" =~ ^[0-9]+$ ]] && [[ "$INPUT_PR_NUMBER" -gt 0 ]]; then
-        JOIN_ARGS+=(--mr "$INPUT_PR_NUMBER")
+        JOIN_ARGS+=(--mr "$INPUT_PR_NUMBER" --prune-mr)
       fi
       if [[ -n "$INPUT_BASE_URL" ]]; then
         JOIN_ARGS+=(--base-url "$INPUT_BASE_URL")
@@ -475,8 +529,7 @@ case "$INPUT_ACTION" in
       if [[ "$INPUT_PR_NUMBER" =~ ^[0-9]+$ ]] && [[ "$INPUT_PR_NUMBER" -gt 0 ]]; then
         LEAVE_ARGS+=(--mr "$INPUT_PR_NUMBER")
         has_leave_selector=1
-      fi
-      if [[ -n "$INPUT_SERVICES" ]]; then
+      elif [[ -n "$INPUT_SERVICES" ]]; then
         while IFS= read -r entry; do
           entry="$(printf '%s' "$entry" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
           [[ -z "$entry" ]] && continue

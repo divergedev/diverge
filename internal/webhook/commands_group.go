@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
@@ -72,6 +73,9 @@ func parseGroupCommandArgs(tokens []string) (groupName, dbMode string, ok bool) 
 func executeGroupCommand(ctx context.Context, c client.Client, ns string, cmd *SlashCommand, repoURL, branch string, prNumber int) (string, error) {
 	groupName, err := previewgroup.NormalizeGroupName(cmd.GroupName)
 	if err != nil {
+		if apierrors.IsForbidden(err) {
+			return "⚠️ Shared `PreviewGroup`s require cluster-scoped controller RBAC (`rbac.namespaceScoped=false`).", nil
+		}
 		return "", err
 	}
 
@@ -85,6 +89,9 @@ func executeGroupCommand(ctx context.Context, c client.Client, ns string, cmd *S
 
 	envs, err := findMatchingEnvironments(ctx, c, ns, repoURL, prNumber)
 	if err != nil {
+		if apierrors.IsForbidden(err) {
+			return "⚠️ Shared `PreviewGroup`s require cluster-scoped controller RBAC (`rbac.namespaceScoped=false`).", nil
+		}
 		return "", err
 	}
 	for i := range envs {
@@ -215,6 +222,9 @@ func executeGroupCommand(ctx context.Context, c client.Client, ns string, cmd *S
 		Traceparent:   TraceparentFromContext(ctx),
 	})
 	if err != nil {
+		if apierrors.IsForbidden(err) {
+			return "⚠️ Shared `PreviewGroup`s require cluster-scoped controller RBAC (`rbac.namespaceScoped=false`).", nil
+		}
 		return "", err
 	}
 
@@ -282,24 +292,36 @@ func executeGroupCommand(ctx context.Context, c client.Client, ns string, cmd *S
 func executeUngroupCommand(ctx context.Context, c client.Client, ns, groupName, repoURL string, prNumber int) (string, error) {
 	project := projectFromRepoURL(repoURL)
 
-	var envName string
+	var envName, envNS string
 	envs, err := findMatchingEnvironments(ctx, c, ns, repoURL, prNumber)
 	if err != nil {
+		if apierrors.IsForbidden(err) {
+			return "⚠️ Shared `PreviewGroup`s require cluster-scoped controller RBAC (`rbac.namespaceScoped=false`).", nil
+		}
 		return "", err
 	}
-	if len(envs) > 0 {
-		envName = envs[0].Name
+	for i := range envs {
+		if envs[i].Labels != nil && envs[i].Labels["divergedev.com/managed-by"] == "diverge-previewgroup" {
+			continue
+		}
+		envName = envs[i].Name
+		envNS = envs[i].Namespace
+		break
 	}
 
 	if strings.TrimSpace(groupName) != "" {
 		res, leaveErr := previewgroup.Leave(ctx, c, previewgroup.LeaveOptions{
-			GroupName:       groupName,
-			Namespace:       ns,
-			Project:         project,
-			MR:              prNumber,
-			EnvironmentName: envName,
+			GroupName:            groupName,
+			Namespace:            ns,
+			Project:              project,
+			MR:                   prNumber,
+			EnvironmentName:      envName,
+			EnvironmentNamespace: envNS,
 		})
 		if leaveErr != nil {
+			if apierrors.IsForbidden(leaveErr) {
+				return "⚠️ Shared `PreviewGroup`s require cluster-scoped controller RBAC (`rbac.namespaceScoped=false`).", nil
+			}
 			return "", leaveErr
 		}
 		if res == nil || res.NotFound {
@@ -315,8 +337,15 @@ func executeUngroupCommand(ctx context.Context, c client.Client, ns, groupName, 
 			strings.Join(res.RemovedServices, ", "), res.GroupName, strings.Join(res.RemovedServices, ", "), strings.Join(res.RemainingServices, ", ")), nil
 	}
 
-	results, err := previewgroup.DetachMemberByPR(ctx, c, project, prNumber, envName)
+	envRef := envName
+	if envNS != "" && envName != "" {
+		envRef = envNS + "/" + envName
+	}
+	results, err := previewgroup.DetachMemberByPR(ctx, c, project, prNumber, envRef)
 	if err != nil {
+		if apierrors.IsForbidden(err) {
+			return "⚠️ Shared `PreviewGroup`s require cluster-scoped controller RBAC (`rbac.namespaceScoped=false`).", nil
+		}
 		return "", err
 	}
 	if len(results) == 0 {
