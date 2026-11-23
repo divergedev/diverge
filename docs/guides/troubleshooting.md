@@ -227,7 +227,9 @@ When `diverge doctor` (or `diverge doctor --json`) inspects a namespace, preview
   - The spoke API server is unreachable from the hub network, TLS CA verification failed, or the spoke ServiceAccount token expired (`401`/`403`).
 - **Remediation**:
   ```bash
-  kubectl get secret <spoke-kubeconfig-secret> -n <namespace> -o yaml
+  # Inspect secret type and data key names without printing raw kubeconfig credentials
+  kubectl get secret <spoke-kubeconfig-secret> -n <namespace> \
+    -o go-template='type={{.type}} keys={{range $k, $_ := .data}}{{$k}} {{end}}{{"\n"}}'
   diverge doctor <env-name> -n <namespace>
   ```
   Ensure the kubeconfig `Secret` exists in the same namespace as the `Environment`, points to a valid `https://` spoke API endpoint with static token/client-cert credentials, and grants `pods` read/list RBAC in the target preview namespace.

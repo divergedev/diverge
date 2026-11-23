@@ -116,6 +116,8 @@ The MCP server provides the following tools grouped by service:
 | `diverge_get_preview_group` | Retrieve status, member services, endpoints, and conditions for a PreviewGroup. |
 | `diverge_list_preview_groups` | List PreviewGroups across namespaces with label selectors and pagination. |
 | `diverge_update_preview_group` | Update configuration or service definitions for a PreviewGroup. |
+| `diverge_join_preview_group` | Create or join a shared multi-MR `PreviewGroup` by attaching existing PR/MR `Environment`s (`environment_names`) or explicit `services` without overwriting other MRs' services. Preserves per-service database configs by default unless `shared_database_mode` (`shared`, `schema`, `snapshot`, `fresh`, `cnpg`, `neon`) is set. |
+| `diverge_leave_preview_group` | Detach services (`service_names`), `environment_name`, or `project` + `mr` from a shared `PreviewGroup` (falling back to baseline) and automatically delete the `PreviewGroup` when the last active service leaves. |
 | `diverge_delete_preview_group` | Tear down a PreviewGroup and its child environments (*requires `--allow-destructive`*). |
 
 ### Built-in Helper & Diagnostic Tools

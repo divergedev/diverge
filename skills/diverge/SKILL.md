@@ -82,6 +82,7 @@ When a preview environment is stuck in `Deploying`, `Pending`, `Degraded`, or `F
 When the Diverge MCP server (`diverge mcp`) is configured in the agent environment, prefer structured MCP tool calls over raw shell polling:
 
 - `diverge_create_environment` / `diverge_create_preview_group`: Provision an isolated single-service or multi-service delta preview.
+- `diverge_join_preview_group` / `diverge_leave_preview_group`: Combine multiple open PR/MR environments or services into one shared multi-MR `PreviewGroup` (without overwriting sibling MRs' services) and detach individual MRs/services when done (`diverge preview join` / `diverge preview leave` on the CLI).
 - `diverge_wait_for_ready`: Block until the environment reaches `Running`/`Ready` or `Failed` (up to 5 minutes) instead of polling `diverge_get_environment` in a loop.
 - `diverge_doctor`: Run structured diagnostics on an environment (`{"name": "pr-42", "namespace": "default"}`).
 - `diverge_fetch_errors`: Fetch truncated `ERROR`/`FATAL`/`PANIC` log lines without overflowing context windows.

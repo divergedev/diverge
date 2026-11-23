@@ -11,6 +11,7 @@ ACTION="$INPUT_ACTION"
 INPUT_CONFIG="${INPUT_CONFIG:-.diverge.yaml}"
 INPUT_BASE_REF="${INPUT_BASE_REF:-origin/main}"
 INPUT_PREVIEW_NAME="${INPUT_PREVIEW_NAME:-}"
+INPUT_GROUP="${INPUT_GROUP:-}"
 INPUT_PR_NUMBER="${INPUT_PR_NUMBER:-}"
 INPUT_BRANCH="${INPUT_BRANCH:-}"
 INPUT_SERVICES="${INPUT_SERVICES:-}"
@@ -79,7 +80,33 @@ emit_output() {
   fi
 }
 
+normalize_group_slug() {
+  local raw="$1"
+  local slug
+  slug="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | sed -E 's/[\/_.]+/-/g; s/[^a-z0-9-]+/-/g; s/-+/-/g; s/^-+//; s/-+$//')"
+  if [[ "${#slug}" -gt 63 ]]; then
+    local digest=""
+    if command -v sha256sum >/dev/null 2>&1; then
+      digest="$(printf '%s' "$raw" | sha256sum | cut -c1-8)"
+    elif command -v shasum >/dev/null 2>&1; then
+      digest="$(printf '%s' "$raw" | shasum -a 256 | cut -c1-8)"
+    fi
+    if [[ -n "$digest" ]]; then
+      local prefix
+      prefix="$(printf '%s' "${slug:0:54}" | sed -E 's/-+$//')"
+      slug="${prefix:-pg}-${digest}"
+    else
+      slug="$(printf '%s' "${slug:0:63}" | sed -E 's/-+$//')"
+    fi
+  fi
+  printf '%s' "${slug:-preview}"
+}
+
 resolve_preview_name() {
+  if [[ -n "$INPUT_GROUP" ]]; then
+    normalize_group_slug "$INPUT_GROUP"
+    return
+  fi
   if [[ -n "$INPUT_PREVIEW_NAME" ]]; then
     printf '%s' "$INPUT_PREVIEW_NAME"
     return
@@ -271,47 +298,84 @@ case "$INPUT_ACTION" in
         fi
       done
 
-      while IFS= read -r cfg_svc; do
-        [[ -z "$cfg_svc" ]] && continue
-        is_changed=0
-        for changed_svc in "${CHANGED_SERVICES[@]}"; do
-          if [[ "$cfg_svc" == "$changed_svc" ]]; then
-            is_changed=1
-            break
+      if [[ -z "$INPUT_GROUP" ]]; then
+        while IFS= read -r cfg_svc; do
+          [[ -z "$cfg_svc" ]] && continue
+          is_changed=0
+          for changed_svc in "${CHANGED_SERVICES[@]}"; do
+            if [[ "$cfg_svc" == "$changed_svc" ]]; then
+              is_changed=1
+              break
+            fi
+          done
+          if [[ "$is_changed" -eq 0 ]]; then
+            SVC_ARGS+=("--service" "$cfg_svc")
           fi
-        done
-        if [[ "$is_changed" -eq 0 ]]; then
-          SVC_ARGS+=("--service" "$cfg_svc")
-        fi
-      done < <(extract_config_services "$INPUT_CONFIG")
+        done < <(extract_config_services "$INPUT_CONFIG")
+      fi
     fi
 
-    CREATE_ARGS=(
-      preview create
-      --name "$PREVIEW_NAME"
-      --header-key "$INPUT_HEADER_KEY"
-      --header-value "$HEADER_VALUE"
-      --ttl "$INPUT_TTL"
-      -n "$INPUT_NAMESPACE"
-    )
-    if [[ -n "$INPUT_CONFIG" ]] && { [[ "$INPUT_CONFIG" != ".diverge.yaml" ]] || [[ -f "$INPUT_CONFIG" ]]; }; then
-      CREATE_ARGS+=(--config "$INPUT_CONFIG")
-    fi
-    if [[ "$INPUT_PR_NUMBER" =~ ^[0-9]+$ ]] && [[ "$INPUT_PR_NUMBER" -gt 0 ]]; then
-      CREATE_ARGS+=(--mr "$INPUT_PR_NUMBER")
-    fi
-    if [[ -n "$INPUT_CLUSTER" ]]; then
-      CREATE_ARGS+=(--cluster "$INPUT_CLUSTER")
-    fi
-    if [[ -n "$INPUT_CLUSTER_SECRET" ]]; then
-      CREATE_ARGS+=(--cluster-secret "$INPUT_CLUSTER_SECRET")
-    fi
-    if [[ "$INPUT_DRY_RUN" == "true" ]]; then
-      CREATE_ARGS+=(--dry-run)
-    fi
-    CREATE_ARGS+=("${SVC_ARGS[@]}")
+    if [[ -n "$INPUT_GROUP" ]]; then
+      JOIN_ARGS=(
+        preview join "$INPUT_GROUP"
+        --header-key "$INPUT_HEADER_KEY"
+        --header-value "$HEADER_VALUE"
+        --ttl "$INPUT_TTL"
+        -n "$INPUT_NAMESPACE"
+      )
+      SCM_PROJECT="${GITHUB_REPOSITORY:-${CI_PROJECT_PATH:-}}"
+      if [[ -n "$SCM_PROJECT" ]]; then
+        JOIN_ARGS+=(--project "$SCM_PROJECT")
+      fi
+      if [[ -n "$INPUT_BRANCH" ]]; then
+        JOIN_ARGS+=(--branch "$INPUT_BRANCH")
+      fi
+      if [[ "$INPUT_PR_NUMBER" =~ ^[0-9]+$ ]] && [[ "$INPUT_PR_NUMBER" -gt 0 ]]; then
+        JOIN_ARGS+=(--mr "$INPUT_PR_NUMBER")
+      fi
+      if [[ -n "$INPUT_BASE_URL" ]]; then
+        JOIN_ARGS+=(--base-url "$INPUT_BASE_URL")
+      fi
+      if [[ -n "$INPUT_CLUSTER" ]]; then
+        JOIN_ARGS+=(--cluster "$INPUT_CLUSTER")
+      fi
+      if [[ -n "$INPUT_CLUSTER_SECRET" ]]; then
+        JOIN_ARGS+=(--cluster-secret "$INPUT_CLUSTER_SECRET")
+      fi
+      if [[ "$INPUT_DRY_RUN" == "true" ]]; then
+        JOIN_ARGS+=(--dry-run)
+      fi
+      JOIN_ARGS+=("${SVC_ARGS[@]}")
+      "$DIVERGE_BIN" "${JOIN_ARGS[@]}"
+    else
+      CREATE_ARGS=(
+        preview create
+        --upsert
+        --name "$PREVIEW_NAME"
+        --header-key "$INPUT_HEADER_KEY"
+        --header-value "$HEADER_VALUE"
+        --ttl "$INPUT_TTL"
+        -n "$INPUT_NAMESPACE"
+      )
+      if [[ -n "$INPUT_CONFIG" ]] && { [[ "$INPUT_CONFIG" != ".diverge.yaml" ]] || [[ -f "$INPUT_CONFIG" ]]; }; then
+        CREATE_ARGS+=(--config "$INPUT_CONFIG")
+      fi
+      if [[ "$INPUT_PR_NUMBER" =~ ^[0-9]+$ ]] && [[ "$INPUT_PR_NUMBER" -gt 0 ]]; then
+        CREATE_ARGS+=(--mr "$INPUT_PR_NUMBER")
+      fi
+      if [[ -n "$INPUT_CLUSTER" ]]; then
+        CREATE_ARGS+=(--cluster "$INPUT_CLUSTER")
+      fi
+      if [[ -n "$INPUT_CLUSTER_SECRET" ]]; then
+        CREATE_ARGS+=(--cluster-secret "$INPUT_CLUSTER_SECRET")
+      fi
+      if [[ "$INPUT_DRY_RUN" == "true" ]]; then
+        CREATE_ARGS+=(--dry-run)
+      fi
+      CREATE_ARGS+=("${SVC_ARGS[@]}")
 
-    "$DIVERGE_BIN" "${CREATE_ARGS[@]}"
+      "$DIVERGE_BIN" "${CREATE_ARGS[@]}"
+    fi
 
     if [[ ( "$INPUT_WAIT" == "true" || "$INPUT_VERIFY" == "true" || "$INPUT_REPLAY" == "true" ) && "$INPUT_DRY_RUN" != "true" ]]; then
       if ! "$KUBECTL_BIN" wait -n "$INPUT_NAMESPACE" --for=condition=Ready "previewgroup/$PREVIEW_NAME" --timeout="$INPUT_WAIT_TIMEOUT"; then
@@ -401,8 +465,38 @@ case "$INPUT_ACTION" in
 
   teardown)
     PREVIEW_NAME="$(resolve_preview_name)"
-    "$KUBECTL_BIN" delete previewgroup "$PREVIEW_NAME" -n "$INPUT_NAMESPACE" --ignore-not-found
-    "$KUBECTL_BIN" delete environment "$PREVIEW_NAME" -n "$INPUT_NAMESPACE" --ignore-not-found
+    if [[ -n "$INPUT_GROUP" ]]; then
+      LEAVE_ARGS=(preview leave "$INPUT_GROUP" -n "$INPUT_NAMESPACE")
+      SCM_PROJECT="${GITHUB_REPOSITORY:-${CI_PROJECT_PATH:-}}"
+      if [[ -n "$SCM_PROJECT" ]]; then
+        LEAVE_ARGS+=(--project "$SCM_PROJECT")
+      fi
+      has_leave_selector=0
+      if [[ "$INPUT_PR_NUMBER" =~ ^[0-9]+$ ]] && [[ "$INPUT_PR_NUMBER" -gt 0 ]]; then
+        LEAVE_ARGS+=(--mr "$INPUT_PR_NUMBER")
+        has_leave_selector=1
+      fi
+      if [[ -n "$INPUT_SERVICES" ]]; then
+        while IFS= read -r entry; do
+          entry="$(printf '%s' "$entry" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+          [[ -z "$entry" ]] && continue
+          LEAVE_ARGS+=(--service "${entry%%=*}")
+          has_leave_selector=1
+        done < <(printf '%s\n' "$INPUT_SERVICES" | tr ',' '\n')
+      elif [[ "$has_leave_selector" -eq 0 ]]; then
+        while IFS= read -r cfg_svc; do
+          [[ -z "$cfg_svc" ]] && continue
+          LEAVE_ARGS+=(--service "$cfg_svc")
+          has_leave_selector=1
+        done < <(extract_config_services "$INPUT_CONFIG")
+      fi
+      if [[ "$has_leave_selector" -eq 1 ]]; then
+        "$DIVERGE_BIN" "${LEAVE_ARGS[@]}"
+      fi
+    else
+      "$KUBECTL_BIN" delete previewgroup "$PREVIEW_NAME" -n "$INPUT_NAMESPACE" --ignore-not-found
+      "$KUBECTL_BIN" delete environment "$PREVIEW_NAME" -n "$INPUT_NAMESPACE" --ignore-not-found
+    fi
     emit_output "preview-name" "$PREVIEW_NAME"
     ;;
 

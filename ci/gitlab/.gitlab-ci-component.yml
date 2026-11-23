@@ -20,6 +20,10 @@ spec:
       description: "Default Kubernetes namespace for preview workloads"
       type: string
       default: "default"
+    diverge_group:
+      description: "Optional shared multi-MR PreviewGroup name or branch slug to join on deploy and detach from on cleanup"
+      type: string
+      default: ""
     diverge_cluster:
       description: "Optional logical spoke cluster name for multi-cluster preview federation"
       type: string
@@ -106,6 +110,7 @@ diverge:preview:
     DIVERGE_TTL: $[[ inputs.diverge_ttl ]]
     DIVERGE_REGISTRY: $[[ inputs.diverge_registry ]]
     DIVERGE_NAMESPACE: $[[ inputs.diverge_namespace ]]
+    DIVERGE_GROUP: $[[ inputs.diverge_group ]]
     DIVERGE_CLUSTER: $[[ inputs.diverge_cluster ]]
     DIVERGE_CLUSTER_SECRET: $[[ inputs.diverge_cluster_secret ]]
     DIVERGE_BASE_URL: $[[ inputs.diverge_base_url ]]
@@ -132,6 +137,15 @@ diverge:preview:
       set -eu
       apk add --no-cache bash curl git jq ca-certificates >/dev/null 2>&1 || true
       PREVIEW_NAME="mr-${CI_MERGE_REQUEST_IID}"
+      if [ -n "${DIVERGE_GROUP:-}" ]; then
+        PREVIEW_NAME="$(printf '%s' "${DIVERGE_GROUP}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[\/_.]+/-/g; s/[^a-z0-9-]+/-/g; s/-+/-/g; s/^-+//; s/-+$//')"
+        if [ "${#PREVIEW_NAME}" -gt 63 ]; then
+          DIGEST="$(printf '%s' "${DIVERGE_GROUP}" | sha256sum | cut -c1-8)"
+          PREFIX="$(printf '%s' "${PREVIEW_NAME}" | cut -c1-54 | sed -E 's/-+$//')"
+          PREVIEW_NAME="${PREFIX:-pg}-${DIGEST}"
+        fi
+        PREVIEW_NAME="${PREVIEW_NAME:-preview}"
+      fi
       HEADER_VALUE="${PREVIEW_NAME}"
       ROUTING_HEADER_B64="$(printf '{"%s":"%s"}' "${DIVERGE_HEADER_KEY}" "${HEADER_VALUE}" | base64 | tr -d '\n')"
 
@@ -177,7 +191,48 @@ diverge:preview:
         exit 0
       fi
 
-      cat <<EOF > previewgroup.yaml
+      if [ -n "${DIVERGE_CLUSTER:-}" ] && [ "${DIVERGE_CLUSTER}" != "local" ] && [ -z "${DIVERGE_CLUSTER_SECRET:-}" ]; then
+        echo "Error: diverge_cluster_secret is required when diverge_cluster is set to a remote cluster" >&2
+        exit 1
+      fi
+
+      IMAGE_PREFIX="${DIVERGE_REGISTRY:-$CI_REGISTRY_IMAGE}"
+      IMAGE_TAG="${CI_COMMIT_SHORT_SHA:-$PREVIEW_NAME}"
+      if [ -n "${DIVERGE_GROUP:-}" ]; then
+        if ! command -v diverge >/dev/null 2>&1; then
+          curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/main/install.sh | sh
+        fi
+        set -- preview join "${DIVERGE_GROUP}" \
+          -n "${DIVERGE_NAMESPACE}" \
+          --header-key "${DIVERGE_HEADER_KEY}" \
+          --header-value "${HEADER_VALUE}" \
+          --ttl "${DIVERGE_TTL}" \
+          --provider gitlab \
+          --project "${CI_PROJECT_PATH}" \
+          --mr "${CI_MERGE_REQUEST_IID}" \
+          --branch "${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}"
+        if [ -n "${DIVERGE_BASE_URL:-}" ]; then
+          set -- "$@" --base-url "${DIVERGE_BASE_URL}"
+        fi
+        if [ -n "${DIVERGE_CLUSTER:-}" ]; then
+          set -- "$@" --cluster "${DIVERGE_CLUSTER}"
+        fi
+        if [ -n "${DIVERGE_CLUSTER_SECRET:-}" ]; then
+          set -- "$@" --cluster-secret "${DIVERGE_CLUSTER_SECRET}"
+        fi
+        OLD_IFS="$IFS"
+        IFS=','
+        set -f
+        for svc in $DIVERGE_SERVICES; do
+          svc="$(printf '%s' "$svc" | tr -d '[:space:]')"
+          [ -z "$svc" ] && continue
+          set -- "$@" --service "${svc}=${IMAGE_PREFIX%/}/${svc}:${IMAGE_TAG}"
+        done
+        set +f
+        IFS="$OLD_IFS"
+        diverge "$@"
+      else
+        cat <<EOF > previewgroup.yaml
       apiVersion: divergedev.com/v1alpha1
       kind: PreviewGroup
       metadata:
@@ -198,61 +253,56 @@ diverge:preview:
           cleanupOnMerge: true
       EOF
 
-      if [ -n "${DIVERGE_CLUSTER:-}" ] && [ "${DIVERGE_CLUSTER}" != "local" ] && [ -z "${DIVERGE_CLUSTER_SECRET:-}" ]; then
-        echo "Error: diverge_cluster_secret is required when diverge_cluster is set to a remote cluster" >&2
-        exit 1
-      fi
-      if [ -n "${DIVERGE_CLUSTER_SECRET:-}" ]; then
-        SEC_NAME="${DIVERGE_CLUSTER_SECRET%%/*}"
-        SEC_KEY=""
-        case "${DIVERGE_CLUSTER_SECRET}" in
-          */*) SEC_KEY="${DIVERGE_CLUSTER_SECRET#*/}" ;;
-        esac
-        case "${DIVERGE_CLUSTER:-}" in
-          *[!a-zA-Z0-9._-]*) echo "Error: invalid diverge_cluster value" >&2; exit 1 ;;
-        esac
-        case "${SEC_NAME}" in
-          ""|*[!a-zA-Z0-9._-]*) echo "Error: invalid diverge_cluster_secret name" >&2; exit 1 ;;
-        esac
-        case "${SEC_KEY}" in
-          *[!a-zA-Z0-9._-]*) echo "Error: invalid diverge_cluster_secret key" >&2; exit 1 ;;
-        esac
-        cat <<EOF >> previewgroup.yaml
+        if [ -n "${DIVERGE_CLUSTER_SECRET:-}" ]; then
+          SEC_NAME="${DIVERGE_CLUSTER_SECRET%%/*}"
+          SEC_KEY=""
+          case "${DIVERGE_CLUSTER_SECRET}" in
+            */*) SEC_KEY="${DIVERGE_CLUSTER_SECRET#*/}" ;;
+          esac
+          case "${DIVERGE_CLUSTER:-}" in
+            *[!a-zA-Z0-9._-]*) echo "Error: invalid diverge_cluster value" >&2; exit 1 ;;
+          esac
+          case "${SEC_NAME}" in
+            ""|*[!a-zA-Z0-9._-]*) echo "Error: invalid diverge_cluster_secret name" >&2; exit 1 ;;
+          esac
+          case "${SEC_KEY}" in
+            *[!a-zA-Z0-9._-]*) echo "Error: invalid diverge_cluster_secret key" >&2; exit 1 ;;
+          esac
+          cat <<EOF >> previewgroup.yaml
         clusterRef:
           name: "${DIVERGE_CLUSTER:-$SEC_NAME}"
           kubeconfigSecretRef:
             name: "${SEC_NAME}"
       EOF
-        if [ -n "${SEC_KEY}" ]; then
-          cat <<EOF >> previewgroup.yaml
+          if [ -n "${SEC_KEY}" ]; then
+            cat <<EOF >> previewgroup.yaml
             key: "${SEC_KEY}"
       EOF
+          fi
         fi
-      fi
 
-      cat <<EOF >> previewgroup.yaml
+        cat <<EOF >> previewgroup.yaml
         services:
       EOF
 
-      IMAGE_PREFIX="${DIVERGE_REGISTRY:-$CI_REGISTRY_IMAGE}"
-      IMAGE_TAG="${CI_COMMIT_SHORT_SHA:-$PREVIEW_NAME}"
-      OLD_IFS="$IFS"
-      IFS=','
-      set -f
-      for svc in $DIVERGE_SERVICES; do
-        svc="$(printf '%s' "$svc" | tr -d '[:space:]')"
-        [ -z "$svc" ] && continue
-        cat <<EOF >> previewgroup.yaml
+        OLD_IFS="$IFS"
+        IFS=','
+        set -f
+        for svc in $DIVERGE_SERVICES; do
+          svc="$(printf '%s' "$svc" | tr -d '[:space:]')"
+          [ -z "$svc" ] && continue
+          cat <<EOF >> previewgroup.yaml
           - name: ${svc}
             mode: image
             namespace: ${DIVERGE_NAMESPACE}
             image: ${IMAGE_PREFIX%/}/${svc}:${IMAGE_TAG}
       EOF
-      done
-      set +f
-      IFS="$OLD_IFS"
+        done
+        set +f
+        IFS="$OLD_IFS"
 
-      kubectl apply -f previewgroup.yaml
+        kubectl apply -f previewgroup.yaml
+      fi
 
       if [ "${DIVERGE_VERIFY:-false}" = "true" ] || [ -n "${DIVERGE_REPLAY_FROM:-}" ]; then
         if ! command -v diverge >/dev/null 2>&1; then
@@ -353,6 +403,7 @@ diverge:cleanup:
     action: stop
   variables:
     DIVERGE_NAMESPACE: $[[ inputs.diverge_namespace ]]
+    DIVERGE_GROUP: $[[ inputs.diverge_group ]]
   script:
     - |
       set -eu
@@ -372,5 +423,15 @@ diverge:cleanup:
         curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/$[[ inputs.diverge_kubectl_version ]]/bin/linux/amd64/kubectl"
         chmod +x /usr/local/bin/kubectl
       fi
-      kubectl delete previewgroup "mr-${CI_MERGE_REQUEST_IID}" -n "${DIVERGE_NAMESPACE}" --ignore-not-found
-      kubectl delete previewgroup "preview-mr-${CI_MERGE_REQUEST_IID}" -n "${DIVERGE_NAMESPACE}" --ignore-not-found
+      if [ -n "${DIVERGE_GROUP:-}" ]; then
+        if ! command -v diverge >/dev/null 2>&1; then
+          curl -fsSL https://raw.githubusercontent.com/divergedev/diverge/main/install.sh | sh
+        fi
+        diverge preview leave "${DIVERGE_GROUP}" \
+          -n "${DIVERGE_NAMESPACE}" \
+          --project "${CI_PROJECT_PATH}" \
+          --mr "${CI_MERGE_REQUEST_IID}"
+      else
+        kubectl delete previewgroup "mr-${CI_MERGE_REQUEST_IID}" -n "${DIVERGE_NAMESPACE}" --ignore-not-found
+        kubectl delete previewgroup "preview-mr-${CI_MERGE_REQUEST_IID}" -n "${DIVERGE_NAMESPACE}" --ignore-not-found
+      fi

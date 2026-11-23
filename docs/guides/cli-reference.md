@@ -27,8 +27,10 @@ The `diverge` CLI manages your local development environments and interacts with
 | `diverge mcp setup` | Configure MCP server (`diverge mcp`) for Cursor, Claude Code, and Windsurf (`--client all\|cursor\|claude\|windsurf`) |
 | `diverge open <name>` | Open the environment URL in browser (`--magic` for one-click `?_diverge_env=` cookie link) |
 | `diverge plugins` | Manage plugins |
-| `diverge preview create` | Create a preview group from current branch |
-| `diverge preview status <name>` | Show status of a preview group |
+| `diverge preview create` | Create a preview group from current branch (`--upsert` to update in place) |
+| `diverge preview join <group>` | Create or join a shared multi-MR `PreviewGroup` without overwriting other MRs' services (alias: `attach`) |
+| `diverge preview leave <group>` | Detach services or an MR from a shared `PreviewGroup`, auto-deleting when empty (alias: `detach`) |
+| `diverge preview status <name>` | Show status and joined MR members of a preview group |
 | `diverge preview delete <name>` | Delete a preview group |
 | `diverge preview watch <name>` | Watch a preview group until Ready/Failed |
 | `diverge providers list` | List all registered providers |
@@ -439,6 +441,59 @@ diverge replay pr-42 --from ./recording.har --filter-host api.example.com --stri
 
 # Replay binary Protobuf/gRPC traffic with a compiled FileDescriptorSet (.binpb)
 diverge replay pr-42 --from ./grpc-trace.jsonl --proto-descriptor ./descriptors.binpb --proto-message acme.v1.ChargeResponse
+```
+
+### `diverge preview`
+
+Create, inspect, and compose multi-service and multi-MR `PreviewGroup` Custom Resources.
+
+**Subcommands:**
+- `diverge preview create` — Create a `PreviewGroup` from `--service` specs (`--upsert` updates an existing `PreviewGroup` in place on re-runs)
+- `diverge preview join <group-name>` (alias: `attach`) — Create or join a shared multi-MR `PreviewGroup` from `--service` specs and/or existing PR/MR `Environment` CRs (`--from-env`) without overwriting services registered by other repositories or MRs
+- `diverge preview leave <group-name>` (alias: `detach`) — Detach specific `--service`, `--from-env`, or `--mr` (`--project`) contributions from a shared `PreviewGroup` (falling back to baseline) and automatically delete the `PreviewGroup` when no active preview services remain
+- `diverge preview status <group-name>` — Display routing header, phase, external URL, joined MR members (`repo#PR · branch · env:<name>`), and child service readiness
+- `diverge preview watch <group-name>` — Poll until the `PreviewGroup` reaches `Ready`/`Running` or `Failed`
+- `diverge preview delete <group-name>` — Delete a `PreviewGroup` and all child `Environment`s
+
+**`diverge preview join` Flags:**
+- `--service` — Service spec (`name=image[:port]` or `name` for baseline; repeatable)
+- `--from-env` — Existing `Environment` CR (`<name>` or `<namespace>/<name>`) to attach into the group (repeatable; preserves per-service database config by default)
+- `--header-key` — Routing header key (default: `x-diverge-env`)
+- `--header-value` — Routing header value (default: normalized `<group-name>`)
+- `--base-url` — Optional staging/gateway base URL to populate a shareable `?_diverge_env=<group>` URL
+- `--ttl` — Group TTL duration (e.g., `8h`, `24h`)
+- `--mr` — PR/MR number for membership provenance tracking
+- `--project` — Repository path (e.g., `acme/payments-api`)
+- `--branch` — Source branch override
+- `--provider` — SCM provider override (`github`, `gitlab`, `local`)
+- `--db-mode` — Optional shared group-level database mode (`shared`, `schema`, `snapshot`, `fresh`, `cnpg`, `neon`); omit to preserve each joined MR's own database config
+- `--db-seed-source` — Optional seed source when `--db-mode` is set
+- `--cluster` — Target spoke cluster name (or `local` to force hub)
+- `--cluster-secret` — Same-namespace `Secret` (`<name>` or `<name>/<key>`) holding spoke kubeconfig
+- `--dry-run` — Print `PreviewGroup` YAML without applying
+
+**`diverge preview leave` Flags:**
+- `--service` — Service name(s) to detach from the preview group (repeatable)
+- `--from-env` — `Environment` CR name(s) whose service should be detached (repeatable)
+- `--mr` — PR/MR number whose contributed service(s) should be detached
+- `--project` — Repository path when detaching by `--mr` (defaults to current Git remote)
+
+**Examples:**
+```bash
+# Combine two open PR environments (frontend + backend) into one shared preview URL
+diverge preview join feat-checkout \
+  --from-env frontend/pr-acme-web-101 \
+  --from-env backend/pr-acme-payments-42 \
+  --base-url https://staging.acme.dev
+
+# Join from a microservice CI job using the branch slug as the shared group
+diverge preview join feat/checkout \
+  --service payments-api=ghcr.io/acme/payments-api:pr-42 \
+  --project acme/payments-api \
+  --mr 42
+
+# Detach a merged MR's service (auto-deletes feat-checkout if it was the last active MR)
+diverge preview leave feat-checkout --project acme/payments-api --mr 42
 ```
 
 ### `diverge task`

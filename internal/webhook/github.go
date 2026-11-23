@@ -20,6 +20,7 @@ import (
 	"github.com/divergedev/diverge/internal/config"
 	"github.com/divergedev/diverge/internal/deployer"
 	"github.com/divergedev/diverge/internal/metrics"
+	"github.com/divergedev/diverge/internal/previewgroup"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -437,7 +438,13 @@ func (h *GitHubWebhookHandler) reconcileEnvironment(ctx context.Context, payload
 		log.FromContext(ctx).WithName("github-webhook").Info("Skipping project without .diverge.yaml", "project", env.Spec.Source.Project, "ref", env.Spec.Source.Branch)
 		return client.IgnoreNotFound(h.Client.Delete(ctx, env))
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if _, syncErr := previewgroup.SyncMemberEnvironment(ctx, h.Client, env); syncErr != nil {
+		log.FromContext(ctx).WithName("github-webhook").Info("Warning: failed to sync Environment update to shared PreviewGroups", "env", env.Name, "error", syncErr)
+	}
+	return nil
 }
 
 func (h *GitHubWebhookHandler) deleteEnvironment(ctx context.Context, payload *GitHubPRPayload) error {
@@ -453,7 +460,11 @@ func (h *GitHubWebhookHandler) deleteEnvironment(ctx context.Context, payload *G
 			Namespace: ns,
 		},
 	}
-	return client.IgnoreNotFound(h.Client.Delete(ctx, env))
+	if err := client.IgnoreNotFound(h.Client.Delete(ctx, env)); err != nil {
+		return err
+	}
+	_, err := previewgroup.DetachMemberByPR(ctx, h.Client, payload.Repository.FullName, payload.PullRequest.Number, envName)
+	return err
 }
 
 // normalizeGitHubAction maps webhook actions to a bounded set of known values

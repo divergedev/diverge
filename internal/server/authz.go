@@ -53,7 +53,7 @@ func candidateToolsForAction(verb, resource string) []string {
 	case "environments":
 		switch verb {
 		case "get":
-			return []string{"diverge_get_environment", "diverge_wait_for_ready", "diverge_fetch_errors", "diverge_list_hook_jobs", "diverge_doctor"}
+			return []string{"diverge_get_environment", "diverge_wait_for_ready", "diverge_fetch_errors", "diverge_list_hook_jobs", "diverge_doctor", "diverge_join_preview_group"}
 		case "list", "watch":
 			return []string{"diverge_list_environments", "diverge_watch_environments"}
 		case "cost-summary":
@@ -77,15 +77,15 @@ func candidateToolsForAction(verb, resource string) []string {
 	case "previewgroups":
 		switch verb {
 		case "get":
-			return []string{"diverge_get_preview_group"}
+			return []string{"diverge_get_preview_group", "diverge_join_preview_group", "diverge_leave_preview_group"}
 		case "list", "watch":
 			return []string{"diverge_list_preview_groups", "diverge_watch_preview_groups"}
 		case "create":
-			return []string{"diverge_create_preview_group"}
+			return []string{"diverge_create_preview_group", "diverge_join_preview_group"}
 		case "update":
-			return []string{"diverge_update_preview_group"}
+			return []string{"diverge_update_preview_group", "diverge_join_preview_group", "diverge_leave_preview_group"}
 		case "delete":
-			return []string{"diverge_delete_preview_group"}
+			return []string{"diverge_delete_preview_group", "diverge_leave_preview_group"}
 		}
 	case "agenttasks":
 		switch verb {

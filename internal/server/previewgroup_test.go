@@ -10,14 +10,17 @@ import (
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	fakek8s "k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"time"
 
 	pb "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 	"github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
@@ -312,4 +315,81 @@ func TestPreviewGroupService_UpdateRejectsClusterRefChangeOnExistingService(t *t
 	}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+func TestPreviewGroupService_ClusterScopedAndTTLRoundTrip(t *testing.T) {
+	c, _, svc := buildPreviewGroupTestSetup(t)
+	ctx := auth.ContextWithUserInfo(context.Background(), &auth.UserInfo{Username: "test-user"})
+
+	// Cluster-scoped PreviewGroup created by CLI/Controller (empty Namespace) with a 24h TTL
+	clusterPG := &v1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "feat-checkout",
+			Annotations: map[string]string{
+				"divergedev.com/group-members": `[{"service":"web-app","project":"acme/web","mr":101}]`,
+			},
+		},
+		Spec: v1alpha1.PreviewGroupSpec{
+			Source: v1alpha1.EnvironmentSource{
+				Provider: "github",
+				Project:  "acme/web",
+				Branch:   "feat/checkout",
+				MR:       101,
+			},
+			Routing: v1alpha1.PreviewGroupRouting{
+				Mode:        "header",
+				HeaderKey:   "x-diverge-env",
+				HeaderValue: "feat-checkout",
+			},
+			Lifecycle: &v1alpha1.PreviewGroupLifecycle{
+				TTL: &metav1.Duration{Duration: 24 * time.Hour},
+			},
+			Services: []v1alpha1.PreviewGroupServiceSpec{
+				{Name: "web-app", Mode: v1alpha1.ServiceModeImage, Image: "ghcr.io/acme/web:pr-101"},
+			},
+		},
+	}
+	require.NoError(t, c.Create(ctx, clusterPG))
+
+	// GetPreviewGroup works with empty namespace ("") AND "_cluster" AND preserves 24h TTL
+	got, err := svc.GetPreviewGroup(ctx, connect.NewRequest(&pb.GetPreviewGroupRequest{
+		Name:      "feat-checkout",
+		Namespace: "",
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, got.Msg.PreviewGroup.Spec.Lifecycle.GetTtl())
+	assert.Equal(t, int64(86400), got.Msg.PreviewGroup.Spec.Lifecycle.GetTtl().GetSeconds())
+	assert.Contains(t, got.Msg.PreviewGroup.Annotations["divergedev.com/group-members"], "web-app")
+
+	// UpdatePreviewGroup works against cluster-scoped resource
+	upd, err := svc.UpdatePreviewGroup(ctx, connect.NewRequest(&pb.UpdatePreviewGroupRequest{
+		PreviewGroup: &pb.PreviewGroup{
+			Name:            "feat-checkout",
+			Namespace:       "",
+			ResourceVersion: got.Msg.PreviewGroup.ResourceVersion,
+			Annotations:     got.Msg.PreviewGroup.Annotations,
+			Spec: &pb.PreviewGroupSpec{
+				Source:  got.Msg.PreviewGroup.Spec.Source,
+				Routing: got.Msg.PreviewGroup.Spec.Routing,
+				Lifecycle: &pb.PreviewGroupLifecycle{
+					Ttl: durationpb.New(12 * time.Hour),
+				},
+				Services: append(got.Msg.PreviewGroup.Spec.Services, &pb.PreviewGroupServiceSpec{
+					Name:  "payments-api",
+					Mode:  "image",
+					Image: "ghcr.io/acme/payments:pr-42",
+				}),
+			},
+		},
+	}))
+	require.NoError(t, err)
+	assert.Len(t, upd.Msg.PreviewGroup.Spec.Services, 2)
+	assert.Equal(t, int64(43200), upd.Msg.PreviewGroup.Spec.Lifecycle.GetTtl().GetSeconds())
+
+	// DeletePreviewGroup works with "_cluster" sentinel
+	_, err = svc.DeletePreviewGroup(ctx, connect.NewRequest(&pb.DeletePreviewGroupRequest{
+		Name:      "feat-checkout",
+		Namespace: "_cluster",
+	}))
+	require.NoError(t, err)
 }

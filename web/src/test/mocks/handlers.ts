@@ -73,6 +73,37 @@ export const handlers = [
   http.post('*/diverge.v1alpha1.PreviewGroupService/ListPreviewGroups', () => {
     return HttpResponse.json({ previewGroups: [] })
   }),
+  http.post('*/diverge.v1alpha1.PreviewGroupService/CreatePreviewGroup', async ({ request }) => {
+    const body = await request.json() as Record<string, unknown>
+    const nested = body.previewGroup as { name?: string; namespace?: string; spec?: unknown; annotations?: unknown } | undefined
+    return HttpResponse.json({
+      previewGroup: {
+        name: nested?.name ?? 'composed-group',
+        namespace: nested?.namespace ?? 'default',
+        resourceVersion: '1',
+        annotations: nested?.annotations ?? {},
+        spec: nested?.spec ?? {},
+        status: { phase: 'Running', serviceCount: 1, services: [] },
+      },
+    })
+  }),
+  http.post('*/diverge.v1alpha1.PreviewGroupService/UpdatePreviewGroup', async ({ request }) => {
+    const body = await request.json() as Record<string, unknown>
+    const nested = body.previewGroup as { name?: string; namespace?: string; spec?: unknown; annotations?: unknown } | undefined
+    return HttpResponse.json({
+      previewGroup: {
+        name: nested?.name ?? 'composed-group',
+        namespace: nested?.namespace ?? 'default',
+        resourceVersion: '2',
+        annotations: nested?.annotations ?? {},
+        spec: nested?.spec ?? {},
+        status: { phase: 'Running', serviceCount: 1, services: [] },
+      },
+    })
+  }),
+  http.post('*/diverge.v1alpha1.PreviewGroupService/DeletePreviewGroup', () => {
+    return HttpResponse.json({})
+  }),
   http.post('*/diverge.v1alpha1.ClusterService/GetClusterInfo', () => {
     return HttpResponse.json({
       version: 'v0.1.0',

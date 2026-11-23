@@ -38,6 +38,10 @@ inputs:
     description: "Explicit PreviewGroup name override (default: pr-<number> or branch slug)"
     required: false
     default: ""
+  group:
+    description: "Optional shared multi-MR PreviewGroup name or branch slug (e.g. github.head_ref) to join on deploy and detach from on teardown"
+    required: false
+    default: ""
   base-ref:
     description: "Git base reference for diverge diff"
     required: false
@@ -207,6 +211,7 @@ runs:
         INPUT_CLUSTER: ${{ inputs.cluster }}
         INPUT_CLUSTER_SECRET: ${{ inputs.cluster-secret }}
         INPUT_PREVIEW_NAME: ${{ inputs.preview-name }}
+        INPUT_GROUP: ${{ inputs.group }}
         INPUT_BASE_REF: ${{ inputs.base-ref || (github.base_ref && format('origin/{0}', github.base_ref)) || 'origin/main' }}
         INPUT_BRANCH: ${{ inputs.branch || github.head_ref || github.ref_name }}
         INPUT_PR_NUMBER: ${{ inputs.pr-number || github.event.pull_request.number || github.event.number }}

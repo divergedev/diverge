@@ -12,6 +12,7 @@ import (
 	"github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/config"
 	"github.com/divergedev/diverge/internal/metrics"
+	"github.com/divergedev/diverge/internal/previewgroup"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -195,5 +196,9 @@ func (h *GitLabPreviewGroupWebhookHandler) deletePreviewGroup(ctx context.Contex
 			Name: pgName,
 		},
 	}
-	return client.IgnoreNotFound(h.Client.Delete(ctx, pg))
+	if err := client.IgnoreNotFound(h.Client.Delete(ctx, pg)); err != nil {
+		return err
+	}
+	_, err := previewgroup.DetachMemberByPR(ctx, h.Client, payload.Project.PathWithNamespace, payload.ObjectAttributes.IID, "")
+	return err
 }

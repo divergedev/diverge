@@ -49,7 +49,7 @@ export function useGetPreviewGroup(namespace: string, name: string) {
   return useQuery({
     queryKey: queryKeys.previewGroup(namespace, name),
     queryFn: () => previewGroupClient.getPreviewGroup({ namespace, name }),
-    enabled: !!name && !!namespace,
+    enabled: !!name,
   })
 }
 
@@ -144,9 +144,28 @@ export function useExtendTTL() {
 export function useCreatePreviewGroup() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (req: { name: string; namespace: string; spec: Record<string, unknown> }) =>
+    mutationFn: (req: Parameters<typeof previewGroupClient.createPreviewGroup>[0]) =>
       previewGroupClient.createPreviewGroup(req),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['previewGroups'] }) },
+  })
+}
+
+export function useUpdatePreviewGroup() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (req: Parameters<typeof previewGroupClient.updatePreviewGroup>[0]) =>
+      previewGroupClient.updatePreviewGroup(req),
+    onSuccess: (data, vars) => {
+      const ns = data.previewGroup?.namespace ?? vars.previewGroup?.namespace ?? ''
+      const name = data.previewGroup?.name ?? vars.previewGroup?.name ?? ''
+      if (name) {
+        if (data.previewGroup) {
+          qc.setQueryData(queryKeys.previewGroup(ns, name), data)
+        }
+        qc.invalidateQueries({ queryKey: queryKeys.previewGroup(ns, name) })
+      }
+      qc.invalidateQueries({ queryKey: ['previewGroups'] })
+    },
   })
 }
 

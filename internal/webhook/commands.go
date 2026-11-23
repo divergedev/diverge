@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/previewgroup"
 	"github.com/divergedev/diverge/pkg/doctor"
 	"github.com/divergedev/diverge/pkg/replay"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -42,6 +43,8 @@ Use ` + "`/diverge <command>`" + ` in any PR or MR comment to manage preview env
 | ` + "`/diverge resume [+$amount] [tokens]`" + ` | Resume agent with optional budget bump | ` + "`/diverge resume +$5.00`" + ` |
 | ` + "`/diverge status`" + ` | Report active tasks and preview environments | ` + "`/diverge status`" + ` |
 | ` + "`/diverge preview`" + ` | Deploy preview environment for this branch | ` + "`/diverge preview`" + ` |
+| ` + "`/diverge group <name> [--db-mode <mode>]`" + ` | Join this PR/MR into a shared multi-MR PreviewGroup | ` + "`/diverge group feat-checkout`" + ` |
+| ` + "`/diverge ungroup [name]`" + ` | Detach this PR/MR from a shared PreviewGroup | ` + "`/diverge ungroup feat-checkout`" + ` |
 | ` + "`/diverge verify [path] [--fix]`" + ` | Run health diagnostics & HTTP probe against preview | ` + "`/diverge verify /healthz --fix`" + ` |
 | ` + "`/diverge replay [path ...] [--fix]`" + ` | Replay baseline vs preview parity checks | ` + "`/diverge replay /api/v1/health /api/v1/status --fix`" + ` |
 | ` + "`/diverge extend-ttl [duration]`" + ` | Extend preview TTL (default 24h) | ` + "`/diverge extend-ttl 48h`" + ` |
@@ -59,6 +62,8 @@ type SlashCommand struct {
 	Tokens    int64
 	Paths     []string
 	AutoFix   bool
+	GroupName string
+	DBMode    string
 }
 
 // ParseSlashCommand parses a PR/MR comment body for a /diverge slash command.
@@ -110,6 +115,32 @@ func ParseSlashCommand(commentBody string) (*SlashCommand, bool) {
 		case "preview":
 			return &SlashCommand{
 				Action: "preview",
+			}, true
+		case "group", "join":
+			groupName, dbMode, ok := parseGroupCommandArgs(fields[1:])
+			if !ok {
+				return nil, false
+			}
+			return &SlashCommand{
+				Action:    "group",
+				GroupName: groupName,
+				DBMode:    dbMode,
+			}, true
+		case "ungroup", "leave":
+			if len(fields) > 2 {
+				return nil, false
+			}
+			var groupName string
+			if len(fields) == 2 {
+				norm, err := previewgroup.NormalizeGroupName(fields[1])
+				if err != nil {
+					return nil, false
+				}
+				groupName = norm
+			}
+			return &SlashCommand{
+				Action:    "ungroup",
+				GroupName: groupName,
 			}, true
 		case "verify", "replay":
 			autoFix := false
@@ -261,6 +292,10 @@ func ExecuteSlashCommandWithFeedback(ctx context.Context, c client.Client, ns st
 		return executeGuideCommand(ctx, c, ns, cmd.Guidance, repoURL, prNumber)
 	case "preview":
 		return executePreviewCommand(ctx, c, ns, repoURL, branch, prNumber)
+	case "group":
+		return executeGroupCommand(ctx, c, ns, cmd, repoURL, branch, prNumber)
+	case "ungroup":
+		return executeUngroupCommand(ctx, c, ns, cmd.GroupName, repoURL, prNumber)
 	case "verify":
 		return executeVerifyCommand(ctx, c, ns, cmd.Paths, cmd.AutoFix, repoURL, branch, prNumber)
 	case "replay":
@@ -790,6 +825,10 @@ func executeTeardownCommand(ctx context.Context, c client.Client, ns, repoURL st
 		}
 	}
 
+	if _, err := previewgroup.DetachMemberByPR(ctx, c, projectFromRepoURL(repoURL), prNumber, ""); err != nil {
+		return "", err
+	}
+
 	var taskList v1alpha1.AgentTaskList
 	if err := c.List(ctx, &taskList, client.InNamespace(ns)); err != nil {
 		return "", err
@@ -989,6 +1028,11 @@ func executeStatusCommand(ctx context.Context, c client.Client, ns, repoURL stri
 		return "", fmt.Errorf("list environments: %w", err)
 	}
 
+	sharedGroups, err := previewgroup.FindGroupsForPR(ctx, c, projectFromRepoURL(repoURL), prNumber, "")
+	if err != nil {
+		return "", fmt.Errorf("list shared preview groups: %w", err)
+	}
+
 	prStr := strconv.Itoa(prNumber)
 	var matchedTasks []v1alpha1.AgentTask
 	for _, task := range taskList.Items {
@@ -997,7 +1041,7 @@ func executeStatusCommand(ctx context.Context, c client.Client, ns, repoURL stri
 		}
 	}
 
-	if len(matchedTasks) == 0 && len(envs) == 0 {
+	if len(matchedTasks) == 0 && len(envs) == 0 && len(sharedGroups) == 0 {
 		return "ℹ️ No active agent tasks or preview environments found for this PR/MR.\n\nUse `/diverge fix <objective>` to start an agent task or `/diverge preview` to launch a preview environment.", nil
 	}
 
@@ -1041,6 +1085,28 @@ func executeStatusCommand(ctx context.Context, c client.Client, ns, repoURL stri
 				phase = "Pending"
 			}
 			fmt.Fprintf(&b, "| `%s` | %s | %s |\n", env.Name, phase, urlCell)
+		}
+		b.WriteString("\n")
+	}
+
+	if len(sharedGroups) > 0 {
+		b.WriteString("#### 🔗 Shared Multi-MR Preview Groups\n\n")
+		b.WriteString("| Group | Phase | Routing Header | Services |\n")
+		b.WriteString("|---|---|---|---|\n")
+		for _, pg := range sharedGroups {
+			phase := string(pg.Status.Phase)
+			if phase == "" {
+				phase = "Pending"
+			}
+			hk := pg.Spec.Routing.HeaderKey
+			if hk == "" {
+				hk = previewgroup.DefaultRoutingHeaderKey
+			}
+			hv := pg.Spec.Routing.HeaderValue
+			if hv == "" {
+				hv = pg.Name
+			}
+			fmt.Fprintf(&b, "| `%s` | %s | `%s: %s` | %d |\n", pg.Name, phase, hk, hv, len(pg.Spec.Services))
 		}
 		b.WriteString("\n")
 	}

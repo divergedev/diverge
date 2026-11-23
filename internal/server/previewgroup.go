@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"connectrpc.com/connect"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -117,21 +118,46 @@ func (s *PreviewGroupService) authorizeServiceNamespaces(ctx context.Context, na
 	return nil
 }
 
+func normalizePreviewGroupNamespace(raw string) (lookupNS, authzNS string, err error) {
+	if raw == "" || raw == "_cluster" {
+		return "", "default", nil
+	}
+	if err := ValidateDNS1123Label(raw, "namespace"); err != nil {
+		return "", "", err
+	}
+	return raw, raw, nil
+}
+
+func (s *PreviewGroupService) getPreviewGroupCRD(ctx context.Context, name, lookupNS string, out *v1alpha1.PreviewGroup) error {
+	err := s.client.Get(ctx, client.ObjectKey{Name: name, Namespace: lookupNS}, out)
+	if err != nil && apierrors.IsNotFound(err) {
+		altNS := ""
+		if lookupNS == "" {
+			altNS = "default"
+		}
+		if clusterErr := s.client.Get(ctx, client.ObjectKey{Name: name, Namespace: altNS}, out); clusterErr == nil {
+			return nil
+		}
+	}
+	return err
+}
+
 func (s *PreviewGroupService) GetPreviewGroup(ctx context.Context, req *connect.Request[pb.GetPreviewGroupRequest]) (*connect.Response[pb.GetPreviewGroupResponse], error) {
 	if err := ValidateDNS1123Label(req.Msg.Name, "name"); err != nil {
 		return nil, err
 	}
-	if err := ValidateDNS1123Label(req.Msg.Namespace, "namespace"); err != nil {
+	lookupNS, authzNS, err := normalizePreviewGroupNamespace(req.Msg.Namespace)
+	if err != nil {
 		return nil, err
 	}
 
 	// RBAC check
-	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "get", req.Msg.Namespace, "previewgroups"); err != nil {
+	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "get", authzNS, "previewgroups"); err != nil {
 		return nil, err
 	}
 
 	var crd v1alpha1.PreviewGroup
-	if err := s.client.Get(ctx, client.ObjectKey{Name: req.Msg.Name, Namespace: req.Msg.Namespace}, &crd); err != nil {
+	if err := s.getPreviewGroupCRD(ctx, req.Msg.Name, lookupNS, &crd); err != nil {
 		return nil, SanitizeK8sError(s.logger, err)
 	}
 	dom, err := CRDPgToProto(&crd)
@@ -235,24 +261,21 @@ func (s *PreviewGroupService) UpdatePreviewGroup(ctx context.Context, req *conne
 		}
 	}
 
-	namespace := msg.PreviewGroup.Namespace
-	if namespace == "" {
-		namespace = "default"
-	}
-	if err := ValidateDNS1123Label(namespace, "namespace"); err != nil {
+	lookupNS, authzNS, err := normalizePreviewGroupNamespace(msg.PreviewGroup.Namespace)
+	if err != nil {
 		return nil, err
 	}
 
 	// RBAC check
-	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "update", namespace, "previewgroups"); err != nil {
+	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "update", authzNS, "previewgroups"); err != nil {
 		return nil, err
 	}
-	if err := s.authorizeServiceNamespaces(ctx, namespace, msg.PreviewGroup.GetSpec()); err != nil {
+	if err := s.authorizeServiceNamespaces(ctx, authzNS, msg.PreviewGroup.GetSpec()); err != nil {
 		return nil, err
 	}
 
 	var existingCrd v1alpha1.PreviewGroup
-	if err := s.client.Get(ctx, client.ObjectKey{Name: msg.PreviewGroup.Name, Namespace: namespace}, &existingCrd); err != nil {
+	if err := s.getPreviewGroupCRD(ctx, msg.PreviewGroup.Name, lookupNS, &existingCrd); err != nil {
 		return nil, SanitizeK8sError(s.logger, err)
 	}
 	priorPg := existingCrd.DeepCopy()
@@ -328,23 +351,25 @@ func (s *PreviewGroupService) DeletePreviewGroup(ctx context.Context, req *conne
 	if err := ValidateDNS1123Label(req.Msg.Name, "name"); err != nil {
 		return nil, err
 	}
-	if err := ValidateDNS1123Label(req.Msg.Namespace, "namespace"); err != nil {
+	lookupNS, authzNS, err := normalizePreviewGroupNamespace(req.Msg.Namespace)
+	if err != nil {
 		return nil, err
 	}
 
 	// RBAC check
-	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "delete", req.Msg.Namespace, "previewgroups"); err != nil {
+	if err := AuthorizeAction(ctx, s.k8sClient, s.auditLogger, "delete", authzNS, "previewgroups"); err != nil {
 		return nil, err
 	}
 
 	var crd v1alpha1.PreviewGroup
-	crd.Name = req.Msg.Name
-	crd.Namespace = req.Msg.Namespace
+	if err := s.getPreviewGroupCRD(ctx, req.Msg.Name, lookupNS, &crd); err != nil {
+		return nil, SanitizeK8sError(s.logger, err)
+	}
 	if err := s.client.Delete(ctx, &crd); err != nil {
 		return nil, SanitizeK8sError(s.logger, err)
 	}
 
-	s.auditLogger.LogMutation(ctx, "resource.deleted", "previewgroup", req.Msg.Name, req.Msg.Namespace)
+	s.auditLogger.LogMutation(ctx, "resource.deleted", "previewgroup", req.Msg.Name, crd.Namespace)
 
 	return connect.NewResponse(&pb.DeletePreviewGroupResponse{}), nil
 }
