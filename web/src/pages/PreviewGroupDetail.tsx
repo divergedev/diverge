@@ -136,12 +136,13 @@ export default function PreviewGroupDetail() {
 
       let nextSource = pg.spec?.source
       if (nextSource && nextSource.mr > 0) {
-        const curProj = (nextSource.project || '').toLowerCase()
-        const curProv = (nextSource.provider || '').toLowerCase()
+        const curProj = (nextSource.project || '').trim().toLowerCase()
+        const curProv = (nextSource.provider || '').trim().toLowerCase()
         const stillHasCreator = keptMembers.some((m) => {
           if (m.mr !== nextSource?.mr) return false
-          if ((m.project || '').toLowerCase() !== curProj) return false
-          const mProv = (m.provider || '').toLowerCase()
+          const mProj = (m.project || '').trim().toLowerCase()
+          if (curProj !== '' && mProj !== curProj) return false
+          const mProv = (m.provider || '').trim().toLowerCase()
           const cKnown = curProv && curProv !== 'local' ? curProv : ''
           const mKnown = mProv && mProv !== 'local' ? mProv : ''
           return !cKnown || !mKnown || cKnown === mKnown

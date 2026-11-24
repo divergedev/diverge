@@ -262,15 +262,18 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 					}
 				}
 			}
-			if r.Notifier != nil && pg.Status.Phase != prevPhase {
+			currentCommentSource, sourcePromoted := resetCommentIfSourcePromoted(&pg)
+			if r.Notifier != nil && (pg.Status.Phase != prevPhase || sourcePromoted) {
 				notifyCtx, cancelN := context.WithTimeout(ctx, 15*time.Second)
 				_ = r.Notifier.PostGroupFailed(notifyCtx, &pg, "GroupDatabaseFailed")
 				cancelN()
-				if pg.Status.CommentID != 0 {
-					if srcKey := previewGroupCommentSourceKey(&pg); srcKey != "" {
-						pg.Status.CommentSource = srcKey
-					}
+			}
+			if pg.Status.CommentID != 0 {
+				if currentCommentSource != "" {
+					pg.Status.CommentSource = currentCommentSource
 				}
+			} else {
+				pg.Status.CommentSource = ""
 			}
 			_ = r.Status().Patch(ctx, &pg, client.MergeFrom(statusBase))
 			return ctrl.Result{}, groupDBErr
@@ -470,6 +473,14 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 				(existingEnv.Generation > 0 && existingEnv.Status.ObservedGeneration < existingEnv.Generation) ||
 				meta.IsStatusConditionFalse(existingEnv.Status.Conditions, "DatabaseReady")) {
 			handoffPhase = divergeiov1alpha1.PhaseDeploying
+			svcStatus.Phase = divergeiov1alpha1.PhaseDeploying
+			if svcStatus.Reason == "" {
+				svcStatus.Reason = "ChildSyncing"
+			}
+			if svcStatus.Message == "" {
+				svcStatus.Message = "Waiting for child Environment to reconcile current specification"
+			}
+			requeue = true
 		}
 		servicePhases[svc.Name] = handoffPhase
 		serviceStatuses = append(serviceStatuses, svcStatus)
@@ -518,19 +529,7 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	meta.SetStatusCondition(&pg.Status.Conditions, readyCondition)
 
 	prevPhase := statusBase.Status.Phase
-	currentCommentSource := previewGroupCommentSourceKey(&pg)
-	prevCommentSource := strings.TrimSpace(pg.Status.CommentSource)
-	if prevCommentSource == "" && pg.Annotations != nil {
-		prevCommentSource = strings.TrimSpace(pg.Annotations[annotationCommentSource])
-	}
-	sourcePromoted := false
-	if pg.Status.CommentID != 0 && prevCommentSource != "" && prevCommentSource != currentCommentSource {
-		// Creator MR left and Spec.Source promoted to a new MR (potentially in the same monorepo):
-		// reset CommentID and CommentSource so we post a fresh comment on the promoted MR instead of editing the closed PR's comment.
-		pg.Status.CommentID = 0
-		pg.Status.CommentSource = ""
-		sourcePromoted = true
-	}
+	currentCommentSource, sourcePromoted := resetCommentIfSourcePromoted(&pg)
 
 	prevReportedCommit := ""
 	if pg.Annotations != nil {
@@ -931,6 +930,25 @@ func previewGroupCommentSourceKey(pg *divergeiov1alpha1.PreviewGroup) string {
 		strings.ToLower(strings.TrimSpace(pg.Spec.Source.Project)),
 		pg.Spec.Source.MR,
 	)
+}
+
+func resetCommentIfSourcePromoted(pg *divergeiov1alpha1.PreviewGroup) (string, bool) {
+	if pg == nil {
+		return "", false
+	}
+	currentCommentSource := previewGroupCommentSourceKey(pg)
+	prevCommentSource := strings.TrimSpace(pg.Status.CommentSource)
+	if prevCommentSource == "" && pg.Annotations != nil {
+		prevCommentSource = strings.TrimSpace(pg.Annotations[annotationCommentSource])
+	}
+	if pg.Status.CommentID != 0 && prevCommentSource != "" && prevCommentSource != currentCommentSource {
+		// Creator MR left and Spec.Source promoted to a new MR (potentially in the same monorepo):
+		// reset CommentID and CommentSource so we post a fresh comment on the promoted MR instead of editing the closed PR's comment.
+		pg.Status.CommentID = 0
+		pg.Status.CommentSource = ""
+		return currentCommentSource, true
+	}
+	return currentCommentSource, false
 }
 
 // listChildEnvironments returns all Environments owned by this PreviewGroup.

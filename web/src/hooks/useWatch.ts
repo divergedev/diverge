@@ -114,7 +114,9 @@ export function useWatchPreviewGroups(namespace?: string) {
                   (p: PreviewGroup) => p.name === pg.name && p.namespace === pg.namespace,
                 )
                 if (msg.type === WatchEventType.DELETED) {
-                  if (idx >= 0) list.splice(idx, 1)
+                  if (idx >= 0 && !isStaleEnvironmentRevision(list[idx].resourceVersion, msg.resourceVersion)) {
+                    list.splice(idx, 1)
+                  }
                 } else {
                   if (idx >= 0) {
                     if (isStaleEnvironmentRevision(list[idx].resourceVersion, pg.resourceVersion)) {
@@ -129,19 +131,30 @@ export function useWatchPreviewGroups(namespace?: string) {
               },
             )
             if (msg.type === WatchEventType.DELETED) {
+              const shouldRemove = (q: { queryKey: readonly unknown[]; state: { data: unknown } }) => {
+                if (q.queryKey[2] !== pg.name) return false
+                const old = q.state.data as GetPreviewGroupResponse | undefined
+                return !isStaleEnvironmentRevision(old?.previewGroup?.resourceVersion, msg.resourceVersion)
+              }
+              void qc.cancelQueries({ queryKey: ['previewGroup'], predicate: shouldRemove })
               qc.removeQueries({
                 queryKey: ['previewGroup'],
-                predicate: (q) => q.queryKey[2] === pg.name,
+                predicate: shouldRemove,
               })
             } else {
               const pgRV = pg.resourceVersion?.trim() ?? ''
               if (/^\d+$/.test(pgRV)) {
+                const isNonStaleDetail = (q: { queryKey: readonly unknown[]; state: { data: unknown } }) => {
+                  if (q.queryKey[2] !== pg.name) return false
+                  const old = q.state.data as GetPreviewGroupResponse | undefined
+                  return !isStaleEnvironmentRevision(old?.previewGroup?.resourceVersion, pgRV)
+                }
+                void qc.cancelQueries({ queryKey: ['previewGroup'], predicate: isNonStaleDetail })
                 qc.setQueriesData(
                   { queryKey: ['previewGroup'], predicate: (q) => q.queryKey[2] === pg.name },
                   (old: GetPreviewGroupResponse | undefined) => {
                     if (!old) return undefined
-                    const cachedRV = old.previewGroup?.resourceVersion?.trim() ?? ''
-                    if (/^\d+$/.test(cachedRV) && BigInt(pgRV) < BigInt(cachedRV)) {
+                    if (isStaleEnvironmentRevision(old.previewGroup?.resourceVersion, pgRV)) {
                       return old
                     }
                     return { ...old, previewGroup: pg } as GetPreviewGroupResponse

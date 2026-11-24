@@ -338,6 +338,8 @@ func MemberMatchesEnvironmentSource(m MemberRecord, env *v1alpha1.Environment) b
 			}
 		} else if m.MR > 0 {
 			return false
+		} else {
+			return eBranch != "" && mBranch != "" && mBranch == eBranch
 		}
 		return true
 	}
@@ -570,7 +572,7 @@ func getPreviewGroup(ctx context.Context, c client.Client, name, fallbackNamespa
 	return nil, err
 }
 
-func wakeStandaloneEnv(ctx context.Context, c client.Client, m MemberRecord) error {
+func wakeStandaloneEnv(ctx context.Context, c client.Client, m MemberRecord, groupName string) error {
 	envName := strings.TrimSpace(m.EnvironmentName)
 	if envName == "" || c == nil {
 		return nil
@@ -597,8 +599,8 @@ func wakeStandaloneEnv(ctx context.Context, c client.Client, m MemberRecord) err
 		if env.Labels != nil && env.Labels["divergedev.com/managed-by"] == "diverge-previewgroup" {
 			return nil
 		}
-		// Wake only if attached to a PreviewGroup, preserving any independent manual/idle hibernation ("false").
-		if env.Annotations == nil || strings.TrimSpace(env.Annotations[AnnotationAttachedPreviewGroup]) == "" {
+		// Wake only if attached to the departing PreviewGroup, preserving any other group's attachment or manual/idle hibernation ("false").
+		if env.Annotations == nil || env.Annotations[AnnotationAttachedPreviewGroup] != groupName {
 			return nil
 		}
 		delete(env.Annotations, AnnotationAttachedPreviewGroup)
@@ -1142,11 +1144,15 @@ func Leave(ctx context.Context, c client.Client, opts LeaveOptions) (*LeaveResul
 			}
 		}
 
+		activeNames := make(map[string]bool, len(remainingActive))
+		for _, name := range remainingActive {
+			activeNames[name] = true
+		}
 		var keptMembers []MemberRecord
 		for _, m := range members {
 			if toRemove[m.Service] {
 				detachedMembers = append(detachedMembers, m)
-			} else {
+			} else if activeNames[m.Service] {
 				keptMembers = append(keptMembers, m)
 			}
 		}
@@ -1293,7 +1299,7 @@ func Leave(ctx context.Context, c client.Client, opts LeaveOptions) (*LeaveResul
 			return nil, fErr
 		}
 		if !claimed {
-			if wErr := wakeStandaloneEnv(ctx, c, dm); wErr != nil {
+			if wErr := wakeStandaloneEnv(ctx, c, dm, groupName); wErr != nil {
 				return nil, wErr
 			}
 		}

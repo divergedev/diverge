@@ -322,6 +322,7 @@ describe('ComposePreviewGroupModal', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     let listCalls = 0
     let updateCalls = 0
+    let getStarted = false
     let getResolved = false
     let releaseGetRetry!: () => void
     const getRetryGate = new Promise<void>((resolve) => {
@@ -357,6 +358,7 @@ describe('ComposePreviewGroupModal', () => {
         return HttpResponse.json({ code: 'aborted', message: 'conflict' }, { status: 409 })
       }),
       http.post('*/diverge.v1alpha1.PreviewGroupService/GetPreviewGroup', async () => {
+        getStarted = true
         await getRetryGate
         getResolved = true
         return HttpResponse.json({
@@ -401,6 +403,7 @@ describe('ComposePreviewGroupModal', () => {
     await waitFor(() => {
       expect(submitBtn).toBeDisabled()
       expect(updateCalls).toBe(1)
+      expect(getStarted).toBe(true)
     })
 
     // Unmount during pending conflict retry -> must abort and NEVER fire second UpdatePreviewGroup

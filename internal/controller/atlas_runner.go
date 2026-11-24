@@ -10,6 +10,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -23,6 +24,14 @@ import (
 )
 
 const defaultAtlasJobImage = "arigaio/atlas:latest"
+
+func isDefinitiveCreateRejection(err error) bool {
+	return apierrors.IsInvalid(err) ||
+		apierrors.IsBadRequest(err) ||
+		apierrors.IsForbidden(err) ||
+		apierrors.IsUnauthorized(err) ||
+		meta.IsNoMatchError(err)
+}
 
 // ensureAtlasCR creates or updates an AtlasMigration or AtlasSchema CR.
 func (r *EnvironmentReconciler) ensureAtlasCR(ctx context.Context, env *divergeiov1alpha1.Environment, dbResult *database.DatabaseResult) error {
@@ -131,13 +140,8 @@ func (r *EnvironmentReconciler) ensureAtlasCR(ctx context.Context, env *divergei
 		}
 		logger.Info(fmt.Sprintf("Creating %s", kind), "name", crName)
 		if err := r.Create(ctx, u); err != nil {
-			if env.UID == "" && !apierrors.IsAlreadyExists(err) {
-				var verifyCR unstructured.Unstructured
-				verifyCR.SetAPIVersion("db.atlasgo.io/v1alpha1")
-				verifyCR.SetKind(kind)
-				if getErr := r.Get(ctx, types.NamespacedName{Name: crName, Namespace: env.Namespace}, &verifyCR); apierrors.IsNotFound(getErr) {
-					_ = client.IgnoreNotFound(r.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: env.Namespace}}))
-				}
+			if env.UID == "" && isDefinitiveCreateRejection(err) {
+				_ = client.IgnoreNotFound(r.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: env.Namespace}}))
 			}
 			return fmt.Errorf("failed to create %s: %w", kind, err)
 		}

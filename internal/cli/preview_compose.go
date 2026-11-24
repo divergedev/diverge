@@ -409,12 +409,20 @@ func newPreviewLeaveCmd(app *App) *cobra.Command {
 			}
 
 			effProject := strings.TrimSpace(project)
-			effProvider := strings.TrimSpace(provider)
-			if effProject == "" && mrNumber > 0 {
+			effProvider := strings.ToLower(strings.TrimSpace(provider))
+			if effProvider != "" && effProvider != "github" && effProvider != "gitlab" {
+				return fmt.Errorf("invalid --provider %q: must be github or gitlab", provider)
+			}
+			if mrNumber > 0 && (effProject == "" || effProvider == "") {
 				if gitCtx, gErr := git.Detect(); gErr == nil && gitCtx != nil {
-					effProject = gitCtx.Project
+					if effProject == "" {
+						effProject = gitCtx.Project
+					}
 					if effProvider == "" {
-						effProvider = gitCtx.Provider
+						gp := strings.ToLower(strings.TrimSpace(gitCtx.Provider))
+						if gp == "github" || gp == "gitlab" {
+							effProvider = gp
+						}
 					}
 				}
 			}

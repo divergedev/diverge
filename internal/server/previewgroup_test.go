@@ -681,6 +681,44 @@ func TestPreviewGroupService_EffectiveEnvNamespaceAuthzAndLocalSourceClearOnDeta
 	require.NoError(t, err)
 	assert.Equal(t, "local", upd.Msg.PreviewGroup.Spec.Source.Provider)
 	assert.Equal(t, int32(0), upd.Msg.PreviewGroup.Spec.Source.Mr)
+
+	// 3. Macaroon bound to team-a cannot remove or re-point an existing member referencing team-b
+	macPG := &v1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "mac-cross-ns-pg",
+			Annotations: map[string]string{
+				"divergedev.com/group-members": `[{"service":"api","namespace":"team-a","environmentName":"team-b-env","environmentNamespace":"team-b","provider":"github","project":"acme/api","mr":11}]`,
+			},
+		},
+		Spec: v1alpha1.PreviewGroupSpec{
+			Services: []v1alpha1.PreviewGroupServiceSpec{
+				{Name: "api", Namespace: "team-a", Mode: v1alpha1.ServiceModeImage, Image: "acme/api:11"},
+			},
+		},
+	}
+	require.NoError(t, c.Create(ctx, macPG))
+	macGot, err := svc.GetPreviewGroup(ctx, connect.NewRequest(&pb.GetPreviewGroupRequest{Name: "mac-cross-ns-pg"}))
+	require.NoError(t, err)
+	teamAMacCtx := auth.ContextWithUserInfo(context.Background(), &auth.UserInfo{
+		Username: "agent-task:team-a",
+		Extra: map[string]authorizationv1.ExtraValue{
+			auth.ExtraKeyAuthType:     {"macaroon"},
+			auth.ExtraKeyNamespace:    {"team-a"},
+			auth.ExtraKeyAllowedTools: {"diverge_join_preview_group", "diverge_leave_preview_group"},
+		},
+	})
+	_, err = svc.UpdatePreviewGroup(teamAMacCtx, connect.NewRequest(&pb.UpdatePreviewGroupRequest{
+		PreviewGroup: &pb.PreviewGroup{
+			Name:            "mac-cross-ns-pg",
+			ResourceVersion: macGot.Msg.PreviewGroup.ResourceVersion,
+			Annotations: map[string]string{
+				"divergedev.com/group-members": `[{"service":"api","namespace":"team-a","environmentName":"team-a-env","environmentNamespace":"team-a","provider":"github","project":"acme/api","mr":11}]`,
+			},
+			Spec: macGot.Msg.PreviewGroup.Spec,
+		},
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
 }
 
 func TestPreviewGroupService_WatchStaleRVAndSameRVDeleted(t *testing.T) {

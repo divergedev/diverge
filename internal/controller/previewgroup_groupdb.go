@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/database/cnpg"
@@ -203,6 +204,19 @@ func blockingObservingAnchor(anchor *divergeiov1alpha1.Environment) *divergeiov1
 	return obs
 }
 
+func childStillUsesSharedDBSecret(child *divergeiov1alpha1.Environment, secName string) bool {
+	if child == nil {
+		return false
+	}
+	if child.Annotations[annotationSharedGroupDB] == "true" {
+		return true
+	}
+	if secName != "" && strings.TrimSpace(child.Spec.Database.ConnectionRef) == secName {
+		return true
+	}
+	return child.Generation > 0 && child.Status.ObservedGeneration < child.Generation
+}
+
 // reconcileGroupDatabase provisions a single shared database for the PreviewGroup when Spec.Database is configured.
 // Returns (sharedEnvVars, anchorNamespace, handledByGroup, ready, requeueNeeded, error).
 func (r *PreviewGroupReconciler) reconcileGroupDatabase(
@@ -219,8 +233,9 @@ func (r *PreviewGroupReconciler) reconcileGroupDatabase(
 				return nil, "", true, false, false, cErr
 			}
 			for i := range children {
-				if children[i].Annotations[annotationSharedGroupDB] == "true" {
-					// Switch live child Environments off the shared DB in this reconcile pass first, then tear down on requeue.
+				secName := sanitizeK8sName(fmt.Sprintf("diverge-db-env-%s", children[i].Name), children[i].Name, 63)
+				if childStillUsesSharedDBSecret(&children[i], secName) {
+					// Wait until live child Environments are updated AND their workloads have observed the switch-off before tearing down shared DB / Secrets.
 					return nil, "", false, true, true, nil
 				}
 			}
@@ -330,6 +345,11 @@ func (r *PreviewGroupReconciler) reconcileGroupDatabase(
 						return nil, anchorNS, true, false, false, nil
 					}
 					migInProgressRequeue = true
+				} else if errors.Is(migErr, ErrHookFailed) && !isGroupMigrationBlocking(pg.Spec.Database) {
+					log.FromContext(ctx).Error(migErr, "non-blocking shared group database migration failed")
+					if r.Recorder != nil {
+						r.Recorder.Eventf(pg, "Warning", "GroupMigrationFailed", "Non-blocking shared group database migration failed: %v", migErr)
+					}
 				} else {
 					return nil, anchorNS, true, false, false, migErr
 				}
@@ -481,8 +501,9 @@ func (r *PreviewGroupReconciler) teardownGroupDatabase(ctx context.Context, pg *
 	anchorEnv := r.buildGroupDatabaseAnchor(pg, anchorNS)
 	helper := r.envProvisionHelper()
 
-	tdCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	baseTDCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
+	tdCtx := baseTDCtx
 
 	targetClient := r.Client
 	target, tErr := helper.resolveTarget(tdCtx, anchorEnv)
@@ -491,7 +512,7 @@ func (r *PreviewGroupReconciler) teardownGroupDatabase(ctx context.Context, pg *
 			return fmt.Errorf("failed to resolve database target cluster for teardown: %w", tErr)
 		}
 	} else if target != nil {
-		tdCtx = multicluster.WithTarget(tdCtx, target)
+		tdCtx = multicluster.WithTarget(baseTDCtx, target)
 		if target.Client != nil {
 			targetClient = target.Client
 		}
@@ -543,7 +564,7 @@ func (r *PreviewGroupReconciler) teardownGroupDatabase(ctx context.Context, pg *
 			errs = append(errs, fmt.Errorf("failed to delete %s %s/%s: %w", kind, anchorNS, u.GetName(), dErr))
 		}
 	}
-	if secErr := r.cleanupOrphanedChildSharedDBSecrets(tdCtx, pg, nil); secErr != nil {
+	if secErr := r.cleanupOrphanedChildSharedDBSecrets(baseTDCtx, pg, nil); secErr != nil {
 		errs = append(errs, secErr)
 	}
 	return errors.Join(errs...)
@@ -564,9 +585,27 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 	keepSecrets := make(map[string]bool, len(children)+len(desiredEnvNames))
 	for i := range children {
 		secName := sanitizeK8sName(fmt.Sprintf("diverge-db-env-%s", children[i].Name), children[i].Name, 63)
-		keepSecrets[children[i].Namespace+"/"+secName] = true
+		if childStillUsesSharedDBSecret(&children[i], secName) {
+			keepSecrets[children[i].Namespace+"/"+secName] = true
+		}
+	}
+	sharedDesiredKeys := make(map[string]bool)
+	if hasDedicatedGroupDatabase(pg) {
+		for _, svc := range pg.Spec.Services {
+			if svc.Mode == divergeiov1alpha1.ServiceModeBaseline || svc.Database != nil {
+				continue
+			}
+			svcNS := strings.TrimSpace(svc.Namespace)
+			if svcNS == "" {
+				svcNS = "default"
+			}
+			sharedDesiredKeys[svcNS+"/"+childEnvironmentName(pg.Name, svc.Name)] = true
+		}
 	}
 	for envKey := range desiredEnvNames {
+		if !sharedDesiredKeys[envKey] {
+			continue
+		}
 		parts := strings.SplitN(envKey, "/", 2)
 		if len(parts) != 2 {
 			continue
@@ -621,19 +660,14 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 		if svcNS == "" {
 			svcNS = "default"
 		}
-		if pg.Spec.ClusterRef != nil {
-			probeAnchor := &divergeiov1alpha1.Environment{
-				ObjectMeta: metav1.ObjectMeta{Name: groupDatabaseAnchorName(pg.Name), Namespace: anchorNS},
-				Spec:       divergeiov1alpha1.EnvironmentSpec{Deploy: divergeiov1alpha1.EnvironmentDeploy{Namespace: "same", ClusterRef: pg.Spec.ClusterRef}},
-			}
-			if t, tErr := helper.resolveTarget(ctx, probeAnchor); tErr == nil {
-				addRemoteScan(t, svcNS)
-			}
-		}
+		effClusterRef := pg.Spec.ClusterRef
 		if svc.ClusterRef != nil {
+			effClusterRef = svc.ClusterRef
+		}
+		if effClusterRef != nil {
 			probeSvc := &divergeiov1alpha1.Environment{
 				ObjectMeta: metav1.ObjectMeta{Name: childEnvironmentName(pg.Name, svc.Name), Namespace: svcNS},
-				Spec:       divergeiov1alpha1.EnvironmentSpec{Deploy: divergeiov1alpha1.EnvironmentDeploy{Namespace: "same", ClusterRef: svc.ClusterRef}},
+				Spec:       divergeiov1alpha1.EnvironmentSpec{Deploy: divergeiov1alpha1.EnvironmentDeploy{Namespace: "same", ClusterRef: effClusterRef}},
 			}
 			if t, tErr := helper.resolveTarget(ctx, probeSvc); tErr != nil {
 				if multicluster.IsRemoteEnv(probeSvc) {
@@ -642,6 +676,23 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 			} else {
 				addRemoteScan(t, svcNS)
 			}
+		}
+	}
+	for i := range children {
+		child := &children[i]
+		if child.Spec.Deploy.ClusterRef == nil {
+			continue
+		}
+		probeChild := &divergeiov1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{Name: child.Name, Namespace: child.Namespace},
+			Spec:       divergeiov1alpha1.EnvironmentSpec{Deploy: divergeiov1alpha1.EnvironmentDeploy{Namespace: "same", ClusterRef: child.Spec.Deploy.ClusterRef}},
+		}
+		if t, tErr := helper.resolveTarget(ctx, probeChild); tErr != nil {
+			if multicluster.IsRemoteEnv(probeChild) {
+				errs = append(errs, fmt.Errorf("failed to resolve spoke cluster for child %s/%s shared DB Secret cleanup: %w", child.Namespace, child.Name, tErr))
+			}
+		} else {
+			addRemoteScan(t, child.Namespace)
 		}
 	}
 
@@ -832,11 +883,18 @@ func (r *PreviewGroupReconciler) wakeUnclaimedStandaloneEnvironments(ctx context
 		if other.Name == groupName || !other.DeletionTimestamp.IsZero() {
 			continue
 		}
+		if other.Generation > 0 {
+			readyCond := meta.FindStatusCondition(other.Status.Conditions, "Ready")
+			if readyCond == nil || readyCond.ObservedGeneration < other.Generation {
+				continue
+			}
+		}
 		otherStatusPhase := make(map[string]divergeiov1alpha1.EnvironmentPhase, len(other.Status.Services))
 		for _, st := range other.Status.Services {
 			otherStatusPhase[st.Name] = st.Phase
 		}
 		svcNS := make(map[string]string, len(other.Spec.Services))
+		svcSpecByName := make(map[string]divergeiov1alpha1.PreviewGroupServiceSpec, len(other.Spec.Services))
 		for _, s := range other.Spec.Services {
 			if s.Mode == divergeiov1alpha1.ServiceModeBaseline {
 				continue
@@ -846,6 +904,7 @@ func (r *PreviewGroupReconciler) wakeUnclaimedStandaloneEnvironments(ctx context
 				ns = "default"
 			}
 			svcNS[s.Name] = ns
+			svcSpecByName[s.Name] = s
 		}
 		for _, m := range previewgroup.ParseMembers(other) {
 			if m.EnvironmentName == "" {
@@ -865,13 +924,17 @@ func (r *PreviewGroupReconciler) wakeUnclaimedStandaloneEnvironments(ctx context
 			if envNS != ns {
 				continue
 			}
-			if otherStatusPhase[m.Service] == divergeiov1alpha1.PhaseFailed {
+			if otherStatusPhase[m.Service] != "" && otherStatusPhase[m.Service] != divergeiov1alpha1.PhaseRunning {
 				continue
 			}
 			child := childEnvByKey[ns+"/"+childEnvironmentName(other.Name, m.Service)]
 			if child == nil || child.Status.Phase != divergeiov1alpha1.PhaseRunning ||
 				(child.Generation > 0 && child.Status.ObservedGeneration < child.Generation) ||
 				meta.IsStatusConditionFalse(child.Status.Conditions, "DatabaseReady") {
+				continue
+			}
+			svcSpec := svcSpecByName[m.Service]
+			if svcSpec.Image != "" && (child.Spec.ServiceConfig == nil || child.Spec.ServiceConfig.Image != svcSpec.Image) {
 				continue
 			}
 			if cand, exists := candidateByKey[envNS+"/"+m.EnvironmentName]; exists && previewgroup.MemberMatchesEnvironmentSource(m, cand) {

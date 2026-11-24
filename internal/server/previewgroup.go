@@ -452,6 +452,18 @@ func (s *PreviewGroupService) authorizeUpdateGroup(ctx context.Context, authzNS 
 				}
 			}
 		}
+		for _, m := range previewgroup.ParseMembers(existing) {
+			if m.Namespace != "" {
+				if err := checkVerbNS("update", m.Namespace); err != nil {
+					return err
+				}
+			}
+			if m.EnvironmentNamespace != "" || strings.TrimSpace(m.EnvironmentName) != "" {
+				if err := checkVerbNS("update", resolveMemberEnvNS(m)); err != nil {
+					return err
+				}
+			}
+		}
 		return nil
 	}
 

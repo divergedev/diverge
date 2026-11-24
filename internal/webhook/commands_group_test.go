@@ -166,6 +166,15 @@ func (f *fakeGroupConfigFetcher) FetchConfig(_ context.Context, _, _, _ string) 
 	return []byte(f.yaml), nil
 }
 
+type recordingCommentPoster struct {
+	bodies []string
+}
+
+func (r *recordingCommentPoster) PostComment(_ context.Context, _ string, _ int, body string) (int64, error) {
+	r.bodies = append(r.bodies, body)
+	return int64(len(r.bodies)), nil
+}
+
 func TestWebhook_ProviderHostCheckUngroupIsolationRoutingUIDTTLAndBackgroundSync(t *testing.T) {
 	ctx := context.Background()
 	scheme := runtime.NewScheme()
@@ -301,6 +310,7 @@ func TestWebhook_ProviderHostCheckUngroupIsolationRoutingUIDTTLAndBackgroundSync
 	assert.False(t, recreatedDeleteAttempted, "teardown retry must stop when refreshed PreviewGroup UID differs")
 
 	// 4. executeExtendTTLCommand must skip shared group when membership disappears before retry Get
+	//    EVEN when that PR was initially the group's direct Spec.Source (composed group with members).
 	sharedTTL := &v1alpha1.PreviewGroup{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "shared-ttl",
@@ -309,7 +319,7 @@ func TestWebhook_ProviderHostCheckUngroupIsolationRoutingUIDTTLAndBackgroundSync
 			},
 		},
 		Spec: v1alpha1.PreviewGroupSpec{
-			Source: v1alpha1.EnvironmentSource{Provider: "github", Project: "acme/web", MR: 13, Branch: "b"},
+			Source: v1alpha1.EnvironmentSource{Provider: "github", Project: "acme/ttl", MR: 12, Branch: "b12"},
 			Services: []v1alpha1.PreviewGroupServiceSpec{
 				{Name: "api", Namespace: "default", Mode: v1alpha1.ServiceModeImage, Image: "a:1"},
 				{Name: "web", Namespace: "default", Mode: v1alpha1.ServiceModeImage, Image: "w:1"},
@@ -330,9 +340,9 @@ func TestWebhook_ProviderHostCheckUngroupIsolationRoutingUIDTTLAndBackgroundSync
 	})
 	ttlFeedback, err := executeExtendTTLCommand(ghCtx, icTTL, "default", 0, "https://github.com/acme/ttl", 12)
 	require.NoError(t, err)
-	assert.Contains(t, ttlFeedback, "for 0 environment(s)", "extend-ttl must skip group after membership was detached")
+	assert.Contains(t, ttlFeedback, "for 0 environment(s)", "extend-ttl must skip directly discovered composed group after membership was detached")
 
-	// 5. Unnamed ungroup reports partial detachments on non-Forbidden API error
+	// 5. Unnamed ungroup returns partial feedback TOGETHER with non-nil error, posts partial feedback, and releases delivery dedup
 	pgA := &v1alpha1.PreviewGroup{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        "pg-a",
@@ -357,10 +367,51 @@ func TestWebhook_ProviderHostCheckUngroupIsolationRoutingUIDTTLAndBackgroundSync
 		},
 	})
 	partialOut, err := executeUngroupCommand(ghCtx, icPartial, "default", "", "https://github.com/acme/part", 21)
-	require.NoError(t, err)
+	require.Error(t, err)
 	assert.Contains(t, partialOut, "Partially detached")
 	assert.Contains(t, partialOut, "pg-a")
 	assert.Contains(t, partialOut, "Command did not finish")
+
+	pgC := &v1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "pg-c",
+			Annotations: map[string]string{previewgroup.AnnotationGroupMembers: `[{"service":"c","namespace":"default","provider":"github","project":"acme/part","mr":22}]`},
+		},
+		Spec: v1alpha1.PreviewGroupSpec{Services: []v1alpha1.PreviewGroupServiceSpec{{Name: "c", Mode: v1alpha1.ServiceModeImage, Image: "c:1"}}},
+	}
+	pgD := &v1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "pg-d",
+			Annotations: map[string]string{previewgroup.AnnotationGroupMembers: `[{"service":"d","namespace":"default","provider":"github","project":"acme/part","mr":22}]`},
+		},
+		Spec: v1alpha1.PreviewGroupSpec{Services: []v1alpha1.PreviewGroupServiceSpec{{Name: "d", Mode: v1alpha1.ServiceModeImage, Image: "d:1"}}},
+	}
+	baseHTTPPartial := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pgC, pgD).Build()
+	icHTTPPartial := interceptor.NewClient(baseHTTPPartial, interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if p, ok := obj.(*v1alpha1.PreviewGroup); ok && p.Name == "pg-d" {
+				return apierrors.NewTimeoutError("apiserver timeout", 1)
+			}
+			return c.Delete(ctx, obj, opts...)
+		},
+	})
+	poster := &recordingCommentPoster{}
+	dedup := NewDeliveryDedup()
+	dedup.IsDuplicate("deliv-partial-1")
+	ghPartialHandler := &GitHubWebhookHandler{
+		Client:    icHTTPPartial,
+		DefaultNS: "default",
+		Commenter: poster,
+		Dedup:     dedup,
+	}
+	ghRec := httptest.NewRecorder()
+	commentPayload := `{"action":"created","issue":{"number":22,"pull_request":{"url":"https://api.github.com/repos/acme/part/pulls/22"}},"pull_request":{"head":{"ref":"feat/part"}},"comment":{"body":"/diverge ungroup","author_association":"MEMBER","user":{"login":"dev"}},"repository":{"full_name":"acme/part","html_url":"https://github.com/acme/part"}}`
+	ghPartialHandler.handleIssueComment(ctx, ghRec, []byte(commentPayload), "deliv-partial-1")
+	assert.Equal(t, http.StatusInternalServerError, ghRec.Code)
+	assert.False(t, dedup.IsDuplicate("deliv-partial-1"), "failed partial command must release delivery dedup for retry")
+	require.Len(t, poster.bodies, 1)
+	assert.Contains(t, poster.bodies[0], "Partially detached")
+	assert.Contains(t, poster.bodies[0], "pg-c")
 
 	// 6. GitLabPreviewGroupWebhookHandler returns 200 even when background syncSharedGroupsFromSinglePG fails
 	baseGL := fake.NewClientBuilder().WithScheme(scheme).Build()

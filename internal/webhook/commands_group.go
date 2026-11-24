@@ -395,7 +395,7 @@ func executeUngroupCommand(ctx context.Context, c client.Client, ns, groupName, 
 		if len(results) > 0 {
 			return "🔌 **Partially detached from shared PreviewGroup(s)**:\n\n" +
 				strings.Join(formatDetachLines(results), "\n") +
-				fmt.Sprintf("\n\n⚠️ Command did not finish: %v", err), nil
+				fmt.Sprintf("\n\n⚠️ Command did not finish: %v", err), err
 		}
 		return "", err
 	}

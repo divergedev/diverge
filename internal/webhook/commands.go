@@ -1149,7 +1149,12 @@ func executeExtendTTLCommand(ctx context.Context, c client.Client, ns string, du
 				return gErr
 			}
 		applyTTL:
-			if !directPG[key.Name] && !previewgroup.HasPRMember(&freshPG, reqProvider, project, prNumber) {
+			if len(previewgroup.ParseMembers(&freshPG)) > 0 {
+				if !previewgroup.HasPRMember(&freshPG, reqProvider, project, prNumber) {
+					skipped = true
+					return nil
+				}
+			} else if !directPG[key.Name] || !previewGroupMatchesPRSource(&freshPG, reqProvider, project, prNumber) {
 				skipped = true
 				return nil
 			}
@@ -1510,23 +1515,30 @@ func findMatchingPreviewGroups(ctx context.Context, c client.Client, repoURL str
 
 	project := projectFromRepoURL(repoURL)
 	reqProvider := resolveRequestProvider(ctx, repoURL)
-	prStr := strconv.Itoa(prNumber)
 	var matched []v1alpha1.PreviewGroup
 	for _, pg := range pgList.Items {
-		pgProv := strings.ToLower(strings.TrimSpace(pg.Spec.Source.Provider))
-		if reqProvider != "" && pgProv != "" && pgProv != "local" && pgProv != reqProvider {
-			continue
-		}
-		if project != "" && !strings.EqualFold(pg.Spec.Source.Project, project) {
-			continue
-		}
-		if pg.Spec.Source.MR == prNumber ||
-			pg.Annotations[prNumberAnnotationKey] == prStr ||
-			pg.Labels[prNumberAnnotationKey] == prStr {
+		if previewGroupMatchesPRSource(&pg, reqProvider, project, prNumber) {
 			matched = append(matched, pg)
 		}
 	}
 	return matched, nil
+}
+
+func previewGroupMatchesPRSource(pg *v1alpha1.PreviewGroup, reqProvider, project string, prNumber int) bool {
+	if pg == nil || prNumber <= 0 {
+		return false
+	}
+	pgProv := strings.ToLower(strings.TrimSpace(pg.Spec.Source.Provider))
+	if reqProvider != "" && pgProv != "" && pgProv != "local" && pgProv != reqProvider {
+		return false
+	}
+	if project != "" && !strings.EqualFold(pg.Spec.Source.Project, project) {
+		return false
+	}
+	prStr := strconv.Itoa(prNumber)
+	return pg.Spec.Source.MR == prNumber ||
+		pg.Annotations[prNumberAnnotationKey] == prStr ||
+		pg.Labels[prNumberAnnotationKey] == prStr
 }
 
 func findMatchingPreviewGroupsOptional(ctx context.Context, c client.Client, repoURL string, prNumber int) ([]v1alpha1.PreviewGroup, error) {

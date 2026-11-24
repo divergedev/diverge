@@ -269,7 +269,11 @@ func (h *GitLabWebhookHandler) handleNoteEvent(ctx context.Context, w http.Respo
 	if execErr != nil {
 		h.Dedup.Release(deliveryID)
 		logger.Error(execErr, "Failed to execute GitLab slash command", "action", cmd.Action, "mr", mrIID)
-		h.postFeedbackComment(ctx, payload.Project.PathWithNamespace, mrIID, fmt.Sprintf("❌ **Diverge Command Error**\n\nFailed to execute `/diverge %s`: %v\n\nRun `/diverge help` for a list of available commands.", cmd.Action, execErr))
+		errComment := feedback
+		if errComment == "" {
+			errComment = fmt.Sprintf("❌ **Diverge Command Error**\n\nFailed to execute `/diverge %s`: %v\n\nRun `/diverge help` for a list of available commands.", cmd.Action, execErr)
+		}
+		h.postFeedbackComment(ctx, payload.Project.PathWithNamespace, mrIID, errComment)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -301,7 +305,7 @@ func (h *GitLabWebhookHandler) handleFixCommand(ctx context.Context, payload *Gi
 	taskName := buildCommandTaskName(effectiveRepoURL, mrIID, cmd.Objective)
 	var task v1alpha1.AgentTask
 	if err := h.Client.Get(ctx, client.ObjectKey{Name: taskName, Namespace: ns}, &task); err != nil {
-		return feedback, err
+		return "", err
 	}
 	if task.Annotations == nil {
 		task.Annotations = make(map[string]string)
@@ -317,7 +321,7 @@ func (h *GitLabWebhookHandler) handleFixCommand(ctx context.Context, payload *Gi
 	}
 	SetTraceparentAnnotation(&task, TraceparentFromContext(ctx))
 	if err := h.Client.Update(ctx, &task); err != nil {
-		return feedback, err
+		return "", err
 	}
 	return feedback, nil
 }

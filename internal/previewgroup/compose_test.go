@@ -535,3 +535,67 @@ func TestProviderIsolationLocalSourceClearAndChangedServicesRecovery(t *testing.
 	assert.Empty(t, recoveredEnv.Annotations[AnnotationAttachedPreviewGroup])
 	assert.Empty(t, recoveredEnv.Annotations[AnnotationHibernated])
 }
+
+func TestCompose_ZeroMRBranchMatchStaleMemberPruningAndWakeGroupGuard(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1alpha1.AddToScheme(scheme))
+
+	// 1. SCM source with MR == 0 must match only equal nonempty branches
+	branchEnv := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "env-feat-old", Namespace: "default"},
+		Spec: v1alpha1.EnvironmentSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "github", Project: "acme/api", Branch: "feat/old"},
+		},
+	}
+	assert.False(t, MemberMatchesEnvironmentSource(MemberRecord{Provider: "github", Project: "acme/api", Branch: "feat/new"}, branchEnv))
+	assert.False(t, MemberMatchesEnvironmentSource(MemberRecord{Provider: "github", Project: "acme/api"}, branchEnv))
+	assert.True(t, MemberMatchesEnvironmentSource(MemberRecord{Provider: "github", Project: "acme/api", Branch: "feat/old"}, branchEnv))
+
+	// 2. Leave filters stale member records (service not in Spec.Services) before persisting or promoting Spec.Source
+	pgStale := &v1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "prune-stale"},
+		Spec: v1alpha1.PreviewGroupSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "github", Project: "acme/api", MR: 10, Branch: "feat/10"},
+			Services: []v1alpha1.PreviewGroupServiceSpec{
+				{Name: "api", Namespace: "default", Mode: v1alpha1.ServiceModeImage, Image: "img:10"},
+				{Name: "custom-local", Namespace: "default", Mode: v1alpha1.ServiceModeImage, Image: "img:local"},
+			},
+		},
+	}
+	require.NoError(t, SetMembers(pgStale, []MemberRecord{
+		{Service: "api", Namespace: "default", Provider: "github", Project: "acme/api", MR: 10, Branch: "feat/10"},
+		{Service: "ghost-removed", Namespace: "default", Provider: "gitlab", Project: "acme/ghost", MR: 99, Branch: "feat/ghost"},
+		{Service: "custom-local", Namespace: "default", Provider: "local"},
+	}))
+
+	// 3. wakeStandaloneEnv must not clear attachment belonging to a different group
+	envOwnedByB := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-standalone-b",
+			Namespace: "default",
+			Annotations: map[string]string{
+				AnnotationAttachedPreviewGroup: "group-b",
+				AnnotationHibernated:           "true",
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pgStale, envOwnedByB).Build()
+	_, err := Leave(ctx, c, LeaveOptions{GroupName: "prune-stale", Provider: "github", Project: "acme/api", MR: 10})
+	require.NoError(t, err)
+
+	var updatedPG v1alpha1.PreviewGroup
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "prune-stale"}, &updatedPG))
+	remainingMembers := ParseMembers(&updatedPG)
+	require.Len(t, remainingMembers, 1)
+	assert.Equal(t, "custom-local", remainingMembers[0].Service)
+	assert.Equal(t, "local", updatedPG.Spec.Source.Provider)
+	assert.Zero(t, updatedPG.Spec.Source.MR)
+
+	require.NoError(t, wakeStandaloneEnv(ctx, c, MemberRecord{EnvironmentName: "pr-standalone-b", EnvironmentNamespace: "default"}, "group-a"))
+	var checkB v1alpha1.Environment
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "pr-standalone-b", Namespace: "default"}, &checkB))
+	assert.Equal(t, "group-b", checkB.Annotations[AnnotationAttachedPreviewGroup])
+	assert.Equal(t, "true", checkB.Annotations[AnnotationHibernated])
+}

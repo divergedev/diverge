@@ -27,6 +27,7 @@ import (
 	"github.com/divergedev/diverge/internal/database/cnpg"
 	"github.com/divergedev/diverge/internal/events"
 	"github.com/divergedev/diverge/internal/metrics"
+	"github.com/divergedev/diverge/internal/multicluster"
 	"github.com/divergedev/diverge/internal/previewgroup"
 	pkgdb "github.com/divergedev/diverge/pkg/database"
 )
@@ -518,28 +519,41 @@ func TestController_GenerationGuardFailedReplacementWakeStatusRetryAndAtlasCreat
 		StatusReporter: reporter,
 	}
 
-	// Reconcile 1: child Generation=2 > ObservedGeneration=1 keeps standalone running; StatusReporter error triggers requeue without marking success reported
+	// Reconcile 1: child Generation=2 > ObservedGeneration=1 sets child phase Deploying, keeps standalone running,
+	// and does NOT mark group Ready/success commit status yet!
 	resGen1, err := rGen.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "pg-gen-check"}})
 	require.NoError(t, err)
 	assert.Equal(t, 1*time.Second, resGen1.RequeueAfter)
-	assert.Equal(t, []string{"success"}, reporter.calls)
+	assert.Empty(t, reporter.calls, "must not post success commit status while child ObservedGeneration < Generation")
+
+	var checkGenPG divergeiov1alpha1.PreviewGroup
+	require.NoError(t, cGen.Get(ctx, types.NamespacedName{Name: "pg-gen-check"}, &checkGenPG))
+	assert.Equal(t, divergeiov1alpha1.PreviewGroupPhaseDeploying, checkGenPG.Status.Phase)
+	require.Len(t, checkGenPG.Status.Services, 1)
+	assert.Equal(t, divergeiov1alpha1.PhaseDeploying, checkGenPG.Status.Services[0].Phase)
 
 	var checkStandalone divergeiov1alpha1.Environment
 	require.NoError(t, cGen.Get(ctx, types.NamespacedName{Name: "pr-77", Namespace: "default"}, &checkStandalone))
 	assert.Empty(t, checkStandalone.Annotations[metrics.AnnotationHibernated], "must not hibernate standalone env on stale child ObservedGeneration")
 
-	// Bring ObservedGeneration up to date and reconcile again -> hibernates standalone env AND retries "success" commit status!
+	// Bring ObservedGeneration up to date: Reconcile 2 hibernates standalone env AND attempts "success" commit status (fails -> requeues),
+	// then Reconcile 3 succeeds cleanly without repeating after success.
 	require.NoError(t, cGen.Get(ctx, types.NamespacedName{Name: desiredChild.Name, Namespace: "default"}, desiredChild))
 	desiredChild.Status.ObservedGeneration = desiredChild.Generation
 	require.NoError(t, cGen.Update(ctx, desiredChild))
 
-	_, err = rGen.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "pg-gen-check"}})
+	resGen2, err := rGen.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "pg-gen-check"}})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"success", "success"}, reporter.calls)
+	assert.Equal(t, 1*time.Second, resGen2.RequeueAfter)
+	assert.Equal(t, []string{"success"}, reporter.calls)
 	require.NoError(t, cGen.Get(ctx, types.NamespacedName{Name: "pr-77", Namespace: "default"}, &checkStandalone))
 	assert.Equal(t, "true", checkStandalone.Annotations[metrics.AnnotationHibernated])
 
-	// C. ensureAtlasCR preserves DSN Secret when Create returns AlreadyExists/timeout while CR exists
+	_, err = rGen.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "pg-gen-check"}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"success", "success"}, reporter.calls)
+
+	// C. ensureAtlasCR preserves DSN Secret on ambiguous timeout/NotFound re-read, and deletes only on definitive rejection
 	atlasEnv := &divergeiov1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{Name: "pgdb-atlas", Namespace: "default"},
 		Spec: divergeiov1alpha1.EnvironmentSpec{
@@ -550,21 +564,17 @@ func TestController_GenerationGuardFailedReplacementWakeStatusRetryAndAtlasCreat
 		},
 	}
 	baseAtlasClient := fake.NewClientBuilder().WithScheme(s).Build()
-	getCount := 0
+	createErrToReturn := errors.New("context deadline exceeded after write")
 	interceptedAtlas := interceptor.NewClient(baseAtlasClient, interceptor.Funcs{
 		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
 			if obj.GetObjectKind().GroupVersionKind().Kind == "AtlasMigration" {
-				getCount++
-				if getCount == 1 {
-					return apierrors.NewNotFound(schema.GroupResource{Group: "db.atlasgo.io", Resource: "atlasmigrations"}, key.Name)
-				}
-				return nil // simulates timeout where apiserver created the CR before error
+				return apierrors.NewNotFound(schema.GroupResource{Group: "db.atlasgo.io", Resource: "atlasmigrations"}, key.Name)
 			}
 			return c.Get(ctx, key, obj, opts...)
 		},
 		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
 			if obj.GetObjectKind().GroupVersionKind().Kind == "AtlasMigration" {
-				return errors.New("context deadline exceeded after write")
+				return createErrToReturn
 			}
 			return c.Create(ctx, obj, opts...)
 		},
@@ -574,7 +584,13 @@ func TestController_GenerationGuardFailedReplacementWakeStatusRetryAndAtlasCreat
 	require.Error(t, err)
 	var dsnSecs corev1.SecretList
 	require.NoError(t, baseAtlasClient.List(ctx, &dsnSecs, client.InNamespace("default")))
-	assert.Len(t, dsnSecs.Items, 1, "DSN Secret must not be deleted when Atlas CR exists on re-read")
+	assert.Len(t, dsnSecs.Items, 1, "DSN Secret must not be deleted on ambiguous timeout even when re-read returns NotFound")
+
+	createErrToReturn = apierrors.NewInvalid(schema.GroupKind{Group: "db.atlasgo.io", Kind: "AtlasMigration"}, "bad", nil)
+	err = envRec.ensureAtlasCR(ctx, atlasEnv, &pkgdb.DatabaseResult{DSN: "postgres://u:p@host:5432/db"})
+	require.Error(t, err)
+	require.NoError(t, baseAtlasClient.List(ctx, &dsnSecs, client.InNamespace("default")))
+	assert.Empty(t, dsnSecs.Items, "DSN Secret must be deleted after definitive invalid rejection")
 }
 
 func TestEnvironmentProvisioner_SharedDBMissingSecretClearsRunningPhase(t *testing.T) {
@@ -610,4 +626,265 @@ func TestEnvironmentProvisioner_SharedDBMissingSecretClearsRunningPhase(t *testi
 	var updated divergeiov1alpha1.Environment
 	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: child.Name, Namespace: "default"}, &updated))
 	assert.Equal(t, divergeiov1alpha1.PhaseDeploying, updated.Status.Phase, "stale Running phase must clear when shared DB Secret is missing")
+}
+
+type failingProvDB struct {
+	err error
+}
+
+func (f *failingProvDB) Provision(_ context.Context, _ *divergeiov1alpha1.Environment) (*pkgdb.DatabaseResult, error) {
+	return nil, f.err
+}
+func (f *failingProvDB) Teardown(_ context.Context, _ *divergeiov1alpha1.Environment) error {
+	return nil
+}
+func (f *failingProvDB) Status(_ context.Context, _ *divergeiov1alpha1.Environment) (*pkgdb.DatabaseStatus, error) {
+	return &pkgdb.DatabaseStatus{}, nil
+}
+
+type nsAwareSpokeResolver struct {
+	byNamespace map[string]*multicluster.Target
+	fallback    *multicluster.Target
+}
+
+func (r *nsAwareSpokeResolver) Resolve(_ context.Context, env *divergeiov1alpha1.Environment) (*multicluster.Target, error) {
+	if t, ok := r.byNamespace[env.Namespace]; ok {
+		return t, nil
+	}
+	return r.fallback, nil
+}
+
+func TestPR351_ControllerGroupDBFailurePromotionNonBlockingFailSwitchOffSpokeAndStaleWake(t *testing.T) {
+	ctx := context.Background()
+	s := runtime.NewScheme()
+	require.NoError(t, divergeiov1alpha1.AddToScheme(s))
+	require.NoError(t, corev1.AddToScheme(s))
+	require.NoError(t, batchv1.AddToScheme(s))
+
+	// 1. GroupDB failure branch after source promotion clears stale CommentID before PostGroupFailed and pairs new ID + CommentSource
+	pgFailPromo := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "pg-fail-promo",
+			Labels:     map[string]string{previewgroup.LabelComposedGroup: "true"},
+			Finalizers: []string{previewGroupFinalizer},
+		},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Source:   divergeiov1alpha1.EnvironmentSource{Provider: "github", Project: "acme/mono", MR: 101, Branch: "feat/101"},
+			Database: &divergeiov1alpha1.EnvironmentDatabase{Mode: "cnpg"},
+			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{Name: "api", Namespace: "default", Mode: divergeiov1alpha1.ServiceModeImage, Image: "img:101"},
+			},
+		},
+		Status: divergeiov1alpha1.PreviewGroupStatus{
+			Phase:         divergeiov1alpha1.PreviewGroupPhaseFailed, // same phase as failure -> only sourcePromoted triggers notification
+			CommentID:     888,
+			CommentSource: "github:acme/mono#10",
+		},
+	}
+	cFail := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&divergeiov1alpha1.PreviewGroup{}).WithObjects(pgFailPromo).Build()
+	notifFail := &mockNotifier{nextCommentID: 1001}
+	rFail := &PreviewGroupReconciler{
+		Client:           cFail,
+		Scheme:           s,
+		Recorder:         events.NewRecorder(k8sevents.NewFakeRecorder(10)),
+		Notifier:         notifFail,
+		DatabaseProvider: &failingProvDB{err: errors.New("cnpg quota exceeded")},
+	}
+	_, err := rFail.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "pg-fail-promo"}})
+	require.Error(t, err)
+	require.Len(t, notifFail.failedCalls, 1)
+	assert.Equal(t, int64(1001), notifFail.failedCalls[0].pg.Status.CommentID, "CommentID must reset before PostGroupFailed")
+	var gotFailPG divergeiov1alpha1.PreviewGroup
+	require.NoError(t, cFail.Get(ctx, types.NamespacedName{Name: "pg-fail-promo"}, &gotFailPG))
+	assert.Equal(t, int64(1001), gotFailPG.Status.CommentID)
+	assert.Equal(t, "github:acme/mono#101", gotFailPG.Status.CommentSource)
+
+	// 2. Non-blocking MigrationJob terminal failure keeps shared DB ready without blocking child deployment
+	falseVal := false
+	pgNBFail := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "pg-nb-fail",
+			Labels:     map[string]string{previewgroup.LabelComposedGroup: "true"},
+			Finalizers: []string{previewGroupFinalizer},
+		},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Database: &divergeiov1alpha1.EnvironmentDatabase{
+				Mode: "cnpg",
+				MigrationJob: &divergeiov1alpha1.MigrationJobSpec{
+					Image:    "migrate:latest",
+					Args:     []string{"up"},
+					Blocking: &falseVal,
+				},
+			},
+			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{Name: "api", Namespace: "default", Mode: divergeiov1alpha1.ServiceModeImage, Image: "img:1"},
+			},
+		},
+	}
+	anchorName := groupDatabaseAnchorName("pg-nb-fail")
+	nbProv := &countingGroupDBProvider{dsn: "postgres://u:p@db-rw.default.svc/app"}
+	cNBFail := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&divergeiov1alpha1.PreviewGroup{}).WithObjects(pgNBFail).Build()
+	rNBFail := &PreviewGroupReconciler{
+		Client:           cNBFail,
+		Scheme:           s,
+		Recorder:         events.NewRecorder(k8sevents.NewFakeRecorder(10)),
+		DatabaseProvider: nbProv,
+	}
+	_, err = rNBFail.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "pg-nb-fail"}})
+	require.NoError(t, err)
+
+	var nbJobs batchv1.JobList
+	require.NoError(t, cNBFail.List(ctx, &nbJobs, client.InNamespace("default")))
+	require.Len(t, nbJobs.Items, 1)
+	nbJobs.Items[0].Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded"}}
+	require.NoError(t, cNBFail.Status().Update(ctx, &nbJobs.Items[0]))
+
+	require.NoError(t, cNBFail.Get(ctx, types.NamespacedName{Name: "pg-nb-fail"}, pgNBFail))
+	outVars, _, handled, ready, reqNeeded, gErr := rNBFail.reconcileGroupDatabase(ctx, pgNBFail)
+	require.NoError(t, gErr, "terminal failure of explicitly non-blocking group migration must not fail reconcileGroupDatabase")
+	assert.True(t, handled)
+	assert.True(t, ready)
+	assert.False(t, reqNeeded)
+	assert.NotEmpty(t, outVars["DATABASE_URL"])
+	assert.Contains(t, anchorName, "pg-nb-fail")
+
+	// 3. Switch-off shared DB preserves diverge-db-env-* Secret until child workload ObservedGeneration catches up,
+	//    AND spoke cleanup resolves inherited clusterRef in child's svcNS (not anchorNS).
+	switchChildName := childEnvironmentName("pg-switch", "api")
+	switchSecName := sanitizeK8sName("diverge-db-env-"+switchChildName, switchChildName, 63)
+	switchChild := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        switchChildName,
+			Namespace:   "backend",
+			Generation:  3,
+			Labels:      map[string]string{labelPreviewGroup: "pg-switch", labelManagedBy: "diverge-previewgroup"},
+			Annotations: map[string]string{}, // switched off shared DB annotation already
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Database: divergeiov1alpha1.EnvironmentDatabase{Mode: "fresh"},
+		},
+		Status: divergeiov1alpha1.EnvironmentStatus{ObservedGeneration: 2}, // workload hasn't observed switch-off yet
+	}
+	pgSwitch := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "pg-switch",
+			Finalizers: []string{previewGroupFinalizer},
+			Annotations: map[string]string{
+				annotationGroupDBNamespace: "default",
+				annotationGroupDBProvider:  "cnpg",
+			},
+		},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			ClusterRef: &divergeiov1alpha1.ClusterTargetRef{
+				Name:                "spoke-a",
+				KubeconfigSecretRef: &divergeiov1alpha1.SecretRef{Name: "kubeconfig"},
+			},
+			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{Name: "api", Namespace: "backend", Mode: divergeiov1alpha1.ServiceModeImage, Image: "img:1"},
+			},
+		},
+	}
+	spokeAnchorClient := fake.NewClientBuilder().WithScheme(s).Build()
+	spokeBackendClient := fake.NewClientBuilder().WithScheme(s).WithObjects(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      switchSecName,
+			Namespace: "backend",
+			Labels: map[string]string{
+				labelPreviewGroup:           "pg-switch",
+				"divergedev.com/managed-by": "diverge",
+			},
+		},
+	}).Build()
+	hubSwitch := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&divergeiov1alpha1.PreviewGroup{}).WithObjects(pgSwitch, switchChild).Build()
+	rSwitch := &PreviewGroupReconciler{
+		Client:           hubSwitch,
+		Scheme:           s,
+		Recorder:         events.NewRecorder(k8sevents.NewFakeRecorder(10)),
+		DatabaseProvider: &countingGroupDBProvider{dsn: "postgres://u:p@db-rw.default.svc/app"},
+		ClusterClients: &nsAwareSpokeResolver{
+			byNamespace: map[string]*multicluster.Target{
+				"backend": {Name: "spoke-backend", IsRemote: true, Client: spokeBackendClient},
+			},
+			fallback: &multicluster.Target{Name: "spoke-anchor", IsRemote: true, Client: spokeAnchorClient},
+		},
+	}
+
+	// Reconcile while ObservedGeneration < Generation: Secret kept on spokeBackendClient and group DB annotations stay pinned
+	_, err = rSwitch.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "pg-switch"}})
+	require.NoError(t, err)
+	var keptSpokeSec corev1.Secret
+	require.NoError(t, spokeBackendClient.Get(ctx, types.NamespacedName{Name: switchSecName, Namespace: "backend"}, &keptSpokeSec))
+
+	// Workload observes child spec change (ObservedGeneration == Generation) -> next reconcile deletes spoke Secret and clears pinned annotations
+	require.NoError(t, hubSwitch.Get(ctx, types.NamespacedName{Name: switchChildName, Namespace: "backend"}, switchChild))
+	switchChild.Status.ObservedGeneration = switchChild.Generation
+	require.NoError(t, hubSwitch.Update(ctx, switchChild))
+
+	_, err = rSwitch.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "pg-switch"}})
+	require.NoError(t, err)
+	err = spokeBackendClient.Get(ctx, types.NamespacedName{Name: switchSecName, Namespace: "backend"}, &keptSpokeSec)
+	assert.True(t, apierrors.IsNotFound(err), "shared DB Secret on svcNS spoke must be deleted after child workload observes switch-off")
+	var switchedPG divergeiov1alpha1.PreviewGroup
+	require.NoError(t, hubSwitch.Get(ctx, types.NamespacedName{Name: "pg-switch"}, &switchedPG))
+	assert.Empty(t, switchedPG.Annotations[annotationGroupDBNamespace])
+	assert.Empty(t, switchedPG.Annotations[annotationGroupDBProvider])
+
+	// 4. Stale replacement PreviewGroup (Ready.ObservedGeneration < Generation) wakes standalone preview instead of transferring attachment
+	standaloneStale := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-88",
+			Namespace: "default",
+			Annotations: map[string]string{
+				metrics.AnnotationHibernated:                "true",
+				previewgroup.AnnotationAttachedPreviewGroup: "group-old",
+				previewgroup.AnnotationGroupHibernated:      "true",
+			},
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Source: divergeiov1alpha1.EnvironmentSource{Provider: "github", Project: "acme/api", MR: 88, Branch: "feat/88"},
+		},
+	}
+	staleRepChild := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       childEnvironmentName("group-stale-rep", "api"),
+			Namespace:  "default",
+			Generation: 2,
+			Labels:     map[string]string{labelPreviewGroup: "group-stale-rep", labelManagedBy: "diverge-previewgroup"},
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			ServiceConfig: &divergeiov1alpha1.ServicePreviewConfig{ServiceName: "api", Image: "acme/api:new"},
+		},
+		Status: divergeiov1alpha1.EnvironmentStatus{
+			ObservedGeneration: 2,
+			Phase:              divergeiov1alpha1.PhaseRunning,
+		},
+	}
+	staleRepGroup := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "group-stale-rep",
+			Generation: 3, // newer group generation not yet observed by Ready condition
+			Annotations: map[string]string{
+				previewgroup.AnnotationGroupMembers: `[{"service":"api","namespace":"default","provider":"github","project":"acme/api","mr":88,"environmentName":"pr-88","environmentNamespace":"default"}]`,
+			},
+		},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{Name: "api", Namespace: "default", Mode: divergeiov1alpha1.ServiceModeImage, Image: "acme/api:new"},
+			},
+		},
+		Status: divergeiov1alpha1.PreviewGroupStatus{
+			Services: []divergeiov1alpha1.PreviewGroupServiceStatus{{Name: "api", Phase: divergeiov1alpha1.PhaseRunning}},
+			Conditions: []metav1.Condition{
+				{Type: "Ready", Status: metav1.ConditionTrue, ObservedGeneration: 2},
+			},
+		},
+	}
+	cStaleWake := fake.NewClientBuilder().WithScheme(s).WithObjects(standaloneStale, staleRepChild, staleRepGroup).Build()
+	rStaleWake := &PreviewGroupReconciler{Client: cStaleWake, Scheme: s, Recorder: events.NewRecorder(k8sevents.NewFakeRecorder(10))}
+	require.NoError(t, rStaleWake.wakeUnclaimedStandaloneEnvironments(ctx, "group-old", nil))
+
+	var wokenFromStale divergeiov1alpha1.Environment
+	require.NoError(t, cStaleWake.Get(ctx, types.NamespacedName{Name: "pr-88", Namespace: "default"}, &wokenFromStale))
+	assert.Empty(t, wokenFromStale.Annotations[previewgroup.AnnotationAttachedPreviewGroup])
+	assert.Empty(t, wokenFromStale.Annotations[metrics.AnnotationHibernated])
 }

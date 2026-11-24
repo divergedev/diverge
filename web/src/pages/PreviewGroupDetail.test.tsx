@@ -413,6 +413,71 @@ describe('PreviewGroupDetail', () => {
     })
   })
 
+  it('preserves spec.source when source has blank project and matching-provider MR member survives', async () => {
+    let updatedPayload: Record<string, unknown> | undefined
+
+    server.use(
+      http.post('*/diverge.v1alpha1.PreviewGroupService/GetPreviewGroup', () =>
+        HttpResponse.json({
+          previewGroup: {
+            ...mockPreviewGroup.previewGroup,
+            resourceVersion: '61',
+            annotations: {
+              'divergedev.com/group-members': JSON.stringify([
+                {
+                  service: 'api-gateway',
+                  provider: 'github',
+                  project: 'org/checkout-monorepo',
+                  mr: 108,
+                  branch: 'feat/multi-service',
+                },
+                {
+                  service: 'payments',
+                  provider: 'github',
+                  project: 'org/payments',
+                  mr: 204,
+                  branch: 'feat/pay',
+                },
+              ]),
+            },
+            spec: {
+              ...mockPreviewGroup.previewGroup.spec,
+              source: {
+                provider: 'github',
+                project: '',
+                mr: 108,
+                branch: 'feat/multi-service',
+              },
+              services: [
+                { name: 'api-gateway', mode: 'image', namespace: 'default', image: 'img/gw:108' },
+                { name: 'payments', mode: 'image', namespace: 'default', image: 'img/pay:204' },
+              ],
+            },
+          },
+        }),
+      ),
+      http.post('*/diverge.v1alpha1.PreviewGroupService/UpdatePreviewGroup', async ({ request }) => {
+        updatedPayload = (await request.json()) as Record<string, unknown>
+        return HttpResponse.json({ previewGroup: updatedPayload.previewGroup })
+      }),
+    )
+
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'Detach payments' }))
+
+    await waitFor(() => {
+      expect(updatedPayload).toBeDefined()
+    })
+    const sent = updatedPayload?.previewGroup as {
+      spec: { source: { provider: string; project?: string; mr?: number; branch: string } }
+    }
+    expect(sent.spec.source).toEqual({
+      provider: 'github',
+      mr: 108,
+      branch: 'feat/multi-service',
+    })
+  })
+
   it('useWatchPreviewGroups ignores older watch snapshots when cache already holds a newer resourceVersion', async () => {
     localStorage.setItem('diverge:token', 'test-token')
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -424,6 +489,19 @@ describe('PreviewGroupDetail', () => {
         spec: { services: [{ name: 'api-gateway' }, { name: 'payments' }] },
       },
     })
+    queryClient.setQueryData(queryKeys.previewGroup('', 'pg-barrier'), {
+      previewGroup: {
+        name: 'pg-barrier',
+        namespace: '',
+        resourceVersion: '1',
+        spec: { services: [] },
+      },
+    })
+
+    let releaseNewer!: () => void
+    const newerGate = new Promise<void>((resolve) => {
+      releaseNewer = resolve
+    })
 
     const spy = vi.spyOn(previewGroupClient, 'watchPreviewGroups').mockImplementation(async function* (_req, opts) {
       yield {
@@ -434,6 +512,47 @@ describe('PreviewGroupDetail', () => {
           namespace: '',
           resourceVersion: '15',
           spec: { services: [{ name: 'api-gateway' }] },
+        } as never,
+      } as never
+      yield {
+        type: WatchEventType.DELETED,
+        resourceVersion: '18',
+        previewGroup: {
+          name: 'pg-checkout',
+          namespace: '',
+          resourceVersion: '15',
+          spec: { services: [{ name: 'api-gateway' }] },
+        } as never,
+      } as never
+      yield {
+        type: WatchEventType.MODIFIED,
+        resourceVersion: '2',
+        previewGroup: {
+          name: 'pg-barrier',
+          namespace: '',
+          resourceVersion: '2',
+          spec: { services: [] },
+        } as never,
+      } as never
+      await newerGate
+      yield {
+        type: WatchEventType.MODIFIED,
+        resourceVersion: '25',
+        previewGroup: {
+          name: 'pg-checkout',
+          namespace: '',
+          resourceVersion: '25',
+          spec: { services: [{ name: 'api-gateway' }, { name: 'payments' }, { name: 'billing' }] },
+        } as never,
+      } as never
+      yield {
+        type: WatchEventType.MODIFIED,
+        resourceVersion: '3',
+        previewGroup: {
+          name: 'pg-barrier',
+          namespace: '',
+          resourceVersion: '3',
+          spec: { services: [] },
         } as never,
       } as never
       await new Promise<void>((resolve) => {
@@ -450,6 +569,11 @@ describe('PreviewGroupDetail', () => {
       return null
     }
 
+    const readCached = (name: string) =>
+      queryClient.getQueryData<{ previewGroup?: { resourceVersion?: string; spec?: { services?: unknown[] } } }>(
+        queryKeys.previewGroup('', name),
+      )
+
     let unmount: (() => void) | undefined
     try {
       const rendered = rtlRender(
@@ -461,13 +585,19 @@ describe('PreviewGroupDetail', () => {
 
       await waitFor(() => {
         expect(spy).toHaveBeenCalled()
+        expect(readCached('pg-barrier')?.previewGroup?.resourceVersion).toBe('2')
       })
-      await new Promise((r) => setTimeout(r, 30))
-      const cached = queryClient.getQueryData<{ previewGroup?: { resourceVersion?: string; spec?: { services?: unknown[] } } }>(
-        queryKeys.previewGroup('', 'pg-checkout'),
-      )
-      expect(cached?.previewGroup?.resourceVersion).toBe('20')
-      expect(cached?.previewGroup?.spec?.services).toHaveLength(2)
+      const afterStale = readCached('pg-checkout')
+      expect(afterStale?.previewGroup?.resourceVersion).toBe('20')
+      expect(afterStale?.previewGroup?.spec?.services).toHaveLength(2)
+
+      releaseNewer()
+      await waitFor(() => {
+        expect(readCached('pg-barrier')?.previewGroup?.resourceVersion).toBe('3')
+      })
+      const afterNewer = readCached('pg-checkout')
+      expect(afterNewer?.previewGroup?.resourceVersion).toBe('25')
+      expect(afterNewer?.previewGroup?.spec?.services).toHaveLength(3)
     } finally {
       unmount?.()
       spy.mockRestore()
