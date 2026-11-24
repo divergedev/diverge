@@ -103,9 +103,11 @@ func (p *MacaroonAuthProvider) Authenticate(ctx context.Context, token string) (
 	}
 
 	return &UserInfo{
-		Username: fmt.Sprintf("system:agenttask:%s:%s", ns, claims.TaskID),
-		UID:      claims.TaskID,
-		Groups:   []string{"system:authenticated", "divergedev:agenttasks"},
+		Username:  fmt.Sprintf("system:agenttask:%s:%s", ns, claims.TaskID),
+		UID:       claims.TaskID,
+		Groups:    []string{"system:authenticated", "divergedev:agenttasks"},
+		ExpiresAt: claims.ExpiresAt,
+		AuthType:  "macaroon",
 		Extra: map[string]authorizationv1.ExtraValue{
 			ExtraKeyAuthType:     {"macaroon"},
 			ExtraKeyTaskID:       {claims.TaskID},

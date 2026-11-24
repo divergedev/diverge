@@ -1,17 +1,39 @@
 package server
 
 import (
+	"crypto/subtle"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 )
 
-// NewTunnelProxyServer creates a dedicated HTTP server for the tunnel proxy.
-// P0 #3: This runs on a SEPARATE port from the RPC server.
-// P0 #6: NO auth middleware — cluster-internal traffic only.
-// Host-header validation prevents open proxy abuse.
+// tunnelProxyAuthMiddleware enforces an optional shared secret on :8081 cluster-internal requests.
+func tunnelProxyAuthMiddleware(expectedToken string, logger *slog.Logger, next http.Handler) http.Handler {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	expected := []byte(strings.TrimSpace(expectedToken))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		vals := r.Header.Values("X-Diverge-Proxy-Token")
+		if len(vals) != 1 || subtle.ConstantTimeCompare([]byte(vals[0]), expected) != 1 {
+			logger.Warn("tunnel proxy request rejected: invalid or duplicate proxy token",
+				"remote_addr", r.RemoteAddr,
+				"method", r.Method,
+				"path", r.URL.Path,
+				"header_count", len(vals),
+			)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		r.Header.Del("X-Diverge-Proxy-Token")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// NewTunnelProxyServer creates the dedicated HTTP/1.1 + h2c server for the cluster-internal tunnel proxy (:8081).
 func NewTunnelProxyServer(tm *TunnelManager, port int, logger *slog.Logger) *http.Server {
 	if logger == nil {
 		logger = slog.Default()
@@ -19,14 +41,24 @@ func NewTunnelProxyServer(tm *TunnelManager, port int, logger *slog.Logger) *htt
 	mux := http.NewServeMux()
 	mux.Handle("/", tm.NewTunnelProxyHandler())
 
+	var handler http.Handler = mux
+	if tm != nil {
+		if token := strings.TrimSpace(tm.ProxyAuthToken()); token != "" {
+			handler = tunnelProxyAuthMiddleware(token, logger, mux)
+		}
+	}
+
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	protocols.SetUnencryptedHTTP2(true)
+
 	return &http.Server{
 		Addr:              fmt.Sprintf(":%d", port),
-		Handler:           mux,
+		Handler:           handler,
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
 		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      60 * time.Second,
 		IdleTimeout:       120 * time.Second,
+		Protocols:         protocols,
 	}
 }
 

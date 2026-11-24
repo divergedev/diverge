@@ -2,11 +2,26 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+)
+
+// ErrPolicyDenied marks authentication rejections enforced by policy (reserved
+// principal prefixes, disallowed OIDC groups) where CompositeProvider must stop
+// rather than falling through to subsequent providers.
+var ErrPolicyDenied = errors.New("authentication denied by policy")
+
+const (
+	// DefaultOIDCPrefix prevents external OIDC/session claims from colliding with K8s/Diverge system principals.
+	DefaultOIDCPrefix = "oidc:"
+	// NoOIDCPrefix explicitly disables OIDC claim prefixing.
+	NoOIDCPrefix = "-"
 )
 
 // OIDCProviderConfig configures the OIDC authentication provider.
@@ -22,17 +37,40 @@ type OIDCProviderConfig struct {
 	// AllowedGroups restricts access to users whose groups intersect this list.
 	// Empty list means all authenticated users are allowed.
 	AllowedGroups []string
+	// UsernamePrefix is prepended to OIDC/session usernames (default "oidc:"; "-" disables).
+	UsernamePrefix string
+	// GroupsPrefix is prepended to OIDC/session groups (default "oidc:"; "-" disables).
+	GroupsPrefix string
 }
 
 // OIDCProvider authenticates users by verifying OIDC ID tokens (JWTs).
 // It supports both direct OIDC tokens and Diverge session JWTs.
 type OIDCProvider struct {
-	verifier      *oidc.IDTokenVerifier
-	session       *SessionManager
-	usernameClaim string
-	groupsClaim   string
-	allowedGroups map[string]bool
-	logger        *slog.Logger
+	verifier       *oidc.IDTokenVerifier
+	session        *SessionManager
+	usernameClaim  string
+	groupsClaim    string
+	allowedGroups  map[string]bool
+	usernamePrefix string
+	groupsPrefix   string
+	logger         *slog.Logger
+}
+
+func resolveOIDCPrefix(raw string) string {
+	switch raw {
+	case NoOIDCPrefix:
+		return ""
+	case "":
+		return DefaultOIDCPrefix
+	default:
+		return raw
+	}
+}
+
+// IsReservedOIDCPrincipal reports whether principal carries a reserved Kubernetes
+// or Diverge prefix ("system:" or "divergedev:") that external OIDC/session tokens must not impersonate.
+func IsReservedOIDCPrincipal(principal string) bool {
+	return strings.HasPrefix(principal, "system:") || strings.HasPrefix(principal, "divergedev:")
 }
 
 // NewOIDCProvider creates a new OIDC authentication provider. It performs
@@ -62,12 +100,14 @@ func NewOIDCProvider(ctx context.Context, cfg OIDCProviderConfig, session *Sessi
 	}
 
 	return &OIDCProvider{
-		verifier:      verifier,
-		session:       session,
-		usernameClaim: usernameClaim,
-		groupsClaim:   groupsClaim,
-		allowedGroups: allowedGroups,
-		logger:        logger,
+		verifier:       verifier,
+		session:        session,
+		usernameClaim:  usernameClaim,
+		groupsClaim:    groupsClaim,
+		allowedGroups:  allowedGroups,
+		usernamePrefix: resolveOIDCPrefix(cfg.UsernamePrefix),
+		groupsPrefix:   resolveOIDCPrefix(cfg.GroupsPrefix),
+		logger:         logger,
 	}, nil
 }
 
@@ -75,16 +115,18 @@ func NewOIDCProvider(ctx context.Context, cfg OIDCProviderConfig, session *Sessi
 // ID token. Returns UserInfo on success.
 func (p *OIDCProvider) Authenticate(ctx context.Context, token string) (*UserInfo, error) {
 	// Try session JWT first (fast, no network)
-	if claims, err := p.session.Verify(token); err == nil {
-		user := &UserInfo{
-			Username: claims.Subject,
-			Email:    claims.Email,
-			Groups:   claims.Groups,
+	if p.session != nil {
+		if claims, err := p.session.Verify(token); err == nil {
+			var expiresAt time.Time
+			if claims.Expiry > 0 {
+				expiresAt = time.Unix(claims.Expiry, 0)
+			}
+			return p.buildUserInfo(claims.Subject, "", claims.Email, claims.Groups, expiresAt, "session")
 		}
-		if err := p.checkAllowedGroups(user.Groups); err != nil {
-			return nil, err
-		}
-		return user, nil
+	}
+
+	if p.verifier == nil {
+		return nil, fmt.Errorf("oidc verifier not configured")
 	}
 
 	// Try OIDC ID token verification (JWKS cached by go-oidc)
@@ -110,16 +152,47 @@ func (p *OIDCProvider) Authenticate(ctx context.Context, token string) (*UserInf
 	email := ClaimString(rawClaims, "email")
 	groups := ClaimStringSlice(rawClaims, p.groupsClaim)
 
-	if err := p.checkAllowedGroups(groups); err != nil {
+	return p.buildUserInfo(username, idToken.Subject, email, groups, idToken.Expiry, "oidc")
+}
+
+func (p *OIDCProvider) buildUserInfo(rawUsername, uid, email string, rawGroups []string, expiresAt time.Time, authType string) (*UserInfo, error) {
+	if IsReservedOIDCPrincipal(rawUsername) {
+		return nil, fmt.Errorf("%w: oidc username %q uses a reserved prefix", ErrPolicyDenied, rawUsername)
+	}
+	for _, g := range rawGroups {
+		if IsReservedOIDCPrincipal(g) {
+			return nil, fmt.Errorf("%w: oidc group %q uses a reserved prefix", ErrPolicyDenied, g)
+		}
+	}
+
+	if err := p.checkAllowedGroups(rawGroups); err != nil {
 		return nil, err
 	}
 
+	username := p.usernamePrefix + rawUsername
+	if IsReservedOIDCPrincipal(username) {
+		return nil, fmt.Errorf("%w: oidc username %q uses a reserved prefix", ErrPolicyDenied, username)
+	}
+
+	var groups []string
+	if rawGroups != nil {
+		groups = make([]string, len(rawGroups))
+		for i, g := range rawGroups {
+			prefixed := p.groupsPrefix + g
+			if IsReservedOIDCPrincipal(prefixed) {
+				return nil, fmt.Errorf("%w: oidc group %q uses a reserved prefix", ErrPolicyDenied, prefixed)
+			}
+			groups[i] = prefixed
+		}
+	}
+
 	return &UserInfo{
-		Username: username,
-		UID:      idToken.Subject,
-		Email:    email,
-		Groups:   groups,
-		Extra:    nil,
+		Username:  username,
+		UID:       uid,
+		Email:     email,
+		Groups:    groups,
+		ExpiresAt: expiresAt,
+		AuthType:  authType,
 	}, nil
 }
 
@@ -132,7 +205,7 @@ func (p *OIDCProvider) checkAllowedGroups(groups []string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("user not in any allowed group (allowed: %v)", p.allowedGroups)
+	return fmt.Errorf("%w: user not in any allowed group (allowed: %v)", ErrPolicyDenied, p.allowedGroups)
 }
 
 // ClaimString extracts a string claim from the raw claims map.

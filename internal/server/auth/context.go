@@ -2,17 +2,21 @@ package auth
 
 import (
 	"context"
+	"time"
 
 	authorizationv1 "k8s.io/api/authorization/v1"
 )
 
 // UserInfo represents the authenticated user's identity.
 type UserInfo struct {
-	Username string
-	UID      string
-	Email    string
-	Groups   []string
-	Extra    map[string]authorizationv1.ExtraValue
+	Username   string
+	UID        string
+	Email      string
+	Groups     []string
+	Extra      map[string]authorizationv1.ExtraValue
+	ExpiresAt  time.Time
+	AuthType   string
+	FromCookie bool
 }
 
 type contextKey string
@@ -49,5 +53,14 @@ func (u *UserInfo) DeepCopy() *UserInfo {
 			extra[k] = val
 		}
 	}
-	return &UserInfo{Username: u.Username, UID: u.UID, Email: u.Email, Groups: groups, Extra: extra}
+	return &UserInfo{
+		Username:   u.Username,
+		UID:        u.UID,
+		Email:      u.Email,
+		Groups:     groups,
+		Extra:      extra,
+		ExpiresAt:  u.ExpiresAt,
+		AuthType:   u.AuthType,
+		FromCookie: u.FromCookie,
+	}
 }

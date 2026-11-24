@@ -30,6 +30,7 @@ type ServeMuxConfig struct {
 	DashboardEnabled bool
 	MacaroonVerifier *pkgauth.MacaroonProvider
 	TokenStore       pkgauth.TokenStore
+	TunnelConfig     *TunnelManagerConfig
 }
 
 // NewServeMux creates the ConnectRPC service mux with all handlers registered.
@@ -80,7 +81,26 @@ func NewServeMux(cfg ServeMuxConfig) (*http.ServeMux, *TunnelManager) {
 	authPath, authHandler := divergev1alpha1connect.NewAuthServiceHandler(authService, interceptors)
 	mux.Handle(authPath, authHandler)
 
-	tunnelMgr := NewTunnelManager(cfg.Client, cfg.K8sClient, cfg.Logger, cfg.AuditLogger)
+	var tunnelCfg TunnelManagerConfig
+	if cfg.TunnelConfig != nil {
+		tunnelCfg = *cfg.TunnelConfig
+	}
+	if tunnelCfg.CRDClient == nil {
+		tunnelCfg.CRDClient = cfg.Client
+	}
+	if tunnelCfg.K8sClient == nil {
+		tunnelCfg.K8sClient = cfg.K8sClient
+	}
+	if tunnelCfg.Logger == nil {
+		tunnelCfg.Logger = cfg.Logger
+	}
+	if tunnelCfg.AuditLogger == nil {
+		tunnelCfg.AuditLogger = cfg.AuditLogger
+	}
+	if tunnelCfg.StreamLimiter == nil {
+		tunnelCfg.StreamLimiter = cfg.StreamLimiter
+	}
+	tunnelMgr := NewTunnelManagerWithConfig(tunnelCfg)
 	tunnelPath, tunnelHandler := divergev1alpha1connect.NewTunnelServiceHandler(tunnelMgr, interceptors)
 	mux.Handle(tunnelPath, tunnelHandler)
 	// NOTE: Tunnel proxy handler is on a SEPARATE port (8081), not this mux.

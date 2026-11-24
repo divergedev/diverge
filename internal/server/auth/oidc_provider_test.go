@@ -2,8 +2,22 @@ package auth
 
 import (
 	"context"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"pgregory.net/rapid"
 )
 
@@ -458,4 +472,150 @@ func TestPBT_ZitadelRoles_AllowedGroupsConsistency(t *testing.T) {
 			t.Errorf("expected fail (no overlap), got nil\nroles: %v, allowed: %v", groups, allowedMap)
 		}
 	})
+}
+
+func startTestOIDCProviderServer(t *testing.T) (issuerURL string, priv *rsa.PrivateKey, sign func(claims map[string]any) string) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
+	var srvURL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"issuer":                                srvURL,
+				"jwks_uri":                              srvURL + "/keys",
+				"authorization_endpoint":                srvURL + "/authorize",
+				"token_endpoint":                        srvURL + "/token",
+				"id_token_signing_alg_values_supported": []string{"RS256"},
+			})
+		case "/keys":
+			eBytes := big.NewInt(int64(key.E)).Bytes()
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"keys": []map[string]any{{
+					"kty": "RSA",
+					"kid": "test-kid",
+					"use": "sig",
+					"alg": "RS256",
+					"n":   base64.RawURLEncoding.EncodeToString(key.N.Bytes()),
+					"e":   base64.RawURLEncoding.EncodeToString(eBytes),
+				}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	srvURL = srv.URL
+	t.Cleanup(srv.Close)
+
+	signFn := func(claims map[string]any) string {
+		hdrJSON, _ := json.Marshal(map[string]string{"alg": "RS256", "kid": "test-kid", "typ": "JWT"})
+		payloadJSON, _ := json.Marshal(claims)
+		signingInput := base64.RawURLEncoding.EncodeToString(hdrJSON) + "." + base64.RawURLEncoding.EncodeToString(payloadJSON)
+		digest := sha256.Sum256([]byte(signingInput))
+		sig, signErr := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, digest[:])
+		require.NoError(t, signErr)
+		return signingInput + "." + base64.RawURLEncoding.EncodeToString(sig)
+	}
+
+	return srvURL, key, signFn
+}
+
+func TestOIDCProvider_PrefixesAndReservedPrincipals(t *testing.T) {
+	issuer, _, sign := startTestOIDCProviderServer(t)
+	sm, err := NewSessionManager(SessionConfig{})
+	require.NoError(t, err)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// Default prefixes should be "oidc:", while AllowedGroups still matches raw unprefixed group names.
+	provider, err := NewOIDCProvider(context.Background(), OIDCProviderConfig{
+		IssuerURL:     issuer,
+		ClientID:      "diverge-web",
+		AllowedGroups: []string{"engineering"},
+	}, sm, logger)
+	require.NoError(t, err)
+
+	exp := time.Now().Add(15 * time.Minute).UTC().Truncate(time.Second)
+	idTok := sign(map[string]any{
+		"iss":                issuer,
+		"aud":                "diverge-web",
+		"sub":                "sub-alice",
+		"preferred_username": "alice",
+		"email":              "alice@example.com",
+		"groups":             []string{"engineering", "platform"},
+		"exp":                exp.Unix(),
+		"iat":                time.Now().Add(-time.Minute).Unix(),
+	})
+
+	u, err := provider.Authenticate(context.Background(), idTok)
+	require.NoError(t, err)
+	assert.Equal(t, "oidc:alice", u.Username)
+	assert.Equal(t, []string{"oidc:engineering", "oidc:platform"}, u.Groups)
+	assert.Equal(t, "oidc", u.AuthType)
+	assert.Equal(t, exp.Unix(), u.ExpiresAt.Unix())
+
+	// Session JWT minted with raw username/groups must also be prefixed and set ExpiresAt/AuthType.
+	sessTok, err := sm.Mint("alice", "alice@example.com", "oidc", []string{"engineering"})
+	require.NoError(t, err)
+	sessUser, err := provider.Authenticate(context.Background(), sessTok)
+	require.NoError(t, err)
+	assert.Equal(t, "oidc:alice", sessUser.Username)
+	assert.Equal(t, []string{"oidc:engineering"}, sessUser.Groups)
+	assert.Equal(t, "session", sessUser.AuthType)
+	assert.False(t, sessUser.ExpiresAt.IsZero())
+
+	// Raw reserved principals must be rejected before prefixing or SAR.
+	badUserTok := sign(map[string]any{
+		"iss":                issuer,
+		"aud":                "diverge-web",
+		"sub":                "sub-bad",
+		"preferred_username": "system:admin",
+		"groups":             []string{"engineering"},
+		"exp":                exp.Unix(),
+		"iat":                time.Now().Add(-time.Minute).Unix(),
+	})
+	_, err = provider.Authenticate(context.Background(), badUserTok)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reserved prefix")
+
+	badGroupTok := sign(map[string]any{
+		"iss":                issuer,
+		"aud":                "diverge-web",
+		"sub":                "sub-badgrp",
+		"preferred_username": "alice",
+		"groups":             []string{"engineering", "system:masters"},
+		"exp":                exp.Unix(),
+		"iat":                time.Now().Add(-time.Minute).Unix(),
+	})
+	_, err = provider.Authenticate(context.Background(), badGroupTok)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reserved prefix")
+
+	badDivergeGroupTok := sign(map[string]any{
+		"iss":                issuer,
+		"aud":                "diverge-web",
+		"sub":                "sub-baddiv",
+		"preferred_username": "alice",
+		"groups":             []string{"engineering", "divergedev:agenttasks"},
+		"exp":                exp.Unix(),
+		"iat":                time.Now().Add(-time.Minute).Unix(),
+	})
+	_, err = provider.Authenticate(context.Background(), badDivergeGroupTok)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reserved prefix")
+
+	// Opt-out with NoOIDCPrefix ("-") disables prefixing but still blocks reserved prefixes.
+	unprefixedProvider, err := NewOIDCProvider(context.Background(), OIDCProviderConfig{
+		IssuerURL:      issuer,
+		ClientID:       "diverge-web",
+		UsernamePrefix: NoOIDCPrefix,
+		GroupsPrefix:   NoOIDCPrefix,
+	}, sm, logger)
+	require.NoError(t, err)
+	unprefUser, err := unprefixedProvider.Authenticate(context.Background(), idTok)
+	require.NoError(t, err)
+	assert.Equal(t, "alice", unprefUser.Username)
+	assert.Equal(t, []string{"engineering", "platform"}, unprefUser.Groups)
 }

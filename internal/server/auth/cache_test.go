@@ -11,6 +11,27 @@ import (
 	"pgregory.net/rapid"
 )
 
+type fakeClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func newFakeClock(start time.Time) *fakeClock {
+	return &fakeClock{now: start}
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
 func TestCacheSetGet(t *testing.T) {
 	cache := NewTokenCache(10, time.Minute)
 	user := &UserInfo{Username: "test"}
@@ -24,14 +45,15 @@ func TestCacheSetGet(t *testing.T) {
 }
 
 func TestCacheExpiration(t *testing.T) {
-	cache := NewTokenCache(10, time.Millisecond*50)
+	clk := newFakeClock(time.Unix(1_700_000_000, 0))
+	cache := newTokenCacheWithClock(10, 50*time.Millisecond, clk.Now)
 	user := &UserInfo{Username: "test"}
 	cache.Set("token1", user)
 
 	got := cache.Get("token1")
 	require.NotNil(t, got)
 
-	time.Sleep(time.Millisecond * 60)
+	clk.Advance(60 * time.Millisecond)
 	assert.Nil(t, cache.Get("token1"))
 }
 
@@ -104,8 +126,9 @@ func TestCacheHashToken(t *testing.T) {
 
 func TestCache_PBT(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
+		clk := newFakeClock(time.Unix(1_700_000_000, 0))
 		maxSize := rapid.IntRange(1, 50).Draw(t, "maxSize")
-		cache := NewTokenCache(maxSize, time.Millisecond*50)
+		cache := newTokenCacheWithClock(maxSize, 50*time.Millisecond, clk.Now)
 
 		tokens := rapid.SliceOfN(rapid.String(), 1, 100).Draw(t, "tokens")
 
@@ -125,9 +148,45 @@ func TestCache_PBT(t *testing.T) {
 		cache.mu.Unlock()
 
 		// Property: After TTL expires, Get returns nil
-		time.Sleep(time.Millisecond * 60)
+		clk.Advance(60 * time.Millisecond)
 		for _, token := range tokens {
 			assert.Nil(t, cache.Get(token))
 		}
 	})
+}
+
+func TestCache_ReturnsDeepCopyAndClampsToExpiresAt(t *testing.T) {
+	clk := newFakeClock(time.Unix(1_700_000_000, 0))
+	cache := newTokenCacheWithClock(10, time.Hour, clk.Now)
+	orig := &UserInfo{
+		Username:   "alice",
+		Groups:     []string{"dev"},
+		ExpiresAt:  clk.Now().Add(40 * time.Millisecond),
+		FromCookie: true,
+	}
+	cache.Set("tok", orig)
+
+	got1 := cache.Get("tok")
+	require.NotNil(t, got1)
+	assert.False(t, got1.FromCookie, "FromCookie must not be persisted across cache lookups")
+	got1.Username = "mutated"
+	got1.Groups[0] = "system:masters"
+
+	got2 := cache.Get("tok")
+	require.NotNil(t, got2)
+	assert.Equal(t, "alice", got2.Username)
+	assert.Equal(t, []string{"dev"}, got2.Groups)
+
+	clk.Advance(60 * time.Millisecond)
+	assert.Nil(t, cache.Get("tok"), "entry must expire when user.ExpiresAt elapses even if cache TTL is longer")
+
+	cache.Set("already-expired", &UserInfo{
+		Username:  "bob",
+		ExpiresAt: clk.Now().Add(-1 * time.Second),
+	})
+	assert.Nil(t, cache.Get("already-expired"))
+
+	noop := NewTokenCache(0, time.Minute)
+	noop.Set("tok", &UserInfo{Username: "carol"})
+	assert.Nil(t, noop.Get("tok"))
 }

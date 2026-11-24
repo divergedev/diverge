@@ -39,8 +39,11 @@ func ValidateDNS1123Label(value, field string) error {
 
 // isMacaroonUser reports whether the authenticated UserInfo originated from a Macaroon capability token.
 func isMacaroonUser(user *auth.UserInfo) bool {
-	if user == nil || len(user.Extra) == 0 {
+	if user == nil {
 		return false
+	}
+	if user.AuthType == "macaroon" {
+		return true
 	}
 	vals := user.Extra[auth.ExtraKeyAuthType]
 	return len(vals) > 0 && vals[0] == "macaroon"
@@ -181,6 +184,28 @@ func AuthorizeTaskObjectAccess(ctx context.Context, auditLogger *AuditLogger, ve
 // checkSAR performs a SubjectAccessReview for the given user and resource attributes.
 // This is the shared helper used by both AuthorizeAction and AuthorizePodLogs.
 func checkSAR(ctx context.Context, k8sClient kubernetes.Interface, auditLogger *AuditLogger, user *auth.UserInfo, attrs *authorizationv1.ResourceAttributes, denialMsg string) error {
+	if user != nil && (user.AuthType == "oidc" || user.AuthType == "session") {
+		reserved := auth.IsReservedOIDCPrincipal(user.Username)
+		if !reserved {
+			for _, g := range user.Groups {
+				if auth.IsReservedOIDCPrincipal(g) {
+					reserved = true
+					break
+				}
+			}
+		}
+		if reserved {
+			resource := attrs.Resource
+			if attrs.Subresource != "" {
+				resource = resource + "/" + attrs.Subresource
+			}
+			if auditLogger != nil {
+				auditLogger.LogAuthz(ctx, "authz.denied", user, attrs.Verb, resource, attrs.Namespace)
+			}
+			return connect.NewError(connect.CodePermissionDenied, errors.New(denialMsg))
+		}
+	}
+
 	sar := &authorizationv1.SubjectAccessReview{
 		Spec: authorizationv1.SubjectAccessReviewSpec{
 			User:               user.Username,

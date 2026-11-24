@@ -40,6 +40,9 @@ var knownProcedures = map[string]bool{
 	"/diverge.v1alpha1.ClusterService/GetClusterInfo":          true,
 	"/diverge.v1alpha1.AuthService/GetCurrentUser":             true,
 	"/diverge.v1alpha1.AuthService/ListPermissions":            true,
+	"/diverge.v1alpha1.TunnelService/Tunnel":                   true,
+	"/diverge.v1alpha1.TunnelService/ListTunnels":              true,
+	"/diverge.v1alpha1.PreviewResolverService/ResolvePreview":  true,
 }
 
 func sanitizeMethod(procedure string) string {
