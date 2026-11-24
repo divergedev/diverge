@@ -438,3 +438,76 @@ func TestGitHubPreviewGroupNotifier_TemporaryUserLookupFailureRetainsExistingCom
 	assert.Equal(t, []string{http.MethodGet, http.MethodGet, http.MethodGet, http.MethodGet, http.MethodPatch}, methods)
 	assert.Equal(t, int64(7777), pg.Status.CommentID)
 }
+
+func TestGitHubPreviewGroupNotifier_404FallbackAndExhaustion(t *testing.T) {
+	newPG := func(commentID int64) *v1alpha1.PreviewGroup {
+		return &v1alpha1.PreviewGroup{
+			ObjectMeta: metav1.ObjectMeta{Name: "pg-gh-404-retry"},
+			Spec: v1alpha1.PreviewGroupSpec{
+				Source: v1alpha1.EnvironmentSource{
+					Provider: "github",
+					Project:  "owner/repo",
+					MR:       42,
+				},
+			},
+			Status: v1alpha1.PreviewGroupStatus{
+				CommentID: commentID,
+			},
+		}
+	}
+
+	t.Run("404 on PATCH falls back to POST and succeeds", func(t *testing.T) {
+		pg := newPG(7777)
+		var methods []string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			methods = append(methods, r.Method)
+			w.Header().Set("Content-Type", "application/json")
+			if r.Method == http.MethodPatch {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			if r.Method == http.MethodPost {
+				w.WriteHeader(http.StatusCreated)
+				_, _ = w.Write([]byte(`{"id": 8888, "user": {"id": 99, "login": "diverge-bot"}}`))
+				return
+			}
+			t.Fatalf("unexpected method %s", r.Method)
+		}))
+		defer server.Close()
+
+		n := NewGitHubPreviewGroupNotifier(server.URL, "token")
+		require.NoError(t, n.PostGroupReady(context.Background(), pg))
+		assert.Equal(t, []string{http.MethodPatch, http.MethodPost}, methods)
+		assert.Equal(t, int64(8888), pg.Status.CommentID)
+	})
+
+	t.Run("429 followed by 404 on final attempt returns error", func(t *testing.T) {
+		pg := newPG(7777)
+		var patchCount int
+		var postCount int
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if r.Method == http.MethodPatch {
+				patchCount++
+				if patchCount < 4 {
+					w.Header().Set("Retry-After", "0")
+					w.WriteHeader(http.StatusTooManyRequests)
+					return
+				}
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			if r.Method == http.MethodPost {
+				postCount++
+			}
+			t.Fatalf("unexpected method %s", r.Method)
+		}))
+		defer server.Close()
+
+		n := NewGitHubPreviewGroupNotifier(server.URL, "token")
+		require.Error(t, n.PostGroupReady(context.Background(), pg))
+		assert.Equal(t, 4, patchCount)
+		assert.Zero(t, postCount)
+		assert.Zero(t, pg.Status.CommentID)
+	})
+}

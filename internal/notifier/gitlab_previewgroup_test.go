@@ -435,3 +435,130 @@ func TestGitLabPreviewGroupNotifier_TemporaryUserLookupFailureRetainsExistingNot
 		t.Fatalf("expected recovered CommentID 9001, got %d", pg.Status.CommentID)
 	}
 }
+
+func TestGitLabPreviewGroupNotifier_WriteRetryExhaustionAnd404Fallback(t *testing.T) {
+	newPG := func(commentID int64) *v1alpha1.PreviewGroup {
+		return &v1alpha1.PreviewGroup{
+			ObjectMeta: metav1.ObjectMeta{Name: "pg-write-retry"},
+			Spec: v1alpha1.PreviewGroupSpec{
+				Source: v1alpha1.EnvironmentSource{
+					Provider: "gitlab",
+					Project:  "owner/repo",
+					MR:       42,
+				},
+			},
+			Status: v1alpha1.PreviewGroupStatus{
+				CommentID: commentID,
+			},
+		}
+	}
+
+	t.Run("recovered note 429 retry exhaustion returns error and keeps ID provisional", func(t *testing.T) {
+		pg := newPG(0)
+		marker := previewGroupCommentMarker(pg)
+		var putCount int
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if r.Method == http.MethodGet && r.URL.Path == "/api/v4/user" {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"id": 99, "username": "diverge-bot"}`))
+				return
+			}
+			if r.Method == http.MethodGet {
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode([]map[string]interface{}{
+					{"id": 9001, "body": "existing\n\n" + marker, "author": map[string]interface{}{"id": 99, "username": "diverge-bot"}},
+				})
+				return
+			}
+			if r.Method == http.MethodPut {
+				putCount++
+				w.Header().Set("Retry-After", "0")
+				w.WriteHeader(http.StatusTooManyRequests)
+				return
+			}
+			t.Fatalf("unexpected method %s", r.Method)
+		}))
+		defer ts.Close()
+
+		n := NewGitLabPreviewGroupNotifier(ts.URL, "test-token")
+		if err := n.PostGroupReady(context.Background(), pg); err == nil {
+			t.Fatal("expected error after exhausting 429 retries on PUT, got nil")
+		}
+		if putCount != 3 {
+			t.Fatalf("expected 3 PUT attempts, got %d", putCount)
+		}
+		if pg.Status.CommentID != 0 {
+			t.Fatalf("expected CommentID to remain 0 after failed update, got %d", pg.Status.CommentID)
+		}
+	})
+
+	t.Run("404 on PUT falls back to POST and succeeds", func(t *testing.T) {
+		pg := newPG(9001)
+		var methods []string
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			methods = append(methods, r.Method)
+			w.Header().Set("Content-Type", "application/json")
+			if r.Method == http.MethodPut {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			if r.Method == http.MethodPost {
+				w.WriteHeader(http.StatusCreated)
+				_, _ = w.Write([]byte(`{"id": 9002, "author": {"id": 99, "username": "diverge-bot"}}`))
+				return
+			}
+			t.Fatalf("unexpected method %s", r.Method)
+		}))
+		defer ts.Close()
+
+		n := NewGitLabPreviewGroupNotifier(ts.URL, "test-token")
+		if err := n.PostGroupReady(context.Background(), pg); err != nil {
+			t.Fatalf("expected POST fallback to succeed, got %v", err)
+		}
+		if len(methods) != 2 || methods[0] != http.MethodPut || methods[1] != http.MethodPost {
+			t.Fatalf("expected [PUT POST], got %v", methods)
+		}
+		if pg.Status.CommentID != 9002 {
+			t.Fatalf("expected CommentID 9002 after fallback POST, got %d", pg.Status.CommentID)
+		}
+	})
+
+	t.Run("429 followed by 404 on final attempt returns error", func(t *testing.T) {
+		pg := newPG(9001)
+		var putCount int
+		var postCount int
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if r.Method == http.MethodPut {
+				putCount++
+				if putCount < 3 {
+					w.Header().Set("Retry-After", "0")
+					w.WriteHeader(http.StatusTooManyRequests)
+					return
+				}
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			if r.Method == http.MethodPost {
+				postCount++
+			}
+			t.Fatalf("unexpected method %s", r.Method)
+		}))
+		defer ts.Close()
+
+		n := NewGitLabPreviewGroupNotifier(ts.URL, "test-token")
+		if err := n.PostGroupReady(context.Background(), pg); err == nil {
+			t.Fatal("expected error when 404 occurs on final attempt, got nil")
+		}
+		if putCount != 3 {
+			t.Fatalf("expected 3 PUT attempts, got %d", putCount)
+		}
+		if postCount != 0 {
+			t.Fatalf("expected 0 POST attempts, got %d", postCount)
+		}
+		if pg.Status.CommentID != 0 {
+			t.Fatalf("expected CommentID to be cleared to 0 after 404, got %d", pg.Status.CommentID)
+		}
+	})
+}

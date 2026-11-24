@@ -186,7 +186,9 @@ func (g *GitLabPreviewGroupNotifier) postOrUpdateComment(ctx context.Context, pg
 	payload := map[string]string{"body": body}
 	jsonPayload, _ := json.Marshal(payload)
 
-	for attempt := 0; attempt < 3; attempt++ {
+	const maxAttempts = 3
+	var lastStatus int
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		var reqURL string
 		var method string
 
@@ -211,12 +213,16 @@ func (g *GitLabPreviewGroupNotifier) postOrUpdateComment(ctx context.Context, pg
 		}
 
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusForbidden {
+			lastStatus = resp.StatusCode
 			retryAfter := resp.Header.Get("Retry-After")
+			_ = resp.Body.Close()
+			if attempt == maxAttempts-1 {
+				return fmt.Errorf("gitlab API returned status: %d after %d attempts", lastStatus, maxAttempts)
+			}
 			backoff := 5 * time.Second
-			if secs, err := strconv.Atoi(retryAfter); err == nil {
+			if secs, err := strconv.Atoi(retryAfter); err == nil && secs >= 0 {
 				backoff = time.Duration(secs) * time.Second
 			}
-			_ = resp.Body.Close()
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -226,6 +232,7 @@ func (g *GitLabPreviewGroupNotifier) postOrUpdateComment(ctx context.Context, pg
 		}
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			lastStatus = resp.StatusCode
 			_ = resp.Body.Close()
 			if commentID != 0 && resp.StatusCode == http.StatusNotFound {
 				commentID = 0
@@ -254,9 +261,9 @@ func (g *GitLabPreviewGroupNotifier) postOrUpdateComment(ctx context.Context, pg
 			g.setCommentID(pg, recoveredID)
 		}
 		_ = resp.Body.Close()
-		break
+		return nil
 	}
-	return nil
+	return fmt.Errorf("gitlab API write exhausted retries (last status: %d)", lastStatus)
 }
 
 // PostGroupCreated performs its designated operation.

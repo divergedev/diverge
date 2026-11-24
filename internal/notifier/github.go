@@ -448,7 +448,7 @@ func (g *GitHubPreviewGroupNotifier) postOrUpdateComment(ctx context.Context, pg
 
 			sleepDuration := backoff
 			if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
-				if parsedSecs, err := strconv.Atoi(retryAfter); err == nil {
+				if parsedSecs, err := strconv.Atoi(retryAfter); err == nil && parsedSecs >= 0 {
 					sleepDuration = time.Duration(parsedSecs) * time.Second
 				}
 			} else if reset := resp.Header.Get("X-RateLimit-Reset"); reset != "" {
@@ -502,9 +502,9 @@ func (g *GitHubPreviewGroupNotifier) postOrUpdateComment(ctx context.Context, pg
 			g.setCommentID(pg, recoveredID)
 		}
 		_ = resp.Body.Close()
-		break
+		return nil
 	}
-	return nil
+	return fmt.Errorf("github API write exhausted retries")
 }
 
 // PostGroupCreated performs its designated operation.
