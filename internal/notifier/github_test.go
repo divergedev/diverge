@@ -34,6 +34,12 @@ func TestGitHubPreviewGroupNotifier_PostGroupCreated(t *testing.T) {
 	var requestedBody map[string]interface{}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/user" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id": 99, "login": "diverge-bot"}`))
+			return
+		}
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
@@ -147,6 +153,12 @@ func TestGitHubPreviewGroupNotifier_RecreateOn404(t *testing.T) {
 func TestGitHubPreviewGroupNotifier_RateLimitBackoff(t *testing.T) {
 	callCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/user" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id": 99, "login": "diverge-bot"}`))
+			return
+		}
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
@@ -372,15 +384,22 @@ func TestGitHubPreviewGroupNotifier_TemporaryUserLookupFailureRetainsExistingCom
 		},
 	}
 	marker := previewGroupCommentMarker(pg)
-	userStatus := http.StatusInternalServerError
+	userStep := 0
 	var methods []string
 	var postCount int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		methods = append(methods, r.Method)
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodGet && r.URL.Path == "/user" {
-			w.WriteHeader(userStatus)
-			if userStatus == http.StatusOK {
+			userStep++
+			switch userStep {
+			case 1:
+				w.WriteHeader(http.StatusInternalServerError)
+			case 2:
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"id": 99, "login":`))
+			default:
+				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(`{"id": 99, "login": "diverge-bot"}`))
 			}
 			return
@@ -409,9 +428,13 @@ func TestGitHubPreviewGroupNotifier_TemporaryUserLookupFailureRetainsExistingCom
 	assert.Zero(t, postCount)
 	assert.Zero(t, pg.Status.CommentID)
 
-	userStatus = http.StatusOK
+	err = n.PostGroupReady(context.Background(), pg)
+	require.Error(t, err, "truncated /user JSON must return decode error rather than marking checked or posting a duplicate")
+	assert.Zero(t, postCount)
+	assert.Zero(t, pg.Status.CommentID)
+
 	require.NoError(t, n.PostGroupReady(context.Background(), pg))
 	assert.Zero(t, postCount, "recovery after /user recovers must PATCH existing comment instead of POSTing duplicate")
-	assert.Equal(t, []string{http.MethodGet, http.MethodGet, http.MethodGet, http.MethodPatch}, methods)
+	assert.Equal(t, []string{http.MethodGet, http.MethodGet, http.MethodGet, http.MethodGet, http.MethodPatch}, methods)
 	assert.Equal(t, int64(7777), pg.Status.CommentID)
 }

@@ -7,11 +7,14 @@ import (
 )
 
 type mockNotifier struct {
-	nextCommentID  int64
-	failNextFailed error
-	createdCalls   []*divergeiov1alpha1.PreviewGroup
-	readyCalls     []*divergeiov1alpha1.PreviewGroup
-	failedCalls    []struct {
+	nextCommentID   int64
+	failNextCreated error
+	failNextReady   error
+	failNextFailed  error
+	failNextStatus  error
+	createdCalls    []*divergeiov1alpha1.PreviewGroup
+	readyCalls      []*divergeiov1alpha1.PreviewGroup
+	failedCalls     []struct {
 		pg     *divergeiov1alpha1.PreviewGroup
 		reason string
 	}
@@ -27,14 +30,24 @@ func (m *mockNotifier) assignCommentID(pg *divergeiov1alpha1.PreviewGroup) {
 }
 
 func (m *mockNotifier) PostGroupCreated(ctx context.Context, pg *divergeiov1alpha1.PreviewGroup) error {
-	m.assignCommentID(pg)
 	m.createdCalls = append(m.createdCalls, pg)
+	if m.failNextCreated != nil {
+		err := m.failNextCreated
+		m.failNextCreated = nil
+		return err
+	}
+	m.assignCommentID(pg)
 	return nil
 }
 
 func (m *mockNotifier) PostGroupReady(ctx context.Context, pg *divergeiov1alpha1.PreviewGroup) error {
-	m.assignCommentID(pg)
 	m.readyCalls = append(m.readyCalls, pg)
+	if m.failNextReady != nil {
+		err := m.failNextReady
+		m.failNextReady = nil
+		return err
+	}
+	m.assignCommentID(pg)
 	return nil
 }
 
@@ -59,5 +72,10 @@ func (m *mockNotifier) PostGroupTeardown(ctx context.Context, pg *divergeiov1alp
 
 func (m *mockNotifier) UpdateGroupStatus(ctx context.Context, pg *divergeiov1alpha1.PreviewGroup) error {
 	m.statusCalls = append(m.statusCalls, pg)
+	if m.failNextStatus != nil {
+		err := m.failNextStatus
+		m.failNextStatus = nil
+		return err
+	}
 	return nil
 }

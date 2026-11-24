@@ -259,7 +259,7 @@ func NewGitHubPreviewGroupNotifier(baseURL, token string) *GitHubPreviewGroupNot
 
 func (g *GitHubPreviewGroupNotifier) getProjectAndMR(pg *v1alpha1.PreviewGroup) (string, int, error) {
 	if pg.Spec.Source.Provider != "github" {
-		return "", 0, fmt.Errorf("preview group source is not github")
+		return "", 0, ErrNotGitHubSource
 	}
 	if pg.Spec.Source.MR == 0 {
 		return "", 0, ErrMissingMergeRequest
@@ -317,8 +317,10 @@ func (g *GitHubPreviewGroupNotifier) resolveAuthenticatedAuthor(ctx context.Cont
 	}
 	decErr := json.NewDecoder(resp.Body).Decode(&u)
 	_ = resp.Body.Close()
-	if decErr == nil && strings.TrimSpace(u.Login) != "" {
-		login := strings.TrimSpace(u.Login)
+	if decErr != nil {
+		return 0, "", fmt.Errorf("decoding github /user response: %w", decErr)
+	}
+	if login := strings.TrimSpace(u.Login); login != "" {
 		g.authorCache.record(u.ID, login)
 		return u.ID, login, nil
 	}

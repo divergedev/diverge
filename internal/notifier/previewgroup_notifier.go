@@ -13,6 +13,8 @@ import (
 )
 
 var (
+	// ErrNotGitHubSource indicates the project is not a GitHub project
+	ErrNotGitHubSource = errors.New("preview group source is not github")
 	// ErrNotGitLabSource indicates the project is not a GitLab project
 	ErrNotGitLabSource = errors.New("preview group source is not gitlab")
 	// ErrMissingMergeRequest indicates no merge request is associated

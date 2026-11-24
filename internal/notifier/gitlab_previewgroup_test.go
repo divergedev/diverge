@@ -17,7 +17,14 @@ func TestGitLabPreviewGroupNotifier_PostGroupCreated(t *testing.T) {
 	var requestBody map[string]string
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v4/user" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id": 99, "username": "diverge-bot"}`))
+			return
+		}
 		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`[]`))
 			return
@@ -362,15 +369,22 @@ func TestGitLabPreviewGroupNotifier_TemporaryUserLookupFailureRetainsExistingNot
 		},
 	}
 	marker := previewGroupCommentMarker(pg)
-	userStatus := http.StatusInternalServerError
+	userStep := 0
 	var methods []string
 	var postCount int
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		methods = append(methods, r.Method)
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodGet && r.URL.Path == "/api/v4/user" {
-			w.WriteHeader(userStatus)
-			if userStatus == http.StatusOK {
+			userStep++
+			switch userStep {
+			case 1:
+				w.WriteHeader(http.StatusInternalServerError)
+			case 2:
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"id": 99, "username":`))
+			default:
+				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(`{"id": 99, "username": "diverge-bot"}`))
 			}
 			return
@@ -401,15 +415,21 @@ func TestGitLabPreviewGroupNotifier_TemporaryUserLookupFailureRetainsExistingNot
 		t.Fatalf("expected no duplicate POST and zero CommentID, got postCount=%d CommentID=%d", postCount, pg.Status.CommentID)
 	}
 
-	userStatus = http.StatusOK
+	if err := n.PostGroupReady(context.Background(), pg); err == nil {
+		t.Fatalf("expected error on truncated /api/v4/user JSON, got nil")
+	}
+	if postCount != 0 || pg.Status.CommentID != 0 {
+		t.Fatalf("expected no duplicate POST and zero CommentID on truncated JSON, got postCount=%d CommentID=%d", postCount, pg.Status.CommentID)
+	}
+
 	if err := n.PostGroupReady(context.Background(), pg); err != nil {
 		t.Fatalf("expected recovery after /api/v4/user recovers, got %v", err)
 	}
 	if postCount != 0 {
 		t.Fatalf("expected no duplicate POST after /api/v4/user recovery, got %d", postCount)
 	}
-	if len(methods) != 4 || methods[0] != http.MethodGet || methods[1] != http.MethodGet || methods[2] != http.MethodGet || methods[3] != http.MethodPut {
-		t.Fatalf("expected [GET GET GET PUT], got %v", methods)
+	if len(methods) != 5 || methods[0] != http.MethodGet || methods[1] != http.MethodGet || methods[2] != http.MethodGet || methods[3] != http.MethodGet || methods[4] != http.MethodPut {
+		t.Fatalf("expected [GET GET GET GET PUT], got %v", methods)
 	}
 	if pg.Status.CommentID != 9001 {
 		t.Fatalf("expected recovered CommentID 9001, got %d", pg.Status.CommentID)

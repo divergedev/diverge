@@ -36,6 +36,7 @@ import (
 	"github.com/divergedev/diverge/internal/events"
 	"github.com/divergedev/diverge/internal/metrics"
 	"github.com/divergedev/diverge/internal/multicluster"
+	"github.com/divergedev/diverge/internal/notifier"
 	"github.com/divergedev/diverge/internal/previewgroup"
 	pkgdb "github.com/divergedev/diverge/pkg/database"
 	"github.com/divergedev/diverge/pkg/features"
@@ -3618,4 +3619,222 @@ func TestSharedDB_SameSpokeDifferentNamespaceScopedClientsTeardownSucceeds(t *te
 	require.NoError(t, err)
 	var keptDesired corev1.Secret
 	require.NoError(t, sharedSpoke2.Get(ctx, types.NamespacedName{Name: activeSecName, Namespace: "team-b"}, &keptDesired), "desired Secret UID must protect it across distinct client scans reaching the same spoke")
+
+	// C. Even when desired child's own client returns Forbidden on team-b Secrets while alternate client can list/delete team-b, Secret stays protected via UID/list error
+	rDesiredForbidden := &PreviewGroupReconciler{
+		Client: fake.NewClientBuilder().WithScheme(s).WithObjects(pgActive).Build(),
+		Scheme: s,
+		ClusterClients: &clusterNameSpokeResolver{
+			byName: map[string]*multicluster.Target{
+				"spoke-rbac-a": {Name: "spoke-rbac-a", IsRemote: true, Client: makeSharedUIDView("team-a", "team-b")},
+				"spoke-rbac-b": {Name: "spoke-rbac-b", IsRemote: true, Client: makeSharedUIDView("team-a")},
+			},
+		},
+	}
+	_, err = rDesiredForbidden.cleanupOrphanedChildSharedDBSecrets(ctx, pgActive, map[string]bool{"team-b/" + activeChildName: true})
+	require.Error(t, err, "Forbidden listing on desired child's own client must surface an error")
+	assert.Contains(t, err.Error(), "forbidden")
+	require.NoError(t, sharedSpoke2.Get(ctx, types.NamespacedName{Name: activeSecName, Namespace: "team-b"}, &keptDesired), "desired Secret must stay on spoke when its own client gets Forbidden even if alternate client can list/delete team-b")
+}
+
+func TestSharedDB_ReadSharedGroupDatabaseDSNRequiresDatabaseURLWhenDatabaseEnvKeySet(t *testing.T) {
+	ctx := context.Background()
+	s := runtime.NewScheme()
+	require.NoError(t, divergeiov1alpha1.AddToScheme(s))
+	require.NoError(t, corev1.AddToScheme(s))
+
+	envName := "pg-envkey-api"
+	secName := sharedGroupDBSecretName(envName)
+	sec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secName,
+			Namespace: "default",
+		},
+		Data: map[string][]byte{
+			"PGHOST": []byte("pg.default.svc"),
+		},
+	}
+	envWithKey := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      envName,
+			Namespace: "default",
+			Annotations: map[string]string{
+				annotationSharedGroupDB: "true",
+			},
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Database: divergeiov1alpha1.EnvironmentDatabase{Mode: "shared"},
+			ServiceConfig: &divergeiov1alpha1.ServicePreviewConfig{
+				ServiceName:    "api",
+				Port:           8080,
+				Image:          "acme/api:v1",
+				DatabaseEnvKey: "SPRING_DATASOURCE_URL",
+			},
+		},
+	}
+	envFromOnly := envWithKey.DeepCopy()
+	envFromOnly.Spec.ServiceConfig.DatabaseEnvKey = ""
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(sec).Build()
+	envRec := &EnvironmentReconciler{Client: c, Scheme: s}
+
+	gotSec, dsn, ready, err := envRec.readSharedGroupDatabaseDSN(ctx, envWithKey)
+	require.NoError(t, err)
+	assert.False(t, ready, "Secret lacking DATABASE_URL must not report ready when DatabaseEnvKey binds DATABASE_URL")
+	assert.Empty(t, gotSec)
+	assert.Empty(t, dsn)
+
+	gotSec, dsn, ready, err = envRec.readSharedGroupDatabaseDSN(ctx, envFromOnly)
+	require.NoError(t, err)
+	assert.True(t, ready, "envFrom-only consumer without DatabaseEnvKey must remain ready when Secret has non-empty data")
+	assert.Equal(t, secName, gotSec)
+	assert.Empty(t, dsn)
+
+	sec.Data["DATABASE_URL"] = []byte("postgres://app:pw@pg.default.svc:5432/app")
+	require.NoError(t, c.Update(ctx, sec))
+
+	gotSec, dsn, ready, err = envRec.readSharedGroupDatabaseDSN(ctx, envWithKey)
+	require.NoError(t, err)
+	assert.True(t, ready)
+	assert.Equal(t, secName, gotSec)
+	assert.Equal(t, "postgres://app:pw@pg.default.svc:5432/app", dsn)
+}
+
+func TestPreviewGroupReconcile_RetriesPendingNotificationsAcrossPhases(t *testing.T) {
+	ctx := context.Background()
+	s := runtime.NewScheme()
+	require.NoError(t, divergeiov1alpha1.AddToScheme(s))
+	require.NoError(t, corev1.AddToScheme(s))
+
+	pgName := "pg-notify-retry"
+	childName := childEnvironmentName(pgName, "api")
+	pg := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       pgName,
+			Finalizers: []string{previewGroupFinalizer},
+		},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Source: divergeiov1alpha1.EnvironmentSource{
+				Provider: "github",
+				Project:  "owner/repo",
+				MR:       42,
+				Branch:   "feat/notify-retry",
+			},
+			Routing: divergeiov1alpha1.PreviewGroupRouting{
+				Mode:        "header",
+				HeaderKey:   "x-preview-env",
+				HeaderValue: pgName,
+			},
+			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{
+					Name:      "api",
+					Namespace: "default",
+					Mode:      divergeiov1alpha1.ServiceModeImage,
+					Image:     "acme/api:v1",
+					Port:      8080,
+				},
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithStatusSubresource(&divergeiov1alpha1.PreviewGroup{}, &divergeiov1alpha1.Environment{}).
+		WithObjects(pg).
+		Build()
+	notif := &mockNotifier{
+		nextCommentID:   1001,
+		failNextCreated: errors.New("temporary github /user 500"),
+	}
+	r := &PreviewGroupReconciler{
+		Client:   c,
+		Scheme:   s,
+		Recorder: events.NewRecorder(k8sevents.NewFakeRecorder(20)),
+		Notifier: notif,
+	}
+
+	// 1. Initial creation notification fails -> status still persists, pending annotation set, requeue scheduled
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pgName}})
+	require.NoError(t, err)
+	assert.Greater(t, res.RequeueAfter, time.Duration(0))
+	require.Len(t, notif.createdCalls, 1)
+
+	var gotPG divergeiov1alpha1.PreviewGroup
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: pgName}, &gotPG))
+	assert.Equal(t, divergeiov1alpha1.PreviewGroupPhasePending, gotPG.Status.Phase)
+	assert.Zero(t, gotPG.Status.CommentID)
+	assert.Equal(t, "phase", gotPG.Annotations[annotationPendingNotification])
+
+	// 2. Subsequent reconcile (no phase/service change) retries PostGroupCreated, persists CommentID, clears annotation
+	_, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pgName}})
+	require.NoError(t, err)
+	require.Len(t, notif.createdCalls, 2)
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: pgName}, &gotPG))
+	assert.Equal(t, int64(1001), gotPG.Status.CommentID)
+	assert.Empty(t, gotPG.Annotations[annotationPendingNotification])
+
+	// Steady-state reconcile does not re-notify
+	_, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pgName}})
+	require.NoError(t, err)
+	assert.Len(t, notif.createdCalls, 2)
+
+	// 3. Running transition with transient failure -> Phase becomes Running, pending-notification=phase, next reconcile retries PostGroupReady
+	var child divergeiov1alpha1.Environment
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: childName, Namespace: "default"}, &child))
+	child.Status.Phase = divergeiov1alpha1.PhaseRunning
+	child.Status.ObservedGeneration = child.Generation
+	require.NoError(t, c.Status().Update(ctx, &child))
+
+	notif.failNextReady = errors.New("temporary github /user 500")
+	res, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pgName}})
+	require.NoError(t, err)
+	assert.Greater(t, res.RequeueAfter, time.Duration(0))
+	require.Len(t, notif.readyCalls, 1)
+
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: pgName}, &gotPG))
+	assert.Equal(t, divergeiov1alpha1.PreviewGroupPhaseRunning, gotPG.Status.Phase)
+	assert.Equal(t, "phase", gotPG.Annotations[annotationPendingNotification])
+
+	_, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pgName}})
+	require.NoError(t, err)
+	require.Len(t, notif.readyCalls, 2)
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: pgName}, &gotPG))
+	assert.Equal(t, divergeiov1alpha1.PreviewGroupPhaseRunning, gotPG.Status.Phase)
+	assert.Empty(t, gotPG.Annotations[annotationPendingNotification])
+
+	_, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pgName}})
+	require.NoError(t, err)
+	assert.Len(t, notif.readyCalls, 2)
+
+	// 4. Failed transition with transient failure -> Phase becomes Failed, next reconcile retries PostGroupFailed and clears annotation
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: childName, Namespace: "default"}, &child))
+	child.Status.Phase = divergeiov1alpha1.PhaseFailed
+	require.NoError(t, c.Status().Update(ctx, &child))
+
+	notif.failNextFailed = errors.New("temporary github /user 500")
+	res, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pgName}})
+	require.NoError(t, err)
+	assert.Greater(t, res.RequeueAfter, time.Duration(0))
+	require.Len(t, notif.failedCalls, 1)
+
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: pgName}, &gotPG))
+	assert.Equal(t, divergeiov1alpha1.PreviewGroupPhaseFailed, gotPG.Status.Phase)
+	assert.Equal(t, "phase", gotPG.Annotations[annotationPendingNotification])
+
+	_, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pgName}})
+	require.NoError(t, err)
+	require.Len(t, notif.failedCalls, 2)
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: pgName}, &gotPG))
+	assert.Empty(t, gotPG.Annotations[annotationPendingNotification])
+
+	// 5. Non-retryable error (e.g. missing MR) must NOT set pending notification or loop
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: childName, Namespace: "default"}, &child))
+	child.Status.Phase = divergeiov1alpha1.PhaseRunning
+	require.NoError(t, c.Status().Update(ctx, &child))
+
+	notif.failNextReady = notifier.ErrMissingMergeRequest
+	res, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pgName}})
+	require.NoError(t, err)
+	assert.Zero(t, res.RequeueAfter)
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: pgName}, &gotPG))
+	assert.Empty(t, gotPG.Annotations[annotationPendingNotification])
 }

@@ -34,11 +34,12 @@ import (
 )
 
 const (
-	previewGroupFinalizer    = "divergedev.com/previewgroup-protection"
-	labelPreviewGroup        = "divergedev.com/previewgroup"
-	labelManagedBy           = "divergedev.com/managed-by"
-	annotationCommentSource  = "divergedev.com/comment-source"
-	annotationReportedCommit = "divergedev.com/reported-commit"
+	previewGroupFinalizer         = "divergedev.com/previewgroup-protection"
+	labelPreviewGroup             = "divergedev.com/previewgroup"
+	labelManagedBy                = "divergedev.com/managed-by"
+	annotationCommentSource       = "divergedev.com/comment-source"
+	annotationReportedCommit      = "divergedev.com/reported-commit"
+	annotationPendingNotification = "divergedev.com/pending-notification"
 )
 
 // PreviewGroupReconciler reconciles a PreviewGroup object.
@@ -260,9 +261,15 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 					}
 				}
 			}
+			prevPendingNotify := ""
+			if pg.Annotations != nil {
+				prevPendingNotify = strings.TrimSpace(pg.Annotations[annotationPendingNotification])
+			}
 			currentCommentSource, prevCommentSource, sourcePromoted := resetCommentIfSourcePromoted(&pg)
 			var notifyErr error
-			if r.Notifier != nil && (pg.Status.Phase != prevPhase || sourcePromoted) {
+			attemptedNotify := false
+			if r.Notifier != nil && (pg.Status.Phase != prevPhase || sourcePromoted || prevPendingNotify != "") {
+				attemptedNotify = true
 				notifyCtx, cancelN := context.WithTimeout(ctx, 15*time.Second)
 				notifyErr = r.Notifier.PostGroupFailed(notifyCtx, &pg, "GroupDatabaseFailed")
 				cancelN()
@@ -277,12 +284,37 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			} else {
 				pg.Status.CommentSource = ""
 			}
+			desiredPendingNotify := prevPendingNotify
+			if attemptedNotify {
+				if notifyErr != nil && !isNonRetryableNotifyError(notifyErr) {
+					desiredPendingNotify = "phase"
+				} else {
+					desiredPendingNotify = ""
+				}
+			}
+			if desiredPendingNotify != "" && desiredPendingNotify != prevPendingNotify {
+				if revChanged, mErr := r.patchPreviewGroupAnnotations(ctx, &pg, func(annos map[string]string) {
+					annos[annotationPendingNotification] = desiredPendingNotify
+				}); mErr != nil {
+					return ctrl.Result{}, groupDBErr
+				} else if revChanged {
+					return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
+				}
+				statusBase.ResourceVersion = pg.ResourceVersion
+				statusBase.Annotations = cloneStringMap(pg.Annotations)
+			}
 			statusPatch := client.MergeFrom(statusBase)
 			if statusBase.ResourceVersion != "" {
 				statusPatch = client.MergeFromWithOptions(statusBase, client.MergeFromWithOptimisticLock{})
 			}
 			if pErr := r.Status().Patch(ctx, &pg, statusPatch); isConflictError(pErr) {
 				r.persistAcceptedCommentIfChanged(ctx, &pg, statusBase)
+			} else if pErr == nil && desiredPendingNotify == "" && prevPendingNotify != "" {
+				if _, mErr := r.patchPreviewGroupAnnotations(ctx, &pg, func(annos map[string]string) {
+					delete(annos, annotationPendingNotification)
+				}); mErr != nil {
+					return ctrl.Result{}, groupDBErr
+				}
 			}
 			return ctrl.Result{}, groupDBErr
 		}
@@ -593,11 +625,19 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	// Run SCM notifications BEFORE Status().Patch so newly created Status.CommentID and Status.CommentSource are persisted atomically together,
-	// and only emit notifications when phase, service statuses, or promoted source MR changed.
+	// and retry transiently failed notifications while preserving the reconciled Status.Phase.
+	prevPendingNotify := ""
+	if pg.Annotations != nil {
+		prevPendingNotify = strings.TrimSpace(pg.Annotations[annotationPendingNotification])
+	}
 	var notifyErr error
+	attemptedNotify := false
+	attemptedNotifyKind := ""
 	if r.Notifier != nil {
 		servicesChanged := !equality.Semantic.DeepEqual(statusBase.Status.Services, pg.Status.Services)
-		if pg.Status.Phase != prevPhase || sourcePromoted {
+		if pg.Status.Phase != prevPhase || sourcePromoted || prevPendingNotify == "phase" || (prevPendingNotify != "" && pg.Status.CommentID == 0) {
+			attemptedNotify = true
+			attemptedNotifyKind = "phase"
 			notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			switch pg.Status.Phase {
 			case divergeiov1alpha1.PreviewGroupPhaseRunning:
@@ -624,13 +664,25 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 				}
 			}
 			cancel()
-		} else if servicesChanged {
+		} else if servicesChanged || prevPendingNotify == "status" {
+			attemptedNotify = true
+			attemptedNotifyKind = "status"
 			notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			if err := r.Notifier.UpdateGroupStatus(notifyCtx, &pg); err != nil {
 				logger.Error(err, "failed to update group status notification")
 				notifyErr = err
 			}
 			cancel()
+		}
+	}
+
+	desiredPendingNotify := prevPendingNotify
+	if attemptedNotify {
+		if notifyErr != nil && !isNonRetryableNotifyError(notifyErr) {
+			desiredPendingNotify = attemptedNotifyKind
+			requeue = true
+		} else {
+			desiredPendingNotify = ""
 		}
 	}
 
@@ -646,10 +698,17 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		pg.Status.CommentSource = ""
 	}
 
-	// Persist reported-commit metadata separately when updated; CommentID + CommentSource are persisted atomically in Status().Patch below.
-	if reportedCommitUpdated && prevReportedCommit != currentCommitStateKey {
+	// Persist reported-commit and pending-notification metadata before Status().Patch so retries survive restarts; CommentID + CommentSource are persisted atomically in Status().Patch below.
+	needCommitAnno := reportedCommitUpdated && prevReportedCommit != currentCommitStateKey
+	needSetPendingAnno := desiredPendingNotify != "" && desiredPendingNotify != prevPendingNotify
+	if needCommitAnno || needSetPendingAnno {
 		revChanged, mErr := r.patchPreviewGroupAnnotations(ctx, &pg, func(annos map[string]string) {
-			annos[annotationReportedCommit] = currentCommitStateKey
+			if needCommitAnno {
+				annos[annotationReportedCommit] = currentCommitStateKey
+			}
+			if needSetPendingAnno {
+				annos[annotationPendingNotification] = desiredPendingNotify
+			}
 		})
 		if mErr != nil {
 			if isConflictError(mErr) {
@@ -677,6 +736,20 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("failed to update PreviewGroup status: %w", err)
+	}
+	if desiredPendingNotify == "" && prevPendingNotify != "" {
+		revChanged, mErr := r.patchPreviewGroupAnnotations(ctx, &pg, func(annos map[string]string) {
+			delete(annos, annotationPendingNotification)
+		})
+		if mErr != nil {
+			if isConflictError(mErr) {
+				requeue = true
+			} else {
+				return ctrl.Result{}, fmt.Errorf("failed to clear pending PreviewGroup notification metadata: %w", mErr)
+			}
+		} else if revChanged {
+			requeue = true
+		}
 	}
 
 	if orphanCleanupErr != nil {
@@ -979,6 +1052,12 @@ func commitStateKey(pg *divergeiov1alpha1.PreviewGroup, state string) string {
 		sha,
 		strings.ToLower(strings.TrimSpace(state)),
 	)
+}
+
+func isNonRetryableNotifyError(err error) bool {
+	return errors.Is(err, notifier.ErrMissingMergeRequest) ||
+		errors.Is(err, notifier.ErrNotGitHubSource) ||
+		errors.Is(err, notifier.ErrNotGitLabSource)
 }
 
 func previewGroupCommentSourceKey(pg *divergeiov1alpha1.PreviewGroup) string {

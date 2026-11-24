@@ -98,8 +98,10 @@ func (g *GitLabPreviewGroupNotifier) resolveAuthenticatedAuthor(ctx context.Cont
 	}
 	decErr := json.NewDecoder(resp.Body).Decode(&u)
 	_ = resp.Body.Close()
-	if decErr == nil && strings.TrimSpace(u.Username) != "" {
-		username := strings.TrimSpace(u.Username)
+	if decErr != nil {
+		return 0, "", fmt.Errorf("decoding gitlab /api/v4/user response: %w", decErr)
+	}
+	if username := strings.TrimSpace(u.Username); username != "" {
 		g.authorCache.record(u.ID, username)
 		return u.ID, username, nil
 	}

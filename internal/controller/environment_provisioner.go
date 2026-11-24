@@ -1116,5 +1116,8 @@ func (r *EnvironmentReconciler) readSharedGroupDatabaseDSN(ctx context.Context, 
 	if dsn == "" && (env.Spec.Database.MigrationJob != nil || env.Spec.Database.Atlas != nil) {
 		return "", "", false, fmt.Errorf("shared group database secret %s/%s is missing DATABASE_URL", targetNS, secretName)
 	}
+	if dsn == "" && env.Spec.ServiceConfig != nil && strings.TrimSpace(env.Spec.ServiceConfig.DatabaseEnvKey) != "" {
+		return "", "", false, nil
+	}
 	return secretName, dsn, true, nil
 }
