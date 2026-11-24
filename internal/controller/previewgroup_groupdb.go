@@ -35,9 +35,11 @@ import (
 )
 
 const (
-	annotationGroupDBNamespace     = "divergedev.com/group-db-namespace"
-	annotationGroupDBProvider      = "divergedev.com/group-db-provider"
-	annotationGroupDBMigrationHash = "divergedev.com/group-db-migration-hash"
+	annotationGroupDBNamespace      = "divergedev.com/group-db-namespace"
+	annotationGroupDBProvider       = "divergedev.com/group-db-provider"
+	annotationGroupDBMigrationHash  = "divergedev.com/group-db-migration-hash"
+	labelSharedGroupDBSecret        = "divergedev.com/shared-group-db-secret"
+	annotationSharedGroupDBDraining = "divergedev.com/shared-group-db-draining"
 )
 
 var (
@@ -208,24 +210,63 @@ func blockingObservingAnchor(anchor *divergeiov1alpha1.Environment) *divergeiov1
 	return obs
 }
 
-func childStillUsesSharedDBSecret(child *divergeiov1alpha1.Environment, secName string) bool {
+func sharedGroupDBSecretName(childEnvName string) string {
+	return sanitizeK8sName(fmt.Sprintf("diverge-group-db-env-%s", childEnvName), childEnvName, 63)
+}
+
+func legacySharedGroupDBSecretName(childEnvName string) string {
+	return sanitizeK8sName(fmt.Sprintf("diverge-db-env-%s", childEnvName), childEnvName, 63)
+}
+
+func hasEnvironmentControllerOwnerRef(sec *corev1.Secret) bool {
+	if sec == nil {
+		return false
+	}
+	for i := range sec.OwnerReferences {
+		ref := &sec.OwnerReferences[i]
+		if ref.Controller != nil && *ref.Controller && ref.Kind == "Environment" {
+			return true
+		}
+	}
+	return false
+}
+
+func isGroupOwnedSharedDBSecret(sec *corev1.Secret, pgName string) bool {
+	if sec == nil {
+		return false
+	}
+	if sec.Labels[labelSharedGroupDBSecret] == "true" || strings.HasPrefix(sec.Name, "diverge-group-db-env-") {
+		return true
+	}
+	return strings.HasPrefix(sec.Name, "diverge-db-env-") &&
+		pgName != "" &&
+		sec.Labels[labelPreviewGroup] == truncateLabel(pgName) &&
+		!hasEnvironmentControllerOwnerRef(sec)
+}
+
+func childIsReadyAtCurrentGeneration(child *divergeiov1alpha1.Environment) bool {
+	if child == nil || child.Generation <= 0 {
+		return true
+	}
+	if child.Status.ObservedGeneration < child.Generation || child.Status.Phase != divergeiov1alpha1.PhaseRunning {
+		return false
+	}
+	servicesReady := meta.FindStatusCondition(child.Status.Conditions, "ServicesReady")
+	return servicesReady != nil && servicesReady.Status == metav1.ConditionTrue && servicesReady.ObservedGeneration >= child.Generation
+}
+
+func childStillUsesSharedDBSecret(child *divergeiov1alpha1.Environment, sharedSecName string) bool {
 	if child == nil {
 		return false
 	}
 	if child.Annotations[annotationSharedGroupDB] == "true" {
 		return true
 	}
-	if secName != "" && strings.TrimSpace(child.Spec.Database.ConnectionRef) == secName {
+	if sharedSecName != "" && strings.TrimSpace(child.Spec.Database.ConnectionRef) == sharedSecName {
 		return true
 	}
-	if child.Generation > 0 {
-		if child.Status.ObservedGeneration < child.Generation || child.Status.Phase != divergeiov1alpha1.PhaseRunning {
-			return true
-		}
-		servicesReady := meta.FindStatusCondition(child.Status.Conditions, "ServicesReady")
-		if servicesReady == nil || servicesReady.Status != metav1.ConditionTrue || servicesReady.ObservedGeneration < child.Generation {
-			return true
-		}
+	if child.Annotations[annotationSharedGroupDBDraining] == "true" {
+		return !childIsReadyAtCurrentGeneration(child)
 	}
 	return false
 }
@@ -240,47 +281,56 @@ func workloadBelongsToChild(name string, labels map[string]string, childName str
 	return labels["divergedev.com/environment"] == childName || name == childName
 }
 
-func containerRefsSecret(envFrom []corev1.EnvFromSource, env []corev1.EnvVar, secName string) bool {
-	for i := range envFrom {
-		if envFrom[i].SecretRef != nil && envFrom[i].SecretRef.Name == secName {
-			return true
-		}
-	}
-	for i := range env {
-		if env[i].ValueFrom != nil && env[i].ValueFrom.SecretKeyRef != nil && env[i].ValueFrom.SecretKeyRef.Name == secName {
+func secretNameMatchesAny(candidate string, secNames []string) bool {
+	for _, s := range secNames {
+		if s != "" && candidate == s {
 			return true
 		}
 	}
 	return false
 }
 
-func podSpecReferencesSecret(spec *corev1.PodSpec, secName string) bool {
-	if spec == nil || secName == "" {
+func containerRefsAnySecret(envFrom []corev1.EnvFromSource, env []corev1.EnvVar, secNames []string) bool {
+	for i := range envFrom {
+		if envFrom[i].SecretRef != nil && secretNameMatchesAny(envFrom[i].SecretRef.Name, secNames) {
+			return true
+		}
+	}
+	for i := range env {
+		if env[i].ValueFrom != nil && env[i].ValueFrom.SecretKeyRef != nil && secretNameMatchesAny(env[i].ValueFrom.SecretKeyRef.Name, secNames) {
+			return true
+		}
+	}
+	return false
+}
+
+func podSpecReferencesAnySecret(spec *corev1.PodSpec, secNames []string) bool {
+	if spec == nil || len(secNames) == 0 {
 		return false
 	}
 	for i := range spec.Containers {
-		if containerRefsSecret(spec.Containers[i].EnvFrom, spec.Containers[i].Env, secName) {
+		if containerRefsAnySecret(spec.Containers[i].EnvFrom, spec.Containers[i].Env, secNames) {
 			return true
 		}
 	}
 	for i := range spec.InitContainers {
-		if containerRefsSecret(spec.InitContainers[i].EnvFrom, spec.InitContainers[i].Env, secName) {
+		if containerRefsAnySecret(spec.InitContainers[i].EnvFrom, spec.InitContainers[i].Env, secNames) {
 			return true
 		}
 	}
 	for i := range spec.EphemeralContainers {
-		if containerRefsSecret(spec.EphemeralContainers[i].EnvFrom, spec.EphemeralContainers[i].Env, secName) {
+		if containerRefsAnySecret(spec.EphemeralContainers[i].EnvFrom, spec.EphemeralContainers[i].Env, secNames) {
 			return true
 		}
 	}
 	for i := range spec.Volumes {
 		vol := &spec.Volumes[i]
-		if vol.Secret != nil && vol.Secret.SecretName == secName {
+		if vol.Secret != nil && secretNameMatchesAny(vol.Secret.SecretName, secNames) {
 			return true
 		}
 		if vol.Projected != nil {
 			for j := range vol.Projected.Sources {
-				if vol.Projected.Sources[j].Secret != nil && vol.Projected.Sources[j].Secret.Name == secName {
+				if vol.Projected.Sources[j].Secret != nil && secretNameMatchesAny(vol.Projected.Sources[j].Secret.Name, secNames) {
 					return true
 				}
 			}
@@ -289,7 +339,7 @@ func podSpecReferencesSecret(spec *corev1.PodSpec, secName string) bool {
 	return false
 }
 
-func unstructuredContainersRefSecret(containers []interface{}, secName string) bool {
+func unstructuredContainersRefAnySecret(containers []interface{}, secNames []string) bool {
 	for _, item := range containers {
 		cMap, ok := item.(map[string]interface{})
 		if !ok {
@@ -301,7 +351,7 @@ func unstructuredContainersRefSecret(containers []interface{}, secName string) b
 				if !ok {
 					continue
 				}
-				if sName, _, _ := unstructured.NestedString(efMap, "secretRef", "name"); sName == secName {
+				if sName, _, _ := unstructured.NestedString(efMap, "secretRef", "name"); secretNameMatchesAny(sName, secNames) {
 					return true
 				}
 			}
@@ -312,7 +362,7 @@ func unstructuredContainersRefSecret(containers []interface{}, secName string) b
 				if !ok {
 					continue
 				}
-				if sName, _, _ := unstructured.NestedString(eMap, "valueFrom", "secretKeyRef", "name"); sName == secName {
+				if sName, _, _ := unstructured.NestedString(eMap, "valueFrom", "secretKeyRef", "name"); secretNameMatchesAny(sName, secNames) {
 					return true
 				}
 			}
@@ -321,8 +371,8 @@ func unstructuredContainersRefSecret(containers []interface{}, secName string) b
 	return false
 }
 
-func unstructuredPodTemplateReferencesSecret(obj map[string]interface{}, secName string) bool {
-	if obj == nil || secName == "" {
+func unstructuredPodTemplateReferencesAnySecret(obj map[string]interface{}, secNames []string) bool {
+	if obj == nil || len(secNames) == 0 {
 		return false
 	}
 	podSpec, found, err := unstructured.NestedMap(obj, "spec", "template", "spec")
@@ -330,7 +380,7 @@ func unstructuredPodTemplateReferencesSecret(obj map[string]interface{}, secName
 		return false
 	}
 	for _, key := range []string{"containers", "initContainers", "ephemeralContainers"} {
-		if list, ok, _ := unstructured.NestedSlice(podSpec, key); ok && unstructuredContainersRefSecret(list, secName) {
+		if list, ok, _ := unstructured.NestedSlice(podSpec, key); ok && unstructuredContainersRefAnySecret(list, secNames) {
 			return true
 		}
 	}
@@ -343,7 +393,7 @@ func unstructuredPodTemplateReferencesSecret(obj map[string]interface{}, secName
 		if !ok {
 			continue
 		}
-		if sName, _, _ := unstructured.NestedString(vMap, "secret", "secretName"); sName == secName {
+		if sName, _, _ := unstructured.NestedString(vMap, "secret", "secretName"); secretNameMatchesAny(sName, secNames) {
 			return true
 		}
 		sources, _, _ := unstructured.NestedSlice(vMap, "projected", "sources")
@@ -352,7 +402,7 @@ func unstructuredPodTemplateReferencesSecret(obj map[string]interface{}, secName
 			if !ok {
 				continue
 			}
-			if sName, _, _ := unstructured.NestedString(srcMap, "secret", "name"); sName == secName {
+			if sName, _, _ := unstructured.NestedString(srcMap, "secret", "name"); secretNameMatchesAny(sName, secNames) {
 				return true
 			}
 		}
@@ -392,11 +442,11 @@ func isIgnorableWorkloadListErr(err error, allowNotFound bool) bool {
 	return allowNotFound && apierrors.IsNotFound(err)
 }
 
-func rolloutStillUsesOrRollingOut(ro *unstructured.Unstructured, childName, secName string) bool {
-	if unstructuredPodTemplateReferencesSecret(ro.Object, secName) {
+func rolloutStillUsesOrRollingOut(ro *unstructured.Unstructured, childName string, secNames []string, checkRolloutProgress bool) bool {
+	if unstructuredPodTemplateReferencesAnySecret(ro.Object, secNames) {
 		return true
 	}
-	if !workloadBelongsToChild(ro.GetName(), ro.GetLabels(), childName) {
+	if !checkRolloutProgress || !workloadBelongsToChild(ro.GetName(), ro.GetLabels(), childName) {
 		return false
 	}
 	specReplicas, hasSpecRepl := nestedInt64OrString(ro.Object, "spec", "replicas")
@@ -425,7 +475,10 @@ func rolloutStillUsesOrRollingOut(ro *unstructured.Unstructured, childName, secN
 	return updatedReplicas < specReplicas || statusReplicas > updatedReplicas
 }
 
-func namespaceWorkloadsStillUseSecret(ctx context.Context, c client.Client, ns, childName, secName string) (bool, error) {
+func namespaceWorkloadsStillUseSecret(ctx context.Context, c client.Client, ns, childName string, secNames []string, checkRolloutProgress bool) (bool, error) {
+	if len(secNames) == 0 {
+		return false, nil
+	}
 	var podList corev1.PodList
 	if err := c.List(ctx, &podList, client.InNamespace(ns)); err != nil {
 		if !isIgnorableWorkloadListErr(err, false) {
@@ -437,7 +490,7 @@ func namespaceWorkloadsStillUseSecret(ctx context.Context, c client.Client, ns, 
 			if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
 				continue
 			}
-			if podSpecReferencesSecret(&pod.Spec, secName) {
+			if podSpecReferencesAnySecret(&pod.Spec, secNames) {
 				return true, nil
 			}
 		}
@@ -451,10 +504,10 @@ func namespaceWorkloadsStillUseSecret(ctx context.Context, c client.Client, ns, 
 	} else {
 		for i := range depList.Items {
 			dep := &depList.Items[i]
-			if podSpecReferencesSecret(&dep.Spec.Template.Spec, secName) {
+			if podSpecReferencesAnySecret(&dep.Spec.Template.Spec, secNames) {
 				return true, nil
 			}
-			if !workloadBelongsToChild(dep.Name, dep.Labels, childName) {
+			if !checkRolloutProgress || !workloadBelongsToChild(dep.Name, dep.Labels, childName) {
 				continue
 			}
 			desired := int32(1)
@@ -478,10 +531,10 @@ func namespaceWorkloadsStillUseSecret(ctx context.Context, c client.Client, ns, 
 	} else {
 		for i := range stsList.Items {
 			sts := &stsList.Items[i]
-			if podSpecReferencesSecret(&sts.Spec.Template.Spec, secName) {
+			if podSpecReferencesAnySecret(&sts.Spec.Template.Spec, secNames) {
 				return true, nil
 			}
-			if !workloadBelongsToChild(sts.Name, sts.Labels, childName) {
+			if !checkRolloutProgress || !workloadBelongsToChild(sts.Name, sts.Labels, childName) {
 				continue
 			}
 			desired := int32(1)
@@ -505,7 +558,7 @@ func namespaceWorkloadsStillUseSecret(ctx context.Context, c client.Client, ns, 
 		}
 	} else {
 		for i := range rolloutList.Items {
-			if rolloutStillUsesOrRollingOut(&rolloutList.Items[i], childName, secName) {
+			if rolloutStillUsesOrRollingOut(&rolloutList.Items[i], childName, secNames, checkRolloutProgress) {
 				return true, nil
 			}
 		}
@@ -514,24 +567,14 @@ func namespaceWorkloadsStillUseSecret(ctx context.Context, c client.Client, ns, 
 	return false, nil
 }
 
-// childOrWorkloadStillUsesSharedDBSecret verifies both child Environment status metadata and live
-// target-cluster Pods, Deployments, StatefulSets, and Argo Rollouts before allowing shared DB teardown or Secret cleanup.
-func (r *PreviewGroupReconciler) childOrWorkloadStillUsesSharedDBSecret(
+func (r *PreviewGroupReconciler) childTargetClientAndNamespaces(
 	ctx context.Context,
 	child *divergeiov1alpha1.Environment,
-	secName string,
-) (bool, error) {
-	if childStillUsesSharedDBSecret(child, secName) {
-		return true, nil
-	}
-	if child == nil || secName == "" || r == nil || r.Client == nil {
-		return false, nil
-	}
-
+) (client.Client, []string, error) {
 	targetClient, _, _, err := r.envProvisionHelper().resolveTargetCluster(ctx, child)
 	if err != nil {
 		if multicluster.IsRemoteEnv(child) {
-			return true, fmt.Errorf("failed to resolve target cluster for child %s/%s shared DB usage check: %w", child.Namespace, child.Name, err)
+			return nil, nil, fmt.Errorf("failed to resolve target cluster for child %s/%s shared DB usage check: %w", child.Namespace, child.Name, err)
 		}
 		targetClient = r.Client
 	}
@@ -552,9 +595,118 @@ func (r *PreviewGroupReconciler) childOrWorkloadStillUsesSharedDBSecret(
 			namespaces = append(namespaces, ns)
 		}
 	}
+	return targetClient, namespaces, nil
+}
 
+func hasGroupOwnedSecretInNamespaces(
+	ctx context.Context,
+	c client.Client,
+	pgName string,
+	namespaces []string,
+	secretName string,
+) (bool, error) {
+	if c == nil || secretName == "" {
+		return false, nil
+	}
 	for _, ns := range namespaces {
-		inUse, checkErr := namespaceWorkloadsStillUseSecret(ctx, targetClient, ns, child.Name, secName)
+		var sec corev1.Secret
+		if err := c.Get(ctx, types.NamespacedName{Name: secretName, Namespace: ns}, &sec); err != nil {
+			if isIgnorableWorkloadListErr(err, true) {
+				continue
+			}
+			return false, fmt.Errorf("failed to check shared DB Secret %s/%s: %w", ns, secretName, err)
+		}
+		if isGroupOwnedSharedDBSecret(&sec, pgName) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// childOrWorkloadStillUsesSharedDBSecret verifies both child Environment status metadata and live
+// target-cluster Pods, Deployments, StatefulSets, and Argo Rollouts before allowing shared DB teardown or Secret cleanup.
+func (r *PreviewGroupReconciler) childOrWorkloadStillUsesSharedDBSecret(
+	ctx context.Context,
+	pgName string,
+	child *divergeiov1alpha1.Environment,
+) (bool, error) {
+	if child == nil {
+		return false, nil
+	}
+	sharedSecName := sharedGroupDBSecretName(child.Name)
+	legacySecName := legacySharedGroupDBSecretName(child.Name)
+	if childStillUsesSharedDBSecret(child, sharedSecName) {
+		return true, nil
+	}
+	if r == nil || r.Client == nil {
+		return false, nil
+	}
+
+	targetClient, namespaces, err := r.childTargetClientAndNamespaces(ctx, child)
+	if err != nil {
+		return true, err
+	}
+
+	hasGroupSecret, gErr := hasGroupOwnedSecretInNamespaces(ctx, targetClient, pgName, namespaces, sharedSecName)
+	if gErr != nil {
+		return true, gErr
+	}
+	hasLegacyGroupSecret, lErr := hasGroupOwnedSecretInNamespaces(ctx, targetClient, pgName, namespaces, legacySecName)
+	if lErr != nil {
+		return true, lErr
+	}
+
+	knownFormerUser := child.Annotations[annotationSharedGroupDBDraining] == "true" || hasGroupSecret || hasLegacyGroupSecret
+	if knownFormerUser && !childIsReadyAtCurrentGeneration(child) {
+		return true, nil
+	}
+
+	secNames := []string{sharedSecName}
+	if hasLegacyGroupSecret {
+		secNames = append(secNames, legacySecName)
+	}
+	for _, ns := range namespaces {
+		inUse, checkErr := namespaceWorkloadsStillUseSecret(ctx, targetClient, ns, child.Name, secNames, knownFormerUser)
+		if checkErr != nil {
+			return true, checkErr
+		}
+		if inUse {
+			return true, nil
+		}
+	}
+
+	if child.Annotations[annotationSharedGroupDBDraining] == "true" {
+		base := child.DeepCopy()
+		delete(child.Annotations, annotationSharedGroupDBDraining)
+		if pErr := r.Patch(ctx, child, client.MergeFrom(base)); pErr != nil && !apierrors.IsNotFound(pErr) {
+			return true, fmt.Errorf("failed to clear draining annotation on child %s/%s: %w", child.Namespace, child.Name, pErr)
+		}
+	}
+	return false, nil
+}
+
+func (r *PreviewGroupReconciler) legacyGroupSecretStillUsed(
+	ctx context.Context,
+	pgName string,
+	child *divergeiov1alpha1.Environment,
+	legacySecName string,
+) (bool, error) {
+	if r == nil || r.Client == nil || child == nil || legacySecName == "" {
+		return false, nil
+	}
+	targetClient, namespaces, err := r.childTargetClientAndNamespaces(ctx, child)
+	if err != nil {
+		return true, err
+	}
+	hasLegacyGroupSecret, lErr := hasGroupOwnedSecretInNamespaces(ctx, targetClient, pgName, namespaces, legacySecName)
+	if lErr != nil {
+		return true, lErr
+	}
+	if !hasLegacyGroupSecret {
+		return false, nil
+	}
+	for _, ns := range namespaces {
+		inUse, checkErr := namespaceWorkloadsStillUseSecret(ctx, targetClient, ns, child.Name, []string{legacySecName}, false)
 		if checkErr != nil {
 			return true, checkErr
 		}
@@ -581,8 +733,7 @@ func (r *PreviewGroupReconciler) reconcileGroupDatabase(
 				return nil, "", true, false, false, cErr
 			}
 			for i := range children {
-				secName := sanitizeK8sName(fmt.Sprintf("diverge-db-env-%s", children[i].Name), children[i].Name, 63)
-				inUse, useErr := r.childOrWorkloadStillUsesSharedDBSecret(ctx, &children[i], secName)
+				inUse, useErr := r.childOrWorkloadStillUsesSharedDBSecret(ctx, pg.Name, &children[i])
 				if useErr != nil {
 					return nil, "", true, false, false, useErr
 				}
@@ -811,7 +962,7 @@ func (r *PreviewGroupReconciler) ensureChildSharedDBSecret(
 		return "", err
 	}
 
-	secretName := sanitizeK8sName(fmt.Sprintf("diverge-db-env-%s", childEnvName), childEnvName, 63)
+	secretName := sharedGroupDBSecretName(childEnvName)
 	varsForChild := rewriteGroupDBVarsForNamespace(groupVars, groupDatabaseAnchorName(pg.Name), anchorNS, targetNS)
 
 	sec := &corev1.Secret{
@@ -827,6 +978,7 @@ func (r *PreviewGroupReconciler) ensureChildSharedDBSecret(
 		sec.Labels["divergedev.com/environment"] = truncateLabel(childEnvName)
 		sec.Labels[labelPreviewGroup] = truncateLabel(pg.Name)
 		sec.Labels["divergedev.com/managed-by"] = "diverge"
+		sec.Labels[labelSharedGroupDBSecret] = "true"
 		data := make(map[string][]byte, len(varsForChild))
 		for k, v := range varsForChild {
 			data[k] = []byte(v)
@@ -947,22 +1099,39 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 			sharedDesiredKeys[svcNS+"/"+childEnvironmentName(pg.Name, svc.Name)] = true
 		}
 	}
-	keepSecrets := make(map[string]bool, len(children)+len(desiredEnvNames))
+	keepSecrets := make(map[string]bool, (len(children)+len(desiredEnvNames))*2)
 	deferredKeepSecrets := make(map[string]bool)
 	var errs []error
 	for i := range children {
-		secName := sanitizeK8sName(fmt.Sprintf("diverge-db-env-%s", children[i].Name), children[i].Name, 63)
-		secKey := children[i].Namespace + "/" + secName
-		inUse, useErr := r.childOrWorkloadStillUsesSharedDBSecret(ctx, &children[i], secName)
+		child := &children[i]
+		childKey := child.Namespace + "/" + child.Name
+		sharedSecName := sharedGroupDBSecretName(child.Name)
+		legacySecName := legacySharedGroupDBSecretName(child.Name)
+		sharedKey := child.Namespace + "/" + sharedSecName
+		legacyKey := child.Namespace + "/" + legacySecName
+
+		inUse, useErr := r.childOrWorkloadStillUsesSharedDBSecret(ctx, pg.Name, child)
 		if useErr != nil {
-			keepSecrets[secKey] = true
+			keepSecrets[sharedKey] = true
+			keepSecrets[legacyKey] = true
 			errs = append(errs, useErr)
 			continue
 		}
 		if inUse {
-			keepSecrets[secKey] = true
-			if !sharedDesiredKeys[children[i].Namespace+"/"+children[i].Name] {
-				deferredKeepSecrets[secKey] = true
+			keepSecrets[sharedKey] = true
+			if !sharedDesiredKeys[childKey] {
+				keepSecrets[legacyKey] = true
+				deferredKeepSecrets[sharedKey] = true
+				deferredKeepSecrets[legacyKey] = true
+			} else {
+				legacyInUse, legErr := r.legacyGroupSecretStillUsed(ctx, pg.Name, child, legacySecName)
+				if legErr != nil {
+					keepSecrets[legacyKey] = true
+					errs = append(errs, legErr)
+				} else if legacyInUse {
+					keepSecrets[legacyKey] = true
+					deferredKeepSecrets[legacyKey] = true
+				}
 			}
 		}
 	}
@@ -974,8 +1143,7 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 		if len(parts) != 2 {
 			continue
 		}
-		secName := sanitizeK8sName(fmt.Sprintf("diverge-db-env-%s", parts[1]), parts[1], 63)
-		keepSecrets[parts[0]+"/"+secName] = true
+		keepSecrets[parts[0]+"/"+sharedGroupDBSecretName(parts[1])] = true
 	}
 
 	type targetScan struct {
@@ -1116,7 +1284,7 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 		}
 		for i := range secList.Items {
 			sec := &secList.Items[i]
-			if !strings.HasPrefix(sec.Name, "diverge-db-env-") {
+			if !isGroupOwnedSharedDBSecret(sec, pg.Name) {
 				continue
 			}
 			secKey := sec.Namespace + "/" + sec.Name

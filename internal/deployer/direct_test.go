@@ -925,7 +925,7 @@ func TestDirectDeployer_Teardown_LeastPrivilegeOptionalKindForbiddenAndExactSecr
 	}
 	require.NoError(t, d.Deploy(ctx, env))
 
-	// Also seed the exact controller-generated DB env Secret, which MUST remain deferred until workload drain completes.
+	// Also seed the exact controller-generated per-service and group DB env Secrets, which MUST remain deferred until workload drain completes.
 	generatedDBSecretName := controllerDBEnvSecretName(env.Name)
 	genSec := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -938,15 +938,28 @@ func TestDirectDeployer_Teardown_LeastPrivilegeOptionalKindForbiddenAndExactSecr
 		},
 	}
 	require.NoError(t, spokeClient.Create(ctx, genSec))
+	generatedGroupDBSecretName := controllerGroupDBEnvSecretName(env.Name)
+	genGroupSec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      generatedGroupDBSecretName,
+			Namespace: "team-orders",
+			Labels: map[string]string{
+				"divergedev.com/environment": env.Name,
+				"divergedev.com/managed-by":  "diverge",
+			},
+		},
+	}
+	require.NoError(t, spokeClient.Create(ctx, genGroupSec))
 
 	env.DeletionTimestamp = &delNow
 	require.NoError(t, d.Teardown(ctx, env))
 
-	// Deployment, Service, and user-supplied diverge-db-cache Secret are deleted, while exact generated DB Secret is deferred.
+	// Deployment, Service, and user-supplied diverge-db-cache Secret are deleted, while exact generated DB Secrets are deferred.
 	assert.True(t, apierrors.IsNotFound(spokeClient.Get(ctx, client.ObjectKey{Name: "echo-preview", Namespace: "team-orders"}, &appsv1.Deployment{})))
 	assert.True(t, apierrors.IsNotFound(spokeClient.Get(ctx, client.ObjectKey{Name: "echo-preview", Namespace: "team-orders"}, &corev1.Service{})))
 	assert.True(t, apierrors.IsNotFound(spokeClient.Get(ctx, client.ObjectKey{Name: "diverge-db-cache", Namespace: "team-orders"}, &corev1.Secret{})))
 	require.NoError(t, spokeClient.Get(ctx, client.ObjectKey{Name: generatedDBSecretName, Namespace: "team-orders"}, &corev1.Secret{}))
+	require.NoError(t, spokeClient.Get(ctx, client.ObjectKey{Name: generatedGroupDBSecretName, Namespace: "team-orders"}, &corev1.Secret{}))
 
 	// 3. Unrelated pre-existing same-named Secret without matching ownership labels MUST NOT be deleted by named fallback.
 	unmanagedSec := &corev1.Secret{

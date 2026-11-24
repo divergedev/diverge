@@ -418,7 +418,11 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 				}
 				if desiredEnv.Annotations[annotationSharedGroupDB] == "true" {
 					existingEnv.Annotations[annotationSharedGroupDB] = "true"
+					delete(existingEnv.Annotations, annotationSharedGroupDBDraining)
 				} else if existingEnv.Annotations != nil {
+					if existingEnv.Annotations[annotationSharedGroupDB] == "true" {
+						existingEnv.Annotations[annotationSharedGroupDBDraining] = "true"
+					}
 					delete(existingEnv.Annotations, annotationSharedGroupDB)
 				}
 				if err := r.Update(ctx, &existingEnv); err != nil {

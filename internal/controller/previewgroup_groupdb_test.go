@@ -158,9 +158,10 @@ func TestPreviewGroupReconcile_TrueSharedGroupDatabaseAcrossNamespacesAndTTLAnch
 	assert.Equal(t, "shared", ordChild.Spec.Database.Mode)
 
 	// Cross-namespace child Secret gets DNS-domain-agnostic Service rewrite (<svc>.backend.svc)
-	ordSecretName := sanitizeK8sName("diverge-db-env-"+ordChildName, ordChildName, 63)
+	ordSecretName := sharedGroupDBSecretName(ordChildName)
 	var ordSec corev1.Secret
 	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: ordSecretName, Namespace: "orders"}, &ordSec))
+	assert.Equal(t, "true", ordSec.Labels[labelSharedGroupDBSecret])
 	assert.Contains(t, string(ordSec.Data["DATABASE_URL"]), "@"+cnpgHost+".backend.svc:5432")
 
 	// Deleting the PreviewGroup tears down children first, then tears down the shared group DB once drained
@@ -274,7 +275,7 @@ func TestPreviewGroupReconcile_RealCNPGSharedDBOwnerRefHibernationWakeAndComment
 	assert.Equal(t, "github:acme/mono#101", currentPG.Status.CommentSource)
 
 	apiChildName := childEnvironmentName("monorepo-group", "api")
-	apiSecretName := sanitizeK8sName("diverge-db-env-"+apiChildName, apiChildName, 63)
+	apiSecretName := sharedGroupDBSecretName(apiChildName)
 	var apiSec corev1.Secret
 	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: apiSecretName, Namespace: "backend"}, &apiSec))
 	assert.Equal(t, "postgres://app:pw@"+clusterName+"-rw.frontend.svc/app", string(apiSec.Data["DATABASE_URL"]))
@@ -415,7 +416,7 @@ func TestGroupDB_CrossNamespaceClusterRefNonBlockingMigrationAndOrphanSecretClea
 	_, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "nb-mig-group"}})
 	require.NoError(t, err)
 
-	orphanSecretName := sanitizeK8sName("diverge-db-env-"+childName, childName, 63)
+	orphanSecretName := sharedGroupDBSecretName(childName)
 	var orphanSec corev1.Secret
 	err = c.Get(ctx, types.NamespacedName{Name: orphanSecretName, Namespace: "backend"}, &orphanSec)
 	assert.True(t, apierrors.IsNotFound(err), "orphaned per-child shared DB Secret must be deleted on teardown")
@@ -750,19 +751,24 @@ func TestPR351_ControllerGroupDBFailurePromotionNonBlockingFailSwitchOffSpokeAnd
 	assert.NotEmpty(t, outVars["DATABASE_URL"])
 	assert.Contains(t, anchorName, "pg-nb-fail")
 
-	// 3. Switch-off shared DB preserves diverge-db-env-* Secret until child workload ObservedGeneration catches up,
+	// 3. Switch-off shared DB preserves diverge-group-db-env-* Secret until child workload ObservedGeneration catches up,
 	//    AND spoke cleanup resolves inherited clusterRef in child's svcNS (not anchorNS).
 	switchChildName := childEnvironmentName("pg-switch", "api")
-	switchSecName := sanitizeK8sName("diverge-db-env-"+switchChildName, switchChildName, 63)
+	switchSecName := sharedGroupDBSecretName(switchChildName)
+	spokeSwitchRef := &divergeiov1alpha1.ClusterTargetRef{
+		Name:                "spoke-a",
+		KubeconfigSecretRef: &divergeiov1alpha1.SecretRef{Name: "kubeconfig"},
+	}
 	switchChild := &divergeiov1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        switchChildName,
 			Namespace:   "backend",
 			Generation:  3,
 			Labels:      map[string]string{labelPreviewGroup: "pg-switch", labelManagedBy: "diverge-previewgroup"},
-			Annotations: map[string]string{}, // switched off shared DB annotation already
+			Annotations: map[string]string{annotationSharedGroupDBDraining: "true"},
 		},
 		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Deploy:   divergeiov1alpha1.EnvironmentDeploy{Namespace: "same", ClusterRef: spokeSwitchRef},
 			Database: divergeiov1alpha1.EnvironmentDatabase{Mode: "fresh"},
 		},
 		Status: divergeiov1alpha1.EnvironmentStatus{ObservedGeneration: 2}, // workload hasn't observed switch-off yet
@@ -777,10 +783,7 @@ func TestPR351_ControllerGroupDBFailurePromotionNonBlockingFailSwitchOffSpokeAnd
 			},
 		},
 		Spec: divergeiov1alpha1.PreviewGroupSpec{
-			ClusterRef: &divergeiov1alpha1.ClusterTargetRef{
-				Name:                "spoke-a",
-				KubeconfigSecretRef: &divergeiov1alpha1.SecretRef{Name: "kubeconfig"},
-			},
+			ClusterRef: spokeSwitchRef,
 			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
 				{Name: "api", Namespace: "backend", Mode: divergeiov1alpha1.ServiceModeImage, Image: "img:1"},
 			},
@@ -794,6 +797,7 @@ func TestPR351_ControllerGroupDBFailurePromotionNonBlockingFailSwitchOffSpokeAnd
 			Labels: map[string]string{
 				labelPreviewGroup:           "pg-switch",
 				"divergedev.com/managed-by": "diverge",
+				labelSharedGroupDBSecret:    "true",
 			},
 		},
 	}).Build()
@@ -938,10 +942,11 @@ func TestEnvironmentReconciler_FailedDeployDoesNotAdvanceObservedGeneration(t *t
 	ctx := context.Background()
 	env := &divergeiov1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:       "deploy-guard-env",
-			Namespace:  "default",
-			Generation: 2,
-			Finalizers: []string{environmentFinalizer},
+			Name:        "deploy-guard-env",
+			Namespace:   "default",
+			Generation:  2,
+			Finalizers:  []string{environmentFinalizer},
+			Annotations: map[string]string{annotationSharedGroupDBDraining: "true"},
 		},
 		Spec: divergeiov1alpha1.EnvironmentSpec{
 			Deploy: divergeiov1alpha1.EnvironmentDeploy{
@@ -976,7 +981,7 @@ func TestEnvironmentReconciler_FailedDeployDoesNotAdvanceObservedGeneration(t *t
 	require.NotNil(t, svcReady)
 	assert.Equal(t, metav1.ConditionFalse, svcReady.Status)
 	assert.Equal(t, int64(2), svcReady.ObservedGeneration)
-	assert.True(t, childStillUsesSharedDBSecret(&updated, "diverge-db-env-deploy-guard-env"))
+	assert.True(t, childStillUsesSharedDBSecret(&updated, sharedGroupDBSecretName(env.Name)))
 
 	dep.deployErr = nil
 	_, err = r.Reconcile(ctx, req)
@@ -989,7 +994,7 @@ func TestEnvironmentReconciler_FailedDeployDoesNotAdvanceObservedGeneration(t *t
 	require.NotNil(t, svcReady)
 	assert.Equal(t, metav1.ConditionTrue, svcReady.Status)
 	assert.Equal(t, int64(2), svcReady.ObservedGeneration)
-	assert.False(t, childStillUsesSharedDBSecret(&updated, "diverge-db-env-deploy-guard-env"))
+	assert.False(t, childStillUsesSharedDBSecret(&updated, sharedGroupDBSecretName(env.Name)))
 }
 
 func TestSharedDBTeardownWaitsForRolloutAndOldPods(t *testing.T) {
@@ -1001,7 +1006,7 @@ func TestSharedDBTeardownWaitsForRolloutAndOldPods(t *testing.T) {
 	require.NoError(t, batchv1.AddToScheme(s))
 
 	childName := childEnvironmentName("pg-rollout-guard", "api")
-	secName := sanitizeK8sName("diverge-db-env-"+childName, childName, 63)
+	secName := sharedGroupDBSecretName(childName)
 	spokeRef := &divergeiov1alpha1.ClusterTargetRef{
 		Name:                "spoke-a",
 		KubeconfigSecretRef: &divergeiov1alpha1.SecretRef{Name: "kubeconfig"},
@@ -1013,7 +1018,7 @@ func TestSharedDBTeardownWaitsForRolloutAndOldPods(t *testing.T) {
 			Namespace:   "backend",
 			Generation:  3,
 			Labels:      map[string]string{labelPreviewGroup: "pg-rollout-guard", labelManagedBy: "diverge-previewgroup"},
-			Annotations: map[string]string{},
+			Annotations: map[string]string{annotationSharedGroupDBDraining: "true"},
 		},
 		Spec: divergeiov1alpha1.EnvironmentSpec{
 			Deploy: divergeiov1alpha1.EnvironmentDeploy{
@@ -1083,13 +1088,14 @@ func TestSharedDBTeardownWaitsForRolloutAndOldPods(t *testing.T) {
 			Labels: map[string]string{
 				labelPreviewGroup:           "pg-rollout-guard",
 				"divergedev.com/managed-by": "diverge",
+				labelSharedGroupDBSecret:    "true",
 			},
 		},
 	}
 
 	spokeBackendClient := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&corev1.Pod{}, &appsv1.Deployment{}).WithObjects(sec, rollout).Build()
 	spokeAnchorClient := fake.NewClientBuilder().WithScheme(s).Build()
-	hubClient := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&divergeiov1alpha1.PreviewGroup{}).WithObjects(pg, child).Build()
+	hubClient := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&divergeiov1alpha1.PreviewGroup{}, &divergeiov1alpha1.Environment{}).WithObjects(pg, child).Build()
 	dbProv := &countingGroupDBProvider{dsn: "postgres://u:p@db-rw.default.svc/app"}
 	r := &PreviewGroupReconciler{
 		Client:           hubClient,
@@ -1160,10 +1166,12 @@ func TestSharedDBTeardownWaitsForRolloutAndOldPods(t *testing.T) {
 	assert.Empty(t, updatedPG.Annotations[annotationGroupDBNamespace])
 	assert.Empty(t, updatedPG.Annotations[annotationGroupDBProvider])
 
-	// 4. Per-service opt-out while group DB stays active: rolling Deployment / live Pod protects Secret and signals requeue
+	// 4. Per-service opt-out while group DB stays active: rolling Deployment / live Pod protects group Secret and signals requeue,
+	//    while preserving both the surviving group Secret (web) and api's own per-service Secret.
 	pgActive := &divergeiov1alpha1.PreviewGroup{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        "pg-active-optout",
+			Labels:      map[string]string{previewgroup.LabelComposedGroup: "true"},
 			Annotations: map[string]string{annotationGroupDBNamespace: "default", annotationGroupDBProvider: "cnpg"},
 		},
 		Spec: divergeiov1alpha1.PreviewGroupSpec{
@@ -1176,13 +1184,18 @@ func TestSharedDBTeardownWaitsForRolloutAndOldPods(t *testing.T) {
 		},
 	}
 	optOutName := childEnvironmentName("pg-active-optout", "api")
-	optOutSecName := sanitizeK8sName("diverge-db-env-"+optOutName, optOutName, 63)
+	optOutSecName := sharedGroupDBSecretName(optOutName)
+	apiPerSvcSecName := legacySharedGroupDBSecretName(optOutName)
+	webChildName := childEnvironmentName("pg-active-optout", "web")
+	webSecName := sharedGroupDBSecretName(webChildName)
 	optOutChild := &divergeiov1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:       optOutName,
-			Namespace:  "backend",
-			Generation: 2,
-			Labels:     map[string]string{labelPreviewGroup: "pg-active-optout", labelManagedBy: "diverge-previewgroup"},
+			Name:        optOutName,
+			Namespace:   "backend",
+			Generation:  2,
+			UID:         "uid-optout-child",
+			Labels:      map[string]string{labelPreviewGroup: "pg-active-optout", labelManagedBy: "diverge-previewgroup"},
+			Annotations: map[string]string{annotationSharedGroupDBDraining: "true"},
 		},
 		Spec: divergeiov1alpha1.EnvironmentSpec{
 			Deploy:   divergeiov1alpha1.EnvironmentDeploy{Namespace: "same", ClusterRef: spokeRef},
@@ -1203,9 +1216,32 @@ func TestSharedDBTeardownWaitsForRolloutAndOldPods(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      optOutSecName,
 			Namespace: "backend",
-			Labels:    map[string]string{labelPreviewGroup: "pg-active-optout", "divergedev.com/managed-by": "diverge"},
+			Labels:    map[string]string{labelPreviewGroup: "pg-active-optout", "divergedev.com/managed-by": "diverge", labelSharedGroupDBSecret: "true"},
 		},
 	}
+	isCtrlTrue := true
+	apiPerSvcSec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      apiPerSvcSecName,
+			Namespace: "backend",
+			Labels:    map[string]string{"divergedev.com/environment": optOutName, "divergedev.com/managed-by": "diverge"},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "divergedev.com/v1alpha1",
+				Kind:       "Environment",
+				Name:       optOutName,
+				UID:        optOutChild.UID,
+				Controller: &isCtrlTrue,
+			}},
+		},
+	}
+	webGroupSec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      webSecName,
+			Namespace: "default",
+			Labels:    map[string]string{labelPreviewGroup: "pg-active-optout", "divergedev.com/managed-by": "diverge", labelSharedGroupDBSecret: "true"},
+		},
+	}
+	require.NoError(t, spokeAnchorClient.Create(ctx, webGroupSec))
 	rollingReplicas := int32(2)
 	rollingDep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1221,7 +1257,7 @@ func TestSharedDBTeardownWaitsForRolloutAndOldPods(t *testing.T) {
 			UpdatedReplicas:    1,
 		},
 	}
-	spokeOptOutClient := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&corev1.Pod{}, &appsv1.Deployment{}).WithObjects(optOutSec, rollingDep).Build()
+	spokeOptOutClient := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&corev1.Pod{}, &appsv1.Deployment{}).WithObjects(optOutSec, apiPerSvcSec, rollingDep).Build()
 	hubOptOut := fake.NewClientBuilder().WithScheme(s).WithObjects(pgActive, optOutChild).Build()
 	rOptOut := &PreviewGroupReconciler{
 		Client: hubOptOut,
@@ -1234,14 +1270,16 @@ func TestSharedDBTeardownWaitsForRolloutAndOldPods(t *testing.T) {
 		},
 	}
 	desired := map[string]bool{
-		"backend/" + optOutName: true,
-		"default/" + childEnvironmentName("pg-active-optout", "web"): true,
+		"backend/" + optOutName:   true,
+		"default/" + webChildName: true,
 	}
 
 	requeue, cErr := rOptOut.cleanupOrphanedChildSharedDBSecrets(ctx, pgActive, desired)
 	require.NoError(t, cErr)
 	assert.True(t, requeue, "must request requeue while opted-out child Deployment still has un-updated replicas")
 	require.NoError(t, spokeOptOutClient.Get(ctx, types.NamespacedName{Name: optOutSecName, Namespace: "backend"}, &keptSec))
+	require.NoError(t, spokeAnchorClient.Get(ctx, types.NamespacedName{Name: webSecName, Namespace: "default"}, &keptSec))
+	require.NoError(t, spokeOptOutClient.Get(ctx, types.NamespacedName{Name: apiPerSvcSecName, Namespace: "backend"}, &keptSec))
 
 	require.NoError(t, spokeOptOutClient.Get(ctx, types.NamespacedName{Name: optOutName, Namespace: "backend"}, rollingDep))
 	rollingDep.Status.UpdatedReplicas = 2
@@ -1251,5 +1289,319 @@ func TestSharedDBTeardownWaitsForRolloutAndOldPods(t *testing.T) {
 	require.NoError(t, cErr)
 	assert.False(t, requeue)
 	err = spokeOptOutClient.Get(ctx, types.NamespacedName{Name: optOutSecName, Namespace: "backend"}, &keptSec)
-	assert.True(t, apierrors.IsNotFound(err))
+	assert.True(t, apierrors.IsNotFound(err), "opted-out api group Secret must be deleted once rollout drains")
+	require.NoError(t, spokeAnchorClient.Get(ctx, types.NamespacedName{Name: webSecName, Namespace: "default"}, &keptSec), "surviving web group Secret must be preserved")
+	require.NoError(t, spokeOptOutClient.Get(ctx, types.NamespacedName{Name: apiPerSvcSecName, Namespace: "backend"}, &keptSec), "opted-out api per-service Secret must be preserved")
+}
+
+func TestSharedDB_OptOutConnectionRefAndTakeover(t *testing.T) {
+	ctx := context.Background()
+	s := runtime.NewScheme()
+	require.NoError(t, divergeiov1alpha1.AddToScheme(s))
+	require.NoError(t, corev1.AddToScheme(s))
+	require.NoError(t, appsv1.AddToScheme(s))
+
+	childName := childEnvironmentName("pg-takeover", "api")
+	legacySecName := legacySharedGroupDBSecretName(childName)
+	groupSecName := sharedGroupDBSecretName(childName)
+
+	child := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       childName,
+			Namespace:  "default",
+			UID:        "uid-takeover-api",
+			Generation: 2,
+			Labels:     map[string]string{labelPreviewGroup: "pg-takeover", labelManagedBy: "diverge-previewgroup"},
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Database: divergeiov1alpha1.EnvironmentDatabase{
+				Mode:          "fresh",
+				ConnectionRef: legacySecName,
+			},
+		},
+		Status: divergeiov1alpha1.EnvironmentStatus{
+			ObservedGeneration: 2,
+			Phase:              divergeiov1alpha1.PhaseRunning,
+			Conditions: []metav1.Condition{{
+				Type:               "ServicesReady",
+				Status:             metav1.ConditionTrue,
+				ObservedGeneration: 2,
+				Reason:             "ServicesDeployed",
+			}},
+		},
+	}
+	pg := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "pg-takeover",
+			Finalizers: []string{previewGroupFinalizer},
+			Annotations: map[string]string{
+				annotationGroupDBNamespace: "default",
+			},
+		},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{Name: "api", Namespace: "default", Mode: divergeiov1alpha1.ServiceModeImage, Image: "img:2", Database: &divergeiov1alpha1.EnvironmentDatabase{Mode: "fresh"}},
+			},
+		},
+	}
+
+	// Pre-upgrade legacy Secret that once carried previewgroup labels gets taken over by per-service ensureDatabaseEnvSecret.
+	legacySec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      legacySecName,
+			Namespace: "default",
+			Labels: map[string]string{
+				"divergedev.com/environment": childName,
+				labelPreviewGroup:            "pg-takeover",
+				"divergedev.com/managed-by":  "diverge",
+				labelSharedGroupDBSecret:     "true",
+			},
+		},
+		Data: map[string][]byte{"DATABASE_URL": []byte("postgres://old-shared")},
+	}
+	groupSec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      groupSecName,
+			Namespace: "default",
+			Labels: map[string]string{
+				"divergedev.com/environment": childName,
+				labelPreviewGroup:            "pg-takeover",
+				"divergedev.com/managed-by":  "diverge",
+				labelSharedGroupDBSecret:     "true",
+			},
+		},
+		Data: map[string][]byte{"DATABASE_URL": []byte("postgres://old-shared")},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&divergeiov1alpha1.PreviewGroup{}).WithObjects(pg, child, legacySec, groupSec).Build()
+	envRec := &EnvironmentReconciler{Client: c, Scheme: s}
+	require.NoError(t, envRec.ensureDatabaseEnvSecret(ctx, child, map[string]string{"DATABASE_URL": "postgres://per-service-fresh"}))
+
+	var updatedLegacy corev1.Secret
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: legacySecName, Namespace: "default"}, &updatedLegacy))
+	assert.Empty(t, updatedLegacy.Labels[labelPreviewGroup], "ensureDatabaseEnvSecret must clear previewgroup label when taking over legacy Secret")
+	assert.Empty(t, updatedLegacy.Labels[labelSharedGroupDBSecret], "ensureDatabaseEnvSecret must clear shared-group-db-secret label on takeover")
+	assert.True(t, hasEnvironmentControllerOwnerRef(&updatedLegacy))
+
+	dbProv := &countingGroupDBProvider{dsn: "postgres://unused"}
+	r := &PreviewGroupReconciler{
+		Client:           c,
+		Scheme:           s,
+		Recorder:         events.NewRecorder(k8sevents.NewFakeRecorder(10)),
+		DatabaseProvider: dbProv,
+	}
+
+	inUse, useErr := r.childOrWorkloadStillUsesSharedDBSecret(ctx, pg.Name, child)
+	require.NoError(t, useErr)
+	assert.False(t, inUse, "ConnectionRef matching per-service Secret name must not be treated as shared DB usage")
+
+	_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "pg-takeover"}})
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), dbProv.teardowns.Load())
+	var updatedTakeoverPG divergeiov1alpha1.PreviewGroup
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "pg-takeover"}, &updatedTakeoverPG))
+	assert.Empty(t, updatedTakeoverPG.Annotations[annotationGroupDBNamespace])
+
+	var deletedGroupSec corev1.Secret
+	err = c.Get(ctx, types.NamespacedName{Name: groupSecName, Namespace: "default"}, &deletedGroupSec)
+	assert.True(t, apierrors.IsNotFound(err), "group-owned Secret must be deleted")
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: legacySecName, Namespace: "default"}, &updatedLegacy), "per-service Secret must survive cleanup")
+	assert.Equal(t, "postgres://per-service-fresh", string(updatedLegacy.Data["DATABASE_URL"]))
+}
+
+func TestSharedDB_UnrelatedFailingChildDoesNotBlockTeardown(t *testing.T) {
+	ctx := context.Background()
+	s := runtime.NewScheme()
+	require.NoError(t, divergeiov1alpha1.AddToScheme(s))
+	require.NoError(t, corev1.AddToScheme(s))
+	require.NoError(t, appsv1.AddToScheme(s))
+
+	apiChild := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        childEnvironmentName("pg-unrelated", "api"),
+			Namespace:   "default",
+			Generation:  2,
+			Labels:      map[string]string{labelPreviewGroup: "pg-unrelated", labelManagedBy: "diverge-previewgroup"},
+			Annotations: map[string]string{annotationSharedGroupDBDraining: "true"},
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Database: divergeiov1alpha1.EnvironmentDatabase{Mode: "fresh"},
+		},
+		Status: divergeiov1alpha1.EnvironmentStatus{
+			ObservedGeneration: 2,
+			Phase:              divergeiov1alpha1.PhaseRunning,
+			Conditions: []metav1.Condition{{
+				Type:               "ServicesReady",
+				Status:             metav1.ConditionTrue,
+				ObservedGeneration: 2,
+				Reason:             "ServicesDeployed",
+			}},
+		},
+	}
+	// worker always had its own per-service database and currently fails image deploy.
+	workerChild := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       childEnvironmentName("pg-unrelated", "worker"),
+			Namespace:  "default",
+			Generation: 2,
+			Labels:     map[string]string{labelPreviewGroup: "pg-unrelated", labelManagedBy: "diverge-previewgroup"},
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Database: divergeiov1alpha1.EnvironmentDatabase{Mode: "fresh"},
+		},
+		Status: divergeiov1alpha1.EnvironmentStatus{
+			ObservedGeneration: 1,
+			Phase:              divergeiov1alpha1.PhaseFailed,
+			Conditions: []metav1.Condition{{
+				Type:               "ServicesReady",
+				Status:             metav1.ConditionFalse,
+				ObservedGeneration: 2,
+				Reason:             "DeployFailed",
+			}},
+		},
+	}
+	pg := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "pg-unrelated",
+			Finalizers:  []string{previewGroupFinalizer},
+			Annotations: map[string]string{annotationGroupDBNamespace: "default"},
+		},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{Name: "api", Namespace: "default", Mode: divergeiov1alpha1.ServiceModeImage, Image: "api:2", Database: &divergeiov1alpha1.EnvironmentDatabase{Mode: "fresh"}},
+				{Name: "worker", Namespace: "default", Mode: divergeiov1alpha1.ServiceModeImage, Image: "worker:bad", Database: &divergeiov1alpha1.EnvironmentDatabase{Mode: "fresh"}},
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&divergeiov1alpha1.PreviewGroup{}).WithObjects(pg, apiChild, workerChild).Build()
+	dbProv := &countingGroupDBProvider{dsn: "postgres://unused"}
+	r := &PreviewGroupReconciler{
+		Client:           c,
+		Scheme:           s,
+		Recorder:         events.NewRecorder(k8sevents.NewFakeRecorder(10)),
+		DatabaseProvider: dbProv,
+	}
+
+	inUseAPI, useErr := r.childOrWorkloadStillUsesSharedDBSecret(ctx, pg.Name, apiChild)
+	require.NoError(t, useErr)
+	assert.False(t, inUseAPI)
+	inUseWorker, useErr := r.childOrWorkloadStillUsesSharedDBSecret(ctx, pg.Name, workerChild)
+	require.NoError(t, useErr)
+	assert.False(t, inUseWorker, "unrelated non-Running child without shared-DB usage must not block teardown")
+
+	_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "pg-unrelated"}})
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), dbProv.teardowns.Load())
+	var updatedUnrelatedPG divergeiov1alpha1.PreviewGroup
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "pg-unrelated"}, &updatedUnrelatedPG))
+	assert.Empty(t, updatedUnrelatedPG.Annotations[annotationGroupDBNamespace])
+}
+
+func TestSharedDB_LegacyGroupOwnedSecretMigration(t *testing.T) {
+	ctx := context.Background()
+	s := runtime.NewScheme()
+	require.NoError(t, divergeiov1alpha1.AddToScheme(s))
+	require.NoError(t, corev1.AddToScheme(s))
+	require.NoError(t, appsv1.AddToScheme(s))
+
+	childName := childEnvironmentName("pg-legacy-mig", "api")
+	legacySecName := legacySharedGroupDBSecretName(childName)
+	legacyGroupSec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      legacySecName,
+			Namespace: "default",
+			Labels: map[string]string{
+				"divergedev.com/environment": childName,
+				labelPreviewGroup:            "pg-legacy-mig",
+				"divergedev.com/managed-by":  "diverge",
+			},
+		},
+		Data: map[string][]byte{"DATABASE_URL": []byte("postgres://legacy-group")},
+	}
+	child := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       childName,
+			Namespace:  "default",
+			Generation: 2,
+			Labels:     map[string]string{labelPreviewGroup: "pg-legacy-mig", labelManagedBy: "diverge-previewgroup"},
+			Annotations: map[string]string{
+				annotationSharedGroupDB: "true",
+			},
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Database: divergeiov1alpha1.EnvironmentDatabase{Mode: "shared"},
+		},
+		Status: divergeiov1alpha1.EnvironmentStatus{
+			ObservedGeneration: 2,
+			Phase:              divergeiov1alpha1.PhaseRunning,
+			Conditions: []metav1.Condition{{
+				Type:               "ServicesReady",
+				Status:             metav1.ConditionTrue,
+				ObservedGeneration: 2,
+				Reason:             "ServicesDeployed",
+			}},
+		},
+	}
+	oldPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: childName + "-legacy-pod", Namespace: "default"},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{
+				Name:    "api",
+				Image:   "img:1",
+				EnvFrom: []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: legacySecName}}}},
+			}},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	pg := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "pg-legacy-mig",
+			Finalizers:  []string{previewGroupFinalizer},
+			Annotations: map[string]string{annotationGroupDBNamespace: "default"},
+		},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{Name: "api", Namespace: "default", Mode: divergeiov1alpha1.ServiceModeImage, Image: "img:2", Database: &divergeiov1alpha1.EnvironmentDatabase{Mode: "fresh"}},
+			},
+		},
+	}
+
+	// Verify readSharedGroupDatabaseDSN falls back cleanly to legacy group Secret when ConnectionRef is unset.
+	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&divergeiov1alpha1.PreviewGroup{}, &corev1.Pod{}).WithObjects(pg, child, legacyGroupSec, oldPod).Build()
+	envRec := &EnvironmentReconciler{Client: c, Scheme: s}
+	dsn, ready, dsnErr := envRec.readSharedGroupDatabaseDSN(ctx, child)
+	require.NoError(t, dsnErr)
+	assert.True(t, ready)
+	assert.Equal(t, "postgres://legacy-group", dsn)
+
+	// Opt-out transition removes annotationSharedGroupDB; old Running Pod referencing legacy group Secret still holds teardown.
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: childName, Namespace: "default"}, child))
+	delete(child.Annotations, annotationSharedGroupDB)
+	require.NoError(t, c.Update(ctx, child))
+
+	dbProv := &countingGroupDBProvider{dsn: "postgres://unused"}
+	r := &PreviewGroupReconciler{
+		Client:           c,
+		Scheme:           s,
+		Recorder:         events.NewRecorder(k8sevents.NewFakeRecorder(10)),
+		DatabaseProvider: dbProv,
+	}
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "pg-legacy-mig"}})
+	require.NoError(t, err)
+	assert.Greater(t, res.RequeueAfter, time.Duration(0))
+	assert.Zero(t, dbProv.teardowns.Load(), "live Pod mounting legacy group-owned Secret must block teardown")
+	var kept corev1.Secret
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: legacySecName, Namespace: "default"}, &kept))
+
+	// Once old Pod terminates, teardown proceeds and legacy group-owned Secret is deleted.
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: oldPod.Name, Namespace: "default"}, oldPod))
+	oldPod.Status.Phase = corev1.PodSucceeded
+	require.NoError(t, c.Status().Update(ctx, oldPod))
+
+	_, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "pg-legacy-mig"}})
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), dbProv.teardowns.Load())
+	err = c.Get(ctx, types.NamespacedName{Name: legacySecName, Namespace: "default"}, &kept)
+	assert.True(t, apierrors.IsNotFound(err), "legacy group-owned Secret must be deleted once Pod drains")
 }

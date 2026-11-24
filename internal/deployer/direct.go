@@ -644,8 +644,8 @@ func isControllerDeferredConfigMap(env *v1alpha1.Environment, name string) bool 
 	return name == featuresCM || name == bannerCM
 }
 
-func controllerDBEnvSecretName(envName string) string {
-	raw := strings.ToLower("diverge-db-env-" + envName)
+func sanitizeControllerEnvSecretName(prefix, envName string) string {
+	raw := strings.ToLower(prefix + envName)
 	raw = strings.NewReplacer(".", "-", "_", "-").Replace(raw)
 	raw = nonAlnumHyphenRegex.ReplaceAllString(raw, "")
 	raw = multiHyphenRegex.ReplaceAllString(raw, "-")
@@ -655,21 +655,29 @@ func controllerDBEnvSecretName(envName string) string {
 	}
 	sum := sha256.Sum256([]byte(envName))
 	hash := fmt.Sprintf("%x", sum)[:8]
-	prefix := raw
-	if len(prefix) > 63-9 {
-		prefix = strings.TrimRight(prefix[:63-9], "-")
+	prefixPart := raw
+	if len(prefixPart) > 63-9 {
+		prefixPart = strings.TrimRight(prefixPart[:63-9], "-")
 	}
-	if prefix == "" {
-		prefix = "r"
+	if prefixPart == "" {
+		prefixPart = "r"
 	}
-	return prefix + "-" + hash
+	return prefixPart + "-" + hash
+}
+
+func controllerDBEnvSecretName(envName string) string {
+	return sanitizeControllerEnvSecretName("diverge-db-env-", envName)
+}
+
+func controllerGroupDBEnvSecretName(envName string) string {
+	return sanitizeControllerEnvSecretName("diverge-group-db-env-", envName)
 }
 
 func isControllerDeferredSecret(env *v1alpha1.Environment, name string) bool {
 	if env == nil || env.DeletionTimestamp.IsZero() {
 		return false
 	}
-	return name == controllerDBEnvSecretName(env.Name)
+	return name == controllerDBEnvSecretName(env.Name) || name == controllerGroupDBEnvSecretName(env.Name)
 }
 
 // Status returns the deployment status of resources managed by this deployer.

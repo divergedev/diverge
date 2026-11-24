@@ -951,6 +951,8 @@ func (r *EnvironmentReconciler) ensureDatabaseEnvSecret(ctx context.Context, env
 		}
 		secret.Labels["divergedev.com/environment"] = truncateLabel(env.Name)
 		secret.Labels["divergedev.com/managed-by"] = "diverge"
+		delete(secret.Labels, labelPreviewGroup)
+		delete(secret.Labels, labelSharedGroupDBSecret)
 
 		if !isRemote && targetNS == env.Namespace {
 			if r.Scheme != nil {
@@ -999,17 +1001,33 @@ func (r *EnvironmentReconciler) readSharedGroupDatabaseDSN(ctx context.Context, 
 	if targetClient == nil {
 		return "", false, fmt.Errorf("target cluster client unavailable for shared database lookup")
 	}
-	secretName := sanitizeK8sName(fmt.Sprintf("diverge-db-env-%s", env.Name), env.Name, 63)
 	targetNS := env.Namespace
 	if env.Spec.Deploy.Namespace == "create" {
 		targetNS = env.PreviewNamespace()
 	}
 	var sec corev1.Secret
-	if err := targetClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: targetNS}, &sec); err != nil {
-		if apierrors.IsNotFound(err) {
-			return "", false, nil
+	secretName := strings.TrimSpace(env.Spec.Database.ConnectionRef)
+	if secretName != "" {
+		if err := targetClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: targetNS}, &sec); err != nil {
+			if apierrors.IsNotFound(err) {
+				return "", false, nil
+			}
+			return "", false, fmt.Errorf("failed to get shared group database secret %s/%s: %w", targetNS, secretName, err)
 		}
-		return "", false, fmt.Errorf("failed to get shared group database secret %s/%s: %w", targetNS, secretName, err)
+	} else {
+		secretName = sharedGroupDBSecretName(env.Name)
+		if err := targetClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: targetNS}, &sec); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return "", false, fmt.Errorf("failed to get shared group database secret %s/%s: %w", targetNS, secretName, err)
+			}
+			secretName = legacySharedGroupDBSecretName(env.Name)
+			if lErr := targetClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: targetNS}, &sec); lErr != nil {
+				if apierrors.IsNotFound(lErr) {
+					return "", false, nil
+				}
+				return "", false, fmt.Errorf("failed to get shared group database secret %s/%s: %w", targetNS, secretName, lErr)
+			}
+		}
 	}
 	dsn := strings.TrimSpace(string(sec.Data["DATABASE_URL"]))
 	if dsn == "" && len(sec.Data) == 0 {
