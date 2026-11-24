@@ -242,14 +242,18 @@ diverge:preview:
         set +f
         IFS="$OLD_IFS"
         diverge "$@"
-        EFF_HK="$(kubectl get previewgroup "${PREVIEW_NAME}" -o jsonpath='{.spec.routing.headerKey}' 2>/dev/null || kubectl get previewgroup "${PREVIEW_NAME}" -n "${DIVERGE_NAMESPACE}" -o jsonpath='{.spec.routing.headerKey}' 2>/dev/null || true)"
-        EFF_HV="$(kubectl get previewgroup "${PREVIEW_NAME}" -o jsonpath='{.spec.routing.headerValue}' 2>/dev/null || kubectl get previewgroup "${PREVIEW_NAME}" -n "${DIVERGE_NAMESPACE}" -o jsonpath='{.spec.routing.headerValue}' 2>/dev/null || true)"
-        if [ -n "${EFF_HK}" ]; then
-          DIVERGE_HEADER_KEY="${EFF_HK}"
+        if ! EFF_JSON="$(kubectl get previewgroup "${PREVIEW_NAME}" -o json 2>/dev/null || kubectl get previewgroup "${PREVIEW_NAME}" -n "${DIVERGE_NAMESPACE}" -o json)"; then
+          echo "Error: failed to read effective routing headers for PreviewGroup '${PREVIEW_NAME}'" >&2
+          exit 1
         fi
-        if [ -n "${EFF_HV}" ]; then
-          HEADER_VALUE="${EFF_HV}"
+        EFF_HK="$(printf '%s' "${EFF_JSON}" | jq -r '.spec.routing.headerKey // empty')"
+        EFF_HV="$(printf '%s' "${EFF_JSON}" | jq -r '.spec.routing.headerValue // empty')"
+        if [ -z "${EFF_HK}" ] || [ -z "${EFF_HV}" ]; then
+          echo "Error: PreviewGroup '${PREVIEW_NAME}' is missing effective routing headers (headerKey='${EFF_HK}', headerValue='${EFF_HV}')" >&2
+          exit 1
         fi
+        DIVERGE_HEADER_KEY="${EFF_HK}"
+        HEADER_VALUE="${EFF_HV}"
         ROUTING_HEADER_B64="$(jq -cn --arg k "${DIVERGE_HEADER_KEY}" --arg v "${HEADER_VALUE}" '{($k): $v}' | base64 | tr -d '\n')"
       else
         cat <<EOF > previewgroup.yaml
@@ -449,6 +453,7 @@ diverge:cleanup:
         fi
         diverge preview leave "${DIVERGE_GROUP}" \
           -n "${DIVERGE_NAMESPACE}" \
+          --provider gitlab \
           --project "${CI_PROJECT_PATH}" \
           --mr "${CI_MERGE_REQUEST_IID}"
       else

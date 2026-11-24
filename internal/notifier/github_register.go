@@ -44,7 +44,11 @@ func init() {
 	GroupProviders.Register("github", registry.Provider[PreviewGroupNotifier]{
 		Create: func(deps registry.Deps) (PreviewGroupNotifier, error) {
 			token := os.Getenv("DIVERGE_NOTIFIER_TOKEN")
-			return NewGitHubPreviewGroupNotifier(ResolveGitHubBaseURL(), token), nil
+			n := NewGitHubPreviewGroupNotifier(ResolveGitHubBaseURL(), token)
+			if author := strings.TrimSpace(os.Getenv("DIVERGE_NOTIFIER_AUTHOR")); author != "" {
+				n.AuthorLogin = author
+			}
+			return n, nil
 		},
 		Description: "GitHub PR group comments",
 	})

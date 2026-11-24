@@ -135,13 +135,22 @@ export default function PreviewGroupDetail() {
       }
 
       let nextSource = pg.spec?.source
-      if (nextSource && nextSource.mr > 0 && keptMembers.length > 0) {
-        const curProj = (nextSource.project || '').toLowerCase()
-        const stillHasCreator = keptMembers.some(
-          (m) => (m.project || '').toLowerCase() === curProj && m.mr === nextSource?.mr,
-        )
+      if (nextSource && nextSource.mr > 0) {
+        const curProj = (nextSource.project || '').trim().toLowerCase()
+        const curProv = (nextSource.provider || '').trim().toLowerCase()
+        const stillHasCreator = keptMembers.some((m) => {
+          if (m.mr !== nextSource?.mr) return false
+          const mProj = (m.project || '').trim().toLowerCase()
+          if (curProj !== '' && mProj !== curProj) return false
+          const mProv = (m.provider || '').trim().toLowerCase()
+          const cKnown = curProv && curProv !== 'local' ? curProv : ''
+          const mKnown = mProv && mProv !== 'local' ? mProv : ''
+          return !cKnown || !mKnown || cKnown === mKnown
+        })
         if (!stillHasCreator) {
-          const promoted = keptMembers.find((m) => (m.mr ?? 0) > 0 && m.project) ?? keptMembers[0]
+          const promoted =
+            keptMembers.find((m) => (m.mr ?? 0) > 0 && Boolean(m.project?.trim())) ??
+            keptMembers.find((m) => (m.mr ?? 0) > 0)
           if (promoted) {
             const rawProv = (promoted.provider || 'local').toLowerCase()
             const validProv = rawProv === 'github' || rawProv === 'gitlab' ? rawProv : 'local'

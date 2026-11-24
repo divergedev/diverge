@@ -108,8 +108,13 @@ export function sameGroupMemberOwner(a?: GroupMemberRecord, b?: GroupMemberRecor
   const aProj = (a.project || '').trim().toLowerCase()
   const bProj = (b.project || '').trim().toLowerCase()
 
-  if (aMR > 0 && bMR > 0 && aProj && bProj) {
-    return aProj === bProj && aMR === bMR
+  if (aMR > 0 && bMR > 0) {
+    if (aMR !== bMR) {
+      return false
+    }
+    if (aProj && bProj) {
+      return aProj === bProj
+    }
   }
   if (a.environmentName && b.environmentName) {
     const aNs = a.environmentNamespace || a.namespace || 'default'

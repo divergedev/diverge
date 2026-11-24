@@ -8,6 +8,11 @@ import { ThemeProvider } from '@/components/ThemeProvider'
 import { AuthProvider } from '@/hooks/useAuth'
 import { MemoryRouter } from 'react-router-dom'
 import { render as rtlRender } from '@testing-library/react'
+import { previewGroupClient } from '@/api/client'
+import { queryKeys, useListPreviewGroups } from '@/api/queries'
+import { Code, ConnectError } from '@connectrpc/connect'
+import { useWatchPreviewGroups } from '@/hooks/useWatch'
+import { WatchEventType } from '@/api/gen/diverge/v1alpha1/types_pb'
 
 vi.mock('react-router-dom', async (importOriginal) => {
   const mod = await importOriginal<typeof import('react-router-dom')>()
@@ -355,5 +360,478 @@ describe('PreviewGroupDetail', () => {
     )
     expect(seenIfMatchHeader).toBe('77')
     expect(await screen.findByText('newly-joined-web')).toBeInTheDocument()
+  })
+
+  it('clears spec.source to local when creator MR leaves and only custom local service remains', async () => {
+    let updatedPayload: Record<string, unknown> | undefined
+
+    server.use(
+      http.post('*/diverge.v1alpha1.PreviewGroupService/GetPreviewGroup', () =>
+        HttpResponse.json({
+          previewGroup: {
+            ...mockPreviewGroup.previewGroup,
+            resourceVersion: '60',
+            annotations: {
+              'divergedev.com/group-members': JSON.stringify([
+                {
+                  service: 'api-gateway',
+                  provider: 'github',
+                  project: 'org/checkout-monorepo',
+                  mr: 108,
+                  branch: 'feat/multi-service',
+                },
+                { service: 'custom-ui', namespace: 'default', provider: 'local' },
+              ]),
+            },
+            spec: {
+              ...mockPreviewGroup.previewGroup.spec,
+              services: [
+                { name: 'api-gateway', mode: 'image', namespace: 'default', image: 'img/gw:108' },
+                { name: 'custom-ui', mode: 'image', namespace: 'default', image: 'img/ui:local' },
+              ],
+            },
+          },
+        }),
+      ),
+      http.post('*/diverge.v1alpha1.PreviewGroupService/UpdatePreviewGroup', async ({ request }) => {
+        updatedPayload = (await request.json()) as Record<string, unknown>
+        return HttpResponse.json({ previewGroup: updatedPayload.previewGroup })
+      }),
+    )
+
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'Detach api-gateway' }))
+
+    await waitFor(() => {
+      expect(updatedPayload).toBeDefined()
+    })
+    const sent = updatedPayload?.previewGroup as {
+      spec: { source: { provider: string; project?: string; mr?: number; branch: string } }
+    }
+    expect(sent.spec.source).toEqual({
+      provider: 'local',
+      branch: 'pg-checkout',
+    })
+  })
+
+  it('preserves spec.source when source has blank project and matching-provider MR member survives', async () => {
+    let updatedPayload: Record<string, unknown> | undefined
+
+    server.use(
+      http.post('*/diverge.v1alpha1.PreviewGroupService/GetPreviewGroup', () =>
+        HttpResponse.json({
+          previewGroup: {
+            ...mockPreviewGroup.previewGroup,
+            resourceVersion: '61',
+            annotations: {
+              'divergedev.com/group-members': JSON.stringify([
+                {
+                  service: 'api-gateway',
+                  provider: 'github',
+                  project: 'org/checkout-monorepo',
+                  mr: 108,
+                  branch: 'feat/multi-service',
+                },
+                {
+                  service: 'payments',
+                  provider: 'github',
+                  project: 'org/payments',
+                  mr: 204,
+                  branch: 'feat/pay',
+                },
+              ]),
+            },
+            spec: {
+              ...mockPreviewGroup.previewGroup.spec,
+              source: {
+                provider: 'github',
+                project: '',
+                mr: 108,
+                branch: 'feat/multi-service',
+              },
+              services: [
+                { name: 'api-gateway', mode: 'image', namespace: 'default', image: 'img/gw:108' },
+                { name: 'payments', mode: 'image', namespace: 'default', image: 'img/pay:204' },
+              ],
+            },
+          },
+        }),
+      ),
+      http.post('*/diverge.v1alpha1.PreviewGroupService/UpdatePreviewGroup', async ({ request }) => {
+        updatedPayload = (await request.json()) as Record<string, unknown>
+        return HttpResponse.json({ previewGroup: updatedPayload.previewGroup })
+      }),
+    )
+
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'Detach payments' }))
+
+    await waitFor(() => {
+      expect(updatedPayload).toBeDefined()
+    })
+    const sent = updatedPayload?.previewGroup as {
+      spec: { source: { provider: string; project?: string; mr?: number; branch: string } }
+    }
+    expect(sent.spec.source).toEqual({
+      provider: 'github',
+      mr: 108,
+      branch: 'feat/multi-service',
+    })
+  })
+
+  it('useWatchPreviewGroups ignores older watch snapshots when cache already holds a newer resourceVersion', async () => {
+    localStorage.setItem('diverge:token', 'test-token')
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    queryClient.setQueryData(queryKeys.previewGroup('', 'pg-checkout'), {
+      previewGroup: {
+        name: 'pg-checkout',
+        namespace: '',
+        resourceVersion: '20',
+        spec: { services: [{ name: 'api-gateway' }, { name: 'payments' }] },
+      },
+    })
+    queryClient.setQueryData(queryKeys.previewGroup('', 'pg-barrier'), {
+      previewGroup: {
+        name: 'pg-barrier',
+        namespace: '',
+        resourceVersion: '1',
+        spec: { services: [] },
+      },
+    })
+
+    let releaseNewer!: () => void
+    const newerGate = new Promise<void>((resolve) => {
+      releaseNewer = resolve
+    })
+
+    const spy = vi.spyOn(previewGroupClient, 'watchPreviewGroups').mockImplementation(async function* (_req, opts) {
+      yield {
+        type: WatchEventType.MODIFIED,
+        resourceVersion: '15',
+        previewGroup: {
+          name: 'pg-checkout',
+          namespace: '',
+          resourceVersion: '15',
+          spec: { services: [{ name: 'api-gateway' }] },
+        } as never,
+      } as never
+      yield {
+        type: WatchEventType.DELETED,
+        resourceVersion: '18',
+        previewGroup: {
+          name: 'pg-checkout',
+          namespace: '',
+          resourceVersion: '15',
+          spec: { services: [{ name: 'api-gateway' }] },
+        } as never,
+      } as never
+      yield {
+        type: WatchEventType.MODIFIED,
+        resourceVersion: '2',
+        previewGroup: {
+          name: 'pg-barrier',
+          namespace: '',
+          resourceVersion: '2',
+          spec: { services: [] },
+        } as never,
+      } as never
+      await newerGate
+      yield {
+        type: WatchEventType.MODIFIED,
+        resourceVersion: '25',
+        previewGroup: {
+          name: 'pg-checkout',
+          namespace: '',
+          resourceVersion: '25',
+          spec: { services: [{ name: 'api-gateway' }, { name: 'payments' }, { name: 'billing' }] },
+        } as never,
+      } as never
+      yield {
+        type: WatchEventType.MODIFIED,
+        resourceVersion: '3',
+        previewGroup: {
+          name: 'pg-barrier',
+          namespace: '',
+          resourceVersion: '3',
+          spec: { services: [] },
+        } as never,
+      } as never
+      await new Promise<void>((resolve) => {
+        if (opts?.signal?.aborted) {
+          resolve()
+          return
+        }
+        opts?.signal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+    })
+
+    function WatchHarness() {
+      useWatchPreviewGroups()
+      return null
+    }
+
+    const readCached = (name: string) =>
+      queryClient.getQueryData<{ previewGroup?: { resourceVersion?: string; spec?: { services?: unknown[] } } }>(
+        queryKeys.previewGroup('', name),
+      )
+
+    let unmount: (() => void) | undefined
+    try {
+      const rendered = rtlRender(
+        <QueryClientProvider client={queryClient}>
+          <WatchHarness />
+        </QueryClientProvider>,
+      )
+      unmount = rendered.unmount
+
+      await waitFor(() => {
+        expect(spy).toHaveBeenCalled()
+        expect(readCached('pg-barrier')?.previewGroup?.resourceVersion).toBe('2')
+      })
+      const afterStale = readCached('pg-checkout')
+      expect(afterStale?.previewGroup?.resourceVersion).toBe('20')
+      expect(afterStale?.previewGroup?.spec?.services).toHaveLength(2)
+      expect(queryClient.getQueryState(queryKeys.previewGroup('', 'pg-checkout'))?.isInvalidated).toBe(true)
+
+      releaseNewer()
+      await waitFor(() => {
+        expect(readCached('pg-barrier')?.previewGroup?.resourceVersion).toBe('3')
+      })
+      const afterNewer = readCached('pg-checkout')
+      expect(afterNewer?.previewGroup?.resourceVersion).toBe('25')
+      expect(afterNewer?.previewGroup?.spec?.services).toHaveLength(3)
+    } finally {
+      unmount?.()
+      spy.mockRestore()
+      localStorage.removeItem('diverge:token')
+    }
+  })
+
+  it('useWatchPreviewGroups invalidates stale list and detail caches on DELETED', async () => {
+    localStorage.setItem('diverge:token', 'test-token')
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    queryClient.setQueryData(queryKeys.previewGroups(undefined), {
+      previewGroups: [
+        {
+          name: 'pg-checkout',
+          namespace: '',
+          resourceVersion: '20',
+          spec: { services: [{ name: 'api-gateway' }, { name: 'payments' }] },
+        },
+      ],
+    })
+    queryClient.setQueryData(queryKeys.previewGroup('', 'pg-checkout'), {
+      previewGroup: {
+        name: 'pg-checkout',
+        namespace: '',
+        resourceVersion: '20',
+        spec: { services: [{ name: 'api-gateway' }, { name: 'payments' }] },
+      },
+    })
+
+    const spy = vi.spyOn(previewGroupClient, 'watchPreviewGroups').mockImplementation(async function* (_req, opts) {
+      yield {
+        type: WatchEventType.DELETED,
+        resourceVersion: '18',
+        previewGroup: {
+          name: 'pg-checkout',
+          namespace: '',
+          resourceVersion: '18',
+          spec: { services: [] },
+        } as never,
+      } as never
+      await new Promise<void>((resolve) => {
+        if (opts?.signal?.aborted) {
+          resolve()
+          return
+        }
+        opts?.signal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+    })
+
+    function WatchHarness() {
+      useWatchPreviewGroups()
+      return null
+    }
+
+    let unmount: (() => void) | undefined
+    try {
+      const rendered = rtlRender(
+        <QueryClientProvider client={queryClient}>
+          <WatchHarness />
+        </QueryClientProvider>,
+      )
+      unmount = rendered.unmount
+
+      await waitFor(() => {
+        expect(queryClient.getQueryState(queryKeys.previewGroups(undefined))?.isInvalidated).toBe(true)
+        expect(queryClient.getQueryState(queryKeys.previewGroup('', 'pg-checkout'))?.isInvalidated).toBe(true)
+      })
+      const listData = queryClient.getQueryData<{
+        previewGroups: Array<{ name: string; resourceVersion: string }>
+      }>(queryKeys.previewGroups(undefined))
+      expect(listData?.previewGroups.find((p) => p.name === 'pg-checkout')?.resourceVersion).toBe('20')
+      const detailData = queryClient.getQueryData<{
+        previewGroup?: { resourceVersion: string }
+      }>(queryKeys.previewGroup('', 'pg-checkout'))
+      expect(detailData?.previewGroup?.resourceVersion).toBe('20')
+    } finally {
+      unmount?.()
+      spy.mockRestore()
+      localStorage.removeItem('diverge:token')
+    }
+  })
+
+  it('useWatchPreviewGroups reconciles active list and detail queries on stale DELETED', async () => {
+    const scenarios = ['absent', 'replaced'] as const
+    for (const scenario of scenarios) {
+      localStorage.setItem('diverge:token', 'test-token')
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, staleTime: 60_000 } },
+      })
+      const baseGroup = {
+        ...mockPreviewGroup.previewGroup,
+        resourceVersion: '20',
+      }
+      queryClient.setQueryData(queryKeys.previewGroups('default'), {
+        previewGroups: [baseGroup],
+      })
+      queryClient.setQueryData(queryKeys.previewGroup('default', 'pg-checkout'), {
+        previewGroup: baseGroup,
+      })
+
+      let releaseDelete!: () => void
+      const deleteGate = new Promise<void>((resolve) => {
+        releaseDelete = resolve
+      })
+
+      const replacementGroup = {
+        ...mockPreviewGroup.previewGroup,
+        resourceVersion: '25',
+        spec: {
+          ...mockPreviewGroup.previewGroup.spec,
+          services: [
+            ...mockPreviewGroup.previewGroup.spec.services,
+            { name: 'billing', mode: 'full' },
+          ],
+        },
+        status: {
+          ...mockPreviewGroup.previewGroup.status,
+          serviceCount: 3,
+          services: [
+            ...mockPreviewGroup.previewGroup.status.services,
+            {
+              name: 'billing',
+              environmentName: 'pg-checkout-billing',
+              namespace: 'default',
+              phase: 'Ready',
+              url: 'https://billing.preview.example.com',
+            },
+          ],
+        },
+      }
+
+      const listSpy = vi
+        .spyOn(previewGroupClient, 'listPreviewGroups')
+        .mockImplementation(async () =>
+          scenario === 'absent'
+            ? ({ previewGroups: [] } as never)
+            : ({ previewGroups: [replacementGroup] } as never),
+        )
+      const getSpy = vi
+        .spyOn(previewGroupClient, 'getPreviewGroup')
+        .mockImplementation(async () => {
+          if (scenario === 'absent') {
+            throw new ConnectError('not found', Code.NotFound)
+          }
+          return { previewGroup: replacementGroup } as never
+        })
+      const watchSpy = vi
+        .spyOn(previewGroupClient, 'watchPreviewGroups')
+        .mockImplementation(async function* (_req, opts) {
+          await deleteGate
+          yield {
+            type: WatchEventType.DELETED,
+            resourceVersion: '18',
+            previewGroup: {
+              name: 'pg-checkout',
+              namespace: 'default',
+              resourceVersion: '18',
+              spec: { services: [] },
+            } as never,
+          } as never
+          await new Promise<void>((resolve) => {
+            if (opts?.signal?.aborted) {
+              resolve()
+              return
+            }
+            opts?.signal?.addEventListener('abort', () => resolve(), { once: true })
+          })
+        })
+
+      function ActiveReconcileHarness() {
+        useWatchPreviewGroups('default')
+        const listQuery = useListPreviewGroups({ namespace: 'default' })
+        return (
+          <>
+            <ul data-testid="active-pg-list">
+              {(listQuery.data?.previewGroups ?? []).map((p) => (
+                <li key={p.name}>{p.name}</li>
+              ))}
+            </ul>
+            <PreviewGroupDetail />
+          </>
+        )
+      }
+
+      let unmount: (() => void) | undefined
+      try {
+        const rendered = rtlRender(
+          <MemoryRouter>
+            <QueryClientProvider client={queryClient}>
+              <ThemeProvider defaultTheme="dark">
+                <AuthProvider>
+                  <ActiveReconcileHarness />
+                </AuthProvider>
+              </ThemeProvider>
+            </QueryClientProvider>
+          </MemoryRouter>,
+        )
+        unmount = rendered.unmount
+
+        expect(screen.getByTestId('active-pg-list')).toHaveTextContent('pg-checkout')
+        expect(screen.getByRole('heading', { name: 'pg-checkout' })).toBeInTheDocument()
+
+        releaseDelete()
+
+        if (scenario === 'absent') {
+          await waitFor(() => {
+            expect(listSpy).toHaveBeenCalled()
+            expect(getSpy).toHaveBeenCalled()
+            expect(screen.getByTestId('active-pg-list').textContent).toBe('')
+            expect(screen.getByText('Failed to load preview group')).toBeInTheDocument()
+          })
+          expect(screen.queryByRole('heading', { name: 'pg-checkout' })).not.toBeInTheDocument()
+        } else {
+          await waitFor(() => {
+            expect(listSpy).toHaveBeenCalled()
+            expect(getSpy).toHaveBeenCalled()
+            expect(screen.getByText('pg-checkout-billing')).toBeInTheDocument()
+          })
+          expect(screen.getByTestId('active-pg-list')).toHaveTextContent('pg-checkout')
+          expect(screen.getByRole('heading', { name: 'pg-checkout' })).toBeInTheDocument()
+          const updatedList = queryClient.getQueryData<{
+            previewGroups: Array<{ resourceVersion?: string }>
+          }>(queryKeys.previewGroups('default'))
+          expect(updatedList?.previewGroups[0]?.resourceVersion).toBe('25')
+        }
+      } finally {
+        unmount?.()
+        watchSpy.mockRestore()
+        listSpy.mockRestore()
+        getSpy.mockRestore()
+        localStorage.removeItem('diverge:token')
+      }
+    }
   })
 })

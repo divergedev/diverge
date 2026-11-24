@@ -256,6 +256,7 @@ func (h *GitLabWebhookHandler) handleNoteEvent(ctx context.Context, w http.Respo
 		branch = "main"
 	}
 
+	ctx = WithWebhookProvider(ctx, "gitlab")
 	var (
 		execErr  error
 		feedback string
@@ -268,7 +269,11 @@ func (h *GitLabWebhookHandler) handleNoteEvent(ctx context.Context, w http.Respo
 	if execErr != nil {
 		h.Dedup.Release(deliveryID)
 		logger.Error(execErr, "Failed to execute GitLab slash command", "action", cmd.Action, "mr", mrIID)
-		h.postFeedbackComment(ctx, payload.Project.PathWithNamespace, mrIID, fmt.Sprintf("❌ **Diverge Command Error**\n\nFailed to execute `/diverge %s`: %v\n\nRun `/diverge help` for a list of available commands.", cmd.Action, execErr))
+		errComment := feedback
+		if errComment == "" {
+			errComment = fmt.Sprintf("❌ **Diverge Command Error**\n\nFailed to execute `/diverge %s`: %v\n\nRun `/diverge help` for a list of available commands.", cmd.Action, execErr)
+		}
+		h.postFeedbackComment(ctx, payload.Project.PathWithNamespace, mrIID, errComment)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -281,6 +286,7 @@ func (h *GitLabWebhookHandler) handleNoteEvent(ctx context.Context, w http.Respo
 }
 
 func (h *GitLabWebhookHandler) handleFixCommand(ctx context.Context, payload *GitLabNotePayload, cmd *SlashCommand, repoURL, branch string, mrIID int) (string, error) {
+	ctx = WithWebhookProvider(ctx, "gitlab")
 	feedback, err := ExecuteSlashCommandWithFeedback(ctx, h.Client, h.DefaultNS, cmd, repoURL, branch, mrIID)
 	if err != nil {
 		return "", err
@@ -299,7 +305,7 @@ func (h *GitLabWebhookHandler) handleFixCommand(ctx context.Context, payload *Gi
 	taskName := buildCommandTaskName(effectiveRepoURL, mrIID, cmd.Objective)
 	var task v1alpha1.AgentTask
 	if err := h.Client.Get(ctx, client.ObjectKey{Name: taskName, Namespace: ns}, &task); err != nil {
-		return feedback, err
+		return "", err
 	}
 	if task.Annotations == nil {
 		task.Annotations = make(map[string]string)
@@ -315,7 +321,7 @@ func (h *GitLabWebhookHandler) handleFixCommand(ctx context.Context, payload *Gi
 	}
 	SetTraceparentAnnotation(&task, TraceparentFromContext(ctx))
 	if err := h.Client.Update(ctx, &task); err != nil {
-		return feedback, err
+		return "", err
 	}
 	return feedback, nil
 }
@@ -397,7 +403,7 @@ func (h *GitLabWebhookHandler) reconcileEnvironment(ctx context.Context, payload
 		if h.DisablePreviewGroups {
 			return nil
 		}
-		_, detachErr := previewgroup.DetachMemberByPR(ctx, h.Client, payload.Project.PathWithNamespace, payload.ObjectAttributes.IID, ns+"/"+envName)
+		_, detachErr := previewgroup.DetachMemberByPR(ctx, h.Client, "gitlab", payload.Project.PathWithNamespace, payload.ObjectAttributes.IID, ns+"/"+envName)
 		return detachErr
 	}
 	if err != nil {
@@ -430,7 +436,7 @@ func (h *GitLabWebhookHandler) deleteEnvironment(ctx context.Context, payload *G
 	if h.DisablePreviewGroups {
 		return nil
 	}
-	_, err := previewgroup.DetachMemberByPR(ctx, h.Client, payload.Project.PathWithNamespace, payload.ObjectAttributes.IID, ns+"/"+envName)
+	_, err := previewgroup.DetachMemberByPR(ctx, h.Client, "gitlab", payload.Project.PathWithNamespace, payload.ObjectAttributes.IID, ns+"/"+envName)
 	return err
 }
 

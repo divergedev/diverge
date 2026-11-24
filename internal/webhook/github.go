@@ -257,6 +257,7 @@ func (h *GitHubWebhookHandler) handleIssueComment(ctx context.Context, w http.Re
 		branch = "main"
 	}
 
+	ctx = WithWebhookProvider(ctx, "github")
 	var (
 		execErr  error
 		feedback string
@@ -269,7 +270,11 @@ func (h *GitHubWebhookHandler) handleIssueComment(ctx context.Context, w http.Re
 	if execErr != nil {
 		h.Dedup.Release(deliveryID)
 		logger.Error(execErr, "Failed to execute slash command", "action", cmd.Action, "pr", prNumber)
-		h.postFeedbackComment(ctx, payload.Repository.FullName, prNumber, fmt.Sprintf("❌ **Diverge Command Error**\n\nFailed to execute `/diverge %s`: %v\n\nRun `/diverge help` for a list of available commands.", cmd.Action, execErr))
+		errComment := feedback
+		if errComment == "" {
+			errComment = fmt.Sprintf("❌ **Diverge Command Error**\n\nFailed to execute `/diverge %s`: %v\n\nRun `/diverge help` for a list of available commands.", cmd.Action, execErr)
+		}
+		h.postFeedbackComment(ctx, payload.Repository.FullName, prNumber, errComment)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -282,6 +287,7 @@ func (h *GitHubWebhookHandler) handleIssueComment(ctx context.Context, w http.Re
 }
 
 func (h *GitHubWebhookHandler) handleFixCommand(ctx context.Context, payload *GitHubIssueCommentPayload, cmd *SlashCommand, repoURL, branch string, prNumber int) (string, error) {
+	ctx = WithWebhookProvider(ctx, "github")
 	feedback, err := ExecuteSlashCommandWithFeedback(ctx, h.Client, h.DefaultNS, cmd, repoURL, branch, prNumber)
 	if err != nil {
 		return "", err
@@ -300,7 +306,7 @@ func (h *GitHubWebhookHandler) handleFixCommand(ctx context.Context, payload *Gi
 	taskName := buildCommandTaskName(effectiveRepoURL, prNumber, cmd.Objective)
 	var task v1alpha1.AgentTask
 	if err := h.Client.Get(ctx, client.ObjectKey{Name: taskName, Namespace: ns}, &task); err != nil {
-		return feedback, err
+		return "", err
 	}
 	if task.Annotations == nil {
 		task.Annotations = make(map[string]string)
@@ -314,7 +320,7 @@ func (h *GitHubWebhookHandler) handleFixCommand(ctx context.Context, payload *Gi
 	}
 	SetTraceparentAnnotation(&task, TraceparentFromContext(ctx))
 	if err := h.Client.Update(ctx, &task); err != nil {
-		return feedback, err
+		return "", err
 	}
 	return feedback, nil
 }
@@ -446,7 +452,7 @@ func (h *GitHubWebhookHandler) reconcileEnvironment(ctx context.Context, payload
 		if h.DisablePreviewGroups {
 			return nil
 		}
-		_, detachErr := previewgroup.DetachMemberByPR(ctx, h.Client, payload.Repository.FullName, payload.PullRequest.Number, ns+"/"+envName)
+		_, detachErr := previewgroup.DetachMemberByPR(ctx, h.Client, "github", payload.Repository.FullName, payload.PullRequest.Number, ns+"/"+envName)
 		return detachErr
 	}
 	if err != nil {
@@ -479,7 +485,7 @@ func (h *GitHubWebhookHandler) deleteEnvironment(ctx context.Context, payload *G
 	if h.DisablePreviewGroups {
 		return nil
 	}
-	_, err := previewgroup.DetachMemberByPR(ctx, h.Client, payload.Repository.FullName, payload.PullRequest.Number, ns+"/"+envName)
+	_, err := previewgroup.DetachMemberByPR(ctx, h.Client, "github", payload.Repository.FullName, payload.PullRequest.Number, ns+"/"+envName)
 	return err
 }
 

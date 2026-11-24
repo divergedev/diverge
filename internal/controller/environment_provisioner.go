@@ -196,8 +196,9 @@ func (r *EnvironmentReconciler) reconcileProvisioningWithTarget(ctx context.Cont
 	var resolvedDBName string
 	if env.Annotations != nil && env.Annotations[annotationSharedGroupDB] == "true" {
 		// Database lifecycle and diverge-db-env-<env> Secret are owned by the parent PreviewGroup.
-		sharedDSN, sharedReady, sharedErr := r.readSharedGroupDatabaseDSN(ctx, env)
+		sharedSecretName, sharedDSN, sharedReady, sharedErr := r.readSharedGroupDatabaseDSN(ctx, env)
 		if sharedErr != nil {
+			env.Status.Phase = divergeiov1alpha1.PhaseFailed
 			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 				Type:    "DatabaseReady",
 				Status:  metav1.ConditionFalse,
@@ -208,6 +209,7 @@ func (r *EnvironmentReconciler) reconcileProvisioningWithTarget(ctx context.Cont
 			return ctx, res, true, retErr
 		}
 		if !sharedReady {
+			env.Status.Phase = divergeiov1alpha1.PhaseDeploying
 			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 				Type:    "DatabaseReady",
 				Status:  metav1.ConditionFalse,
@@ -216,6 +218,10 @@ func (r *EnvironmentReconciler) reconcileProvisioningWithTarget(ctx context.Cont
 			})
 			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, nil, 3*time.Second)
 			return ctx, res, true, retErr
+		}
+		// Retain env.Status.DatabaseProvider so handleTeardown still releases any prior standalone database provisioned before adoption.
+		if sharedSecretName != "" {
+			ctx = internaldb.WithResolvedSharedDBSecret(ctx, env.Namespace, env.Name, sharedSecretName)
 		}
 		dbStatus = &pkgdb.DatabaseResult{
 			DSN:              sharedDSN,
@@ -295,7 +301,10 @@ func (r *EnvironmentReconciler) reconcileProvisioningWithTarget(ctx context.Cont
 			resolvedDBName == "neon" ||
 			strings.TrimSpace(env.Status.DatabaseProvider) == "neon" ||
 			env.Annotations["divergedev.com/database-provider"] != ""
-		if (env.Spec.Database.ConnectionRef == "" || isBranchingMode) && (len(dbStatus.EnvVars) > 0 || env.Spec.Database.Mode == "schema") {
+		connRef := strings.TrimSpace(env.Spec.Database.ConnectionRef)
+		if env.Annotations[annotationSharedGroupDB] != "true" &&
+			(connRef == "" || connRef == internaldb.EnvSecretName(env.Name) || isBranchingMode) &&
+			(len(dbStatus.EnvVars) > 0 || env.Spec.Database.Mode == "schema") {
 			envVars := dbStatus.EnvVars
 			if len(envVars) == 0 {
 				envVars = map[string]string{
@@ -929,7 +938,7 @@ func (r *EnvironmentReconciler) ensureDatabaseEnvSecret(ctx context.Context, env
 		return err
 	}
 
-	secretName := sanitizeK8sName(fmt.Sprintf("diverge-db-env-%s", env.Name), env.Name, 63)
+	secretName := internaldb.EnvSecretName(env.Name)
 
 	targetNS := env.Namespace
 	if env.Spec.Deploy.Namespace == "create" {
@@ -944,11 +953,20 @@ func (r *EnvironmentReconciler) ensureDatabaseEnvSecret(ctx context.Context, env
 	}
 
 	_, err = controllerutil.CreateOrUpdate(ctx, targetClient, secret, func() error {
+		prevGroup := ""
+		if secret.Labels != nil {
+			prevGroup = strings.TrimSpace(secret.Labels[labelPreviewGroup])
+		}
+		wasGroupOwned := (secret.Labels != nil && secret.Labels[labelSharedGroupDBSecret] == "true") ||
+			(prevGroup != "" && !hasEnvironmentControllerOwnerRef(secret))
+
 		if secret.Labels == nil {
 			secret.Labels = make(map[string]string)
 		}
 		secret.Labels["divergedev.com/environment"] = truncateLabel(env.Name)
 		secret.Labels["divergedev.com/managed-by"] = "diverge"
+		delete(secret.Labels, labelPreviewGroup)
+		delete(secret.Labels, labelSharedGroupDBSecret)
 
 		if !isRemote && targetNS == env.Namespace {
 			if r.Scheme != nil {
@@ -975,6 +993,27 @@ func (r *EnvironmentReconciler) ensureDatabaseEnvSecret(ctx context.Context, env
 			}
 		}
 
+		if wasGroupOwned {
+			if prevGroup != "" {
+				secret.Labels[labelLegacyGroupDBDrainingOwner] = prevGroup
+			}
+			if secret.Annotations == nil {
+				secret.Annotations = make(map[string]string)
+			}
+			secret.Annotations[annotationLegacyGroupDBDraining] = legacyGroupDBDrainingPending
+			if prevGroup != "" {
+				secret.Annotations[annotationLegacyGroupDBOwner] = prevGroup
+			}
+		}
+		if wasGroupOwned || strings.TrimSpace(secret.Annotations[internaldb.AnnotationDBCredentialRevision]) != "" {
+			if credRev := internaldb.CredentialRevision(envVars); credRev != "" {
+				if secret.Annotations == nil {
+					secret.Annotations = make(map[string]string)
+				}
+				secret.Annotations[internaldb.AnnotationDBCredentialRevision] = credRev
+			}
+		}
+
 		newData := make(map[string][]byte, len(envVars))
 		for k, v := range envVars {
 			newData[k] = []byte(v)
@@ -986,35 +1025,99 @@ func (r *EnvironmentReconciler) ensureDatabaseEnvSecret(ctx context.Context, env
 	if err != nil {
 		return fmt.Errorf("failed to create or update database env secret: %w", err)
 	}
+
+	if secret.Annotations[annotationLegacyGroupDBDraining] == legacyGroupDBDrainingPending {
+		var podList corev1.PodList
+		if lErr := targetClient.List(ctx, &podList, client.InNamespace(targetNS)); lErr != nil {
+			if !isIgnorableWorkloadListErr(lErr, false) {
+				return fmt.Errorf("failed to list pods in %s after legacy DB Secret takeover: %w", targetNS, lErr)
+			}
+		}
+		seenIDs := make(map[string]bool)
+		var podIDs []string
+		for i := range podList.Items {
+			pod := &podList.Items[i]
+			if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+				continue
+			}
+			if podSpecReferencesAnySecret(&pod.Spec, []string{secretName}) {
+				id := podTrackID(pod)
+				if !seenIDs[id] {
+					seenIDs[id] = true
+					podIDs = append(podIDs, id)
+				}
+			}
+		}
+		sort.Strings(podIDs)
+		base := secret.DeepCopy()
+		if len(podIDs) > 0 {
+			if secret.Annotations == nil {
+				secret.Annotations = make(map[string]string)
+			}
+			secret.Annotations[annotationLegacyGroupDBDraining] = legacyGroupDBDrainingUIDPrefix + strings.Join(podIDs, ",")
+		} else {
+			delete(secret.Annotations, annotationLegacyGroupDBDraining)
+			delete(secret.Annotations, annotationLegacyGroupDBOwner)
+			delete(secret.Labels, labelLegacyGroupDBDrainingOwner)
+		}
+		if pErr := targetClient.Patch(ctx, secret, client.MergeFrom(base)); pErr != nil && !apierrors.IsNotFound(pErr) {
+			return fmt.Errorf("failed to record draining pods on legacy DB Secret %s/%s: %w", targetNS, secretName, pErr)
+		}
+	}
+	if credRev := strings.TrimSpace(secret.Annotations[internaldb.AnnotationDBCredentialRevision]); credRev != "" {
+		if env.Annotations == nil {
+			env.Annotations = make(map[string]string)
+		}
+		env.Annotations[internaldb.AnnotationDBCredentialRevision] = credRev
+	}
 	return nil
 }
 
-func (r *EnvironmentReconciler) readSharedGroupDatabaseDSN(ctx context.Context, env *divergeiov1alpha1.Environment) (string, bool, error) {
+func (r *EnvironmentReconciler) readSharedGroupDatabaseDSN(ctx context.Context, env *divergeiov1alpha1.Environment) (string, string, bool, error) {
 	targetClient, _, _, err := r.resolveTargetCluster(ctx, env)
 	if err != nil {
-		return "", false, err
+		return "", "", false, err
 	}
 	if targetClient == nil {
-		return "", false, fmt.Errorf("target cluster client unavailable for shared database lookup")
+		return "", "", false, fmt.Errorf("target cluster client unavailable for shared database lookup")
 	}
-	secretName := sanitizeK8sName(fmt.Sprintf("diverge-db-env-%s", env.Name), env.Name, 63)
 	targetNS := env.Namespace
 	if env.Spec.Deploy.Namespace == "create" {
 		targetNS = env.PreviewNamespace()
 	}
 	var sec corev1.Secret
-	if err := targetClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: targetNS}, &sec); err != nil {
-		if apierrors.IsNotFound(err) {
-			return "", false, nil
+	secretName := strings.TrimSpace(env.Spec.Database.ConnectionRef)
+	if secretName != "" {
+		if err := targetClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: targetNS}, &sec); err != nil {
+			if apierrors.IsNotFound(err) {
+				return "", "", false, nil
+			}
+			return "", "", false, fmt.Errorf("failed to get shared group database secret %s/%s: %w", targetNS, secretName, err)
 		}
-		return "", false, fmt.Errorf("failed to get shared group database secret %s/%s: %w", targetNS, secretName, err)
+	} else {
+		secretName = sharedGroupDBSecretName(env.Name)
+		if err := targetClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: targetNS}, &sec); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return "", "", false, fmt.Errorf("failed to get shared group database secret %s/%s: %w", targetNS, secretName, err)
+			}
+			secretName = legacySharedGroupDBSecretName(env.Name)
+			if lErr := targetClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: targetNS}, &sec); lErr != nil {
+				if apierrors.IsNotFound(lErr) {
+					return "", "", false, nil
+				}
+				return "", "", false, fmt.Errorf("failed to get shared group database secret %s/%s: %w", targetNS, secretName, lErr)
+			}
+		}
 	}
 	dsn := strings.TrimSpace(string(sec.Data["DATABASE_URL"]))
 	if dsn == "" && len(sec.Data) == 0 {
-		return "", false, nil
+		return "", "", false, nil
 	}
 	if dsn == "" && (env.Spec.Database.MigrationJob != nil || env.Spec.Database.Atlas != nil) {
-		return "", false, fmt.Errorf("shared group database secret %s/%s is missing DATABASE_URL", targetNS, secretName)
+		return "", "", false, fmt.Errorf("shared group database secret %s/%s is missing DATABASE_URL", targetNS, secretName)
 	}
-	return dsn, true, nil
+	if dsn == "" && env.Spec.ServiceConfig != nil && strings.TrimSpace(env.Spec.ServiceConfig.DatabaseEnvKey) != "" {
+		return "", "", false, nil
+	}
+	return secretName, dsn, true, nil
 }

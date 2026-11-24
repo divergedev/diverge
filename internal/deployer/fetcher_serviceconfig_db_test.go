@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/database"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -75,6 +76,90 @@ func TestResolveDBSecret_ConnectionRefOverridesSchemaMode(t *testing.T) {
 	env := testEnvWithDB("preview-42", "schema", "custom-secret", "")
 	secret := resolveDBSecret(env)
 	assert.Equal(t, "custom-secret", secret, "connectionRef should override schema auto-provision")
+}
+
+func TestResolveDBSecret_TrimsWhitespace(t *testing.T) {
+	env := testEnvWithDB("preview-42", "schema", " group-db ", "")
+	assert.Equal(t, "group-db", resolveDBSecret(env), "leading/trailing whitespace in connectionRef should be normalized")
+
+	envUnpadded := testEnvWithDB("preview-42", "schema", "group-db", "")
+	assert.Equal(t, "group-db", resolveDBSecret(envUnpadded), "unpadded connectionRef must remain valid")
+
+	envBlank := testEnvWithDB("preview-42", "", "   ", "")
+	assert.Empty(t, resolveDBSecret(envBlank), "whitespace-only connectionRef should be treated as unset")
+}
+
+func TestResolveDBSecret_FormerNeonChildJoiningSharedGroupDB(t *testing.T) {
+	sharedSec := "diverge-group-db-env-pg-api-12345678"
+	envShared := testEnvWithDB("pg-api", "shared", sharedSec, "")
+	envShared.Annotations = map[string]string{"divergedev.com/shared-group-db": "true"}
+	envShared.Status.DatabaseProvider = "neon"
+	envShared.Status.DatabaseStatus = "Using shared PreviewGroup database"
+	assert.Equal(t, sharedSec, resolveDBSecret(envShared), "shared-group child ConnectionRef must take precedence over historical Neon Status.DatabaseProvider")
+
+	envNeon := testEnvWithDB("pg-api", "neon", "neon-api-creds", "")
+	envNeon.Status.DatabaseProvider = "neon"
+	envNeon.Status.DatabaseStatus = "Neon branch ready"
+	assert.Equal(t, sanitizeDBEnvSecretName("diverge-db-env-pg-api", "pg-api", 63), resolveDBSecret(envNeon), "child still provisioning Neon must continue using per-service Secret")
+}
+
+func TestResolveDBSecret_SharedModeWithoutSharedGroupMarkerHonorsRecordedNeonProvider(t *testing.T) {
+	envNeonShared := testEnvWithDB("pr-neon-shared", "shared", "neon-api-creds", "")
+	envNeonShared.Status.DatabaseProvider = "neon"
+	envNeonShared.Status.DatabaseStatus = "Neon branch ready"
+	expected := sanitizeDBEnvSecretName("diverge-db-env-pr-neon-shared", "pr-neon-shared", 63)
+	assert.Equal(t, expected, resolveDBSecret(envNeonShared), "shared mode without shared-group marker must use generated app Secret, never Neon API creds")
+
+	envNeonSharedNotReady := testEnvWithDB("pr-neon-shared", "shared", "neon-api-creds", "")
+	envNeonSharedNotReady.Status.DatabaseProvider = "neon"
+	envNeonSharedNotReady.Status.Conditions = []metav1.Condition{{Type: "NamespaceReady", Status: metav1.ConditionTrue}}
+	assert.Empty(t, resolveDBSecret(envNeonSharedNotReady), "unready Neon Environment without shared-group marker must not fall back to ConnectionRef")
+
+	envPlainShared := testEnvWithDB("pr-plain-shared", "shared", "shared-app-db", "")
+	assert.Equal(t, "shared-app-db", resolveDBSecret(envPlainShared), "non-Neon shared Environment must still honor ConnectionRef")
+}
+
+func TestServiceConfigFetcher_LegacySharedChildUsesReadySecretFromContext(t *testing.T) {
+	env := testEnvWithDB("pg-api", "shared", "", "CUSTOM_DB_URL")
+	env.Annotations = map[string]string{"divergedev.com/shared-group-db": "true"}
+	legacySec := sanitizeDBEnvSecretName("diverge-db-env-pg-api", "pg-api", 63)
+
+	assert.Empty(t, resolveDBSecretWithContext(context.Background(), env))
+	otherCtx := database.WithResolvedSharedDBSecret(context.Background(), "other-ns", env.Name, legacySec)
+	assert.Empty(t, resolveDBSecretWithContext(otherCtx, env), "context secret scoped to another namespace must be ignored")
+
+	ctx := database.WithResolvedSharedDBSecret(context.Background(), env.Namespace, env.Name, legacySec)
+	fetcher := &ServiceConfigFetcher{}
+	objects, err := fetcher.Fetch(ctx, env)
+	require.NoError(t, err)
+	require.Len(t, objects, 2)
+
+	deploy := objects[0]
+	containers, found, _ := unstructuredNestedSlice(deploy.Object, "spec", "template", "spec", "containers")
+	require.True(t, found)
+	require.Len(t, containers, 1)
+	container := containers[0].(map[string]interface{})
+
+	envFrom, hasEnvFrom := container["envFrom"].([]interface{})
+	require.True(t, hasEnvFrom)
+	require.Len(t, envFrom, 1)
+	secretRef := envFrom[0].(map[string]interface{})["secretRef"].(map[string]interface{})
+	assert.Equal(t, legacySec, secretRef["name"], "Fetch must inject the ready legacy Secret resolved during database readiness")
+
+	envVars := container["env"].([]interface{})
+	var foundCustom bool
+	for _, ev := range envVars {
+		e := ev.(map[string]interface{})
+		if e["name"] == "CUSTOM_DB_URL" {
+			foundCustom = true
+			secretKeyRef := e["valueFrom"].(map[string]interface{})["secretKeyRef"].(map[string]interface{})
+			assert.Equal(t, legacySec, secretKeyRef["name"])
+		}
+	}
+	assert.True(t, foundCustom, "DatabaseEnvKey must also bind to ready legacy Secret")
+
+	env.Spec.Database.ConnectionRef = "diverge-group-db-env-explicit"
+	assert.Equal(t, "diverge-group-db-env-explicit", resolveDBSecretWithContext(ctx, env), "explicit ConnectionRef must take precedence")
 }
 
 func TestServiceConfigFetcher_WithSchemaDB_NoEnvFrom(t *testing.T) {

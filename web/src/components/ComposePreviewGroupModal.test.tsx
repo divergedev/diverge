@@ -1,9 +1,10 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor } from '../test/utils'
 import { server } from '../test/mocks/server'
 import { http, HttpResponse } from 'msw'
 import userEvent from '@testing-library/user-event'
 import { ComposePreviewGroupModal } from './ComposePreviewGroupModal'
-import { normalizeGroupSlug, sha256Hex8 } from '../lib/previewgroup'
+import { normalizeGroupSlug, sameGroupMemberOwner, sha256Hex8 } from '../lib/previewgroup'
 
 describe('ComposePreviewGroupModal', () => {
   it('composes a multi-MR PreviewGroup from selected open PR environments and preserves per-service DB by default', async () => {
@@ -302,5 +303,116 @@ describe('ComposePreviewGroupModal', () => {
     const normalizedLong = normalizeGroupSlug(longBranch)
     expect(normalizedLong.length).toBeLessThanOrEqual(63)
     expect(normalizedLong.endsWith('-' + sha256Hex8(longBranch))).toBe(true)
+  }, 15000)
+
+  it('rejects mismatched MR numbers without project in sameGroupMemberOwner, keeps cached candidates on refetch failure, locks during retry, and aborts on unmount', async () => {
+    expect(
+      sameGroupMemberOwner(
+        { service: 'worker', mr: 42, environmentName: 'pr-worker', environmentNamespace: 'default' },
+        { service: 'worker', mr: 43, environmentName: 'pr-worker', environmentNamespace: 'default' },
+      ),
+    ).toBe(false)
+    expect(
+      sameGroupMemberOwner(
+        { service: 'worker', mr: 42, environmentName: 'pr-worker', environmentNamespace: 'default' },
+        { service: 'worker', mr: 42, environmentName: 'pr-worker', environmentNamespace: 'default' },
+      ),
+    ).toBe(true)
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    let listCalls = 0
+    let updateCalls = 0
+    let getStarted = false
+    let getResolved = false
+    let releaseGetRetry!: () => void
+    const getRetryGate = new Promise<void>((resolve) => {
+      releaseGetRetry = resolve
+    })
+
+    server.use(
+      http.post('*/diverge.v1alpha1.EnvironmentService/ListEnvironments', () => {
+        listCalls++
+        if (listCalls === 1) {
+          return HttpResponse.json({
+            environments: [
+              {
+                name: 'pr-acme-web-101',
+                namespace: 'frontend',
+                spec: {
+                  source: { provider: 'github', project: 'acme/web', mr: 101, branch: 'feat/x' },
+                  serviceConfig: {
+                    serviceName: 'web-app',
+                    namespace: 'frontend',
+                    image: 'ghcr.io/acme/web:pr-101',
+                    port: 3000,
+                  },
+                },
+              },
+            ],
+          })
+        }
+        return HttpResponse.json({ code: 'unavailable', message: 'refresh failed' }, { status: 503 })
+      }),
+      http.post('*/diverge.v1alpha1.PreviewGroupService/UpdatePreviewGroup', () => {
+        updateCalls++
+        return HttpResponse.json({ code: 'aborted', message: 'conflict' }, { status: 409 })
+      }),
+      http.post('*/diverge.v1alpha1.PreviewGroupService/GetPreviewGroup', async () => {
+        getStarted = true
+        await getRetryGate
+        getResolved = true
+        return HttpResponse.json({
+          previewGroup: {
+            name: 'feat-lock',
+            namespace: '',
+            resourceVersion: '99',
+            spec: { services: [] },
+          },
+        })
+      }),
+    )
+
+    const existingGroup = {
+      name: 'feat-lock',
+      namespace: '',
+      resourceVersion: '50',
+      spec: { services: [] },
+    } as never
+
+    const user = userEvent.setup()
+    const { unmount } = render(
+      <QueryClientProvider client={qc}>
+        <ComposePreviewGroupModal open={true} onClose={() => {}} existingGroup={existingGroup} />
+      </QueryClientProvider>,
+    )
+
+    const cb = await screen.findByRole('checkbox', { name: /web-app/i })
+    expect(cb).toBeEnabled()
+
+    // Background refetch fails (503) -> error alert renders while cached candidate remains toggleable
+    await qc.invalidateQueries()
+    expect(await screen.findByText(/refresh failed/i)).toBeInTheDocument()
+    const cachedCb = screen.getByRole('checkbox', { name: /web-app/i })
+    await user.click(cachedCb)
+    expect(cachedCb).toBeChecked()
+
+    const submitBtn = screen.getByRole('button', { name: /Join Services/i })
+    await user.click(submitBtn)
+
+    // Submit stays disabled while waiting on GetPreviewGroup during 409 retry
+    await waitFor(() => {
+      expect(submitBtn).toBeDisabled()
+      expect(updateCalls).toBe(1)
+      expect(getStarted).toBe(true)
+    })
+
+    // Unmount during pending conflict retry -> must abort and NEVER fire second UpdatePreviewGroup
+    unmount()
+    releaseGetRetry()
+    await waitFor(() => {
+      expect(getResolved).toBe(true)
+    })
+    await new Promise((r) => setTimeout(r, 30))
+    expect(updateCalls).toBe(1)
   }, 15000)
 })

@@ -236,9 +236,12 @@ func ValidateGitHubWebhookSignature(payload []byte, signature, secret string) bo
 
 // GitHubPreviewGroupNotifier implements PreviewGroupNotifier for GitHub.
 type GitHubPreviewGroupNotifier struct {
-	BaseURL    string
-	Token      string
-	HTTPClient *http.Client
+	BaseURL     string
+	Token       string
+	HTTPClient  *http.Client
+	AuthorLogin string
+
+	authorCache cachedNotifierAuthor
 }
 
 // NewGitHubPreviewGroupNotifier creates a GitHub-backed notifier that posts preview group status to pull request comments using the GitHub API.
@@ -256,7 +259,7 @@ func NewGitHubPreviewGroupNotifier(baseURL, token string) *GitHubPreviewGroupNot
 
 func (g *GitHubPreviewGroupNotifier) getProjectAndMR(pg *v1alpha1.PreviewGroup) (string, int, error) {
 	if pg.Spec.Source.Provider != "github" {
-		return "", 0, fmt.Errorf("preview group source is not github")
+		return "", 0, ErrNotGitHubSource
 	}
 	if pg.Spec.Source.MR == 0 {
 		return "", 0, ErrMissingMergeRequest
@@ -272,6 +275,115 @@ func (g *GitHubPreviewGroupNotifier) setCommentID(pg *v1alpha1.PreviewGroup, id 
 	pg.Status.CommentID = id
 }
 
+func (g *GitHubPreviewGroupNotifier) resolveAuthenticatedAuthor(ctx context.Context) (int64, string, error) {
+	if id, login, needFetch := g.authorCache.get(g.AuthorLogin); !needFetch {
+		return id, login, nil
+	}
+	baseURL := strings.TrimRight(strings.TrimSpace(g.BaseURL), "/")
+	if baseURL == "" {
+		return 0, "", nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/user", nil)
+	if err != nil {
+		return 0, "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+g.Token)
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	httpClient := g.HTTPClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return 0, "", fmt.Errorf("github /user lookup failed: %w", err)
+	}
+	if resp.StatusCode == http.StatusForbidden &&
+		(resp.Header.Get("Retry-After") != "" || resp.Header.Get("X-RateLimit-Remaining") == "0") {
+		_ = resp.Body.Close()
+		return 0, "", fmt.Errorf("github /user lookup rate limited: status %d", resp.StatusCode)
+	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound {
+		_ = resp.Body.Close()
+		g.authorCache.markChecked()
+		return 0, "", nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
+		return 0, "", fmt.Errorf("github /user lookup returned status: %d", resp.StatusCode)
+	}
+	var u struct {
+		ID    int64  `json:"id"`
+		Login string `json:"login"`
+	}
+	decErr := json.NewDecoder(resp.Body).Decode(&u)
+	_ = resp.Body.Close()
+	if decErr != nil {
+		return 0, "", fmt.Errorf("decoding github /user response: %w", decErr)
+	}
+	if login := strings.TrimSpace(u.Login); login != "" {
+		g.authorCache.record(u.ID, login)
+		return u.ID, login, nil
+	}
+	g.authorCache.markChecked()
+	return 0, "", nil
+}
+
+func (g *GitHubPreviewGroupNotifier) findExistingCommentID(ctx context.Context, escapedProject string, mr int, marker string) (int64, error) {
+	if marker == "" {
+		return 0, nil
+	}
+	authID, authLogin, err := g.resolveAuthenticatedAuthor(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if authID == 0 && authLogin == "" {
+		return 0, nil
+	}
+	httpClient := g.HTTPClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	nextURL := fmt.Sprintf("%s/repos/%s/issues/%d/comments?per_page=100", g.BaseURL, escapedProject, mr)
+	var matchedID int64
+	for page := 0; page < 5 && nextURL != ""; page++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, nextURL, nil)
+		if err != nil {
+			return 0, err
+		}
+		req.Header.Set("Authorization", "Bearer "+g.Token)
+		req.Header.Set("Accept", "application/vnd.github.v3+json")
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			return 0, fmt.Errorf("github comment lookup failed: %w", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			_ = resp.Body.Close()
+			return 0, fmt.Errorf("github comment lookup returned status: %d", resp.StatusCode)
+		}
+		var comments []struct {
+			ID   int64  `json:"id"`
+			Body string `json:"body"`
+			User struct {
+				ID    int64  `json:"id"`
+				Login string `json:"login"`
+			} `json:"user"`
+		}
+		decErr := json.NewDecoder(resp.Body).Decode(&comments)
+		linkHeader := resp.Header.Get("Link")
+		_ = resp.Body.Close()
+		if decErr != nil {
+			return 0, fmt.Errorf("decoding github comment lookup response: %w", decErr)
+		}
+		for _, c := range comments {
+			if c.ID != 0 && notifierAuthorMatches(authID, authLogin, c.User.ID, c.User.Login) && strings.Contains(c.Body, marker) {
+				matchedID = c.ID
+			}
+		}
+		nextURL = parseNextLink(linkHeader)
+	}
+	return matchedID, nil
+}
+
 func (g *GitHubPreviewGroupNotifier) postOrUpdateComment(ctx context.Context, pg *v1alpha1.PreviewGroup, body string) error {
 	project, mr, err := g.getProjectAndMR(pg)
 	if err != nil {
@@ -283,6 +395,20 @@ func (g *GitHubPreviewGroupNotifier) postOrUpdateComment(ctx context.Context, pg
 		return err
 	}
 
+	commentID := g.getCommentID(pg)
+	var recoveredID int64
+	if commentID == 0 {
+		existingID, lookupErr := g.findExistingCommentID(ctx, escapedProject, mr, previewGroupCommentMarker(pg))
+		if lookupErr != nil {
+			return lookupErr
+		}
+		if existingID != 0 {
+			commentID = existingID
+			recoveredID = existingID
+		}
+	}
+
+	body = withPreviewGroupCommentMarker(pg, body)
 	payload := map[string]string{"body": body}
 	jsonPayload, _ := json.Marshal(payload)
 
@@ -290,7 +416,6 @@ func (g *GitHubPreviewGroupNotifier) postOrUpdateComment(ctx context.Context, pg
 	maxRetries := 3
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		commentID := g.getCommentID(pg)
 		var reqURL string
 		var method string
 
@@ -323,7 +448,7 @@ func (g *GitHubPreviewGroupNotifier) postOrUpdateComment(ctx context.Context, pg
 
 			sleepDuration := backoff
 			if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
-				if parsedSecs, err := strconv.Atoi(retryAfter); err == nil {
+				if parsedSecs, err := strconv.Atoi(retryAfter); err == nil && parsedSecs >= 0 {
 					sleepDuration = time.Duration(parsedSecs) * time.Second
 				}
 			} else if reset := resp.Header.Get("X-RateLimit-Reset"); reset != "" {
@@ -351,6 +476,8 @@ func (g *GitHubPreviewGroupNotifier) postOrUpdateComment(ctx context.Context, pg
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			_ = resp.Body.Close()
 			if commentID != 0 && resp.StatusCode == http.StatusNotFound {
+				commentID = 0
+				recoveredID = 0
 				g.setCommentID(pg, 0)
 				continue
 			}
@@ -359,16 +486,25 @@ func (g *GitHubPreviewGroupNotifier) postOrUpdateComment(ctx context.Context, pg
 
 		if commentID == 0 {
 			var result struct {
-				ID int64 `json:"id"`
+				ID   int64 `json:"id"`
+				User struct {
+					ID    int64  `json:"id"`
+					Login string `json:"login"`
+				} `json:"user"`
 			}
-			if err := json.NewDecoder(resp.Body).Decode(&result); err == nil && result.ID != 0 {
-				g.setCommentID(pg, result.ID)
+			if err := json.NewDecoder(resp.Body).Decode(&result); err == nil {
+				if result.ID != 0 {
+					g.setCommentID(pg, result.ID)
+				}
+				g.authorCache.record(result.User.ID, result.User.Login)
 			}
+		} else if recoveredID != 0 {
+			g.setCommentID(pg, recoveredID)
 		}
 		_ = resp.Body.Close()
-		break
+		return nil
 	}
-	return nil
+	return fmt.Errorf("github API write exhausted retries")
 }
 
 // PostGroupCreated performs its designated operation.

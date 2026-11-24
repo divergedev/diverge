@@ -2,9 +2,7 @@ package deployer
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
-	"regexp"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -23,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/database"
 	"github.com/divergedev/diverge/internal/multicluster"
 )
 
@@ -211,6 +210,19 @@ func (d *DirectDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) 
 					annos = make(map[string]string)
 				}
 				annos["divergedev.com/baseline-fingerprint"] = fp
+				_ = unstructured.SetNestedStringMap(obj.Object, annos, "spec", "template", "metadata", "annotations")
+			}
+		}
+
+		// Inject credential revision digest on Pod templates when a legacy DB Secret takeover updated credentials in place
+		if rev := strings.TrimSpace(env.Annotations[database.AnnotationDBCredentialRevision]); rev != "" {
+			kind := obj.GetKind()
+			if kind == "Deployment" || kind == "StatefulSet" || kind == "DaemonSet" || kind == "Rollout" {
+				annos, found, _ := unstructured.NestedStringMap(obj.Object, "spec", "template", "metadata", "annotations")
+				if !found || annos == nil {
+					annos = make(map[string]string)
+				}
+				annos[database.AnnotationDBCredentialRevision] = rev
 				_ = unstructured.SetNestedStringMap(obj.Object, annos, "spec", "template", "metadata", "annotations")
 			}
 		}
@@ -507,11 +519,6 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 	return nil
 }
 
-var (
-	nonAlnumHyphenRegex = regexp.MustCompile(`[^a-z0-9-]`)
-	multiHyphenRegex    = regexp.MustCompile(`-{2,}`)
-)
-
 func errOrNil(err error) error { return err }
 
 func (d *DirectDeployer) fetchedObjectsByKind(ctx context.Context, env *v1alpha1.Environment, targetNS string) (map[string][]unstructured.Unstructured, error) {
@@ -645,31 +652,18 @@ func isControllerDeferredConfigMap(env *v1alpha1.Environment, name string) bool 
 }
 
 func controllerDBEnvSecretName(envName string) string {
-	raw := strings.ToLower("diverge-db-env-" + envName)
-	raw = strings.NewReplacer(".", "-", "_", "-").Replace(raw)
-	raw = nonAlnumHyphenRegex.ReplaceAllString(raw, "")
-	raw = multiHyphenRegex.ReplaceAllString(raw, "-")
-	raw = strings.Trim(raw, "-")
-	if raw == "" {
-		raw = "resource"
-	}
-	sum := sha256.Sum256([]byte(envName))
-	hash := fmt.Sprintf("%x", sum)[:8]
-	prefix := raw
-	if len(prefix) > 63-9 {
-		prefix = strings.TrimRight(prefix[:63-9], "-")
-	}
-	if prefix == "" {
-		prefix = "r"
-	}
-	return prefix + "-" + hash
+	return database.EnvSecretName(envName)
+}
+
+func controllerGroupDBEnvSecretName(envName string) string {
+	return database.GroupEnvSecretName(envName)
 }
 
 func isControllerDeferredSecret(env *v1alpha1.Environment, name string) bool {
 	if env == nil || env.DeletionTimestamp.IsZero() {
 		return false
 	}
-	return name == controllerDBEnvSecretName(env.Name)
+	return name == controllerDBEnvSecretName(env.Name) || name == controllerGroupDBEnvSecretName(env.Name)
 }
 
 // Status returns the deployment status of resources managed by this deployer.

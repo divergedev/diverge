@@ -3,14 +3,18 @@ package notifier
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
 
 var (
+	// ErrNotGitHubSource indicates the project is not a GitHub project
+	ErrNotGitHubSource = errors.New("preview group source is not github")
 	// ErrNotGitLabSource indicates the project is not a GitLab project
 	ErrNotGitLabSource = errors.New("preview group source is not gitlab")
 	// ErrMissingMergeRequest indicates no merge request is associated
@@ -171,4 +175,103 @@ func buildPreviewGroupLinks(rawURL, headerValue string) (cleanBase, openURL, exi
 	exitCopy.RawQuery = exitQ.Encode()
 	exitURL = exitCopy.String()
 	return cleanBase, openURL, exitURL
+}
+
+func previewGroupCommentMarker(pg *v1alpha1.PreviewGroup) string {
+	if pg == nil {
+		return ""
+	}
+	src := fmt.Sprintf("%s:%s#%d",
+		strings.TrimSpace(pg.Spec.Source.Provider),
+		strings.TrimSpace(pg.Spec.Source.Project),
+		pg.Spec.Source.MR,
+	)
+	return fmt.Sprintf("<!-- diverge:previewgroup=%s source=%s -->", strings.TrimSpace(pg.Name), src)
+}
+
+func withPreviewGroupCommentMarker(pg *v1alpha1.PreviewGroup, body string) string {
+	marker := previewGroupCommentMarker(pg)
+	if marker == "" || strings.Contains(body, marker) {
+		return body
+	}
+	return body + "\n\n" + marker
+}
+
+func parseNextLink(header string) string {
+	for _, part := range strings.Split(header, ",") {
+		segments := strings.Split(strings.TrimSpace(part), ";")
+		if len(segments) < 2 {
+			continue
+		}
+		rawURL := strings.TrimSpace(segments[0])
+		if !strings.HasPrefix(rawURL, "<") || !strings.HasSuffix(rawURL, ">") {
+			continue
+		}
+		for _, param := range segments[1:] {
+			p := strings.TrimSpace(param)
+			if strings.EqualFold(p, `rel="next"`) || strings.EqualFold(p, "rel=next") {
+				return rawURL[1 : len(rawURL)-1]
+			}
+		}
+	}
+	return ""
+}
+
+func notifierAuthorMatches(authID int64, authLogin string, candID int64, candLogin string) bool {
+	authLogin = strings.TrimSpace(authLogin)
+	candLogin = strings.TrimSpace(candLogin)
+	if authID == 0 && authLogin == "" {
+		return false
+	}
+	if authID != 0 && candID != 0 {
+		return authID == candID
+	}
+	if authLogin != "" && candLogin != "" {
+		return strings.EqualFold(authLogin, candLogin)
+	}
+	return false
+}
+
+type cachedNotifierAuthor struct {
+	mu      sync.Mutex
+	checked bool
+	id      int64
+	login   string
+}
+
+func (a *cachedNotifierAuthor) record(id int64, login string) {
+	login = strings.TrimSpace(login)
+	if id == 0 && login == "" {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if id != 0 {
+		a.id = id
+	}
+	if login != "" {
+		a.login = login
+	}
+	a.checked = true
+}
+
+func (a *cachedNotifierAuthor) get(explicit string) (id int64, login string, shouldFetch bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if exp := strings.TrimSpace(explicit); exp != "" {
+		if a.id != 0 && strings.EqualFold(a.login, exp) {
+			return a.id, exp, false
+		}
+		return 0, exp, false
+	}
+	if a.id != 0 || a.login != "" || a.checked {
+		return a.id, a.login, false
+	}
+	return 0, "", true
+}
+
+func (a *cachedNotifierAuthor) markChecked() {
+	a.mu.Lock()
+	a.checked = true
+	a.mu.Unlock()
 }

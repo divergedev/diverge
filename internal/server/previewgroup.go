@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
 
 	"connectrpc.com/connect"
@@ -314,33 +315,84 @@ func nonMemberAnnotationsChanged(a, b map[string]string) bool {
 	return false
 }
 
+func parseDecimalRV(rv string) (uint64, bool) {
+	trimmed := strings.TrimSpace(rv)
+	if trimmed == "" {
+		return 0, false
+	}
+	v, err := strconv.ParseUint(trimmed, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+func resolveMemberEnvNS(m previewgroup.MemberRecord) string {
+	if ns := strings.TrimSpace(m.EnvironmentNamespace); ns != "" {
+		return ns
+	}
+	return strings.TrimSpace(m.Namespace)
+}
+
 func isSafeSourcePromotion(existing, updated *v1alpha1.PreviewGroup) bool {
 	if equality.Semantic.DeepEqual(existing.Spec.Source, updated.Spec.Source) {
 		return true
 	}
-	// Only exempt Spec.Source promotion when the prior creator MR is no longer present in updated members
-	// and updated.Spec.Source matches a surviving member's exact (Provider, Project, MR, Branch) with empty CommitSHA.
+	// Only exempt Spec.Source promotion/clearing when the prior creator MR is no longer present in updated members
+	// and updated.Spec.Source matches a surviving MR member (or clears to local when no MR member remains).
+	if existing.Spec.Source.MR <= 0 {
+		return false
+	}
 	if updated.Spec.Source.CommitSHA != "" && updated.Spec.Source.CommitSHA != existing.Spec.Source.CommitSHA {
 		return false
 	}
+	exProv := strings.ToLower(strings.TrimSpace(existing.Spec.Source.Provider))
+	if exProv == "local" {
+		exProv = ""
+	}
 	updatedMembers := previewgroup.ParseMembers(updated)
+	hasPositiveMRMember := false
 	for _, m := range updatedMembers {
-		if existing.Spec.Source.MR > 0 &&
-			strings.EqualFold(m.Project, existing.Spec.Source.Project) &&
-			m.MR == existing.Spec.Source.MR {
+		if m.MR > 0 {
+			hasPositiveMRMember = true
+		}
+		mProv := strings.ToLower(strings.TrimSpace(m.Provider))
+		if mProv == "local" {
+			mProv = ""
+		}
+		if m.MR == existing.Spec.Source.MR &&
+			(exProv == "" || mProv == "" || mProv == exProv) &&
+			(existing.Spec.Source.Project == "" || strings.EqualFold(strings.TrimSpace(m.Project), strings.TrimSpace(existing.Spec.Source.Project))) {
 			return false
 		}
 	}
-	for _, m := range updatedMembers {
-		if m.MR > 0 &&
-			strings.EqualFold(m.Provider, updated.Spec.Source.Provider) &&
-			strings.EqualFold(m.Project, updated.Spec.Source.Project) &&
-			m.MR == updated.Spec.Source.MR &&
-			m.Branch == updated.Spec.Source.Branch {
-			return true
+	if hasPositiveMRMember {
+		if updated.Spec.Source.CommitSHA != "" {
+			return false
 		}
+		for _, m := range updatedMembers {
+			if m.MR <= 0 {
+				continue
+			}
+			mProv := strings.ToLower(strings.TrimSpace(m.Provider))
+			if mProv != "github" && mProv != "gitlab" {
+				mProv = "local"
+			}
+			mBranch := strings.TrimSpace(m.Branch)
+			if strings.EqualFold(updated.Spec.Source.Provider, mProv) &&
+				strings.EqualFold(strings.TrimSpace(m.Project), strings.TrimSpace(updated.Spec.Source.Project)) &&
+				m.MR == updated.Spec.Source.MR &&
+				(updated.Spec.Source.Branch == mBranch || (mBranch == "" && updated.Spec.Source.Branch == updated.Name)) {
+				return true
+			}
+		}
+		return false
 	}
-	return false
+	return strings.EqualFold(strings.TrimSpace(updated.Spec.Source.Provider), "local") &&
+		strings.TrimSpace(updated.Spec.Source.Project) == "" &&
+		updated.Spec.Source.MR == 0 &&
+		updated.Spec.Source.CommitSHA == "" &&
+		(updated.Spec.Source.Branch == updated.Name || updated.Spec.Source.Branch == existing.Name)
 }
 
 func (s *PreviewGroupService) authorizeUpdateGroup(ctx context.Context, authzNS string, existing, updated *v1alpha1.PreviewGroup, specTouched bool) error {
@@ -394,8 +446,20 @@ func (s *PreviewGroupService) authorizeUpdateGroup(ctx context.Context, authzNS 
 					return err
 				}
 			}
-			if m.EnvironmentNamespace != "" {
-				if err := checkVerbNS("update", m.EnvironmentNamespace); err != nil {
+			if m.EnvironmentNamespace != "" || strings.TrimSpace(m.EnvironmentName) != "" {
+				if err := checkVerbNS("update", resolveMemberEnvNS(m)); err != nil {
+					return err
+				}
+			}
+		}
+		for _, m := range previewgroup.ParseMembers(existing) {
+			if m.Namespace != "" {
+				if err := checkVerbNS("update", m.Namespace); err != nil {
+					return err
+				}
+			}
+			if m.EnvironmentNamespace != "" || strings.TrimSpace(m.EnvironmentName) != "" {
+				if err := checkVerbNS("update", resolveMemberEnvNS(m)); err != nil {
 					return err
 				}
 			}
@@ -453,8 +517,8 @@ func (s *PreviewGroupService) authorizeUpdateGroup(ctx context.Context, authzNS 
 						return err
 					}
 				}
-				if oldM.EnvironmentNamespace != "" {
-					if err := checkVerbNS(verb, oldM.EnvironmentNamespace); err != nil {
+				if oldM.EnvironmentNamespace != "" || strings.TrimSpace(oldM.EnvironmentName) != "" {
+					if err := checkVerbNS(verb, resolveMemberEnvNS(oldM)); err != nil {
 						return err
 					}
 				}
@@ -472,8 +536,8 @@ func (s *PreviewGroupService) authorizeUpdateGroup(ctx context.Context, authzNS 
 						return err
 					}
 				}
-				if oldM.EnvironmentNamespace != "" {
-					if err := checkVerbNS("update", oldM.EnvironmentNamespace); err != nil {
+				if oldM.EnvironmentNamespace != "" || strings.TrimSpace(oldM.EnvironmentName) != "" {
+					if err := checkVerbNS("update", resolveMemberEnvNS(oldM)); err != nil {
 						return err
 					}
 				}
@@ -482,8 +546,8 @@ func (s *PreviewGroupService) authorizeUpdateGroup(ctx context.Context, authzNS 
 						return err
 					}
 				}
-				if newM.EnvironmentNamespace != "" {
-					if err := checkVerbNS("update", newM.EnvironmentNamespace); err != nil {
+				if newM.EnvironmentNamespace != "" || strings.TrimSpace(newM.EnvironmentName) != "" {
+					if err := checkVerbNS("update", resolveMemberEnvNS(newM)); err != nil {
 						return err
 					}
 				}
@@ -503,8 +567,8 @@ func (s *PreviewGroupService) authorizeUpdateGroup(ctx context.Context, authzNS 
 						return err
 					}
 				}
-				if newM.EnvironmentNamespace != "" {
-					if err := checkVerbNS(verb, newM.EnvironmentNamespace); err != nil {
+				if newM.EnvironmentNamespace != "" || strings.TrimSpace(newM.EnvironmentName) != "" {
+					if err := checkVerbNS(verb, resolveMemberEnvNS(newM)); err != nil {
 						return err
 					}
 				}
@@ -1068,11 +1132,27 @@ func (s *PreviewGroupService) WatchPreviewGroups(ctx context.Context, req *conne
 		return SanitizeK8sError(s.logger, err)
 	}
 
-	sentRVs := make(map[string]struct{}, len(list.Items))
+	listedRVs := make(map[string]uint64, len(list.Items))
+	lastSentRV := make(map[string]string, len(list.Items))
+	lastDeletedRV := make(map[string]string)
 	emittedLast := make(map[string]*pb.PreviewGroup, len(list.Items))
+
+	recordDeletedRV := func(objKey, rv string) {
+		if rv == "" {
+			return
+		}
+		if len(lastDeletedRV) >= 1024 {
+			clear(lastDeletedRV)
+		}
+		lastDeletedRV[objKey] = rv
+	}
 
 	for i := range list.Items {
 		crd := &list.Items[i]
+		objKey := crd.Namespace + "/" + crd.Name
+		if rvNum, ok := parseDecimalRV(crd.ResourceVersion); ok {
+			listedRVs[objKey] = rvNum
+		}
 		if namespace != "" && !previewGroupMatchesNamespace(crd, namespace) {
 			continue
 		}
@@ -1085,9 +1165,10 @@ func (s *PreviewGroupService) WatchPreviewGroups(ctx context.Context, req *conne
 			continue
 		}
 		if dom != nil {
-			objKey := crd.Namespace + "/" + crd.Name
 			emittedLast[objKey] = dom
-			sentRVs[objKey+"@"+crd.ResourceVersion] = struct{}{}
+			if crd.ResourceVersion != "" {
+				lastSentRV[objKey] = crd.ResourceVersion
+			}
 			if err := stream.Send(&pb.WatchPreviewGroupsResponse{
 				Type:            pb.WatchEventType_WATCH_EVENT_TYPE_ADDED,
 				PreviewGroup:    dom,
@@ -1114,21 +1195,25 @@ func (s *PreviewGroupService) WatchPreviewGroups(ctx context.Context, req *conne
 			}
 
 			objKey := event.Object.Namespace + "/" + event.Object.Name
-			if event.Version != "" {
-				if _, sent := sentRVs[objKey+"@"+event.Version]; sent {
-					continue
-				}
-			}
-
+			evRV, hasEvRV := parseDecimalRV(event.Version)
+			listedRV, inInitialList := listedRVs[objKey]
 			matches := (namespace == "" || previewGroupMatchesNamespace(event.Object, namespace)) &&
 				(!macaroonCaller || previewGroupAllowedForMacaroon(event.Object, namespace))
 
 			if event.Type == "DELETED" {
+				if inInitialList && hasEvRV && evRV < listedRV {
+					continue
+				}
+				if event.Version != "" && lastDeletedRV[objKey] == event.Version {
+					continue
+				}
 				prevDom, wasEmitted := emittedLast[objKey]
 				if !wasEmitted && !matches {
 					continue
 				}
 				delete(emittedLast, objKey)
+				delete(lastSentRV, objKey)
+				delete(listedRVs, objKey)
 				payload := prevDom
 				if matches {
 					if dom, mErr := CRDPgToProto(event.Object); mErr == nil && dom != nil {
@@ -1138,9 +1223,7 @@ func (s *PreviewGroupService) WatchPreviewGroups(ctx context.Context, req *conne
 				if payload == nil {
 					continue
 				}
-				if event.Version != "" {
-					sentRVs[objKey+"@"+event.Version] = struct{}{}
-				}
+				recordDeletedRV(objKey, event.Version)
 				if err := stream.Send(&pb.WatchPreviewGroupsResponse{
 					Type:            pb.WatchEventType_WATCH_EVENT_TYPE_DELETED,
 					PreviewGroup:    payload,
@@ -1151,14 +1234,23 @@ func (s *PreviewGroupService) WatchPreviewGroups(ctx context.Context, req *conne
 				continue
 			}
 
+			if inInitialList && hasEvRV {
+				if evRV <= listedRV {
+					continue
+				}
+				delete(listedRVs, objKey)
+			}
+			if event.Version != "" && lastSentRV[objKey] == event.Version {
+				continue
+			}
+
 			if !matches {
 				// Group previously visible on this stream moved out of the watched/allowed namespace:
 				// emit a DELETED event carrying ONLY the previously visible snapshot.
 				if prevDom, wasEmitted := emittedLast[objKey]; wasEmitted {
 					delete(emittedLast, objKey)
-					if event.Version != "" {
-						sentRVs[objKey+"@"+event.Version] = struct{}{}
-					}
+					delete(lastSentRV, objKey)
+					recordDeletedRV(objKey, event.Version)
 					if err := stream.Send(&pb.WatchPreviewGroupsResponse{
 						Type:            pb.WatchEventType_WATCH_EVENT_TYPE_DELETED,
 						PreviewGroup:    prevDom,
@@ -1180,9 +1272,10 @@ func (s *PreviewGroupService) WatchPreviewGroups(ctx context.Context, req *conne
 			}
 
 			_, wasEmitted := emittedLast[objKey]
+			delete(lastDeletedRV, objKey)
 			emittedLast[objKey] = dom
 			if event.Version != "" {
-				sentRVs[objKey+"@"+event.Version] = struct{}{}
+				lastSentRV[objKey] = event.Version
 			}
 
 			var eventType pb.WatchEventType

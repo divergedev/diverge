@@ -2,15 +2,14 @@ package deployer
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/database"
 	"github.com/divergedev/diverge/pkg/features"
 )
 
@@ -67,7 +66,7 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 
 	// Build envFrom for database secret injection
 	var containerEnvFrom []interface{}
-	dbSecretName := resolveDBSecret(env)
+	dbSecretName := resolveDBSecretWithContext(ctx, env)
 	if dbSecretName != "" {
 		containerEnvFrom = append(containerEnvFrom, map[string]interface{}{
 			"secretRef": map[string]interface{}{
@@ -247,6 +246,14 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 		annos["divergedev.com/baseline-fingerprint"] = fp
 		_ = unstructured.SetNestedStringMap(deploy.Object, annos, "spec", "template", "metadata", "annotations")
 	}
+	if rev := strings.TrimSpace(env.Annotations[database.AnnotationDBCredentialRevision]); rev != "" {
+		annos, found, _ := unstructured.NestedStringMap(deploy.Object, "spec", "template", "metadata", "annotations")
+		if !found || annos == nil {
+			annos = make(map[string]string)
+		}
+		annos[database.AnnotationDBCredentialRevision] = rev
+		_ = unstructured.SetNestedStringMap(deploy.Object, annos, "spec", "template", "metadata", "annotations")
+	}
 
 	// Service
 	svc := unstructured.Unstructured{
@@ -286,22 +293,39 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 //  2. Auto-provisioned Secret from SchemaProvider (diverge-db-env-<env.Name>)
 //  3. Empty string (no database injection)
 func resolveDBSecret(env *v1alpha1.Environment) string {
+	return resolveDBSecretWithContext(context.Background(), env)
+}
+
+func resolveDBSecretWithContext(ctx context.Context, env *v1alpha1.Environment) string {
+	if env == nil {
+		return ""
+	}
 	db := env.Spec.Database
+	connRef := strings.TrimSpace(db.ConnectionRef)
 	providerAnno := strings.TrimSpace(env.Annotations["divergedev.com/database-provider"])
+	// Explicitly shared-group children use their group ConnectionRef (or the ready shared Secret
+	// identified during readiness for legacy children before ConnectionRef is populated), even if
+	// Status.DatabaseProvider still records an earlier standalone Neon database for teardown.
+	if env.Annotations["divergedev.com/shared-group-db"] == "true" {
+		if connRef != "" {
+			return connRef
+		}
+		return database.ResolvedSharedDBSecret(ctx, env.Namespace, env.Name)
+	}
 	isNeon := db.Mode == "neon" || providerAnno == "neon" || strings.TrimSpace(env.Status.DatabaseProvider) == "neon"
 
 	// For Neon CoW branching, connectionRef holds the hub-side Neon API credentials Secret,
 	// NOT the application DATABASE_URL; preview pods always consume diverge-db-env-<env.Name>.
 	if isNeon {
 		if env.Status.DatabaseStatus != "" || len(env.Status.Conditions) == 0 {
-			return sanitizeDBEnvSecretName(fmt.Sprintf("diverge-db-env-%s", env.Name), env.Name, 63)
+			return database.EnvSecretName(env.Name)
 		}
 		return ""
 	}
 
 	// Primary path: user-provided connection secret
-	if db.ConnectionRef != "" {
-		return db.ConnectionRef
+	if connRef != "" {
+		return connRef
 	}
 
 	// Auto-provisioned secret for schema and branching modes (when database provisioning has
@@ -309,33 +333,12 @@ func resolveDBSecret(env *v1alpha1.Environment) string {
 	isAutoEnvSecretMode := db.Mode == "schema" || db.Mode == "cnpg" || db.Mode == "snapshot" || db.Mode == "fresh" ||
 		providerAnno == "cnpg" || providerAnno == "snapshot" || providerAnno == "fresh" || providerAnno == "schema"
 	if isAutoEnvSecretMode && (env.Status.DatabaseStatus != "" || len(env.Status.Conditions) == 0) {
-		return sanitizeDBEnvSecretName(fmt.Sprintf("diverge-db-env-%s", env.Name), env.Name, 63)
+		return database.EnvSecretName(env.Name)
 	}
 
 	return ""
 }
 
 func sanitizeDBEnvSecretName(raw, hashInput string, maxLength int) string {
-	if maxLength < 10 {
-		maxLength = 10
-	}
-	raw = strings.ToLower(raw)
-	raw = strings.NewReplacer(".", "-", "_", "-").Replace(raw)
-	raw = regexp.MustCompile(`[^a-z0-9-]`).ReplaceAllString(raw, "")
-	raw = regexp.MustCompile(`-{2,}`).ReplaceAllString(raw, "-")
-	raw = strings.Trim(raw, "-")
-
-	if raw == "" {
-		raw = "resource"
-	}
-
-	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(hashInput)))[:8]
-	prefix := raw
-	if len(prefix) > maxLength-9 {
-		prefix = strings.TrimRight(prefix[:maxLength-9], "-")
-	}
-	if prefix == "" {
-		prefix = "r"
-	}
-	return prefix + "-" + hash
+	return database.SanitizeK8sSecretName(raw, hashInput, maxLength)
 }

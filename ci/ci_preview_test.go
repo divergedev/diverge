@@ -439,6 +439,77 @@ services:
 			t.Errorf("expected kubectl delete environment pr-42 in log, got:\n%s", logStr)
 		}
 	})
+
+	t.Run("deploy_group_reads_atomic_routing_snapshot_and_fails_on_lookup_error", func(t *testing.T) {
+		mockDir := t.TempDir()
+		mockDiverge := filepath.Join(mockDir, "diverge")
+		mockDivergeLog := filepath.Join(mockDir, "diverge.log")
+		mockDivergeScript := "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> " + mockDivergeLog + "\n"
+		if err := os.WriteFile(mockDiverge, []byte(mockDivergeScript), 0o755); err != nil {
+			t.Fatalf("failed to write mock diverge: %v", err)
+		}
+
+		mockKubectl := filepath.Join(mockDir, "kubectl")
+		mockKubectlScript := "#!/usr/bin/env bash\n" +
+			"if [[ \"${MOCK_KUBECTL_FAIL:-0}\" == \"1\" ]]; then\n" +
+			"\techo \"error: timed out\" >&2\n" +
+			"\texit 1\n" +
+			"fi\n" +
+			"printf '{\"spec\":{\"routing\":{\"headerKey\":\"x-shared-key\",\"headerValue\":\"shared-grp\"}}}\\n'\n"
+		if err := os.WriteFile(mockKubectl, []byte(mockKubectlScript), 0o755); err != nil {
+			t.Fatalf("failed to write mock kubectl: %v", err)
+		}
+
+		ghOutFile := filepath.Join(t.TempDir(), "github_output")
+		encodedKube := base64.StdEncoding.EncodeToString([]byte("apiVersion: v1\nkind: Config\n"))
+		cmd := exec.Command(scriptPath)
+		cmd.Dir = repoDir
+		cmd.Env = append(os.Environ(),
+			"DIVERGE_BIN="+mockDiverge,
+			"KUBECTL_BIN="+mockKubectl,
+			"GITHUB_OUTPUT="+ghOutFile,
+			"GITHUB_REPOSITORY=acme/commerce",
+			"INPUT_ACTION=deploy",
+			"INPUT_GROUP=feat/checkout-discount",
+			"INPUT_SERVICES=checkout-api=ghcr.io/acme/checkout-api:sha1",
+			"INPUT_PR_NUMBER=42",
+			"INPUT_KUBECONFIG="+encodedKube,
+		)
+		outBytes, runErr := cmd.CombinedOutput()
+		if runErr != nil {
+			t.Fatalf("expected group deploy to succeed, got %v:\n%s", runErr, string(outBytes))
+		}
+		ghOut := parseKeyValueFile(ghOutFile)
+		if ghOut["routing-header"] != "x-shared-key: shared-grp" {
+			t.Errorf("expected effective routing-header='x-shared-key: shared-grp', got %q", ghOut["routing-header"])
+		}
+		divArgs, err := os.ReadFile(mockDivergeLog)
+		if err != nil {
+			t.Fatalf("failed to read diverge log: %v", err)
+		}
+		if !strings.Contains(string(divArgs), "--provider github") {
+			t.Errorf("expected --provider github in preview join args, got: %s", string(divArgs))
+		}
+
+		// When kubectl get previewgroup fails, script must fail rather than emitting job defaults
+		cmdFail := exec.Command(scriptPath)
+		cmdFail.Dir = repoDir
+		cmdFail.Env = append(os.Environ(),
+			"DIVERGE_BIN="+mockDiverge,
+			"KUBECTL_BIN="+mockKubectl,
+			"MOCK_KUBECTL_FAIL=1",
+			"GITHUB_OUTPUT="+filepath.Join(t.TempDir(), "github_output"),
+			"GITHUB_REPOSITORY=acme/commerce",
+			"INPUT_ACTION=deploy",
+			"INPUT_GROUP=feat/checkout-discount",
+			"INPUT_SERVICES=checkout-api=ghcr.io/acme/checkout-api:sha1",
+			"INPUT_PR_NUMBER=42",
+			"INPUT_KUBECONFIG="+encodedKube,
+		)
+		if failOut, failErr := cmdFail.CombinedOutput(); failErr == nil {
+			t.Fatalf("expected non-zero exit when effective routing snapshot lookup fails, got output:\n%s", string(failOut))
+		}
+	})
 }
 
 func parseKeyValueFile(path string) map[string]string {

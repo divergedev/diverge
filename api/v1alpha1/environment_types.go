@@ -69,9 +69,15 @@ func canonicalizeClusterTargetRef(ref *ClusterTargetRef, defaultNamespace string
 	}
 }
 
+// EqualClusterTargetRefInNamespaces reports whether two ClusterTargetRefs resolve to the same canonical
+// target cluster and Secret reference when each ref resolves unqualified Secret references in its own namespace.
+func EqualClusterTargetRefInNamespaces(a *ClusterTargetRef, aDefaultNS string, b *ClusterTargetRef, bDefaultNS string) bool {
+	return canonicalizeClusterTargetRef(a, aDefaultNS) == canonicalizeClusterTargetRef(b, bDefaultNS)
+}
+
 // EqualClusterTargetRef reports whether two ClusterTargetRefs resolve to the same canonical target cluster and Secret reference.
 func EqualClusterTargetRef(a, b *ClusterTargetRef, defaultNamespace string) bool {
-	return canonicalizeClusterTargetRef(a, defaultNamespace) == canonicalizeClusterTargetRef(b, defaultNamespace)
+	return EqualClusterTargetRefInNamespaces(a, defaultNamespace, b, defaultNamespace)
 }
 
 // MigrationJobSpec configures a Kubernetes Job for database migrations.

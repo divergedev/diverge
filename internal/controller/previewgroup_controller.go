@@ -34,11 +34,12 @@ import (
 )
 
 const (
-	previewGroupFinalizer    = "divergedev.com/previewgroup-protection"
-	labelPreviewGroup        = "divergedev.com/previewgroup"
-	labelManagedBy           = "divergedev.com/managed-by"
-	annotationCommentSource  = "divergedev.com/comment-source"
-	annotationReportedCommit = "divergedev.com/reported-commit"
+	previewGroupFinalizer         = "divergedev.com/previewgroup-protection"
+	labelPreviewGroup             = "divergedev.com/previewgroup"
+	labelManagedBy                = "divergedev.com/managed-by"
+	annotationCommentSource       = "divergedev.com/comment-source"
+	annotationReportedCommit      = "divergedev.com/reported-commit"
+	annotationPendingNotification = "divergedev.com/pending-notification"
 )
 
 // PreviewGroupReconciler reconciles a PreviewGroup object.
@@ -145,7 +146,7 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			}
 			return ctrl.Result{}, nil
 		}
-		requeueAfter = time.Until(expiryTime)
+		requeueAfter = clampPositiveRequeue(time.Until(expiryTime))
 	}
 
 	if pg.Status.LeaseRenewedAt != nil {
@@ -153,7 +154,10 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		if time.Now().After(expiration) {
 			logger.Info("PreviewGroup lease expired, marking abandoned and triggering deletion")
 			pg.Status.Phase = divergeiov1alpha1.PreviewGroupPhaseAbandoned
-			if err := r.Status().Patch(ctx, &pg, client.MergeFrom(statusBase)); err != nil {
+			if err := r.Status().Patch(ctx, &pg, client.MergeFromWithOptions(statusBase, client.MergeFromWithOptimisticLock{})); err != nil {
+				if apierrors.IsConflict(err) {
+					return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
+				}
 				return ctrl.Result{}, fmt.Errorf("failed to update PreviewGroup status: %w", err)
 			}
 
@@ -184,10 +188,7 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			return ctrl.Result{}, nil
 		}
 
-		d := time.Until(expiration)
-		if requeueAfter == 0 || d < requeueAfter {
-			requeueAfter = d
-		}
+		requeueAfter = shorterRequeueDelay(requeueAfter, clampPositiveRequeue(time.Until(expiration)))
 	}
 
 	// Reconcile child Environments for each service
@@ -212,12 +213,16 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	// Provision a single shared group-level database when Spec.Database is configured on a concrete provider
-	groupDBVars, groupDBAnchorNS, groupDBHandled, groupDBReady, groupDBCleanupPending, groupDBErr := r.reconcileGroupDatabase(ctx, &pg)
+	groupDBVars, groupDBAnchorNS, groupDBHandled, groupDBReady, groupDBNeedsRequeue, groupDBErr := r.reconcileGroupDatabase(ctx, &pg)
+	if errors.Is(groupDBErr, errPreviewGroupRevisionChanged) || isConflictError(groupDBErr) {
+		return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
+	}
 	// Always refresh statusBase ResourceVersion/annotations in case reconcileGroupDatabase persisted or cleared metadata
 	statusBase.ResourceVersion = pg.ResourceVersion
-	statusBase.Annotations = pg.DeepCopy().Annotations
-	if groupDBCleanupPending {
-		requeue = true
+	statusBase.Annotations = cloneStringMap(pg.Annotations)
+	var shortRequeue time.Duration
+	if groupDBNeedsRequeue {
+		shortRequeue = 3 * time.Second
 	}
 	if groupDBHandled {
 		if groupDBErr != nil {
@@ -231,21 +236,86 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 				Message:            failMsg,
 				ObservedGeneration: pg.Generation,
 			})
-			if r.StatusReporter != nil && pg.Status.Phase != prevPhase && strings.TrimSpace(pg.Spec.Source.CommitSHA) != "" {
+			prevReportedCommit := ""
+			if pg.Annotations != nil {
+				prevReportedCommit = strings.TrimSpace(pg.Annotations[annotationReportedCommit])
+			}
+			failCommitKey := commitStateKey(&pg, "failed")
+			if r.StatusReporter != nil && failCommitKey != "" && failCommitKey != prevReportedCommit {
 				sCtx, cancelS := context.WithTimeout(ctx, 15*time.Second)
-				_ = r.StatusReporter.PostCommitStatus(sCtx, &divergeiov1alpha1.Environment{
+				sErr := r.StatusReporter.PostCommitStatus(sCtx, &divergeiov1alpha1.Environment{
 					ObjectMeta: metav1.ObjectMeta{Name: pg.Name},
 					Spec:       divergeiov1alpha1.EnvironmentSpec{Source: pg.Spec.Source},
 					Status:     divergeiov1alpha1.EnvironmentStatus{URL: pg.Spec.Routing.ExternalURL},
 				}, "failed", failMsg)
 				cancelS()
+				if sErr == nil {
+					if revChanged, mErr := r.patchPreviewGroupAnnotations(ctx, &pg, func(annos map[string]string) {
+						annos[annotationReportedCommit] = failCommitKey
+					}); mErr == nil {
+						if revChanged {
+							return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
+						}
+						statusBase.ResourceVersion = pg.ResourceVersion
+						statusBase.Annotations = cloneStringMap(pg.Annotations)
+					}
+				}
 			}
-			if r.Notifier != nil && pg.Status.Phase != prevPhase {
+			prevPendingNotify := ""
+			if pg.Annotations != nil {
+				prevPendingNotify = strings.TrimSpace(pg.Annotations[annotationPendingNotification])
+			}
+			currentCommentSource, prevCommentSource, sourcePromoted := resetCommentIfSourcePromoted(&pg)
+			var notifyErr error
+			attemptedNotify := false
+			if r.Notifier != nil && (pg.Status.Phase != prevPhase || sourcePromoted || prevPendingNotify != "") {
+				attemptedNotify = true
 				notifyCtx, cancelN := context.WithTimeout(ctx, 15*time.Second)
-				_ = r.Notifier.PostGroupFailed(notifyCtx, &pg, "GroupDatabaseFailed")
+				notifyErr = r.Notifier.PostGroupFailed(notifyCtx, &pg, "GroupDatabaseFailed")
 				cancelN()
 			}
-			_ = r.Status().Patch(ctx, &pg, client.MergeFrom(statusBase))
+			if pg.Status.CommentID != 0 {
+				if currentCommentSource != "" {
+					pg.Status.CommentSource = currentCommentSource
+				}
+			} else if sourcePromoted && notifyErr != nil && currentCommentSource != "" {
+				// Keep old CommentID cleared, but preserve previous source marker so next reconcile retries posting on promoted MR.
+				pg.Status.CommentSource = prevCommentSource
+			} else {
+				pg.Status.CommentSource = ""
+			}
+			desiredPendingNotify := prevPendingNotify
+			if attemptedNotify {
+				if notifyErr != nil && !isNonRetryableNotifyError(notifyErr) {
+					desiredPendingNotify = "phase"
+				} else {
+					desiredPendingNotify = ""
+				}
+			}
+			if desiredPendingNotify != "" && desiredPendingNotify != prevPendingNotify {
+				if revChanged, mErr := r.patchPreviewGroupAnnotations(ctx, &pg, func(annos map[string]string) {
+					annos[annotationPendingNotification] = desiredPendingNotify
+				}); mErr != nil {
+					return ctrl.Result{}, groupDBErr
+				} else if revChanged {
+					return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
+				}
+				statusBase.ResourceVersion = pg.ResourceVersion
+				statusBase.Annotations = cloneStringMap(pg.Annotations)
+			}
+			statusPatch := client.MergeFrom(statusBase)
+			if statusBase.ResourceVersion != "" {
+				statusPatch = client.MergeFromWithOptions(statusBase, client.MergeFromWithOptimisticLock{})
+			}
+			if pErr := r.Status().Patch(ctx, &pg, statusPatch); isConflictError(pErr) {
+				r.persistAcceptedCommentIfChanged(ctx, &pg, statusBase)
+			} else if pErr == nil && desiredPendingNotify == "" && prevPendingNotify != "" {
+				if _, mErr := r.patchPreviewGroupAnnotations(ctx, &pg, func(annos map[string]string) {
+					delete(annos, annotationPendingNotification)
+				}); mErr != nil {
+					return ctrl.Result{}, groupDBErr
+				}
+			}
 			return ctrl.Result{}, groupDBErr
 		}
 		if !groupDBReady {
@@ -265,6 +335,7 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	servicePhases := make(map[string]divergeiov1alpha1.EnvironmentPhase, len(pg.Spec.Services))
+	var childSecretErrs []error
 
 	for _, svc := range pg.Spec.Services {
 		envName := childEnvironmentName(pg.Name, svc.Name)
@@ -325,13 +396,20 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 		var sharedDBSecretName string
 		if groupDBHandled && svc.Database == nil && len(groupDBVars) > 0 {
-			secName, secErr := r.ensureChildSharedDBSecret(ctx, &pg, svc, envName, targetNS, groupDBAnchorNS, groupDBVars)
+			secName, secRevChanged, secErr := r.ensureChildSharedDBSecret(ctx, &pg, svc, envName, targetNS, groupDBAnchorNS, groupDBVars)
+			// Refresh statusBase ResourceVersion/annotations in case ensureChildSharedDBSecret recorded a remote target on pg
+			statusBase.ResourceVersion = pg.ResourceVersion
+			statusBase.Annotations = cloneStringMap(pg.Annotations)
+			if isConflictError(secErr) || secRevChanged {
+				return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
+			}
 			if secErr != nil {
 				svcStatus.Phase = divergeiov1alpha1.PhaseFailed
 				svcStatus.Reason = "SharedDatabaseSecretFailed"
 				svcStatus.Message = secErr.Error()
 				servicePhases[svc.Name] = svcStatus.Phase
 				serviceStatuses = append(serviceStatuses, svcStatus)
+				childSecretErrs = append(childSecretErrs, secErr)
 				continue
 			}
 			sharedDBSecretName = secName
@@ -341,6 +419,7 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		useSharedForChild := groupDBHandled && svc.Database == nil && sharedDBSecretName != ""
 		desiredEnv := r.buildChildEnvironmentWithSharedDB(&pg, svc, envName, targetNS, useSharedForChild, sharedDBSecretName)
 
+		childSpecUpdated := false
 		if !childExists {
 			// Create
 			if err := r.Create(ctx, desiredEnv); err != nil {
@@ -369,6 +448,7 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		} else {
 			// Update — sync spec if changed
 			if r.needsUpdate(&existingEnv, desiredEnv) {
+				specChanged := !equality.Semantic.DeepEqual(existingEnv.Spec, desiredEnv.Spec)
 				existingEnv.Spec = desiredEnv.Spec
 				existingEnv.Labels = desiredEnv.Labels
 				if existingEnv.Annotations == nil && len(desiredEnv.Annotations) > 0 {
@@ -384,12 +464,17 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 				}
 				if desiredEnv.Annotations[annotationSharedGroupDB] == "true" {
 					existingEnv.Annotations[annotationSharedGroupDB] = "true"
+					delete(existingEnv.Annotations, annotationSharedGroupDBDraining)
 				} else if existingEnv.Annotations != nil {
+					if existingEnv.Annotations[annotationSharedGroupDB] == "true" {
+						existingEnv.Annotations[annotationSharedGroupDBDraining] = "true"
+					}
 					delete(existingEnv.Annotations, annotationSharedGroupDB)
 				}
 				if err := r.Update(ctx, &existingEnv); err != nil {
 					return ctrl.Result{}, fmt.Errorf("failed to update child Environment %s/%s: %w", targetNS, envName, err)
 				}
+				childSpecUpdated = specChanged
 				r.Recorder.Eventf(&pg, "Normal", "ChildUpdated",
 					"Updated Environment %s/%s for service %s", targetNS, envName, svc.Name)
 			}
@@ -409,8 +494,13 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			}
 		}
 
-		// Run post-deploy hooks
-		if svc.PostDeploy != nil && svcStatus.Phase == divergeiov1alpha1.PhaseRunning {
+		childPendingSync := childExists && svcStatus.Phase == divergeiov1alpha1.PhaseRunning &&
+			(childSpecUpdated ||
+				(existingEnv.Generation > 0 && existingEnv.Status.ObservedGeneration < existingEnv.Generation) ||
+				meta.IsStatusConditionFalse(existingEnv.Status.Conditions, "DatabaseReady"))
+
+		// Run post-deploy hooks only after the child Environment has converged on the current revision
+		if childExists && svc.PostDeploy != nil && svcStatus.Phase == divergeiov1alpha1.PhaseRunning && !childPendingSync {
 			if err := r.runPostDeployJob(ctx, &existingEnv, svc.PostDeploy); err != nil {
 				if errors.Is(err, ErrHookInProgress) {
 					blocking := svc.PostDeploy.Blocking != nil && *svc.PostDeploy.Blocking
@@ -432,7 +522,19 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			}
 		}
 
-		servicePhases[svc.Name] = svcStatus.Phase
+		handoffPhase := svcStatus.Phase
+		if childPendingSync {
+			handoffPhase = divergeiov1alpha1.PhaseDeploying
+			svcStatus.Phase = divergeiov1alpha1.PhaseDeploying
+			if svcStatus.Reason == "" {
+				svcStatus.Reason = "ChildSyncing"
+			}
+			if svcStatus.Message == "" {
+				svcStatus.Message = "Waiting for child Environment to reconcile current specification"
+			}
+			requeue = true
+		}
+		servicePhases[svc.Name] = handoffPhase
 		serviceStatuses = append(serviceStatuses, svcStatus)
 	}
 
@@ -443,7 +545,16 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	// Delete orphaned Environments (services removed from spec)
-	orphanCleanupErr := r.deleteOrphanedEnvironments(ctx, &pg, desiredEnvNames)
+	orphanCleanupRequeue, orphanCleanupErr := r.deleteOrphanedEnvironments(ctx, &pg, desiredEnvNames)
+	// Refresh statusBase ResourceVersion/annotations in case cleanupOrphanedChildSharedDBSecrets pruned recorded targets on pg
+	statusBase.ResourceVersion = pg.ResourceVersion
+	statusBase.Annotations = cloneStringMap(pg.Annotations)
+	if errors.Is(orphanCleanupErr, errPreviewGroupRevisionChanged) || isConflictError(orphanCleanupErr) {
+		return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
+	}
+	if orphanCleanupRequeue && (shortRequeue == 0 || 3*time.Second < shortRequeue) {
+		shortRequeue = 3 * time.Second
+	}
 	if orphanCleanupErr != nil {
 		logger.Error(orphanCleanupErr, "failed to delete orphaned Environments")
 	}
@@ -479,125 +590,166 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	meta.SetStatusCondition(&pg.Status.Conditions, readyCondition)
 
 	prevPhase := statusBase.Status.Phase
-	currentCommentSource := previewGroupCommentSourceKey(&pg)
-	prevCommentSource := ""
-	if pg.Annotations != nil {
-		prevCommentSource = strings.TrimSpace(pg.Annotations[annotationCommentSource])
-	}
-	sourcePromoted := false
-	if pg.Status.CommentID != 0 && prevCommentSource != "" && prevCommentSource != currentCommentSource {
-		// Creator MR left and Spec.Source promoted to a new MR (potentially in the same monorepo):
-		// reset CommentID so we post a fresh comment on the promoted MR instead of editing the closed PR's comment.
-		pg.Status.CommentID = 0
-		sourcePromoted = true
-	}
+	currentCommentSource, prevCommentSource, sourcePromoted := resetCommentIfSourcePromoted(&pg)
 
 	prevReportedCommit := ""
 	if pg.Annotations != nil {
 		prevReportedCommit = strings.TrimSpace(pg.Annotations[annotationReportedCommit])
 	}
-	currentCommitKey := ""
-	if sha := strings.TrimSpace(pg.Spec.Source.CommitSHA); sha != "" {
-		currentCommitKey = fmt.Sprintf("%s:%s@%s",
-			strings.ToLower(strings.TrimSpace(pg.Spec.Source.Provider)),
-			strings.ToLower(strings.TrimSpace(pg.Spec.Source.Project)),
-			sha,
-		)
+	var commitState, commitDesc string
+	switch pg.Status.Phase {
+	case divergeiov1alpha1.PreviewGroupPhaseRunning:
+		commitState = "success"
+		commitDesc = fmt.Sprintf("Preview group %s ready", pg.Name)
+	case divergeiov1alpha1.PreviewGroupPhaseFailed, divergeiov1alpha1.PreviewGroupPhaseDegraded:
+		commitState = "failed"
+		commitDesc = readyCondition.Message
 	}
-	commitChanged := currentCommitKey != "" && currentCommitKey != prevReportedCommit
+	currentCommitStateKey := commitStateKey(&pg, commitState)
 	reportedCommitUpdated := false
 
-	if r.StatusReporter != nil && (pg.Status.Phase != prevPhase || commitChanged) && currentCommitKey != "" {
-		var commitState, commitDesc string
-		switch pg.Status.Phase {
-		case divergeiov1alpha1.PreviewGroupPhaseRunning:
-			commitState = "success"
-			commitDesc = fmt.Sprintf("Preview group %s ready", pg.Name)
-		case divergeiov1alpha1.PreviewGroupPhaseFailed, divergeiov1alpha1.PreviewGroupPhaseDegraded:
-			commitState = "failed"
-			commitDesc = readyCondition.Message
+	if r.StatusReporter != nil && currentCommitStateKey != "" && currentCommitStateKey != prevReportedCommit {
+		syntheticEnv := &divergeiov1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{Name: pg.Name},
+			Spec:       divergeiov1alpha1.EnvironmentSpec{Source: pg.Spec.Source},
+			Status:     divergeiov1alpha1.EnvironmentStatus{URL: pg.Spec.Routing.ExternalURL},
 		}
-		if commitState != "" {
-			syntheticEnv := &divergeiov1alpha1.Environment{
-				ObjectMeta: metav1.ObjectMeta{Name: pg.Name},
-				Spec:       divergeiov1alpha1.EnvironmentSpec{Source: pg.Spec.Source},
-				Status:     divergeiov1alpha1.EnvironmentStatus{URL: pg.Spec.Routing.ExternalURL},
-			}
-			sCtx, cancelS := context.WithTimeout(ctx, 15*time.Second)
-			if sErr := r.StatusReporter.PostCommitStatus(sCtx, syntheticEnv, commitState, commitDesc); sErr != nil {
-				logger.Error(sErr, "failed to post preview group commit status")
-			} else {
-				reportedCommitUpdated = true
-			}
-			cancelS()
+		sCtx, cancelS := context.WithTimeout(ctx, 15*time.Second)
+		if sErr := r.StatusReporter.PostCommitStatus(sCtx, syntheticEnv, commitState, commitDesc); sErr != nil {
+			logger.Error(sErr, "failed to post preview group commit status")
+			requeue = true
+		} else {
+			reportedCommitUpdated = true
 		}
+		cancelS()
 	}
 
-	// Run SCM notifications BEFORE Status().Patch so newly created Status.CommentID is persisted,
-	// and only emit notifications when phase, service statuses, or promoted source MR changed.
+	// Run SCM notifications BEFORE Status().Patch so newly created Status.CommentID and Status.CommentSource are persisted atomically together,
+	// and retry transiently failed notifications while preserving the reconciled Status.Phase.
+	prevPendingNotify := ""
+	if pg.Annotations != nil {
+		prevPendingNotify = strings.TrimSpace(pg.Annotations[annotationPendingNotification])
+	}
+	var notifyErr error
+	attemptedNotify := false
+	attemptedNotifyKind := ""
 	if r.Notifier != nil {
 		servicesChanged := !equality.Semantic.DeepEqual(statusBase.Status.Services, pg.Status.Services)
-		if pg.Status.Phase != prevPhase || sourcePromoted {
+		if pg.Status.Phase != prevPhase || sourcePromoted || prevPendingNotify == "phase" || (prevPendingNotify != "" && pg.Status.CommentID == 0) {
+			attemptedNotify = true
+			attemptedNotifyKind = "phase"
 			notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			switch pg.Status.Phase {
 			case divergeiov1alpha1.PreviewGroupPhaseRunning:
 				if err := r.Notifier.PostGroupReady(notifyCtx, &pg); err != nil {
 					logger.Error(err, "failed to post group ready notification")
+					notifyErr = err
 				}
 			case divergeiov1alpha1.PreviewGroupPhaseFailed, divergeiov1alpha1.PreviewGroupPhaseDegraded:
 				if err := r.Notifier.PostGroupFailed(notifyCtx, &pg, readyCondition.Reason); err != nil {
 					logger.Error(err, "failed to post group failed notification")
+					notifyErr = err
 				}
 			default:
 				if pg.Status.CommentID == 0 {
 					if err := r.Notifier.PostGroupCreated(notifyCtx, &pg); err != nil {
 						logger.Error(err, "failed to post group created notification")
+						notifyErr = err
 					}
 				} else {
 					if err := r.Notifier.UpdateGroupStatus(notifyCtx, &pg); err != nil {
 						logger.Error(err, "failed to update group status notification")
+						notifyErr = err
 					}
 				}
 			}
 			cancel()
-		} else if servicesChanged {
+		} else if servicesChanged || prevPendingNotify == "status" {
+			attemptedNotify = true
+			attemptedNotifyKind = "status"
 			notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			if err := r.Notifier.UpdateGroupStatus(notifyCtx, &pg); err != nil {
 				logger.Error(err, "failed to update group status notification")
+				notifyErr = err
 			}
 			cancel()
 		}
 	}
 
-	// Persist comment-source and reported-commit annotations BEFORE Status().Patch so Status.CommentID
-	// is never stored paired with a stale previous MR's comment-source.
-	needMetaPatch := false
-	desiredStatus := pg.Status.DeepCopy()
-	metaBase := pg.DeepCopy()
-	if pg.Annotations == nil {
-		pg.Annotations = make(map[string]string)
-	}
-	if pg.Status.CommentID != 0 && currentCommentSource != "" && prevCommentSource != currentCommentSource {
-		pg.Annotations[annotationCommentSource] = currentCommentSource
-		needMetaPatch = true
-	}
-	if reportedCommitUpdated && prevReportedCommit != currentCommitKey {
-		pg.Annotations[annotationReportedCommit] = currentCommitKey
-		needMetaPatch = true
-	}
-	if needMetaPatch {
-		if mErr := r.Patch(ctx, &pg, client.MergeFrom(metaBase)); mErr != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to persist PreviewGroup notification metadata: %w", mErr)
+	desiredPendingNotify := prevPendingNotify
+	if attemptedNotify {
+		if notifyErr != nil && !isNonRetryableNotifyError(notifyErr) {
+			desiredPendingNotify = attemptedNotifyKind
+			requeue = true
+		} else {
+			desiredPendingNotify = ""
 		}
-		pg.Status = *desiredStatus
-		statusBase.ResourceVersion = pg.ResourceVersion
-		statusBase.Annotations = pg.DeepCopy().Annotations
 	}
 
-	// Persist status (including any updated Status.CommentID)
+	if pg.Status.CommentID != 0 {
+		if currentCommentSource != "" {
+			pg.Status.CommentSource = currentCommentSource
+		}
+	} else if sourcePromoted && notifyErr != nil && currentCommentSource != "" {
+		// Keep old CommentID cleared, but preserve previous source marker so next reconcile retries posting on promoted MR.
+		pg.Status.CommentSource = prevCommentSource
+		requeue = true
+	} else {
+		pg.Status.CommentSource = ""
+	}
+
+	// Persist reported-commit and pending-notification metadata before Status().Patch so retries survive restarts; CommentID + CommentSource are persisted atomically in Status().Patch below.
+	needCommitAnno := reportedCommitUpdated && prevReportedCommit != currentCommitStateKey
+	needSetPendingAnno := desiredPendingNotify != "" && desiredPendingNotify != prevPendingNotify
+	if needCommitAnno || needSetPendingAnno {
+		revChanged, mErr := r.patchPreviewGroupAnnotations(ctx, &pg, func(annos map[string]string) {
+			if needCommitAnno {
+				annos[annotationReportedCommit] = currentCommitStateKey
+			}
+			if needSetPendingAnno {
+				annos[annotationPendingNotification] = desiredPendingNotify
+			}
+		})
+		if mErr != nil {
+			if isConflictError(mErr) {
+				r.persistAcceptedCommentIfChanged(ctx, &pg, statusBase)
+				return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
+			}
+			return ctrl.Result{}, fmt.Errorf("failed to persist PreviewGroup notification metadata: %w", mErr)
+		}
+		if revChanged {
+			r.persistAcceptedCommentIfChanged(ctx, &pg, statusBase)
+			return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
+		}
+		statusBase.ResourceVersion = pg.ResourceVersion
+		statusBase.Annotations = cloneStringMap(pg.Annotations)
+	}
+
+	// Persist status (including CommentID + CommentSource together atomically)
 	patch := client.MergeFrom(statusBase)
+	if statusBase.ResourceVersion != "" {
+		patch = client.MergeFromWithOptions(statusBase, client.MergeFromWithOptimisticLock{})
+	}
 	if err := r.Status().Patch(ctx, &pg, patch); err != nil {
+		if isConflictError(err) {
+			r.persistAcceptedCommentIfChanged(ctx, &pg, statusBase)
+			return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
+		}
 		return ctrl.Result{}, fmt.Errorf("failed to update PreviewGroup status: %w", err)
+	}
+	if desiredPendingNotify == "" && prevPendingNotify != "" {
+		revChanged, mErr := r.patchPreviewGroupAnnotations(ctx, &pg, func(annos map[string]string) {
+			delete(annos, annotationPendingNotification)
+		})
+		if mErr != nil {
+			if isConflictError(mErr) {
+				requeue = true
+			} else {
+				return ctrl.Result{}, fmt.Errorf("failed to clear pending PreviewGroup notification metadata: %w", mErr)
+			}
+		} else if revChanged {
+			requeue = true
+		}
 	}
 
 	if orphanCleanupErr != nil {
@@ -606,11 +758,15 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if memberSyncErr != nil {
 		return ctrl.Result{}, memberSyncErr
 	}
-	if requeueAfter > 0 {
-		return ctrl.Result{RequeueAfter: requeueAfter}, nil
+	if len(childSecretErrs) > 0 {
+		return ctrl.Result{}, errors.Join(childSecretErrs...)
 	}
 	if requeue {
-		return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
+		shortRequeue = shorterRequeueDelay(shortRequeue, 1*time.Second)
+	}
+	requeueAfter = shorterRequeueDelay(requeueAfter, shortRequeue)
+	if requeueAfter > 0 {
+		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
 	return ctrl.Result{}, nil
 }
@@ -639,6 +795,13 @@ func (r *PreviewGroupReconciler) handleTeardown(ctx context.Context, pg *diverge
 	remaining := 0
 	for i := range children {
 		child := &children[i]
+		if child.Spec.Deploy.ClusterRef != nil && multicluster.IsRemoteEnv(child) && childMayHoldSharedDBSecret(child, nil) {
+			if _, recErr := r.recordSharedDBSecretTarget(ctx, pg, child.Namespace, child.Spec.Deploy.ClusterRef); recErr != nil {
+				logger.Error(recErr, "failed to record remote spoke target before deleting child Environment", "name", child.Name, "namespace", child.Namespace)
+				remaining++
+				continue
+			}
+		}
 		if child.DeletionTimestamp.IsZero() {
 			hookCtx, cancelHook := context.WithTimeout(ctx, 15*time.Second)
 			hookErr := r.cleanupPostDeployJobs(hookCtx, child)
@@ -687,9 +850,14 @@ func (r *PreviewGroupReconciler) handleTeardown(ctx context.Context, pg *diverge
 	}
 
 	// All child Environments have drained — tear down any shared group-level database and wake attached standalone PR Environments
-	if err := r.teardownGroupDatabase(ctx, pg); err != nil {
+	tdRequeue, err := r.teardownGroupDatabase(ctx, pg)
+	if err != nil {
 		logger.Error(err, "failed to teardown shared group database", "group", pg.Name)
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, err
+	}
+	if tdRequeue {
+		logger.Info("Waiting for shared group database workloads or Secrets to drain before removing finalizer", "group", pg.Name)
+		return ctrl.Result{RequeueAfter: 3 * time.Second}, nil
 	}
 	if err := r.wakeUnclaimedStandaloneEnvironments(ctx, pg.Name, nil); err != nil {
 		logger.Error(err, "failed to wake standalone PR Environments during teardown", "group", pg.Name)
@@ -870,6 +1038,28 @@ func (r *PreviewGroupReconciler) needsUpdate(existing, desired *divergeiov1alpha
 	return false
 }
 
+func commitStateKey(pg *divergeiov1alpha1.PreviewGroup, state string) string {
+	if pg == nil || strings.TrimSpace(state) == "" {
+		return ""
+	}
+	sha := strings.TrimSpace(pg.Spec.Source.CommitSHA)
+	if sha == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s:%s@%s:%s",
+		strings.ToLower(strings.TrimSpace(pg.Spec.Source.Provider)),
+		strings.ToLower(strings.TrimSpace(pg.Spec.Source.Project)),
+		sha,
+		strings.ToLower(strings.TrimSpace(state)),
+	)
+}
+
+func isNonRetryableNotifyError(err error) bool {
+	return errors.Is(err, notifier.ErrMissingMergeRequest) ||
+		errors.Is(err, notifier.ErrNotGitHubSource) ||
+		errors.Is(err, notifier.ErrNotGitLabSource)
+}
+
 func previewGroupCommentSourceKey(pg *divergeiov1alpha1.PreviewGroup) string {
 	if pg == nil || pg.Spec.Source.MR <= 0 {
 		return ""
@@ -879,6 +1069,65 @@ func previewGroupCommentSourceKey(pg *divergeiov1alpha1.PreviewGroup) string {
 		strings.ToLower(strings.TrimSpace(pg.Spec.Source.Project)),
 		pg.Spec.Source.MR,
 	)
+}
+
+func resetCommentIfSourcePromoted(pg *divergeiov1alpha1.PreviewGroup) (string, string, bool) {
+	if pg == nil {
+		return "", "", false
+	}
+	currentCommentSource := previewGroupCommentSourceKey(pg)
+	prevCommentSource := strings.TrimSpace(pg.Status.CommentSource)
+	if prevCommentSource == "" && pg.Annotations != nil {
+		prevCommentSource = strings.TrimSpace(pg.Annotations[annotationCommentSource])
+	}
+	if prevCommentSource != "" && prevCommentSource != currentCommentSource &&
+		(pg.Status.CommentID != 0 || currentCommentSource != "") {
+		// Creator MR left and Spec.Source promoted to a new MR (potentially in the same monorepo):
+		// reset CommentID and CommentSource so we post a fresh comment on the promoted MR instead of editing the closed PR's comment.
+		pg.Status.CommentID = 0
+		pg.Status.CommentSource = ""
+		return currentCommentSource, prevCommentSource, true
+	}
+	return currentCommentSource, prevCommentSource, false
+}
+
+func (r *PreviewGroupReconciler) persistAcceptedCommentIfChanged(ctx context.Context, pg, statusBase *divergeiov1alpha1.PreviewGroup) {
+	if pg == nil || statusBase == nil {
+		return
+	}
+	if pg.Status.CommentID != 0 && pg.Status.CommentSource != "" &&
+		(pg.Status.CommentID != statusBase.Status.CommentID || pg.Status.CommentSource != statusBase.Status.CommentSource) {
+		r.persistAcceptedCommentOnConflict(ctx, pg.Name, pg.Status.CommentID, pg.Status.CommentSource)
+	}
+}
+
+func (r *PreviewGroupReconciler) persistAcceptedCommentOnConflict(ctx context.Context, pgName string, commentID int64, commentSource string) {
+	if r == nil || r.Client == nil || pgName == "" || commentID == 0 || commentSource == "" {
+		return
+	}
+	for attempt := 0; attempt < 3; attempt++ {
+		var latest divergeiov1alpha1.PreviewGroup
+		if err := r.Get(ctx, types.NamespacedName{Name: pgName}, &latest); err != nil {
+			return
+		}
+		if previewGroupCommentSourceKey(&latest) != commentSource {
+			return
+		}
+		if latest.Status.CommentID == commentID && latest.Status.CommentSource == commentSource {
+			return
+		}
+		base := latest.DeepCopy()
+		latest.Status.CommentID = commentID
+		latest.Status.CommentSource = commentSource
+		patch := client.MergeFrom(base)
+		if base.ResourceVersion != "" {
+			patch = client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
+		}
+		err := r.Status().Patch(ctx, &latest, patch)
+		if err == nil || !isConflictError(err) {
+			return
+		}
+	}
 }
 
 // listChildEnvironments returns all Environments owned by this PreviewGroup.
@@ -934,19 +1183,35 @@ func (r *PreviewGroupReconciler) propagateForceTeardownToChild(ctx context.Conte
 }
 
 // deleteOrphanedEnvironments removes child Environments that are no longer in the spec.
-func (r *PreviewGroupReconciler) deleteOrphanedEnvironments(ctx context.Context, pg *divergeiov1alpha1.PreviewGroup, desired map[string]bool) error {
+func (r *PreviewGroupReconciler) deleteOrphanedEnvironments(ctx context.Context, pg *divergeiov1alpha1.PreviewGroup, desired map[string]bool) (bool, error) {
 	logger := log.FromContext(ctx)
 
 	children, err := r.listChildEnvironments(ctx, pg)
 	if err != nil {
-		return err
+		return false, err
 	}
+
+	hasPinned := pg != nil && pg.Annotations != nil &&
+		(strings.TrimSpace(pg.Annotations[annotationGroupDBNamespace]) != "" ||
+			strings.TrimSpace(pg.Annotations[annotationGroupDBProvider]) != "")
+	usesSharedGroupSecrets := hasDedicatedGroupDatabase(pg) || hasPinned
 
 	var errs []error
 	for i := range children {
 		child := &children[i]
 		if !desired[child.Namespace+"/"+child.Name] && !desired[child.Name] {
 			logger.Info("Deleting orphaned Environment", "name", child.Name, "namespace", child.Namespace)
+			if child.Spec.Deploy.ClusterRef != nil && multicluster.IsRemoteEnv(child) && childMayHoldSharedDBSecret(child, nil) {
+				if recRevChanged, recErr := r.recordSharedDBSecretTarget(ctx, pg, child.Namespace, child.Spec.Deploy.ClusterRef); recErr != nil {
+					if isConflictError(recErr) {
+						return false, recErr
+					}
+					errs = append(errs, fmt.Errorf("failed to record remote spoke target for orphaned Environment %s/%s: %w", child.Namespace, child.Name, recErr))
+					continue
+				} else if recRevChanged {
+					return false, errPreviewGroupRevisionChanged
+				}
+			}
 			hookCtx, cancelHook := context.WithTimeout(ctx, 15*time.Second)
 			hookErr := r.cleanupPostDeployJobs(hookCtx, child)
 			cancelHook()
@@ -982,7 +1247,15 @@ func (r *PreviewGroupReconciler) deleteOrphanedEnvironments(ctx context.Context,
 				"Deleted orphaned Environment %s/%s", child.Namespace, child.Name)
 		}
 	}
-	return errors.Join(errs...)
+	secRequeue := false
+	if usesSharedGroupSecrets || hasRecordedSharedDBSecretTargets(pg) {
+		var secErr error
+		secRequeue, secErr = r.cleanupOrphanedChildSharedDBSecrets(ctx, pg, desired)
+		if secErr != nil {
+			errs = append(errs, secErr)
+		}
+	}
+	return secRequeue, errors.Join(errs...)
 }
 
 // derivePreviewGroupPhase computes the aggregate phase from per-service statuses.
@@ -1146,4 +1419,21 @@ func (r *PreviewGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.mapEnvironmentToGroup),
 		).
 		Complete(r)
+}
+
+func clampPositiveRequeue(d time.Duration) time.Duration {
+	if d <= 0 {
+		return 100 * time.Millisecond
+	}
+	return d
+}
+
+func shorterRequeueDelay(current, candidate time.Duration) time.Duration {
+	if candidate <= 0 {
+		return current
+	}
+	if current <= 0 || candidate < current {
+		return candidate
+	}
+	return current
 }

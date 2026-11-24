@@ -318,7 +318,16 @@ case "$INPUT_ACTION" in
         echo "No service changes detected relative to ${INPUT_BASE_REF}; skipping preview deployment."
         if [[ -n "$INPUT_GROUP" && "$INPUT_DRY_RUN" != "true" && "$INPUT_PR_NUMBER" =~ ^[0-9]+$ && "$INPUT_PR_NUMBER" -gt 0 ]]; then
           SCM_PROJECT="${GITHUB_REPOSITORY:-${CI_PROJECT_PATH:-}}"
+          SCM_PROVIDER=""
+          if [[ -n "${GITHUB_REPOSITORY:-}" ]]; then
+            SCM_PROVIDER="github"
+          elif [[ -n "${CI_PROJECT_PATH:-}" ]]; then
+            SCM_PROVIDER="gitlab"
+          fi
           REVERT_LEAVE_ARGS=(preview leave "$INPUT_GROUP" -n "$INPUT_NAMESPACE" --mr "$INPUT_PR_NUMBER")
+          if [[ -n "$SCM_PROVIDER" ]]; then
+            REVERT_LEAVE_ARGS+=(--provider "$SCM_PROVIDER")
+          fi
           if [[ -n "$SCM_PROJECT" ]]; then
             REVERT_LEAVE_ARGS+=(--project "$SCM_PROJECT")
           fi
@@ -378,6 +387,15 @@ case "$INPUT_ACTION" in
         JOIN_ARGS+=(--ttl "$INPUT_TTL")
       fi
       SCM_PROJECT="${GITHUB_REPOSITORY:-${CI_PROJECT_PATH:-}}"
+      SCM_PROVIDER=""
+      if [[ -n "${GITHUB_REPOSITORY:-}" ]]; then
+        SCM_PROVIDER="github"
+      elif [[ -n "${CI_PROJECT_PATH:-}" ]]; then
+        SCM_PROVIDER="gitlab"
+      fi
+      if [[ -n "$SCM_PROVIDER" ]]; then
+        JOIN_ARGS+=(--provider "$SCM_PROVIDER")
+      fi
       if [[ -n "$SCM_PROJECT" ]]; then
         JOIN_ARGS+=(--project "$SCM_PROJECT")
       fi
@@ -402,15 +420,19 @@ case "$INPUT_ACTION" in
       JOIN_ARGS+=("${SVC_ARGS[@]}")
       "$DIVERGE_BIN" "${JOIN_ARGS[@]}"
       if [[ "$INPUT_DRY_RUN" != "true" ]]; then
-        EFF_HK="$("$KUBECTL_BIN" get previewgroup "$PREVIEW_NAME" -o jsonpath='{.spec.routing.headerKey}' 2>/dev/null || "$KUBECTL_BIN" get previewgroup "$PREVIEW_NAME" -n "$INPUT_NAMESPACE" -o jsonpath='{.spec.routing.headerKey}' 2>/dev/null || true)"
-        EFF_HV="$("$KUBECTL_BIN" get previewgroup "$PREVIEW_NAME" -o jsonpath='{.spec.routing.headerValue}' 2>/dev/null || "$KUBECTL_BIN" get previewgroup "$PREVIEW_NAME" -n "$INPUT_NAMESPACE" -o jsonpath='{.spec.routing.headerValue}' 2>/dev/null || true)"
-        if [[ -n "$EFF_HK" ]]; then
-          INPUT_HEADER_KEY="$EFF_HK"
+        if ! EFF_JSON="$("$KUBECTL_BIN" get previewgroup "$PREVIEW_NAME" -o json 2>/dev/null || "$KUBECTL_BIN" get previewgroup "$PREVIEW_NAME" -n "$INPUT_NAMESPACE" -o json)"; then
+          echo "Error: failed to read effective routing headers for PreviewGroup '${PREVIEW_NAME}'" >&2
+          exit 1
         fi
-        if [[ -n "$EFF_HV" ]]; then
-          HEADER_VALUE="$EFF_HV"
-          INPUT_HEADER_VALUE="$EFF_HV"
+        EFF_HK="$(printf '%s' "$EFF_JSON" | jq -r '.spec.routing.headerKey // empty')"
+        EFF_HV="$(printf '%s' "$EFF_JSON" | jq -r '.spec.routing.headerValue // empty')"
+        if [[ -z "$EFF_HK" || -z "$EFF_HV" ]]; then
+          echo "Error: PreviewGroup '${PREVIEW_NAME}' is missing effective routing headers (headerKey='${EFF_HK}', headerValue='${EFF_HV}')" >&2
+          exit 1
         fi
+        INPUT_HEADER_KEY="$EFF_HK"
+        HEADER_VALUE="$EFF_HV"
+        INPUT_HEADER_VALUE="$EFF_HV"
         ROUTING_HEADER="${INPUT_HEADER_KEY}: ${HEADER_VALUE}"
         ROUTING_HEADER_JSON="$(jq -cn --arg k "$INPUT_HEADER_KEY" --arg v "$HEADER_VALUE" '{($k): $v}')"
       fi
@@ -535,6 +557,15 @@ case "$INPUT_ACTION" in
     if [[ -n "$INPUT_GROUP" ]]; then
       LEAVE_ARGS=(preview leave "$INPUT_GROUP" -n "$INPUT_NAMESPACE")
       SCM_PROJECT="${GITHUB_REPOSITORY:-${CI_PROJECT_PATH:-}}"
+      SCM_PROVIDER=""
+      if [[ -n "${GITHUB_REPOSITORY:-}" ]]; then
+        SCM_PROVIDER="github"
+      elif [[ -n "${CI_PROJECT_PATH:-}" ]]; then
+        SCM_PROVIDER="gitlab"
+      fi
+      if [[ -n "$SCM_PROVIDER" ]]; then
+        LEAVE_ARGS+=(--provider "$SCM_PROVIDER")
+      fi
       if [[ -n "$SCM_PROJECT" ]]; then
         LEAVE_ARGS+=(--project "$SCM_PROJECT")
       fi

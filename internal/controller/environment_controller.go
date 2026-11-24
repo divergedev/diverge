@@ -200,9 +200,6 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, nil
 	}
 
-	// 4. Set ObservedGeneration
-	env.Status.ObservedGeneration = env.Generation
-
 	// 5-7.7 Provisioning (Namespace, DB, Routing, Async, Banner, Features) with single-resolve pinned target
 	provCtx, res, done, err := r.reconcileProvisioningWithTarget(ctx, &env, statusBase)
 	if done {
@@ -214,6 +211,9 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if done {
 		return res, err
 	}
+
+	// 9. Record ObservedGeneration only after provisioning and deploy succeed for this spec generation
+	env.Status.ObservedGeneration = env.Generation
 
 	// 10. Derive phase
 	newPhase := derivePhase(env.Status.Conditions)

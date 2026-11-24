@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/database"
 	"github.com/divergedev/diverge/internal/multicluster"
 	"github.com/divergedev/diverge/pkg/registry"
 )
@@ -297,7 +298,7 @@ func (d *ArgoRolloutsDeployer) Deploy(ctx context.Context, env *v1alpha1.Environ
 	}
 
 	// 3. Reconcile the Argo Rollout resource.
-	rollout := d.buildRollout(env, targetNS, targetName, stableSvcName, serviceName, image, port, analysisTemplateName, isRemote)
+	rollout := d.buildRollout(ctx, env, targetNS, targetName, stableSvcName, serviceName, image, port, analysisTemplateName, isRemote)
 	if err := d.applyOrCreate(ctx, targetClient, rolloutGVK, rollout); err != nil {
 		return fmt.Errorf("failed to apply argo rollout: %w", err)
 	}
@@ -434,7 +435,7 @@ func (d *ArgoRolloutsDeployer) buildAnalysisTemplate(env *v1alpha1.Environment, 
 }
 
 // buildRollout constructs the Argo Rollouts Rollout resource for an environment.
-func (d *ArgoRolloutsDeployer) buildRollout(env *v1alpha1.Environment, targetNS, targetName, stableSvcName, serviceName, image string, port int64, analysisTemplateName string, isRemote bool) *unstructured.Unstructured {
+func (d *ArgoRolloutsDeployer) buildRollout(ctx context.Context, env *v1alpha1.Environment, targetNS, targetName, stableSvcName, serviceName, image string, port int64, analysisTemplateName string, isRemote bool) *unstructured.Unstructured {
 	rollout := &unstructured.Unstructured{}
 	rollout.SetGroupVersionKind(rolloutGVK)
 	d.setMetadataAndOwner(rollout, env, targetNS, targetName, serviceName, isRemote)
@@ -509,7 +510,7 @@ func (d *ArgoRolloutsDeployer) buildRollout(env *v1alpha1.Environment, targetNS,
 		})
 	}
 
-	if dbSecret := resolveDBSecret(env); dbSecret != "" {
+	if dbSecret := resolveDBSecretWithContext(ctx, env); dbSecret != "" {
 		addSecretEnvFrom(dbSecret)
 		if env.Spec.ServiceConfig != nil && env.Spec.ServiceConfig.DatabaseEnvKey != "" && !seenEnv[env.Spec.ServiceConfig.DatabaseEnvKey] {
 			seenEnv[env.Spec.ServiceConfig.DatabaseEnvKey] = true
@@ -595,6 +596,14 @@ func (d *ArgoRolloutsDeployer) buildRollout(env *v1alpha1.Environment, targetNS,
 	}
 
 	_ = unstructured.SetNestedSlice(rollout.Object, []interface{}{containerSpec}, "spec", "template", "spec", "containers")
+	if rev := strings.TrimSpace(env.Annotations[database.AnnotationDBCredentialRevision]); rev != "" {
+		annos, found, _ := unstructured.NestedStringMap(rollout.Object, "spec", "template", "metadata", "annotations")
+		if !found || annos == nil {
+			annos = make(map[string]string)
+		}
+		annos[database.AnnotationDBCredentialRevision] = rev
+		_ = unstructured.SetNestedStringMap(rollout.Object, annos, "spec", "template", "metadata", "annotations")
+	}
 
 	canarySpec := map[string]interface{}{
 		"canaryService": targetName,

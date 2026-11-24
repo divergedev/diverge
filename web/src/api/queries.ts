@@ -5,6 +5,7 @@ import { environmentClient, previewGroupClient, clusterClient, authClient, agent
 
 export const queryKeys = {
   environments: (ns?: string) => ['environments', ns ?? 'all'] as const,
+  allEnvironments: (ns?: string, phase = '') => ['environments', ns ?? 'all', 'allPages', phase] as const,
   environment: (ns: string, name: string) => ['environment', ns, name] as const,
   previewGroups: (ns?: string) => ['previewGroups', ns ?? 'all'] as const,
   previewGroup: (ns: string, name: string) => ['previewGroup', ns, name] as const,
@@ -35,9 +36,9 @@ export function useListAllEnvironments(
 ) {
   const pageSize = params.pageSize ?? 100
   return useQuery({
-    queryKey: [...queryKeys.environments(params.namespace), 'allPages', params.phase ?? ''] as const,
+    queryKey: queryKeys.allEnvironments(params.namespace, params.phase ?? ''),
     enabled: params.enabled ?? true,
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const allEnvs: Awaited<ReturnType<typeof environmentClient.listEnvironments>>['environments'] = []
       let currentToken = ''
       let lastResp: Awaited<ReturnType<typeof environmentClient.listEnvironments>> | undefined
@@ -45,12 +46,18 @@ export function useListAllEnvironments(
       const maxPages = 500
 
       for (let page = 0; page < maxPages; page++) {
-        const resp = await environmentClient.listEnvironments({
-          namespace: params.namespace ?? '',
-          phase: params.phase ?? '',
-          pageSize,
-          pageToken: currentToken,
-        })
+        if (signal?.aborted) {
+          throw signal.reason ?? new DOMException('Aborted', 'AbortError')
+        }
+        const resp = await environmentClient.listEnvironments(
+          {
+            namespace: params.namespace ?? '',
+            phase: params.phase ?? '',
+            pageSize,
+            pageToken: currentToken,
+          },
+          { signal },
+        )
         lastResp = resp
         allEnvs.push(...(resp.environments ?? []))
         const nextToken = resp.nextPageToken ?? ''
@@ -72,12 +79,15 @@ export function useListAllEnvironments(
         combined.environments = allEnvs
         return combined
       }
-      return environmentClient.listEnvironments({
-        namespace: params.namespace ?? '',
-        phase: params.phase ?? '',
-        pageSize,
-        pageToken: '',
-      })
+      return environmentClient.listEnvironments(
+        {
+          namespace: params.namespace ?? '',
+          phase: params.phase ?? '',
+          pageSize,
+          pageToken: '',
+        },
+        { signal },
+      )
     },
   })
 }

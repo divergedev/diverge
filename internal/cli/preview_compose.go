@@ -391,6 +391,7 @@ func newPreviewLeaveCmd(app *App) *cobra.Command {
 		fromEnvs []string
 		mrNumber int
 		project  string
+		provider string
 	)
 
 	cmd := &cobra.Command{
@@ -408,9 +409,21 @@ func newPreviewLeaveCmd(app *App) *cobra.Command {
 			}
 
 			effProject := strings.TrimSpace(project)
-			if effProject == "" && mrNumber > 0 {
+			effProvider := strings.ToLower(strings.TrimSpace(provider))
+			if effProvider != "" && effProvider != "github" && effProvider != "gitlab" {
+				return fmt.Errorf("invalid --provider %q: must be github or gitlab", provider)
+			}
+			if mrNumber > 0 && (effProject == "" || effProvider == "") {
 				if gitCtx, gErr := git.Detect(); gErr == nil && gitCtx != nil {
-					effProject = gitCtx.Project
+					if effProject == "" {
+						effProject = gitCtx.Project
+					}
+					if effProvider == "" {
+						gp := strings.ToLower(strings.TrimSpace(gitCtx.Provider))
+						if gp == "github" || gp == "gitlab" {
+							effProvider = gp
+						}
+					}
 				}
 			}
 
@@ -457,6 +470,7 @@ func newPreviewLeaveCmd(app *App) *cobra.Command {
 				GroupName:    groupName,
 				Namespace:    app.Namespace,
 				ServiceNames: services,
+				Provider:     effProvider,
 				Project:      effProject,
 				MR:           mrNumber,
 			})
@@ -472,6 +486,7 @@ func newPreviewLeaveCmd(app *App) *cobra.Command {
 	cmd.Flags().StringSliceVar(&fromEnvs, "from-env", nil, "Environment CR name(s) (<name> or <namespace>/<name>) whose service should be detached")
 	cmd.Flags().IntVar(&mrNumber, "mr", 0, "PR/MR number whose contributed service(s) should be detached")
 	cmd.Flags().StringVar(&project, "project", "", "repository path when detaching by --mr (defaults to current git remote)")
+	cmd.Flags().StringVar(&provider, "provider", "", "SCM provider filter when detaching by --mr (github, gitlab)")
 
 	return cmd
 }
