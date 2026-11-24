@@ -1,11 +1,12 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
-	"strconv"
+	"slices"
 	"strings"
 
 	"connectrpc.com/connect"
@@ -89,8 +90,29 @@ func previewGroupAllowedForMacaroon(pg *v1alpha1.PreviewGroup, boundNS string) b
 	return true
 }
 
+func validateUniqueGroupMembers(pg *v1alpha1.PreviewGroup) error {
+	if pg == nil {
+		return nil
+	}
+	seen := make(map[string]bool)
+	for _, m := range previewgroup.ParseMembers(pg) {
+		svc := strings.TrimSpace(m.Service)
+		if svc == "" {
+			continue
+		}
+		if seen[svc] {
+			return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("duplicate service %q in divergedev.com/group-members annotation", svc))
+		}
+		seen[svc] = true
+	}
+	return nil
+}
+
 func enforcePreviewGroupValidation(prior, current *v1alpha1.PreviewGroup) error {
 	if current != nil {
+		if err := validateUniqueGroupMembers(current); err != nil {
+			return err
+		}
 		for _, svc := range current.Spec.Services {
 			if strings.TrimSpace(svc.Name) == "" {
 				return connect.NewError(connect.CodeInvalidArgument, errors.New("service name is required"))
@@ -344,6 +366,11 @@ func (s *PreviewGroupService) authorizeUpdateGroup(ctx context.Context, authzNS 
 		return nil
 	}
 
+	// Reject duplicate member records upfront so map-keyed authorization and downstream slice consumers observe identical membership.
+	if err := validateUniqueGroupMembers(updated); err != nil {
+		return err
+	}
+
 	// Macaroon capability tokens may only update PreviewGroups whose existing AND updated services/members all stay in boundNS.
 	if isMacaroonUser(user) {
 		if len(existing.Spec.Services) == 0 && len(updated.Spec.Services) == 0 {
@@ -442,6 +469,11 @@ func (s *PreviewGroupService) authorizeUpdateGroup(ctx context.Context, authzNS 
 				}
 				if oldM.Namespace != "" {
 					if err := checkVerbNS("update", oldM.Namespace); err != nil {
+						return err
+					}
+				}
+				if oldM.EnvironmentNamespace != "" {
+					if err := checkVerbNS("update", oldM.EnvironmentNamespace); err != nil {
 						return err
 					}
 				}
@@ -775,25 +807,34 @@ func (s *PreviewGroupService) ListPreviewGroups(ctx context.Context, req *connec
 
 	nextToken := list.Continue
 	if needsPostFilter {
-		offset := 0
+		slices.SortFunc(pbs, func(a, b *pb.PreviewGroup) int {
+			return cmp.Compare(a.GetName(), b.GetName())
+		})
+		startIdx := 0
 		if req.Msg.PageToken != "" {
-			parsedOffset, pErr := strconv.Atoi(req.Msg.PageToken)
-			if pErr != nil || parsedOffset < 0 {
+			afterName, ok := strings.CutPrefix(req.Msg.PageToken, "after:")
+			if !ok || strings.TrimSpace(afterName) == "" {
 				return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("invalid page_token"))
 			}
-			offset = parsedOffset
+			startIdx = len(pbs)
+			for i, item := range pbs {
+				if item.GetName() > afterName {
+					startIdx = i
+					break
+				}
+			}
 		}
-		if offset >= len(pbs) {
+		if startIdx >= len(pbs) {
 			pbs = nil
 			nextToken = ""
 		} else {
-			end := offset + pageSize
+			end := startIdx + pageSize
 			if end < len(pbs) {
-				nextToken = strconv.Itoa(end)
-				pbs = pbs[offset:end]
+				nextToken = "after:" + pbs[end-1].GetName()
+				pbs = pbs[startIdx:end]
 			} else {
 				nextToken = ""
-				pbs = pbs[offset:]
+				pbs = pbs[startIdx:]
 			}
 		}
 	}
@@ -1028,6 +1069,7 @@ func (s *PreviewGroupService) WatchPreviewGroups(ctx context.Context, req *conne
 	}
 
 	sentRVs := make(map[string]struct{}, len(list.Items))
+	emittedLast := make(map[string]*pb.PreviewGroup, len(list.Items))
 
 	for i := range list.Items {
 		crd := &list.Items[i]
@@ -1043,7 +1085,9 @@ func (s *PreviewGroupService) WatchPreviewGroups(ctx context.Context, req *conne
 			continue
 		}
 		if dom != nil {
-			sentRVs[crd.Namespace+"/"+crd.Name+"@"+crd.ResourceVersion] = struct{}{}
+			objKey := crd.Namespace + "/" + crd.Name
+			emittedLast[objKey] = dom
+			sentRVs[objKey+"@"+crd.ResourceVersion] = struct{}{}
 			if err := stream.Send(&pb.WatchPreviewGroupsResponse{
 				Type:            pb.WatchEventType_WATCH_EVENT_TYPE_ADDED,
 				PreviewGroup:    dom,
@@ -1065,18 +1109,64 @@ func (s *PreviewGroupService) WatchPreviewGroups(ctx context.Context, req *conne
 				}
 				return connect.NewError(connect.CodeResourceExhausted, errors.New("event buffer overflow, please reconnect"))
 			}
+			if event.Object == nil {
+				continue
+			}
 
-			if event.Object != nil && event.Version != "" {
-				key := event.Object.Namespace + "/" + event.Object.Name + "@" + event.Version
-				if _, sent := sentRVs[key]; sent {
+			objKey := event.Object.Namespace + "/" + event.Object.Name
+			if event.Version != "" {
+				if _, sent := sentRVs[objKey+"@"+event.Version]; sent {
 					continue
 				}
 			}
 
-			if namespace != "" && !previewGroupMatchesNamespace(event.Object, namespace) {
+			matches := (namespace == "" || previewGroupMatchesNamespace(event.Object, namespace)) &&
+				(!macaroonCaller || previewGroupAllowedForMacaroon(event.Object, namespace))
+
+			if event.Type == "DELETED" {
+				prevDom, wasEmitted := emittedLast[objKey]
+				if !wasEmitted && !matches {
+					continue
+				}
+				delete(emittedLast, objKey)
+				payload := prevDom
+				if matches {
+					if dom, mErr := CRDPgToProto(event.Object); mErr == nil && dom != nil {
+						payload = dom
+					}
+				}
+				if payload == nil {
+					continue
+				}
+				if event.Version != "" {
+					sentRVs[objKey+"@"+event.Version] = struct{}{}
+				}
+				if err := stream.Send(&pb.WatchPreviewGroupsResponse{
+					Type:            pb.WatchEventType_WATCH_EVENT_TYPE_DELETED,
+					PreviewGroup:    payload,
+					ResourceVersion: event.Version,
+				}); err != nil {
+					return err
+				}
 				continue
 			}
-			if macaroonCaller && !previewGroupAllowedForMacaroon(event.Object, namespace) {
+
+			if !matches {
+				// Group previously visible on this stream moved out of the watched/allowed namespace:
+				// emit a DELETED event carrying ONLY the previously visible snapshot.
+				if prevDom, wasEmitted := emittedLast[objKey]; wasEmitted {
+					delete(emittedLast, objKey)
+					if event.Version != "" {
+						sentRVs[objKey+"@"+event.Version] = struct{}{}
+					}
+					if err := stream.Send(&pb.WatchPreviewGroupsResponse{
+						Type:            pb.WatchEventType_WATCH_EVENT_TYPE_DELETED,
+						PreviewGroup:    prevDom,
+						ResourceVersion: event.Version,
+					}); err != nil {
+						return err
+					}
+				}
 				continue
 			}
 
@@ -1089,14 +1179,22 @@ func (s *PreviewGroupService) WatchPreviewGroups(ctx context.Context, req *conne
 				continue
 			}
 
+			_, wasEmitted := emittedLast[objKey]
+			emittedLast[objKey] = dom
+			if event.Version != "" {
+				sentRVs[objKey+"@"+event.Version] = struct{}{}
+			}
+
 			var eventType pb.WatchEventType
 			switch event.Type {
 			case "ADDED":
 				eventType = pb.WatchEventType_WATCH_EVENT_TYPE_ADDED
 			case "MODIFIED":
-				eventType = pb.WatchEventType_WATCH_EVENT_TYPE_MODIFIED
-			case "DELETED":
-				eventType = pb.WatchEventType_WATCH_EVENT_TYPE_DELETED
+				if !wasEmitted {
+					eventType = pb.WatchEventType_WATCH_EVENT_TYPE_ADDED
+				} else {
+					eventType = pb.WatchEventType_WATCH_EVENT_TYPE_MODIFIED
+				}
 			default:
 				eventType = pb.WatchEventType_WATCH_EVENT_TYPE_UNSPECIFIED
 			}

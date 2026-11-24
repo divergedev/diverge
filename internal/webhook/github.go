@@ -116,7 +116,7 @@ func (h *GitHubWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	event := r.Header.Get("X-GitHub-Event")
 	if event == "issue_comment" {
 		action = "issue_comment"
-		h.handleIssueComment(ctx, w, bodyBytes)
+		h.handleIssueComment(ctx, w, bodyBytes, deliveryID)
 		return
 	}
 	if event != "pull_request" {
@@ -138,12 +138,14 @@ func (h *GitHubWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	switch payload.Action {
 	case "opened", "reopened", "synchronize":
 		if err := h.reconcileEnvironment(ctx, &payload); err != nil {
+			h.Dedup.Release(deliveryID)
 			logger.Error(err, "Failed to reconcile environment")
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
 	case "closed":
 		if err := h.deleteEnvironment(ctx, &payload); err != nil {
+			h.Dedup.Release(deliveryID)
 			logger.Error(err, "Failed to delete environment")
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
@@ -188,7 +190,7 @@ func isAuthorizedGitHubCommenter(assoc string) bool {
 	}
 }
 
-func (h *GitHubWebhookHandler) handleIssueComment(ctx context.Context, w http.ResponseWriter, bodyBytes []byte) {
+func (h *GitHubWebhookHandler) handleIssueComment(ctx context.Context, w http.ResponseWriter, bodyBytes []byte, deliveryID string) {
 	logger := log.FromContext(ctx).WithName("github-webhook")
 
 	var payload GitHubIssueCommentPayload
@@ -265,6 +267,7 @@ func (h *GitHubWebhookHandler) handleIssueComment(ctx context.Context, w http.Re
 		feedback, execErr = ExecuteSlashCommandWithFeedback(ctx, h.Client, h.DefaultNS, cmd, repoURL, branch, prNumber)
 	}
 	if execErr != nil {
+		h.Dedup.Release(deliveryID)
 		logger.Error(execErr, "Failed to execute slash command", "action", cmd.Action, "pr", prNumber)
 		h.postFeedbackComment(ctx, payload.Repository.FullName, prNumber, fmt.Sprintf("❌ **Diverge Command Error**\n\nFailed to execute `/diverge %s`: %v\n\nRun `/diverge help` for a list of available commands.", cmd.Action, execErr))
 		http.Error(w, "Internal server error", http.StatusInternalServerError)

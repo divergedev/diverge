@@ -130,20 +130,19 @@ Examples:
 			}
 			loadedCfg, cfgErr := config.Load(configPath)
 			if cfgErr != nil {
-				if cmd.Flags().Changed("config") && !errors.Is(cfgErr, os.ErrNotExist) {
-					return fmt.Errorf("failed to load config %s: %w", configPath, cfgErr)
-				}
-				if cmd.Flags().Changed("config") && errors.Is(cfgErr, os.ErrNotExist) {
+				if cmd.Flags().Changed("config") || !errors.Is(cfgErr, os.ErrNotExist) {
 					return fmt.Errorf("failed to load config %s: %w", configPath, cfgErr)
 				}
 			} else if loadedCfg != nil {
-				if vErr := loadedCfg.Validate(); vErr == nil {
-					res := loadedCfg.Resolve("preview", nil)
-					if rErr := res.Validate(); rErr == nil {
-						cfg = loadedCfg
-						resolvedCfg = res.EnvironmentSettings
-					}
+				if vErr := loadedCfg.Validate(); vErr != nil {
+					return fmt.Errorf("invalid config %s: %w", configPath, vErr)
 				}
+				res := loadedCfg.Resolve("preview", nil)
+				if rErr := res.Validate(); rErr != nil {
+					return fmt.Errorf("invalid resolved preview config %s: %w", configPath, rErr)
+				}
+				cfg = loadedCfg
+				resolvedCfg = res.EnvironmentSettings
 			}
 
 			var clusterRef *divergeiov1alpha1.ClusterTargetRef
@@ -420,6 +419,11 @@ func newPreviewLeaveCmd(app *App) *cobra.Command {
 				return fmt.Errorf("failed to create Kubernetes client: %w", err)
 			}
 
+			ns := strings.TrimSpace(app.Namespace)
+			if ns == "" {
+				ns = "default"
+			}
+
 			out := cmd.OutOrStdout()
 			if len(fromEnvs) > 0 {
 				for _, envRef := range fromEnvs {
@@ -427,9 +431,12 @@ func newPreviewLeaveCmd(app *App) *cobra.Command {
 					if envName == "" {
 						continue
 					}
+					if envNS == "" {
+						envNS = ns
+					}
 					res, lErr := previewgroup.Leave(cmd.Context(), c, previewgroup.LeaveOptions{
 						GroupName:            groupName,
-						Namespace:            app.Namespace,
+						Namespace:            ns,
 						EnvironmentName:      envName,
 						EnvironmentNamespace: envNS,
 					})

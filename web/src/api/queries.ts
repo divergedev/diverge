@@ -30,17 +30,21 @@ export function useListEnvironments(params: { namespace?: string; phase?: string
   })
 }
 
-export function useListAllEnvironments(params: { namespace?: string; phase?: string; pageSize?: number } = {}) {
+export function useListAllEnvironments(
+  params: { namespace?: string; phase?: string; pageSize?: number; enabled?: boolean } = {},
+) {
   const pageSize = params.pageSize ?? 100
   return useQuery({
     queryKey: [...queryKeys.environments(params.namespace), 'allPages', params.phase ?? ''] as const,
+    enabled: params.enabled ?? true,
     queryFn: async () => {
       const allEnvs: Awaited<ReturnType<typeof environmentClient.listEnvironments>>['environments'] = []
       let currentToken = ''
       let lastResp: Awaited<ReturnType<typeof environmentClient.listEnvironments>> | undefined
       const seenTokens = new Set<string>()
+      const maxPages = 500
 
-      for (let page = 0; page < 50; page++) {
+      for (let page = 0; page < maxPages; page++) {
         const resp = await environmentClient.listEnvironments({
           namespace: params.namespace ?? '',
           phase: params.phase ?? '',
@@ -50,8 +54,14 @@ export function useListAllEnvironments(params: { namespace?: string; phase?: str
         lastResp = resp
         allEnvs.push(...(resp.environments ?? []))
         const nextToken = resp.nextPageToken ?? ''
-        if (!nextToken || seenTokens.has(nextToken)) {
+        if (!nextToken) {
           break
+        }
+        if (seenTokens.has(nextToken)) {
+          throw new Error('Pagination cycle detected while listing environments')
+        }
+        if (page + 1 >= maxPages) {
+          throw new Error(`Environment list exceeded ${maxPages} pages without completing`)
         }
         seenTokens.add(nextToken)
         currentToken = nextToken

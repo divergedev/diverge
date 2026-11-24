@@ -17,10 +17,12 @@ import {
   extractEnvironmentCandidate,
   formatGroupMemberBadge,
   isAbortedConflictError,
+  isStaleEnvironmentRevision,
   normalizeGroupSlug,
   parseGroupMembers,
   previewGroupPath,
   sameGroupMemberOwner,
+  sameReferencedEnvironment,
   serializeGroupMembers,
   type GroupMemberRecord,
 } from '@/lib/previewgroup'
@@ -67,19 +69,16 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
   const formIdPrefix = useId()
   const navigate = useNavigate()
 
-  const { data: envData } = useListAllEnvironments()
+  const {
+    data: envData,
+    isLoading: envsLoading,
+    error: envsError,
+    refetch: refetchEnvs,
+  } = useListAllEnvironments({ enabled: open })
   const createGroup = useCreatePreviewGroup()
   const updateGroup = useUpdatePreviewGroup()
   const sessionRef = useRef(0)
-
-  useEffect(() => {
-    sessionRef.current += 1
-  }, [open])
-
-  const handleDismiss = () => {
-    sessionRef.current += 1
-    onClose()
-  }
+  const prevOpenRef = useRef(open)
 
   const [name, setName] = useState('')
   const [nameTouched, setNameTouched] = useState(false)
@@ -95,6 +94,32 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
   const [selectedEnvKeys, setSelectedEnvKeys] = useState<string[]>([])
   const [customServices, setCustomServices] = useState<CustomServiceRow[]>([])
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    sessionRef.current += 1
+    if (open && !prevOpenRef.current) {
+      setName('')
+      setNameTouched(false)
+      setNameEditedManually(false)
+      setNamespace('default')
+      setHeaderKey(DEFAULT_ROUTING_HEADER_KEY)
+      setHeaderValue('')
+      setExternalUrl('')
+      setTtlSeconds('86400')
+      setSharedDbMode('')
+      setTargetCluster('')
+      setClusterSecret('')
+      setSelectedEnvKeys([])
+      setCustomServices([])
+      setError('')
+    }
+    prevOpenRef.current = open
+  }, [open])
+
+  const handleDismiss = () => {
+    sessionRef.current += 1
+    onClose()
+  }
 
   const candidates = useMemo(() => {
     const envs = envData?.environments ?? []
@@ -290,15 +315,32 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
             if (idx >= 0) {
               const prevOwner = byService.get(normalizedInc.name ?? '')
               const nextOwner = incomingMembers.get(normalizedInc.name ?? '')
-              if (
-                priorServices[idx].mode !== 'baseline' &&
-                normalizedInc.mode !== 'baseline' &&
-                !sameGroupMemberOwner(prevOwner, nextOwner)
-              ) {
-                const ownerLabel = formatGroupMemberBadge(prevOwner) || prevOwner?.environmentName || 'another MR'
-                throw new Error(
-                  `Service "${normalizedInc.name}" is already owned by ${ownerLabel} in group "${currentGroup.name}". Detach it first before replacing it.`,
-                )
+              if (priorServices[idx].mode !== 'baseline') {
+                const prevIsOwned = Boolean(prevOwner && ((prevOwner.mr ?? 0) > 0 || prevOwner.environmentName))
+                if (normalizedInc.mode === 'baseline' && prevIsOwned) {
+                  const ownerLabel = formatGroupMemberBadge(prevOwner) || prevOwner?.environmentName || 'another MR'
+                  throw new Error(
+                    `Service "${normalizedInc.name}" is owned by ${ownerLabel} in group "${currentGroup.name}". Detach it first before reverting it to baseline.`,
+                  )
+                }
+                if (normalizedInc.mode !== 'baseline' && !sameGroupMemberOwner(prevOwner, nextOwner)) {
+                  const ownerLabel = formatGroupMemberBadge(prevOwner) || prevOwner?.environmentName || 'another MR'
+                  throw new Error(
+                    `Service "${normalizedInc.name}" is already owned by ${ownerLabel} in group "${currentGroup.name}". Detach it first before replacing it.`,
+                  )
+                }
+                if (
+                  normalizedInc.mode !== 'baseline' &&
+                  sameReferencedEnvironment(prevOwner, nextOwner) &&
+                  isStaleEnvironmentRevision(
+                    prevOwner?.environmentResourceVersion,
+                    nextOwner?.environmentResourceVersion,
+                  )
+                ) {
+                  throw new Error(
+                    `Selected revision for "${normalizedInc.name}" (${nextOwner?.environmentResourceVersion}) is older than the group's active revision (${prevOwner?.environmentResourceVersion}). Refresh environments and try again.`,
+                  )
+                }
               }
               priorServices[idx] = {
                 ...normalizedInc,
@@ -330,7 +372,7 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
             await updateGroup.mutateAsync({
               previewGroup: {
                 name: currentGroup.name,
-                namespace: currentGroup.namespace || nsClean,
+                namespace: currentGroup.namespace,
                 resourceVersion: currentGroup.resourceVersion,
                 labels: {
                   ...(currentGroup.labels ?? {}),
@@ -347,10 +389,12 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
             break
           } catch (updateErr) {
             if (attempt < 2 && isAbortedConflictError(updateErr)) {
+              if (!isCurrentSession()) return
               const fresh = await previewGroupClient.getPreviewGroup({
-                namespace: currentGroup.namespace || nsClean,
+                namespace: currentGroup.namespace,
                 name: currentGroup.name,
               })
+              if (!isCurrentSession()) return
               if (fresh.previewGroup) {
                 currentGroup = fresh.previewGroup
                 continue
@@ -452,6 +496,21 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
   const clusterSecId = `${formIdPrefix}-cluster-secret`
   const errId = `${formIdPrefix}-error`
 
+  const candidateKeySet = useMemo(() => new Set(candidates.map((c) => c.key)), [candidates])
+  const missingSelectedKeys = useMemo(
+    () => selectedEnvKeys.filter((k) => !candidateKeySet.has(k)),
+    [selectedEnvKeys, candidateKeySet],
+  )
+  const existingSharedDbMode = isJoinMode ? (existingGroup?.spec?.database?.mode?.trim() ?? '') : ''
+  const dbModeOptions = useMemo(() => {
+    if (!existingSharedDbMode) return DB_MODE_OPTIONS
+    return DB_MODE_OPTIONS.map((opt) =>
+      opt.value === ''
+        ? { ...opt, label: `Keep current group database (${existingSharedDbMode})` }
+        : opt,
+    )
+  }, [existingSharedDbMode])
+
   const hasNameError = !isJoinMode && Boolean(error && error.toLowerCase().includes('name'))
 
   return (
@@ -526,7 +585,18 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
             <legend className="text-sm font-medium px-1">
               Open PR / MR Environments ({candidates.length})
             </legend>
-            {candidates.length === 0 ? (
+            {envsLoading ? (
+              <p className="text-xs text-muted-foreground">Loading standalone preview environments...</p>
+            ) : envsError ? (
+              <div className="flex items-center justify-between gap-2 rounded border border-destructive/30 bg-destructive/10 px-2.5 py-2 text-xs text-destructive">
+                <span>
+                  Failed to load preview environments: {envsError instanceof Error ? envsError.message : 'Unknown error'}
+                </span>
+                <Button type="button" variant="outline" size="sm" onClick={() => refetchEnvs()}>
+                  Retry
+                </Button>
+              </div>
+            ) : candidates.length === 0 ? (
               <p className="text-xs text-muted-foreground">
                 No standalone preview environments with container images found. Add custom service images below.
               </p>
@@ -571,6 +641,33 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
                     </div>
                   )
                 })}
+              </div>
+            )}
+            {missingSelectedKeys.length > 0 && (
+              <div className="space-y-1.5 pt-1 border-t border-border/60">
+                <p className="text-xs text-destructive font-medium">
+                  Unavailable selections (no longer present):
+                </p>
+                {missingSelectedKeys.map((missingKey) => (
+                  <div
+                    key={missingKey}
+                    className="flex items-center justify-between gap-2 rounded border border-destructive/30 bg-destructive/5 px-2.5 py-1.5 text-xs"
+                  >
+                    <span className="font-mono">{missingKey}</span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      aria-label={`Remove unavailable selection ${missingKey}`}
+                      onClick={() => {
+                        setError('')
+                        setSelectedEnvKeys((prev) => prev.filter((k) => k !== missingKey))
+                      }}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                ))}
               </div>
             )}
           </fieldset>
@@ -685,7 +782,7 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
                   setSharedDbMode(e.target.value)
                 }}
               >
-                {DB_MODE_OPTIONS.map((o) => (
+                {dbModeOptions.map((o) => (
                   <option key={o.value} value={o.value}>
                     {o.label}
                   </option>

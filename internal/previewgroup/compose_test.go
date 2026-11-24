@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
 )
@@ -317,4 +318,81 @@ func TestJoinCollisionGuardNamespaceLeaveHibernationAndTTLGuard(t *testing.T) {
 	synced, err := SyncMemberEnvironment(ctx, c, &liveEnvA)
 	require.NoError(t, err)
 	assert.Empty(t, synced)
+}
+
+func TestSyncMemberEnvironment_DetachBetweenDiscoveryAndJoinRead(t *testing.T) {
+	ctx := context.Background()
+
+	envA := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "pr-42", Namespace: "team-a", ResourceVersion: "10"},
+		Spec: v1alpha1.EnvironmentSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "github", Project: "acme/worker", MR: 42, Branch: "feat/x"},
+			ServiceConfig: &v1alpha1.ServicePreviewConfig{
+				ServiceName: "worker",
+				Namespace:   "team-a",
+				Image:       "ghcr.io/acme/worker:v1",
+			},
+		},
+	}
+	envB := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "pr-99", Namespace: "team-b", ResourceVersion: "10"},
+		Spec: v1alpha1.EnvironmentSpec{
+			Source: v1alpha1.EnvironmentSource{Provider: "github", Project: "acme/billing", MR: 99, Branch: "feat/x"},
+			ServiceConfig: &v1alpha1.ServicePreviewConfig{
+				ServiceName: "billing-api",
+				Namespace:   "team-b",
+				Image:       "ghcr.io/acme/billing:v1",
+			},
+		},
+	}
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1alpha1.AddToScheme(scheme))
+	baseClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(envA, envB).Build()
+
+	svcA, memA, err := ServiceFromEnvironment(envA)
+	require.NoError(t, err)
+	svcB, memB, err := ServiceFromEnvironment(envB)
+	require.NoError(t, err)
+
+	_, err = Join(ctx, baseClient, JoinOptions{
+		GroupName: "feat-race",
+		Services:  []v1alpha1.PreviewGroupServiceSpec{svcA, svcB},
+		Members:   []MemberRecord{memA, memB},
+	})
+	require.NoError(t, err)
+
+	// Simulate Leave detaching worker (A) while retaining billing-api (B) right after SyncMemberEnvironment's List
+	// discovers feat-race, BEFORE Join reads feat-race inside its retry loop.
+	detachedOnFirstGet := false
+	racingClient := interceptor.NewClient(baseClient, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, isPG := obj.(*v1alpha1.PreviewGroup); isPG && key.Name == "feat-race" && !detachedOnFirstGet {
+				detachedOnFirstGet = true
+				_, leaveErr := Leave(ctx, baseClient, LeaveOptions{
+					GroupName:            "feat-race",
+					EnvironmentName:      "pr-42",
+					EnvironmentNamespace: "team-a",
+				})
+				require.NoError(t, leaveErr)
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+
+	envAUpdated := envA.DeepCopy()
+	envAUpdated.ResourceVersion = "11"
+	envAUpdated.Spec.ServiceConfig.Image = "ghcr.io/acme/worker:v2"
+
+	synced, err := SyncMemberEnvironment(ctx, racingClient, envAUpdated)
+	require.NoError(t, err)
+	assert.Empty(t, synced, "detached member must not be re-added when Leave commits between discovery and Join read")
+
+	var stored v1alpha1.PreviewGroup
+	require.NoError(t, baseClient.Get(ctx, types.NamespacedName{Name: "feat-race"}, &stored))
+	require.Len(t, stored.Spec.Services, 1)
+	assert.Equal(t, "billing-api", stored.Spec.Services[0].Name)
+	members := ParseMembers(&stored)
+	require.Len(t, members, 1)
+	assert.Equal(t, "billing-api", members[0].Service)
 }

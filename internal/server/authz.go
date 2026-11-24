@@ -246,7 +246,7 @@ func AuthorizePreviewGroupServiceNamespace(
 	ctx context.Context,
 	k8sClient kubernetes.Interface,
 	auditLogger *AuditLogger,
-	verb, svcNamespace, alreadyCheckedPrimaryNS string,
+	verb, svcNamespace, _ string,
 ) error {
 	effNS := strings.TrimSpace(svcNamespace)
 	if effNS == "" {
@@ -260,9 +260,6 @@ func AuthorizePreviewGroupServiceNamespace(
 		if err := authorizeMacaroon(ctx, auditLogger, user, verb, effNS, "previewgroups", fmt.Sprintf("permission denied for service namespace %s", effNS)); err != nil {
 			return err
 		}
-		return nil
-	}
-	if effNS == alreadyCheckedPrimaryNS {
 		return nil
 	}
 	return checkSAR(ctx, k8sClient, auditLogger, user, &authorizationv1.ResourceAttributes{

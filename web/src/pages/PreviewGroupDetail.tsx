@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
+import { Code, ConnectError } from '@connectrpc/connect'
 import { stringify as yamlStringify } from 'yaml'
 import { useGetPreviewGroup, useDeletePreviewGroup, useUpdatePreviewGroup } from '@/api/queries'
 import { StatusBadge } from '@/components/StatusBadge'
@@ -52,7 +53,14 @@ export default function PreviewGroupDetail() {
     )
   }
 
-  if (error) {
+  const pg = data?.previewGroup
+  const isDefinitiveError =
+    error instanceof ConnectError &&
+    (error.code === Code.NotFound ||
+      error.code === Code.PermissionDenied ||
+      error.code === Code.Unauthenticated)
+
+  if (error && (!pg || isDefinitiveError)) {
     return (
       <div className="text-center py-16 space-y-4" role="alert">
         <AlertCircle className="h-10 w-10 text-destructive mx-auto" />
@@ -65,7 +73,6 @@ export default function PreviewGroupDetail() {
     )
   }
 
-  const pg = data?.previewGroup
   if (!pg) {
     return (
       <div className="text-center py-16">
@@ -134,13 +141,22 @@ export default function PreviewGroupDetail() {
           (m) => (m.project || '').toLowerCase() === curProj && m.mr === nextSource?.mr,
         )
         if (!stillHasCreator) {
-          const promoted = keptMembers.find((m) => (m.mr ?? 0) > 0 && m.project)
+          const promoted = keptMembers.find((m) => (m.mr ?? 0) > 0 && m.project) ?? keptMembers[0]
           if (promoted) {
+            const rawProv = (promoted.provider || 'local').toLowerCase()
+            const validProv = rawProv === 'github' || rawProv === 'gitlab' ? rawProv : 'local'
             nextSource = {
-              provider: promoted.provider || nextSource.provider,
-              project: promoted.project,
-              mr: promoted.mr,
-              branch: promoted.branch || '',
+              provider: validProv,
+              project: promoted.project || '',
+              mr: promoted.mr || 0,
+              branch: promoted.branch || pg.name,
+            } as typeof nextSource
+          } else {
+            nextSource = {
+              provider: 'local',
+              project: '',
+              mr: 0,
+              branch: pg.name,
             } as typeof nextSource
           }
         }
@@ -218,6 +234,20 @@ export default function PreviewGroupDetail() {
 
   return (
     <div className="space-y-6">
+      {error && (
+        <div
+          className="bg-destructive/10 border border-destructive/20 text-destructive px-4 py-3 rounded-md flex items-center justify-between gap-2 text-sm"
+          role="status"
+        >
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
+            <span>Background refresh failed: {error.message}</span>
+          </div>
+          <Button type="button" variant="outline" size="sm" onClick={() => refetch()}>
+            Retry
+          </Button>
+        </div>
+      )}
       {mutationError && (
         <div
           className="bg-destructive/10 border border-destructive/20 text-destructive px-4 py-3 rounded-md flex items-center gap-2 text-sm"
@@ -545,13 +575,11 @@ export default function PreviewGroupDetail() {
         </TabsContent>
       </Tabs>
 
-      {joinOpen && (
-        <ComposePreviewGroupModal
-          open={joinOpen}
-          onClose={() => setJoinOpen(false)}
-          existingGroup={pg}
-        />
-      )}
+      <ComposePreviewGroupModal
+        open={joinOpen}
+        onClose={() => setJoinOpen(false)}
+        existingGroup={pg}
+      />
     </div>
   )
 }

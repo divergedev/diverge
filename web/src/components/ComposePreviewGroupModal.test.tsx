@@ -172,14 +172,27 @@ describe('ComposePreviewGroupModal', () => {
       http.post('*/diverge.v1alpha1.PreviewGroupService/UpdatePreviewGroup', async ({ request }) => {
         updateCalls++
         lastUpdatedPayload = (await request.json()) as Record<string, unknown>
+        const nested = lastUpdatedPayload.previewGroup as Record<string, unknown>
+        if ((nested.namespace ?? '') !== '') {
+          return HttpResponse.json(
+            { code: 'permission_denied', message: 'expected implicit cluster scope on update' },
+            { status: 403 },
+          )
+        }
         if (updateCalls === 1) {
           return HttpResponse.json({ code: 'aborted', message: 'resourceVersion conflict' }, { status: 409 })
         }
-        const nested = lastUpdatedPayload.previewGroup as Record<string, unknown>
         return HttpResponse.json({ previewGroup: nested })
       }),
-      http.post('*/diverge.v1alpha1.PreviewGroupService/GetPreviewGroup', () =>
-        HttpResponse.json({
+      http.post('*/diverge.v1alpha1.PreviewGroupService/GetPreviewGroup', async ({ request }) => {
+        const getReq = (await request.json()) as Record<string, unknown>
+        if ((getReq.namespace ?? '') !== '') {
+          return HttpResponse.json(
+            { code: 'permission_denied', message: 'expected implicit cluster scope on retry get' },
+            { status: 403 },
+          )
+        }
+        return HttpResponse.json({
           previewGroup: {
             name: 'feat-checkout',
             namespace: '',
@@ -187,6 +200,7 @@ describe('ComposePreviewGroupModal', () => {
             annotations: {
               'divergedev.com/group-members': JSON.stringify([
                 { service: 'payments-api', provider: 'github', project: 'acme/payments', mr: 42 },
+                { service: 'worker', provider: 'github', project: 'acme/worker', mr: 77 },
               ]),
             },
             spec: {
@@ -198,11 +212,18 @@ describe('ComposePreviewGroupModal', () => {
                   namespace: 'backend',
                   database: { mode: 'schema' },
                 },
+                {
+                  name: 'worker',
+                  mode: 'image',
+                  image: 'ghcr.io/acme/worker:pr-77',
+                  namespace: 'jobs',
+                  database: { mode: 'fresh' },
+                },
               ],
             },
           },
-        }),
-      ),
+        })
+      }),
     )
 
     const existingGroup = {
@@ -254,18 +275,26 @@ describe('ComposePreviewGroupModal', () => {
     expect(updateCalls).toBe(2)
 
     const updatedPg = lastUpdatedPayload?.previewGroup as {
+      namespace?: string
       resourceVersion: string
+      annotations?: Record<string, string>
       spec: {
         database?: { mode: string }
         services: Array<{ name: string; database?: unknown }>
       }
     }
+    expect(updatedPg.namespace ?? '').toBe('')
     expect(updatedPg.resourceVersion).toBe('55')
     expect(updatedPg.spec.database?.mode).toBe('neon')
-    // Shared DB mode strips per-service DB across BOTH existing and incoming services
-    expect(updatedPg.spec.services).toHaveLength(2)
+    // Retry preserves concurrently added service + member AND strips per-service DB across all 3 services
+    expect(updatedPg.spec.services.map((s) => s.name)).toEqual(['payments-api', 'worker', 'web-app'])
     expect(updatedPg.spec.services[0].database).toBeUndefined()
     expect(updatedPg.spec.services[1].database).toBeUndefined()
+    expect(updatedPg.spec.services[2].database).toBeUndefined()
+    const savedMembers = JSON.parse(updatedPg.annotations?.['divergedev.com/group-members'] ?? '[]') as Array<{
+      service: string
+    }>
+    expect(savedMembers.map((m) => m.service)).toEqual(['payments-api', 'worker', 'web-app'])
 
     // >63-char branch slug normalizes with deterministic 8-char SHA-256 suffix matching Go/CI
     expect(sha256Hex8('abc')).toBe('ba7816bf')

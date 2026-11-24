@@ -91,9 +91,7 @@ export default function PreviewGroups() {
         </Table>
       )}
 
-      {composeOpen && (
-        <ComposePreviewGroupModal open={composeOpen} onClose={() => setComposeOpen(false)} />
-      )}
+      <ComposePreviewGroupModal open={composeOpen} onClose={() => setComposeOpen(false)} />
     </div>
   )
 }

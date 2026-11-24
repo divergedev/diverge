@@ -14,6 +14,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -195,7 +196,27 @@ func (r *EnvironmentReconciler) reconcileProvisioningWithTarget(ctx context.Cont
 	var resolvedDBName string
 	if env.Annotations != nil && env.Annotations[annotationSharedGroupDB] == "true" {
 		// Database lifecycle and diverge-db-env-<env> Secret are owned by the parent PreviewGroup.
-		sharedDSN := r.readSharedGroupDatabaseDSN(ctx, env)
+		sharedDSN, sharedReady, sharedErr := r.readSharedGroupDatabaseDSN(ctx, env)
+		if sharedErr != nil {
+			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+				Type:    "DatabaseReady",
+				Status:  metav1.ConditionFalse,
+				Reason:  "DatabaseProvisionFailed",
+				Message: sharedErr.Error(),
+			})
+			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, sharedErr, 0)
+			return ctx, res, true, retErr
+		}
+		if !sharedReady {
+			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
+				Type:    "DatabaseReady",
+				Status:  metav1.ConditionFalse,
+				Reason:  "WaitingForSharedDatabaseSecret",
+				Message: "Waiting for parent PreviewGroup shared database Secret",
+			})
+			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, nil, 3*time.Second)
+			return ctx, res, true, retErr
+		}
 		dbStatus = &pkgdb.DatabaseResult{
 			DSN:              sharedDSN,
 			Ready:            true,
@@ -968,10 +989,13 @@ func (r *EnvironmentReconciler) ensureDatabaseEnvSecret(ctx context.Context, env
 	return nil
 }
 
-func (r *EnvironmentReconciler) readSharedGroupDatabaseDSN(ctx context.Context, env *divergeiov1alpha1.Environment) string {
+func (r *EnvironmentReconciler) readSharedGroupDatabaseDSN(ctx context.Context, env *divergeiov1alpha1.Environment) (string, bool, error) {
 	targetClient, _, _, err := r.resolveTargetCluster(ctx, env)
-	if err != nil || targetClient == nil {
-		return ""
+	if err != nil {
+		return "", false, err
+	}
+	if targetClient == nil {
+		return "", false, fmt.Errorf("target cluster client unavailable for shared database lookup")
 	}
 	secretName := sanitizeK8sName(fmt.Sprintf("diverge-db-env-%s", env.Name), env.Name, 63)
 	targetNS := env.Namespace
@@ -980,7 +1004,17 @@ func (r *EnvironmentReconciler) readSharedGroupDatabaseDSN(ctx context.Context, 
 	}
 	var sec corev1.Secret
 	if err := targetClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: targetNS}, &sec); err != nil {
-		return ""
+		if apierrors.IsNotFound(err) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("failed to get shared group database secret %s/%s: %w", targetNS, secretName, err)
 	}
-	return strings.TrimSpace(string(sec.Data["DATABASE_URL"]))
+	dsn := strings.TrimSpace(string(sec.Data["DATABASE_URL"]))
+	if dsn == "" && len(sec.Data) == 0 {
+		return "", false, nil
+	}
+	if dsn == "" && (env.Spec.Database.MigrationJob != nil || env.Spec.Database.Atlas != nil) {
+		return "", false, fmt.Errorf("shared group database secret %s/%s is missing DATABASE_URL", targetNS, secretName)
+	}
+	return dsn, true, nil
 }

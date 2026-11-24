@@ -86,6 +86,18 @@ func (h *GitLabPreviewGroupWebhookHandler) ServeHTTP(w http.ResponseWriter, r *h
 
 func (h *GitLabPreviewGroupWebhookHandler) resolveSingleMRPreviewGroupName(ctx context.Context, project string, iid int) (string, error) {
 	defaultName := fmt.Sprintf("preview-mr-%d", iid)
+	if strings.TrimSpace(project) != "" {
+		qualName := previewEnvName("preview-mr", project, iid)
+		if qualName != defaultName {
+			var qualExisting v1alpha1.PreviewGroup
+			if qErr := h.Client.Get(ctx, client.ObjectKey{Name: qualName}, &qualExisting); qErr == nil {
+				return qualName, nil
+			} else if !apierrors.IsNotFound(qErr) {
+				return "", qErr
+			}
+		}
+	}
+
 	var existing v1alpha1.PreviewGroup
 	err := h.Client.Get(ctx, client.ObjectKey{Name: defaultName}, &existing)
 	if err != nil {
@@ -121,8 +133,7 @@ func (h *GitLabPreviewGroupWebhookHandler) reconcilePreviewGroup(ctx context.Con
 	if err != nil {
 		if errors.Is(err, config.ErrConfigNotFound) {
 			// Do not create an invalid 0-service PreviewGroup when .diverge.yaml is absent; delete any prior single-MR group.
-			_ = client.IgnoreNotFound(h.Client.Delete(ctx, &v1alpha1.PreviewGroup{ObjectMeta: metav1.ObjectMeta{Name: pgName}}))
-			return nil
+			return client.IgnoreNotFound(h.Client.Delete(ctx, &v1alpha1.PreviewGroup{ObjectMeta: metav1.ObjectMeta{Name: pgName}}))
 		}
 		return err
 	}
@@ -132,8 +143,7 @@ func (h *GitLabPreviewGroupWebhookHandler) reconcilePreviewGroup(ctx context.Con
 		return parseErr
 	}
 	if len(cfg.Services) == 0 {
-		_ = client.IgnoreNotFound(h.Client.Delete(ctx, &v1alpha1.PreviewGroup{ObjectMeta: metav1.ObjectMeta{Name: pgName}}))
-		return nil
+		return client.IgnoreNotFound(h.Client.Delete(ctx, &v1alpha1.PreviewGroup{ObjectMeta: metav1.ObjectMeta{Name: pgName}}))
 	}
 
 	pg := &v1alpha1.PreviewGroup{
@@ -249,15 +259,18 @@ func (h *GitLabPreviewGroupWebhookHandler) syncSharedGroupsFromSinglePG(ctx cont
 		if sharedPG.Name == singlePG.Name {
 			continue
 		}
-		if _, jErr := previewgroup.Join(ctx, h.Client, previewgroup.JoinOptions{
-			GroupName:        sharedPG.Name,
-			Namespace:        sharedPG.Namespace,
-			Services:         svcs,
-			Members:          members,
-			SyncOnlyIfMember: true,
-			Traceparent:      TraceparentFromContext(ctx),
-		}); jErr != nil {
-			return jErr
+		for i := range svcs {
+			if _, jErr := previewgroup.Join(ctx, h.Client, previewgroup.JoinOptions{
+				GroupName:               sharedPG.Name,
+				Namespace:               sharedPG.Namespace,
+				Services:                []v1alpha1.PreviewGroupServiceSpec{svcs[i]},
+				Members:                 []previewgroup.MemberRecord{members[i]},
+				SyncOnlyIfMember:        true,
+				PreserveServiceDatabase: true,
+				Traceparent:             TraceparentFromContext(ctx),
+			}); jErr != nil {
+				return jErr
+			}
 		}
 	}
 	return nil
@@ -266,7 +279,11 @@ func (h *GitLabPreviewGroupWebhookHandler) syncSharedGroupsFromSinglePG(ctx cont
 func (h *GitLabPreviewGroupWebhookHandler) deletePreviewGroup(ctx context.Context, payload *GitLabMRPayload) error {
 	defaultName := fmt.Sprintf("preview-mr-%d", payload.ObjectAttributes.IID)
 	var existing v1alpha1.PreviewGroup
-	if err := h.Client.Get(ctx, client.ObjectKey{Name: defaultName}, &existing); err == nil {
+	if err := h.Client.Get(ctx, client.ObjectKey{Name: defaultName}, &existing); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return err
+		}
+	} else {
 		if existing.Spec.Source.Project == "" || payload.Project.PathWithNamespace == "" ||
 			strings.EqualFold(existing.Spec.Source.Project, payload.Project.PathWithNamespace) {
 			if delErr := client.IgnoreNotFound(h.Client.Delete(ctx, &existing)); delErr != nil {

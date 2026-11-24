@@ -40,6 +40,10 @@ const (
 	// AnnotationHibernated scales standalone Environment workloads to zero while attached to a PreviewGroup.
 	AnnotationHibernated = "divergedev.com/hibernated"
 
+	// AnnotationGroupHibernated records ("true" | "false") whether hibernation was initiated by attaching to a PreviewGroup,
+	// so detaching never overrides an independent manual/idle hibernation state ("false").
+	AnnotationGroupHibernated = "divergedev.com/group-hibernated"
+
 	// LabelComposedGroup marks a PreviewGroup managed through multi-MR / multi-service composition.
 	LabelComposedGroup = "divergedev.com/composed"
 
@@ -70,27 +74,28 @@ type MemberRecord struct {
 
 // JoinOptions configures adding or updating one or more services inside a PreviewGroup.
 type JoinOptions struct {
-	GroupName           string
-	Namespace           string // Optional fallback namespace for fake/namespaced clients
-	Services            []v1alpha1.PreviewGroupServiceSpec
-	Members             []MemberRecord
-	Source              *v1alpha1.EnvironmentSource
-	HeaderKey           string
-	HeaderKeyExplicit   bool
-	HeaderValue         string
-	HeaderValueExplicit bool
-	ExternalURL         string
-	TTL                 *time.Duration
-	TTLExplicit         bool
-	GroupDatabase       *v1alpha1.EnvironmentDatabase // Optional shared group-level database override
-	ClusterRef          *v1alpha1.ClusterTargetRef
-	ClusterRefExplicit  bool
-	Owner               string
-	Traceparent         string
-	ReplaceServices     bool // True for `preview create --upsert` (replaces full service list)
-	AllowTakeover       bool // True (`--force`) to allow replacing a service owned by a different MR/env
-	SyncOnlyIfMember    bool // True (`SyncMemberEnvironment`) to skip if group or member record no longer exists
-	PruneSameMR         bool // True (`ci-preview.sh`) to prune prior services from the same (Project, MR) absent in Services
+	GroupName               string
+	Namespace               string // Optional fallback namespace for fake/namespaced clients
+	Services                []v1alpha1.PreviewGroupServiceSpec
+	Members                 []MemberRecord
+	Source                  *v1alpha1.EnvironmentSource
+	HeaderKey               string
+	HeaderKeyExplicit       bool
+	HeaderValue             string
+	HeaderValueExplicit     bool
+	ExternalURL             string
+	TTL                     *time.Duration
+	TTLExplicit             bool
+	GroupDatabase           *v1alpha1.EnvironmentDatabase // Optional shared group-level database override
+	ClusterRef              *v1alpha1.ClusterTargetRef
+	ClusterRefExplicit      bool
+	Owner                   string
+	Traceparent             string
+	ReplaceServices         bool // True for `preview create --upsert` (replaces full service list)
+	AllowTakeover           bool // True (`--force`) to allow replacing a service owned by a different MR/env
+	SyncOnlyIfMember        bool // True (`SyncMemberEnvironment`) to skip if group or member record no longer exists
+	PruneSameMR             bool // True (`ci-preview.sh`) to prune prior services from the same (Project, MR) absent in Services
+	PreserveServiceDatabase bool // True to retain an existing per-service Database override when incoming Database is nil
 }
 
 // JoinResult summarizes a Join operation.
@@ -230,9 +235,66 @@ func EffectiveTTLAnchor(createdAt *metav1.Time, annotations map[string]string) t
 	return anchor
 }
 
+func knownSCMProvider(p string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(p))
+	if trimmed == "" || trimmed == "local" {
+		return ""
+	}
+	return trimmed
+}
+
+// SameReferencedEnvironment reports whether two MemberRecords refer to the exact same standalone Environment.
+func SameReferencedEnvironment(existing, incoming MemberRecord) bool {
+	exEnv := strings.TrimSpace(existing.EnvironmentName)
+	inEnv := strings.TrimSpace(incoming.EnvironmentName)
+	if exEnv == "" || inEnv == "" || exEnv != inEnv {
+		return false
+	}
+	exNS := strings.TrimSpace(existing.EnvironmentNamespace)
+	if exNS == "" {
+		exNS = strings.TrimSpace(existing.Namespace)
+	}
+	inNS := strings.TrimSpace(incoming.EnvironmentNamespace)
+	if inNS == "" {
+		inNS = strings.TrimSpace(incoming.Namespace)
+	}
+	if exNS != "" && inNS != "" {
+		return exNS == inNS
+	}
+	return true
+}
+
+// MemberMatchesEnvironmentSource verifies that a MemberRecord's SCM ownership metadata does not conflict
+// with a fetched standalone Environment's Spec.Source before claiming or hibernating that Environment.
+func MemberMatchesEnvironmentSource(m MemberRecord, env *v1alpha1.Environment) bool {
+	if env == nil {
+		return false
+	}
+	mProv := knownSCMProvider(m.Provider)
+	eProv := knownSCMProvider(env.Spec.Source.Provider)
+	if mProv != "" && eProv != "" && mProv != eProv {
+		return false
+	}
+	mProj := strings.TrimSpace(m.Project)
+	eProj := strings.TrimSpace(env.Spec.Source.Project)
+	if mProj != "" && eProj != "" && !strings.EqualFold(mProj, eProj) {
+		return false
+	}
+	if m.MR > 0 && env.Spec.Source.MR > 0 && m.MR != env.Spec.Source.MR {
+		return false
+	}
+	return true
+}
+
 // SameMemberOwner reports whether existing and incoming MemberRecords represent the same owning PR/MR or Environment.
 // If existing has no distinct ownership metadata (e.g. manual service without MR or EnvironmentName), updates are allowed.
 func SameMemberOwner(existing, incoming MemberRecord) bool {
+	exProv := knownSCMProvider(existing.Provider)
+	inProv := knownSCMProvider(incoming.Provider)
+	if exProv != "" && inProv != "" && exProv != inProv {
+		return false
+	}
+
 	exEnv := strings.TrimSpace(existing.EnvironmentName)
 	inEnv := strings.TrimSpace(incoming.EnvironmentName)
 	exEnvNS := strings.TrimSpace(existing.EnvironmentNamespace)
@@ -256,18 +318,12 @@ func SameMemberOwner(existing, incoming MemberRecord) bool {
 		}
 		return exEnv == inEnv
 	}
-	// Existing belongs to a tracked MR or Environment, while incoming belongs to a different one or none
+	// Existing belongs to a tracked MR (with project) or Environment, while incoming does not match it
 	if (exProj != "" && existing.MR > 0) || exEnv != "" {
-		if inProj != "" && incoming.MR > 0 {
-			return exProj == inProj && existing.MR == incoming.MR
-		}
-		if existing.MR > 0 && incoming.MR > 0 && exProj == "" && inProj == "" {
-			return existing.MR == incoming.MR
-		}
 		return false
 	}
-	// Fallback when neither had Project/Env: check namespace + MR if set
-	if existing.MR > 0 && incoming.MR > 0 && existing.MR != incoming.MR {
+	// Fallback when existing had neither Project+MR nor EnvironmentName: check MR and Namespace if set
+	if existing.MR > 0 && incoming.MR != existing.MR {
 		return false
 	}
 	if strings.TrimSpace(existing.Namespace) != "" && strings.TrimSpace(incoming.Namespace) != "" &&
@@ -301,7 +357,8 @@ func FormatOwnerSummary(m MemberRecord) string {
 	return "another member"
 }
 
-func isStaleResourceVersion(existingRV, incomingRV string) bool {
+// IsStaleResourceVersion reports whether incomingRV is strictly older (numerically) than existingRV.
+func IsStaleResourceVersion(existingRV, incomingRV string) bool {
 	if strings.TrimSpace(existingRV) == "" || strings.TrimSpace(incomingRV) == "" {
 		return false
 	}
@@ -311,6 +368,10 @@ func isStaleResourceVersion(existingRV, incomingRV string) bool {
 		return false
 	}
 	return inNum < exNum
+}
+
+func isStaleResourceVersion(existingRV, incomingRV string) bool {
+	return IsStaleResourceVersion(existingRV, incomingRV)
 }
 
 // normalizeProvider ensures EnvironmentSource.Provider satisfies the CRD enum (gitlab|github|local).
@@ -441,10 +502,32 @@ func getPreviewGroup(ctx context.Context, c client.Client, name, fallbackNamespa
 	return nil, err
 }
 
-func setStandaloneEnvHibernation(ctx context.Context, c client.Client, m MemberRecord, groupName string, hibernate bool) {
+func isMemberStillPresentInGroup(pg *v1alpha1.PreviewGroup, m MemberRecord, envNS, envName string) bool {
+	if pg == nil || !pg.DeletionTimestamp.IsZero() {
+		return false
+	}
+	hasActiveSvc := false
+	for _, svc := range pg.Spec.Services {
+		if svc.Name == m.Service && svc.Mode != v1alpha1.ServiceModeBaseline {
+			hasActiveSvc = true
+			break
+		}
+	}
+	if !hasActiveSvc {
+		return false
+	}
+	for _, cur := range ParseMembers(pg) {
+		if cur.Service == m.Service && matchesEnvironmentMember(cur, envNS, envName) {
+			return true
+		}
+	}
+	return false
+}
+
+func setStandaloneEnvHibernation(ctx context.Context, c client.Client, m MemberRecord, groupName, fallbackNS string, hibernate bool) error {
 	envName := strings.TrimSpace(m.EnvironmentName)
 	if envName == "" || c == nil {
-		return
+		return nil
 	}
 	envNS := strings.TrimSpace(m.EnvironmentNamespace)
 	if envNS == "" {
@@ -454,10 +537,30 @@ func setStandaloneEnvHibernation(ctx context.Context, c client.Client, m MemberR
 		envNS = "default"
 	}
 
-	_ = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+	didHibernate := false
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		didHibernate = false
+		if hibernate {
+			// Verify the member is still actively present in the PreviewGroup before hibernating its standalone preview,
+			// so a concurrent Leave cannot be overwritten by a delayed post-Join hibernation.
+			latestPG, pgErr := getPreviewGroup(ctx, c, groupName, fallbackNS)
+			if pgErr != nil {
+				if apierrors.IsNotFound(pgErr) {
+					return nil
+				}
+				return pgErr
+			}
+			if !isMemberStillPresentInGroup(latestPG, m, envNS, envName) {
+				return nil
+			}
+		}
+
 		var env v1alpha1.Environment
 		if err := c.Get(ctx, types.NamespacedName{Name: envName, Namespace: envNS}, &env); err != nil {
-			return nil
+			if apierrors.IsNotFound(err) {
+				return nil
+			}
+			return err
 		}
 		if !env.DeletionTimestamp.IsZero() {
 			return nil
@@ -466,29 +569,59 @@ func setStandaloneEnvHibernation(ctx context.Context, c client.Client, m MemberR
 			return nil
 		}
 		if hibernate {
+			if !MemberMatchesEnvironmentSource(m, &env) {
+				return nil
+			}
 			if env.Annotations != nil && env.Annotations[AnnotationHibernated] == "true" && env.Annotations[AnnotationAttachedPreviewGroup] == groupName {
 				return nil
 			}
-			// Preserve manual hibernation if the user hibernated it independently
 			if env.Annotations == nil {
 				env.Annotations = make(map[string]string)
 			}
 			if env.Annotations[AnnotationHibernated] != "true" {
 				env.Annotations[AnnotationHibernated] = "true"
 				env.Annotations[AnnotationAttachedPreviewGroup] = groupName
+				env.Annotations[AnnotationGroupHibernated] = "true"
+				if uErr := c.Update(ctx, &env); uErr != nil {
+					return uErr
+				}
+				didHibernate = true
+				return nil
+			}
+			// Preserve independent manual/idle hibernation while still recording group attachment if unclaimed.
+			if strings.TrimSpace(env.Annotations[AnnotationAttachedPreviewGroup]) == "" {
+				env.Annotations[AnnotationAttachedPreviewGroup] = groupName
+				env.Annotations[AnnotationGroupHibernated] = "false"
 				return c.Update(ctx, &env)
 			}
 			return nil
 		}
 
-		// Wake only if we hibernated it when attaching to a PreviewGroup
+		// Wake only if attached to a PreviewGroup, preserving any independent manual/idle hibernation ("false").
 		if env.Annotations == nil || strings.TrimSpace(env.Annotations[AnnotationAttachedPreviewGroup]) == "" {
 			return nil
 		}
 		delete(env.Annotations, AnnotationAttachedPreviewGroup)
-		delete(env.Annotations, AnnotationHibernated)
+		if env.Annotations[AnnotationGroupHibernated] != "false" {
+			delete(env.Annotations, AnnotationHibernated)
+		}
+		delete(env.Annotations, AnnotationGroupHibernated)
 		return c.Update(ctx, &env)
 	})
+	if err != nil {
+		return err
+	}
+	if hibernate && didHibernate {
+		// Re-check membership once more after committing hibernation: if a concurrent Leave removed the member
+		// while Update(&env) was in flight, wake the Environment unless another group still claims it.
+		latestPG, pgErr := getPreviewGroup(ctx, c, groupName, fallbackNS)
+		if apierrors.IsNotFound(pgErr) || (pgErr == nil && !isMemberStillPresentInGroup(latestPG, m, envNS, envName)) {
+			if claimed, cErr := isEnvironmentClaimedByAnyGroup(ctx, c, envNS, envName); cErr == nil && !claimed {
+				_ = setStandaloneEnvHibernation(ctx, c, m, groupName, fallbackNS, false)
+			}
+		}
+	}
+	return nil
 }
 
 // Join creates a PreviewGroup or atomically merges/updates the specified services inside an existing PreviewGroup.
@@ -794,16 +927,29 @@ func Join(ctx context.Context, c client.Client, opts JoinOptions) (*JoinResult, 
 					return cur.Name == incoming.Name
 				})
 				if idx >= 0 {
-					if !opts.AllowTakeover && !opts.SyncOnlyIfMember {
+					if !opts.AllowTakeover {
 						if curOwner, owned := priorByService[incoming.Name]; owned {
 							incMember := membersByService[incoming.Name]
-							if !SameMemberOwner(curOwner, incMember) {
+							if !opts.SyncOnlyIfMember && !SameMemberOwner(curOwner, incMember) {
 								return fmt.Errorf(
 									"service %q in PreviewGroup %q is already owned by %s; pass --force to replace it",
 									incoming.Name, groupName, FormatOwnerSummary(curOwner),
 								)
 							}
+							if !opts.SyncOnlyIfMember && SameReferencedEnvironment(curOwner, incMember) &&
+								IsStaleResourceVersion(curOwner.EnvironmentResourceVersion, incMember.EnvironmentResourceVersion) {
+								return fmt.Errorf(
+									"environment %s resourceVersion %s is older than PreviewGroup %q member revision %s; refresh and retry or pass --force",
+									formatEnvSelector(incMember.EnvironmentNamespace, incMember.EnvironmentName),
+									incMember.EnvironmentResourceVersion,
+									groupName,
+									curOwner.EnvironmentResourceVersion,
+								)
+							}
 						}
+					}
+					if opts.PreserveServiceDatabase && !hasActiveGroupDB && incoming.Database == nil && merged[idx].Database != nil {
+						incoming.Database = merged[idx].Database.DeepCopy()
 					}
 					if incoming.ClusterRef == nil && !opts.ClusterRefExplicit && merged[idx].ClusterRef != nil {
 						incoming.ClusterRef = merged[idx].ClusterRef.DeepCopy()
@@ -904,7 +1050,7 @@ func Join(ctx context.Context, c client.Client, opts JoinOptions) (*JoinResult, 
 	if result != nil && !result.DeletedGroup && !opts.SyncOnlyIfMember {
 		for _, m := range result.Members {
 			if _, joinedNow := membersByService[m.Service]; joinedNow && m.EnvironmentName != "" {
-				setStandaloneEnvHibernation(ctx, c, m, groupName, true)
+				_ = setStandaloneEnvHibernation(ctx, c, m, groupName, opts.Namespace, true)
 			}
 		}
 	}
@@ -1106,18 +1252,144 @@ func Leave(ctx context.Context, c client.Client, opts LeaveOptions) (*LeaveResul
 		return nil, err
 	}
 
-	// Wake any standalone PR Environment that is no longer attached to any PreviewGroup.
-	for _, dm := range detachedMembers {
-		if strings.TrimSpace(dm.EnvironmentName) == "" {
+	// Also recover any standalone PR Environment still carrying AnnotationAttachedPreviewGroup == groupName
+	// from an earlier partial Leave whose membership removal committed before the Environment wake succeeded.
+	recovered, recErr := collectOrphanedAttachedMembers(ctx, c, groupName, opts)
+	if recErr != nil {
+		return nil, recErr
+	}
+	wakeCandidates := make([]MemberRecord, 0, len(detachedMembers)+len(recovered))
+	seenWake := make(map[string]bool, len(detachedMembers)+len(recovered))
+	for _, cand := range append(detachedMembers, recovered...) {
+		envName := strings.TrimSpace(cand.EnvironmentName)
+		if envName == "" {
 			continue
 		}
-		otherGroups, fErr := FindGroupsForPR(ctx, c, dm.Project, dm.MR, formatEnvSelector(dm.EnvironmentNamespace, dm.EnvironmentName))
-		if fErr == nil && len(otherGroups) == 0 {
-			setStandaloneEnvHibernation(ctx, c, dm, groupName, false)
+		envNS := strings.TrimSpace(cand.EnvironmentNamespace)
+		if envNS == "" {
+			envNS = strings.TrimSpace(cand.Namespace)
+		}
+		if envNS == "" {
+			envNS = "default"
+		}
+		key := envNS + "/" + envName
+		if seenWake[key] {
+			continue
+		}
+		seenWake[key] = true
+		cand.EnvironmentName = envName
+		cand.EnvironmentNamespace = envNS
+		wakeCandidates = append(wakeCandidates, cand)
+	}
+
+	// Wake any standalone PR Environment whose exact (namespace, name) is no longer claimed by any PreviewGroup.
+	for _, dm := range wakeCandidates {
+		claimed, fErr := isEnvironmentClaimedByAnyGroup(ctx, c, dm.EnvironmentNamespace, dm.EnvironmentName)
+		if fErr != nil {
+			return nil, fErr
+		}
+		if !claimed {
+			if wErr := setStandaloneEnvHibernation(ctx, c, dm, groupName, opts.Namespace, false); wErr != nil {
+				return nil, wErr
+			}
 		}
 	}
 
 	return result, nil
+}
+
+func isEnvironmentClaimedByAnyGroup(ctx context.Context, c client.Client, envNS, envName string) (bool, error) {
+	if c == nil || strings.TrimSpace(envName) == "" {
+		return false, nil
+	}
+	var pgList v1alpha1.PreviewGroupList
+	if err := c.List(ctx, &pgList); err != nil {
+		if meta.IsNoMatchError(err) || runtime.IsNotRegisteredError(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	for i := range pgList.Items {
+		pg := &pgList.Items[i]
+		if !pg.DeletionTimestamp.IsZero() {
+			continue
+		}
+		for _, m := range ParseMembers(pg) {
+			if matchesEnvironmentMember(m, envNS, envName) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func collectOrphanedAttachedMembers(ctx context.Context, c client.Client, groupName string, opts LeaveOptions) ([]MemberRecord, error) {
+	if c == nil || strings.TrimSpace(groupName) == "" {
+		return nil, nil
+	}
+	envNS := strings.TrimSpace(opts.EnvironmentNamespace)
+	envTarget := strings.TrimSpace(opts.EnvironmentName)
+	if parsedNS, parsedName := SplitEnvironmentRef(envTarget); parsedNS != "" {
+		if envNS == "" {
+			envNS = parsedNS
+		}
+		envTarget = parsedName
+	}
+
+	var out []MemberRecord
+	if envTarget != "" && envNS != "" {
+		var env v1alpha1.Environment
+		if err := c.Get(ctx, types.NamespacedName{Namespace: envNS, Name: envTarget}, &env); err != nil {
+			if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) || meta.IsNoMatchError(err) || runtime.IsNotRegisteredError(err) {
+				return nil, nil
+			}
+			return nil, err
+		}
+		if env.Annotations[AnnotationAttachedPreviewGroup] == groupName {
+			out = append(out, MemberRecord{EnvironmentName: env.Name, EnvironmentNamespace: env.Namespace})
+		}
+		return out, nil
+	}
+
+	var listOpts []client.ListOption
+	if envNS != "" {
+		listOpts = append(listOpts, client.InNamespace(envNS))
+	} else if strings.TrimSpace(opts.Namespace) != "" {
+		listOpts = append(listOpts, client.InNamespace(strings.TrimSpace(opts.Namespace)))
+	}
+	var envList v1alpha1.EnvironmentList
+	if err := c.List(ctx, &envList, listOpts...); err != nil {
+		if apierrors.IsForbidden(err) || meta.IsNoMatchError(err) || runtime.IsNotRegisteredError(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	projTarget := strings.TrimSpace(opts.Project)
+	for i := range envList.Items {
+		env := &envList.Items[i]
+		if env.Annotations[AnnotationAttachedPreviewGroup] != groupName {
+			continue
+		}
+		if envTarget != "" && env.Name == envTarget {
+			out = append(out, MemberRecord{EnvironmentName: env.Name, EnvironmentNamespace: env.Namespace})
+			continue
+		}
+		if opts.MR > 0 && env.Spec.Source.MR == opts.MR &&
+			(projTarget == "" || strings.EqualFold(strings.TrimSpace(env.Spec.Source.Project), projTarget)) {
+			out = append(out, MemberRecord{EnvironmentName: env.Name, EnvironmentNamespace: env.Namespace})
+			continue
+		}
+		if len(opts.ServiceNames) > 0 {
+			for _, svcName := range opts.ServiceNames {
+				svcClean := strings.TrimSpace(svcName)
+				if svcClean != "" && ((env.Spec.ServiceConfig != nil && env.Spec.ServiceConfig.ServiceName == svcClean) || env.Labels["divergedev.com/service"] == svcClean) {
+					out = append(out, MemberRecord{EnvironmentName: env.Name, EnvironmentNamespace: env.Namespace})
+					break
+				}
+			}
+		}
+	}
+	return out, nil
 }
 
 func formatEnvSelector(envNS, envName string) string {
@@ -1169,13 +1441,14 @@ func resolveServicesToRemove(pg *v1alpha1.PreviewGroup, members []MemberRecord, 
 }
 
 // FindGroupsForPR returns all PreviewGroups where the given project/MR or environmentName ("<name>" or "<ns>/<name>") is a recorded member.
+// Authorization errors (403 Forbidden) are returned to callers so destructive commands can distinguish RBAC denial from an empty list.
 func FindGroupsForPR(ctx context.Context, c client.Client, project string, mr int, envRef string) ([]v1alpha1.PreviewGroup, error) {
 	if c == nil {
 		return nil, nil
 	}
 	var pgList v1alpha1.PreviewGroupList
 	if err := c.List(ctx, &pgList); err != nil {
-		if meta.IsNoMatchError(err) || runtime.IsNotRegisteredError(err) || apierrors.IsForbidden(err) {
+		if meta.IsNoMatchError(err) || runtime.IsNotRegisteredError(err) {
 			return nil, nil
 		}
 		return nil, err
@@ -1202,6 +1475,16 @@ func FindGroupsForPR(ctx context.Context, c client.Client, project string, mr in
 	return matched, nil
 }
 
+// FindGroupsForPROptional is like FindGroupsForPR, except 403 Forbidden (e.g. namespace-scoped RBAC installs)
+// is treated as empty discovery for non-destructive / background callers.
+func FindGroupsForPROptional(ctx context.Context, c client.Client, project string, mr int, envRef string) ([]v1alpha1.PreviewGroup, error) {
+	groups, err := FindGroupsForPR(ctx, c, project, mr, envRef)
+	if apierrors.IsForbidden(err) {
+		return nil, nil
+	}
+	return groups, err
+}
+
 // SyncMemberEnvironment propagates updated container image and service settings from a reconciled PR/MR Environment
 // into every composed PreviewGroup where that Environment/MR is already a member.
 // Inside Join's retry loop, SyncOnlyIfMember verifies the group and member record still exist and inherits the live
@@ -1217,7 +1500,7 @@ func SyncMemberEnvironment(ctx context.Context, c client.Client, env *v1alpha1.E
 	}
 
 	envRef := formatEnvSelector(env.Namespace, env.Name)
-	groups, err := FindGroupsForPR(ctx, c, env.Spec.Source.Project, env.Spec.Source.MR, envRef)
+	groups, err := FindGroupsForPROptional(ctx, c, env.Spec.Source.Project, env.Spec.Source.MR, envRef)
 	if err != nil {
 		return nil, err
 	}

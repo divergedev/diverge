@@ -163,7 +163,7 @@ func (h *GitLabWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 
 	if payload.ObjectKind == "note" || r.Header.Get("X-Gitlab-Event") == "Note Hook" {
 		action = "note"
-		h.handleNoteEvent(ctx, w, bodyBytes)
+		h.handleNoteEvent(ctx, w, bodyBytes, deliveryID)
 		return
 	}
 
@@ -179,12 +179,14 @@ func (h *GitLabWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	switch payload.ObjectAttributes.Action {
 	case "open", "reopen", "update":
 		if err := h.reconcileEnvironment(ctx, &payload); err != nil {
+			h.Dedup.Release(deliveryID)
 			logger.Error(err, "Failed to reconcile environment")
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
 	case "merge", "close":
 		if err := h.deleteEnvironment(ctx, &payload); err != nil {
+			h.Dedup.Release(deliveryID)
 			logger.Error(err, "Failed to delete environment")
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
@@ -195,7 +197,7 @@ func (h *GitLabWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 }
 
 // handleNoteEvent processes GitLab Note Hook webhook requests for Merge Request slash commands.
-func (h *GitLabWebhookHandler) handleNoteEvent(ctx context.Context, w http.ResponseWriter, bodyBytes []byte) {
+func (h *GitLabWebhookHandler) handleNoteEvent(ctx context.Context, w http.ResponseWriter, bodyBytes []byte, deliveryID string) {
 	logger := log.FromContext(ctx).WithName("gitlab-webhook")
 
 	var payload GitLabNotePayload
@@ -264,6 +266,7 @@ func (h *GitLabWebhookHandler) handleNoteEvent(ctx context.Context, w http.Respo
 		feedback, execErr = ExecuteSlashCommandWithFeedback(ctx, h.Client, h.DefaultNS, cmd, repoURL, branch, mrIID)
 	}
 	if execErr != nil {
+		h.Dedup.Release(deliveryID)
 		logger.Error(execErr, "Failed to execute GitLab slash command", "action", cmd.Action, "mr", mrIID)
 		h.postFeedbackComment(ctx, payload.Project.PathWithNamespace, mrIID, fmt.Sprintf("❌ **Diverge Command Error**\n\nFailed to execute `/diverge %s`: %v\n\nRun `/diverge help` for a list of available commands.", cmd.Action, execErr))
 		http.Error(w, "Internal server error", http.StatusInternalServerError)

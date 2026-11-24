@@ -110,6 +110,10 @@ export function useWatchPreviewGroups(namespace?: string) {
                 predicate: (q) => q.queryKey[2] === pg.name,
               })
             } else {
+              await qc.cancelQueries({
+                queryKey: ['previewGroup'],
+                predicate: (q) => q.queryKey[2] === pg.name,
+              })
               qc.setQueriesData(
                 { queryKey: ['previewGroup'], predicate: (q) => q.queryKey[2] === pg.name },
                 (old: GetPreviewGroupResponse | undefined) =>

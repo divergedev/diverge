@@ -291,77 +291,84 @@ func registerPreviewGroupComposeTools(
 		}
 
 		nowStr := time.Now().UTC().Format(time.RFC3339)
-		var incomingSvcs []*divergev1alpha1.PreviewGroupServiceSpec
-		membersBySvc := make(map[string]previewgroup.MemberRecord)
-		var firstSource *divergev1alpha1.EnvironmentSource
+		resolveInputs := func() ([]*divergev1alpha1.PreviewGroupServiceSpec, map[string]previewgroup.MemberRecord, *divergev1alpha1.EnvironmentSource, error) {
+			var svcs []*divergev1alpha1.PreviewGroupServiceSpec
+			members := make(map[string]previewgroup.MemberRecord)
+			var firstSrc *divergev1alpha1.EnvironmentSource
 
-		for _, envRef := range params.EnvironmentNames {
-			if envClient == nil {
-				return errorToolResult(errors.New("environment client is not configured")), nil
-			}
-			envNS, envName := previewgroup.SplitEnvironmentRef(envRef)
-			if envNS == "" {
-				envNS = ns
-			}
-			if envName == "" {
-				continue
-			}
-			envResp, getErr := envClient.GetEnvironment(ctx, connect.NewRequest(&divergev1alpha1.GetEnvironmentRequest{
-				Name:      envName,
-				Namespace: envNS,
-			}))
-			if getErr != nil {
-				return errorToolResult(getErr), nil
-			}
-			svcSpec, member, convErr := protoEnvToServiceSpec(envResp.Msg.GetEnvironment(), ns)
-			if convErr != nil {
-				return errorToolResult(convErr), nil
-			}
-			if strings.TrimSpace(params.SharedDatabaseMode) != "" {
-				svcSpec.Database = nil
-			}
-			incomingSvcs = append(incomingSvcs, svcSpec)
-			membersBySvc[svcSpec.Name] = member
-			if firstSource == nil && envResp.Msg.GetEnvironment().GetSpec().GetSource() != nil {
-				firstSource = envResp.Msg.GetEnvironment().GetSpec().GetSource()
-			}
-		}
-
-		for _, rawSvc := range params.Services {
-			svcName := strings.TrimSpace(rawSvc.Name)
-			if svcName == "" {
-				return errorToolResult(errors.New("service name cannot be empty")), nil
-			}
-			mode := strings.ToLower(strings.TrimSpace(rawSvc.Mode))
-			if mode == "" {
-				mode = "image"
-			}
-			if mode == "image" && strings.TrimSpace(rawSvc.Image) == "" {
-				return errorToolResult(fmt.Errorf("service %q requires an image when mode is 'image'", svcName)), nil
-			}
-			svcNS := strings.TrimSpace(rawSvc.Namespace)
-			if svcNS == "" {
-				svcNS = ns
-			}
-			incomingSvcs = append(incomingSvcs, &divergev1alpha1.PreviewGroupServiceSpec{
-				Name:      svcName,
-				Image:     strings.TrimSpace(rawSvc.Image),
-				Mode:      mode,
-				Namespace: svcNS,
-				Port:      rawSvc.Port,
-			})
-			if mode != "baseline" {
-				membersBySvc[svcName] = previewgroup.MemberRecord{
-					Service:   svcName,
-					Namespace: svcNS,
-					Project:   strings.TrimSpace(rawSvc.Project),
-					MR:        rawSvc.MR,
-					Branch:    strings.TrimSpace(rawSvc.Branch),
-					UpdatedAt: nowStr,
+			for _, envRef := range params.EnvironmentNames {
+				if envClient == nil {
+					return nil, nil, nil, errors.New("environment client is not configured")
+				}
+				envNS, envName := previewgroup.SplitEnvironmentRef(envRef)
+				if envNS == "" {
+					envNS = ns
+				}
+				if envName == "" {
+					continue
+				}
+				envResp, getErr := envClient.GetEnvironment(ctx, connect.NewRequest(&divergev1alpha1.GetEnvironmentRequest{
+					Name:      envName,
+					Namespace: envNS,
+				}))
+				if getErr != nil {
+					return nil, nil, nil, getErr
+				}
+				svcSpec, member, convErr := protoEnvToServiceSpec(envResp.Msg.GetEnvironment(), ns)
+				if convErr != nil {
+					return nil, nil, nil, convErr
+				}
+				if strings.TrimSpace(params.SharedDatabaseMode) != "" {
+					svcSpec.Database = nil
+				}
+				svcs = append(svcs, svcSpec)
+				members[svcSpec.Name] = member
+				if firstSrc == nil && envResp.Msg.GetEnvironment().GetSpec().GetSource() != nil {
+					firstSrc = envResp.Msg.GetEnvironment().GetSpec().GetSource()
 				}
 			}
+
+			for _, rawSvc := range params.Services {
+				svcName := strings.TrimSpace(rawSvc.Name)
+				if svcName == "" {
+					return nil, nil, nil, errors.New("service name cannot be empty")
+				}
+				mode := strings.ToLower(strings.TrimSpace(rawSvc.Mode))
+				if mode == "" {
+					mode = "image"
+				}
+				if mode == "image" && strings.TrimSpace(rawSvc.Image) == "" {
+					return nil, nil, nil, fmt.Errorf("service %q requires an image when mode is 'image'", svcName)
+				}
+				svcNS := strings.TrimSpace(rawSvc.Namespace)
+				if svcNS == "" {
+					svcNS = ns
+				}
+				svcs = append(svcs, &divergev1alpha1.PreviewGroupServiceSpec{
+					Name:      svcName,
+					Image:     strings.TrimSpace(rawSvc.Image),
+					Mode:      mode,
+					Namespace: svcNS,
+					Port:      rawSvc.Port,
+				})
+				if mode != "baseline" {
+					members[svcName] = previewgroup.MemberRecord{
+						Service:   svcName,
+						Namespace: svcNS,
+						Project:   strings.TrimSpace(rawSvc.Project),
+						MR:        rawSvc.MR,
+						Branch:    strings.TrimSpace(rawSvc.Branch),
+						UpdatedAt: nowStr,
+					}
+				}
+			}
+			return svcs, members, firstSrc, nil
 		}
 
+		incomingSvcs, membersBySvc, firstSource, prepErr := resolveInputs()
+		if prepErr != nil {
+			return errorToolResult(prepErr), nil
+		}
 		if len(incomingSvcs) == 0 {
 			return errorToolResult(errors.New("no valid services resolved from environment_names or services")), nil
 		}
@@ -385,6 +392,17 @@ func registerPreviewGroupComposeTools(
 		var finalPG *divergev1alpha1.PreviewGroup
 		created := false
 		for attempt := 0; attempt < 5; attempt++ {
+			if attempt > 0 && len(params.EnvironmentNames) > 0 {
+				refreshedSvcs, refreshedMembers, refreshedSrc, rErr := resolveInputs()
+				if rErr != nil {
+					return errorToolResult(rErr), nil
+				}
+				incomingSvcs = refreshedSvcs
+				membersBySvc = refreshedMembers
+				if refreshedSrc != nil {
+					firstSource = refreshedSrc
+				}
+			}
 			getResp, getErr := pgClient.GetPreviewGroup(ctx, connect.NewRequest(&divergev1alpha1.GetPreviewGroupRequest{
 				Name:      groupName,
 				Namespace: ns,
@@ -481,6 +499,7 @@ func registerPreviewGroupComposeTools(
 			hasActiveGroupDB := !isZeroProtoDatabase(spec.GetDatabase())
 
 			mergedSvcs := slices.Clone(spec.GetServices())
+			staleEnvDetected := false
 			for _, origInc := range incomingSvcs {
 				inc := proto.Clone(origInc).(*divergev1alpha1.PreviewGroupServiceSpec)
 				if hasActiveGroupDB {
@@ -499,6 +518,17 @@ func registerPreviewGroupComposeTools(
 									inc.Name, groupName, previewgroup.FormatOwnerSummary(curOwner),
 								)), nil
 							}
+							if previewgroup.SameReferencedEnvironment(curOwner, incMember) &&
+								previewgroup.IsStaleResourceVersion(curOwner.EnvironmentResourceVersion, incMember.EnvironmentResourceVersion) {
+								if attempt < 4 && len(params.EnvironmentNames) > 0 {
+									staleEnvDetected = true
+									break
+								}
+								return errorToolResult(fmt.Errorf(
+									"environment %s/%s resourceVersion %s is older than PreviewGroup %q member revision %s; retry or set force=true",
+									incMember.EnvironmentNamespace, incMember.EnvironmentName, incMember.EnvironmentResourceVersion, groupName, curOwner.EnvironmentResourceVersion,
+								)), nil
+							}
 						}
 					}
 					if inc.ClusterRef == nil && mergedSvcs[idx].GetClusterRef() != nil {
@@ -511,6 +541,9 @@ func registerPreviewGroupComposeTools(
 				} else {
 					mergedSvcs = append(mergedSvcs, inc)
 				}
+			}
+			if staleEnvDetected {
+				continue
 			}
 			if sharedDB != nil {
 				for i := range mergedSvcs {
@@ -662,6 +695,9 @@ func registerPreviewGroupComposeTools(
 		var envSelectors []envSelector
 		for _, e := range params.EnvironmentNames {
 			eNS, eName := previewgroup.SplitEnvironmentRef(e)
+			if eNS == "" {
+				eNS = ns
+			}
 			if eName != "" {
 				envSelectors = append(envSelectors, envSelector{ns: eNS, name: eName})
 			}

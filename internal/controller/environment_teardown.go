@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -101,7 +102,16 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 			ctx = multicluster.WithTarget(ctx, resolvedTarget)
 		}
 
-		if !skipRemoteTargetCleanup && (env.Annotations == nil || env.Annotations[annotationSharedGroupDB] != "true") {
+		recordedDedicatedProvider := strings.TrimSpace(env.Status.DatabaseProvider)
+		hasPriorDedicatedDB := recordedDedicatedProvider != "" &&
+			recordedDedicatedProvider != "shared" &&
+			recordedDedicatedProvider != "none" &&
+			recordedDedicatedProvider != "noop"
+		isPureSharedGroupChild := env.Annotations != nil &&
+			env.Annotations[annotationSharedGroupDB] == "true" &&
+			!hasPriorDedicatedDB
+
+		if !skipRemoteTargetCleanup && !isPureSharedGroupChild {
 			tCtxDBResolve, cancelDBResolve := context.WithTimeout(ctx, 15*time.Second)
 			dbProv, _, dbResolveErr := r.resolveDatabaseProviderWithContext(tCtxDBResolve, env, true)
 			cancelDBResolve()

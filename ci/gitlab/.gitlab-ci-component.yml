@@ -242,6 +242,15 @@ diverge:preview:
         set +f
         IFS="$OLD_IFS"
         diverge "$@"
+        EFF_HK="$(kubectl get previewgroup "${PREVIEW_NAME}" -o jsonpath='{.spec.routing.headerKey}' 2>/dev/null || kubectl get previewgroup "${PREVIEW_NAME}" -n "${DIVERGE_NAMESPACE}" -o jsonpath='{.spec.routing.headerKey}' 2>/dev/null || true)"
+        EFF_HV="$(kubectl get previewgroup "${PREVIEW_NAME}" -o jsonpath='{.spec.routing.headerValue}' 2>/dev/null || kubectl get previewgroup "${PREVIEW_NAME}" -n "${DIVERGE_NAMESPACE}" -o jsonpath='{.spec.routing.headerValue}' 2>/dev/null || true)"
+        if [ -n "${EFF_HK}" ]; then
+          DIVERGE_HEADER_KEY="${EFF_HK}"
+        fi
+        if [ -n "${EFF_HV}" ]; then
+          HEADER_VALUE="${EFF_HV}"
+        fi
+        ROUTING_HEADER_B64="$(jq -cn --arg k "${DIVERGE_HEADER_KEY}" --arg v "${HEADER_VALUE}" '{($k): $v}' | base64 | tr -d '\n')"
       else
         cat <<EOF > previewgroup.yaml
       apiVersion: divergedev.com/v1alpha1

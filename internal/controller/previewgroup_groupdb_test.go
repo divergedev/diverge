@@ -148,11 +148,11 @@ func TestPreviewGroupReconcile_TrueSharedGroupDatabaseAcrossNamespacesAndTTLAnch
 	assert.Equal(t, "shared", payChild.Spec.Database.Mode)
 	assert.Equal(t, "shared", ordChild.Spec.Database.Mode)
 
-	// Cross-namespace child Secret gets FQDN rewrite to backend.svc.cluster.local
+	// Cross-namespace child Secret gets DNS-domain-agnostic Service rewrite (<svc>.backend.svc)
 	ordSecretName := sanitizeK8sName("diverge-db-env-"+ordChildName, ordChildName, 63)
 	var ordSec corev1.Secret
 	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: ordSecretName, Namespace: "orders"}, &ordSec))
-	assert.Contains(t, string(ordSec.Data["DATABASE_URL"]), "@"+cnpgHost+".backend.svc.cluster.local:5432")
+	assert.Contains(t, string(ordSec.Data["DATABASE_URL"]), "@"+cnpgHost+".backend.svc:5432")
 
 	// Deleting the PreviewGroup tears down children first, then tears down the shared group DB once drained
 	require.NoError(t, c.Delete(ctx, &currentPG))
@@ -203,6 +203,7 @@ func TestPreviewGroupReconcile_RealCNPGSharedDBOwnerRefHibernationWakeAndComment
 			},
 			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
 				{Name: "web", Namespace: "frontend", Mode: divergeiov1alpha1.ServiceModeImage, Image: "acme/web:pr-101"},
+				{Name: "api", Namespace: "backend", Mode: divergeiov1alpha1.ServiceModeImage, Image: "acme/api:pr-101"},
 			},
 		},
 		Status: divergeiov1alpha1.PreviewGroupStatus{
@@ -245,15 +246,34 @@ func TestPreviewGroupReconcile_RealCNPGSharedDBOwnerRefHibernationWakeAndComment
 		Data:       map[string][]byte{"uri": []byte("postgres://app:pw@" + clusterName + "-rw/app")},
 	}))
 
-	// 2. Second reconcile sees CNPG Ready, hibernates standaloneWeb, and resets CommentID from closed PR #12!
+	// 2. Second reconcile sees CNPG Ready, creates child Environments (Pending -> standalone stays awake!),
+	//    rewrites portless DSN across namespaces without adding a port, and resets CommentID from closed PR #12!
 	_, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "monorepo-group"}})
 	require.NoError(t, err)
+	assert.NotEmpty(t, notif.createdCalls, "source promotion in monorepo must reset stale CommentID and post fresh comment on PR #101")
+
+	apiChildName := childEnvironmentName("monorepo-group", "api")
+	apiSecretName := sanitizeK8sName("diverge-db-env-"+apiChildName, apiChildName, 63)
+	var apiSec corev1.Secret
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: apiSecretName, Namespace: "backend"}, &apiSec))
+	assert.Equal(t, "postgres://app:pw@"+clusterName+"-rw.frontend.svc/app", string(apiSec.Data["DATABASE_URL"]))
 
 	var currentWeb divergeiov1alpha1.Environment
 	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "pr-web-101", Namespace: "frontend"}, &currentWeb))
+	assert.Empty(t, currentWeb.Annotations[metrics.AnnotationHibernated], "standalone preview stays running while child is Pending")
+
+	// Mark web child Running -> next reconcile hibernates standaloneWeb!
+	webChildName := childEnvironmentName("monorepo-group", "web")
+	var webChild divergeiov1alpha1.Environment
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: webChildName, Namespace: "frontend"}, &webChild))
+	webChild.Status.Phase = divergeiov1alpha1.PhaseRunning
+	require.NoError(t, c.Update(ctx, &webChild))
+
+	_, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "monorepo-group"}})
+	require.NoError(t, err)
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "pr-web-101", Namespace: "frontend"}, &currentWeb))
 	assert.Equal(t, "true", currentWeb.Annotations[metrics.AnnotationHibernated])
 	assert.Equal(t, "monorepo-group", currentWeb.Annotations[previewgroup.AnnotationAttachedPreviewGroup])
-	assert.NotEmpty(t, notif.createdCalls, "source promotion in monorepo must reset stale CommentID and post fresh comment on PR #101")
 
 	// 3. Delete PreviewGroup -> after teardown completes, standaloneWeb is automatically woken back up!
 	var currentPG divergeiov1alpha1.PreviewGroup

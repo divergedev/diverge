@@ -133,6 +133,9 @@ func executeGroupCommand(ctx context.Context, c client.Client, ns string, cmd *S
 	if len(svcSpecs) == 0 {
 		pgs, pgErr := findMatchingPreviewGroups(ctx, c, repoURL, prNumber)
 		if pgErr != nil {
+			if apierrors.IsForbidden(pgErr) {
+				return "⚠️ Shared `PreviewGroup`s require cluster-scoped controller RBAC (`rbac.namespaceScoped=false`).", nil
+			}
 			return "", pgErr
 		}
 		nowStr := time.Now().UTC().Format(time.RFC3339)
@@ -140,9 +143,27 @@ func executeGroupCommand(ctx context.Context, c client.Client, ns string, cmd *S
 			if singlePG.Name == groupName {
 				continue
 			}
+			pgMembers := previewgroup.ParseMembers(&singlePG)
+			isComposed := singlePG.Labels != nil && singlePG.Labels[previewgroup.LabelComposedGroup] == "true"
+			memberBySvc := make(map[string]previewgroup.MemberRecord, len(pgMembers))
+			for _, pm := range pgMembers {
+				memberBySvc[pm.Service] = pm
+			}
 			for _, svc := range singlePG.Spec.Services {
 				if svc.Mode == v1alpha1.ServiceModeBaseline || strings.TrimSpace(svc.Image) == "" {
 					continue
+				}
+				if len(pgMembers) > 0 || isComposed {
+					pm, ok := memberBySvc[svc.Name]
+					if !ok || pm.MR != prNumber {
+						continue
+					}
+					if project != "" && pm.Project != "" && !strings.EqualFold(strings.TrimSpace(pm.Project), project) {
+						continue
+					}
+					if provider != "" && pm.Provider != "" && pm.Provider != "local" && !strings.EqualFold(strings.TrimSpace(pm.Provider), provider) {
+						continue
+					}
 				}
 				copied := *svc.DeepCopy()
 				if copied.Namespace == "" {
@@ -342,8 +363,24 @@ func executeUngroupCommand(ctx context.Context, c client.Client, ns, groupName, 
 		envRef = envNS + "/" + envName
 	}
 	results, err := previewgroup.DetachMemberByPR(ctx, c, project, prNumber, envRef)
+	formatDetachLines := func(items []previewgroup.LeaveResult) []string {
+		outLines := make([]string, 0, len(items))
+		for _, r := range items {
+			if r.DeletedGroup {
+				outLines = append(outLines, fmt.Sprintf("- **`%s`**: detached `%s` and deleted group (last active MR)", r.GroupName, strings.Join(r.RemovedServices, ", ")))
+			} else {
+				outLines = append(outLines, fmt.Sprintf("- **`%s`**: detached `%s` (remaining active: `%s`)", r.GroupName, strings.Join(r.RemovedServices, ", "), strings.Join(r.RemainingServices, ", ")))
+			}
+		}
+		return outLines
+	}
 	if err != nil {
 		if apierrors.IsForbidden(err) {
+			if len(results) > 0 {
+				return "🔌 **Partially detached from shared PreviewGroup(s)**:\n\n" +
+					strings.Join(formatDetachLines(results), "\n") +
+					"\n\n⚠️ Command did not finish: remaining shared `PreviewGroup`s could not be updated because cluster-scoped controller RBAC (`rbac.namespaceScoped=false`) is required.", nil
+			}
 			return "⚠️ Shared `PreviewGroup`s require cluster-scoped controller RBAC (`rbac.namespaceScoped=false`).", nil
 		}
 		return "", err
@@ -352,13 +389,5 @@ func executeUngroupCommand(ctx context.Context, c client.Client, ns, groupName, 
 		return "ℹ️ This PR/MR is not currently attached to any shared PreviewGroup.", nil
 	}
 
-	var lines []string
-	for _, r := range results {
-		if r.DeletedGroup {
-			lines = append(lines, fmt.Sprintf("- **`%s`**: detached `%s` and deleted group (last active MR)", r.GroupName, strings.Join(r.RemovedServices, ", ")))
-		} else {
-			lines = append(lines, fmt.Sprintf("- **`%s`**: detached `%s` (remaining active: `%s`)", r.GroupName, strings.Join(r.RemovedServices, ", "), strings.Join(r.RemainingServices, ", ")))
-		}
-	}
-	return "🔌 **Detached from shared PreviewGroup(s)**:\n\n" + strings.Join(lines, "\n"), nil
+	return "🔌 **Detached from shared PreviewGroup(s)**:\n\n" + strings.Join(formatDetachLines(results), "\n"), nil
 }

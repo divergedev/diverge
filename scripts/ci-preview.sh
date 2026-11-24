@@ -401,6 +401,19 @@ case "$INPUT_ACTION" in
       fi
       JOIN_ARGS+=("${SVC_ARGS[@]}")
       "$DIVERGE_BIN" "${JOIN_ARGS[@]}"
+      if [[ "$INPUT_DRY_RUN" != "true" ]]; then
+        EFF_HK="$("$KUBECTL_BIN" get previewgroup "$PREVIEW_NAME" -o jsonpath='{.spec.routing.headerKey}' 2>/dev/null || "$KUBECTL_BIN" get previewgroup "$PREVIEW_NAME" -n "$INPUT_NAMESPACE" -o jsonpath='{.spec.routing.headerKey}' 2>/dev/null || true)"
+        EFF_HV="$("$KUBECTL_BIN" get previewgroup "$PREVIEW_NAME" -o jsonpath='{.spec.routing.headerValue}' 2>/dev/null || "$KUBECTL_BIN" get previewgroup "$PREVIEW_NAME" -n "$INPUT_NAMESPACE" -o jsonpath='{.spec.routing.headerValue}' 2>/dev/null || true)"
+        if [[ -n "$EFF_HK" ]]; then
+          INPUT_HEADER_KEY="$EFF_HK"
+        fi
+        if [[ -n "$EFF_HV" ]]; then
+          HEADER_VALUE="$EFF_HV"
+          INPUT_HEADER_VALUE="$EFF_HV"
+        fi
+        ROUTING_HEADER="${INPUT_HEADER_KEY}: ${HEADER_VALUE}"
+        ROUTING_HEADER_JSON="$(jq -cn --arg k "$INPUT_HEADER_KEY" --arg v "$HEADER_VALUE" '{($k): $v}')"
+      fi
     else
       CREATE_ARGS=(
         preview create

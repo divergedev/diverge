@@ -75,28 +75,54 @@ export function countDistinctGroupMRs(members: GroupMemberRecord[]): number {
   return seen.size
 }
 
+function knownScmProvider(p?: string): string {
+  const clean = (p || '').trim().toLowerCase()
+  return clean && clean !== 'local' ? clean : ''
+}
+
+export function sameReferencedEnvironment(a?: GroupMemberRecord, b?: GroupMemberRecord): boolean {
+  if (!a?.environmentName || !b?.environmentName) return false
+  if (a.environmentName.trim() !== b.environmentName.trim()) return false
+  const aNs = (a.environmentNamespace || a.namespace || 'default').trim()
+  const bNs = (b.environmentNamespace || b.namespace || 'default').trim()
+  return aNs === bNs
+}
+
+export function isStaleEnvironmentRevision(existingRV?: string, incomingRV?: string): boolean {
+  const ex = existingRV?.trim() ?? ''
+  const inc = incomingRV?.trim() ?? ''
+  if (!ex || !inc || !/^\d+$/.test(ex) || !/^\d+$/.test(inc)) return false
+  return BigInt(inc) < BigInt(ex)
+}
+
 export function sameGroupMemberOwner(a?: GroupMemberRecord, b?: GroupMemberRecord): boolean {
   if (!a || !b) return true
+  const aProv = knownScmProvider(a.provider)
+  const bProv = knownScmProvider(b.provider)
+  if (aProv && bProv && aProv !== bProv) {
+    return false
+  }
+
   const aMR = a.mr ?? 0
   const bMR = b.mr ?? 0
-  if (aMR > 0 && bMR > 0) {
-    const aProv = (a.provider || 'local').toLowerCase()
-    const bProv = (b.provider || 'local').toLowerCase()
-    const aProj = (a.project || '').toLowerCase()
-    const bProj = (b.project || '').toLowerCase()
-    return aProv === bProv && aProj === bProj && aMR === bMR
+  const aProj = (a.project || '').trim().toLowerCase()
+  const bProj = (b.project || '').trim().toLowerCase()
+
+  if (aMR > 0 && bMR > 0 && aProj && bProj) {
+    return aProj === bProj && aMR === bMR
   }
   if (a.environmentName && b.environmentName) {
     const aNs = a.environmentNamespace || a.namespace || 'default'
     const bNs = b.environmentNamespace || b.namespace || 'default'
     return a.environmentName === b.environmentName && aNs === bNs
   }
-  const aProv = (a.provider || 'local').toLowerCase()
-  const bProv = (b.provider || 'local').toLowerCase()
-  if (aProv === 'local' && bProv === 'local' && aMR === 0 && bMR === 0 && !a.environmentName && !b.environmentName) {
-    return (a.namespace || 'default') === (b.namespace || 'default')
+  if ((aProj && aMR > 0) || a.environmentName || (bProj && bMR > 0) || b.environmentName) {
+    return false
   }
-  return false
+  if (aMR > 0 || bMR > 0) {
+    return aMR === bMR && (a.namespace || 'default') === (b.namespace || 'default')
+  }
+  return (a.namespace || 'default') === (b.namespace || 'default')
 }
 
 const SHA256_K = new Uint32Array([
@@ -182,9 +208,7 @@ export function appendPreviewEnvParam(rawUrl: string, headerVal: string): string
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
       return trimmed
     }
-    if (!parsed.searchParams.has('_diverge_env')) {
-      parsed.searchParams.set('_diverge_env', headerVal.trim())
-    }
+    parsed.searchParams.set('_diverge_env', headerVal.trim())
     return parsed.toString()
   } catch {
     return trimmed
