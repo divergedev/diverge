@@ -80,7 +80,10 @@ func executeGroupCommand(ctx context.Context, c client.Client, ns string, cmd *S
 	}
 
 	project := projectFromRepoURL(repoURL)
-	provider := providerFromRepoURL(repoURL)
+	provider := resolveRequestProvider(ctx, repoURL)
+	if provider == "" {
+		provider = "github"
+	}
 
 	var svcSpecs []v1alpha1.PreviewGroupServiceSpec
 	var members []previewgroup.MemberRecord
@@ -149,6 +152,7 @@ func executeGroupCommand(ctx context.Context, c client.Client, ns string, cmd *S
 			for _, pm := range pgMembers {
 				memberBySvc[pm.Service] = pm
 			}
+			contributedFromPG := false
 			for _, svc := range singlePG.Spec.Services {
 				if svc.Mode == v1alpha1.ServiceModeBaseline || strings.TrimSpace(svc.Image) == "" {
 					continue
@@ -182,13 +186,16 @@ func executeGroupCommand(ctx context.Context, c client.Client, ns string, cmd *S
 					Branch:    branch,
 					UpdatedAt: nowStr,
 				})
+				contributedFromPG = true
 			}
-			if inheritedHeaderKey == "" && strings.TrimSpace(singlePG.Spec.Routing.HeaderKey) != "" {
-				inheritedHeaderKey = strings.TrimSpace(singlePG.Spec.Routing.HeaderKey)
-			}
-			if inheritedBaseURL == "" {
-				if ext := stripPreviewQueryParam(singlePG.Spec.Routing.ExternalURL); ext != "" && !strings.Contains(ext, "{") {
-					inheritedBaseURL = ext
+			if contributedFromPG {
+				if inheritedHeaderKey == "" && strings.TrimSpace(singlePG.Spec.Routing.HeaderKey) != "" {
+					inheritedHeaderKey = strings.TrimSpace(singlePG.Spec.Routing.HeaderKey)
+				}
+				if inheritedBaseURL == "" {
+					if ext := stripPreviewQueryParam(singlePG.Spec.Routing.ExternalURL); ext != "" && !strings.Contains(ext, "{") {
+						inheritedBaseURL = ext
+					}
 				}
 			}
 		}
@@ -312,6 +319,7 @@ func executeGroupCommand(ctx context.Context, c client.Client, ns string, cmd *S
 
 func executeUngroupCommand(ctx context.Context, c client.Client, ns, groupName, repoURL string, prNumber int) (string, error) {
 	project := projectFromRepoURL(repoURL)
+	provider := resolveRequestProvider(ctx, repoURL)
 
 	var envName, envNS string
 	envs, err := findMatchingEnvironments(ctx, c, ns, repoURL, prNumber)
@@ -334,6 +342,7 @@ func executeUngroupCommand(ctx context.Context, c client.Client, ns, groupName, 
 		res, leaveErr := previewgroup.Leave(ctx, c, previewgroup.LeaveOptions{
 			GroupName:            groupName,
 			Namespace:            ns,
+			Provider:             provider,
 			Project:              project,
 			MR:                   prNumber,
 			EnvironmentName:      envName,
@@ -362,7 +371,7 @@ func executeUngroupCommand(ctx context.Context, c client.Client, ns, groupName, 
 	if envNS != "" && envName != "" {
 		envRef = envNS + "/" + envName
 	}
-	results, err := previewgroup.DetachMemberByPR(ctx, c, project, prNumber, envRef)
+	results, err := previewgroup.DetachMemberByPR(ctx, c, provider, project, prNumber, envRef)
 	formatDetachLines := func(items []previewgroup.LeaveResult) []string {
 		outLines := make([]string, 0, len(items))
 		for _, r := range items {
@@ -382,6 +391,11 @@ func executeUngroupCommand(ctx context.Context, c client.Client, ns, groupName, 
 					"\n\n⚠️ Command did not finish: remaining shared `PreviewGroup`s could not be updated because cluster-scoped controller RBAC (`rbac.namespaceScoped=false`) is required.", nil
 			}
 			return "⚠️ Shared `PreviewGroup`s require cluster-scoped controller RBAC (`rbac.namespaceScoped=false`).", nil
+		}
+		if len(results) > 0 {
+			return "🔌 **Partially detached from shared PreviewGroup(s)**:\n\n" +
+				strings.Join(formatDetachLines(results), "\n") +
+				fmt.Sprintf("\n\n⚠️ Command did not finish: %v", err), nil
 		}
 		return "", err
 	}

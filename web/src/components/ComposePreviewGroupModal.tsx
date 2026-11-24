@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import type { PartialMessage } from '@bufbuild/protobuf'
 import type { PreviewGroup, PreviewGroupServiceSpec } from '@/api/gen/diverge/v1alpha1/previewgroup_pb'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
@@ -8,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { previewGroupClient } from '@/api/client'
-import { useCreatePreviewGroup, useListAllEnvironments, useUpdatePreviewGroup } from '@/api/queries'
+import { queryKeys, useCreatePreviewGroup, useListAllEnvironments, useUpdatePreviewGroup } from '@/api/queries'
 import {
   COMPOSED_GROUP_LABEL,
   DEFAULT_ROUTING_HEADER_KEY,
@@ -69,6 +70,7 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
   const formIdPrefix = useId()
   const navigate = useNavigate()
 
+  const queryClient = useQueryClient()
   const {
     data: envData,
     isLoading: envsLoading,
@@ -78,7 +80,10 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
   const createGroup = useCreatePreviewGroup()
   const updateGroup = useUpdatePreviewGroup()
   const sessionRef = useRef(0)
+  const submittingRef = useRef(false)
   const prevOpenRef = useRef(open)
+
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
   const [name, setName] = useState('')
   const [nameTouched, setNameTouched] = useState(false)
@@ -97,7 +102,16 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
 
   useEffect(() => {
     sessionRef.current += 1
+    if (!open) {
+      submittingRef.current = false
+      setIsSubmitting(false)
+      if (prevOpenRef.current) {
+        void queryClient.cancelQueries({ queryKey: queryKeys.allEnvironments() })
+      }
+    }
     if (open && !prevOpenRef.current) {
+      submittingRef.current = false
+      setIsSubmitting(false)
       setName('')
       setNameTouched(false)
       setNameEditedManually(false)
@@ -114,10 +128,18 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
       setError('')
     }
     prevOpenRef.current = open
-  }, [open])
+    return () => {
+      sessionRef.current += 1
+      submittingRef.current = false
+      void queryClient.cancelQueries({ queryKey: queryKeys.allEnvironments() })
+    }
+  }, [open, queryClient])
 
   const handleDismiss = () => {
     sessionRef.current += 1
+    submittingRef.current = false
+    setIsSubmitting(false)
+    void queryClient.cancelQueries({ queryKey: queryKeys.allEnvironments() })
     onClose()
   }
 
@@ -182,6 +204,7 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (submittingRef.current) return
     setError('')
 
     const effectiveName = isJoinMode ? (existingGroup?.name ?? '') : name.trim()
@@ -290,6 +313,8 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
     const submitSession = sessionRef.current
     const isCurrentSession = () => open && sessionRef.current === submitSession
 
+    submittingRef.current = true
+    setIsSubmitting(true)
     try {
       if (isJoinMode && existingGroup) {
         let currentGroup: PreviewGroup = existingGroup
@@ -480,10 +505,15 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
     } catch (err) {
       if (!isCurrentSession()) return
       setError(err instanceof Error ? err.message : 'Failed to save preview group')
+    } finally {
+      if (sessionRef.current === submitSession) {
+        submittingRef.current = false
+        setIsSubmitting(false)
+      }
     }
   }
 
-  const isPending = createGroup.isPending || updateGroup.isPending
+  const isPending = isSubmitting || createGroup.isPending || updateGroup.isPending
   const nameInputId = `${formIdPrefix}-name`
   const nameHintId = `${formIdPrefix}-name-hint`
   const nsInputId = `${formIdPrefix}-namespace`
@@ -585,9 +615,7 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
             <legend className="text-sm font-medium px-1">
               Open PR / MR Environments ({candidates.length})
             </legend>
-            {envsLoading ? (
-              <p className="text-xs text-muted-foreground">Loading standalone preview environments...</p>
-            ) : envsError ? (
+            {envsError && (
               <div className="flex items-center justify-between gap-2 rounded border border-destructive/30 bg-destructive/10 px-2.5 py-2 text-xs text-destructive">
                 <span>
                   Failed to load preview environments: {envsError instanceof Error ? envsError.message : 'Unknown error'}
@@ -596,11 +624,14 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
                   Retry
                 </Button>
               </div>
-            ) : candidates.length === 0 ? (
+            )}
+            {envsLoading && candidates.length === 0 ? (
+              <p className="text-xs text-muted-foreground">Loading standalone preview environments...</p>
+            ) : !envsError && candidates.length === 0 ? (
               <p className="text-xs text-muted-foreground">
                 No standalone preview environments with container images found. Add custom service images below.
               </p>
-            ) : (
+            ) : candidates.length > 0 ? (
               <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
                 {candidates.map((cand) => {
                   const cbId = `${formIdPrefix}-env-${encodeURIComponent(cand.key)}`
@@ -642,7 +673,7 @@ export function ComposePreviewGroupModal({ open, onClose, existingGroup }: Compo
                   )
                 })}
               </div>
-            )}
+            ) : null}
             {missingSelectedKeys.length > 0 && (
               <div className="space-y-1.5 pt-1 border-t border-border/60">
                 <p className="text-xs text-destructive font-medium">

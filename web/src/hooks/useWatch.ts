@@ -7,10 +7,26 @@ import type { PreviewGroup } from '@/api/gen/diverge/v1alpha1/previewgroup_pb'
 import type { ListEnvironmentsResponse } from '@/api/gen/diverge/v1alpha1/environment_pb'
 import type { GetPreviewGroupResponse, ListPreviewGroupsResponse } from '@/api/gen/diverge/v1alpha1/previewgroup_pb'
 import { WatchEventType } from '@/api/gen/diverge/v1alpha1/types_pb'
+import { isStaleEnvironmentRevision } from '@/lib/previewgroup'
 
 function backoff(attempt: number): number {
   const base = Math.min(1000 * Math.pow(2, attempt), 30000)
   return base + Math.random() * 1000
+}
+
+function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve()
+  return new Promise((resolve) => {
+    const onAbort = () => {
+      clearTimeout(timer)
+      resolve()
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
 }
 
 export function useWatchEnvironments(namespace?: string) {
@@ -52,11 +68,13 @@ export function useWatchEnvironments(namespace?: string) {
               },
             )
           }
+          if (aborted) return
+          await sleepAbortable(backoff(attemptRef.current++), ac.signal)
         } catch (err) {
           if (aborted) return
           const delay = backoff(attemptRef.current++)
           console.warn(`[watch-env] reconnecting in ${Math.round(delay)}ms`, err)
-          await new Promise((r) => setTimeout(r, delay))
+          await sleepAbortable(delay, ac.signal)
         }
       }
     }
@@ -98,8 +116,14 @@ export function useWatchPreviewGroups(namespace?: string) {
                 if (msg.type === WatchEventType.DELETED) {
                   if (idx >= 0) list.splice(idx, 1)
                 } else {
-                  if (idx >= 0) list[idx] = pg
-                  else list.unshift(pg)
+                  if (idx >= 0) {
+                    if (isStaleEnvironmentRevision(list[idx].resourceVersion, pg.resourceVersion)) {
+                      return old
+                    }
+                    list[idx] = pg
+                  } else {
+                    list.unshift(pg)
+                  }
                 }
                 return { ...old, previewGroups: list }
               },
@@ -110,22 +134,34 @@ export function useWatchPreviewGroups(namespace?: string) {
                 predicate: (q) => q.queryKey[2] === pg.name,
               })
             } else {
-              await qc.cancelQueries({
-                queryKey: ['previewGroup'],
-                predicate: (q) => q.queryKey[2] === pg.name,
-              })
-              qc.setQueriesData(
-                { queryKey: ['previewGroup'], predicate: (q) => q.queryKey[2] === pg.name },
-                (old: GetPreviewGroupResponse | undefined) =>
-                  old ? ({ ...old, previewGroup: pg } as GetPreviewGroupResponse) : undefined,
-              )
+              const pgRV = pg.resourceVersion?.trim() ?? ''
+              if (/^\d+$/.test(pgRV)) {
+                qc.setQueriesData(
+                  { queryKey: ['previewGroup'], predicate: (q) => q.queryKey[2] === pg.name },
+                  (old: GetPreviewGroupResponse | undefined) => {
+                    if (!old) return undefined
+                    const cachedRV = old.previewGroup?.resourceVersion?.trim() ?? ''
+                    if (/^\d+$/.test(cachedRV) && BigInt(pgRV) < BigInt(cachedRV)) {
+                      return old
+                    }
+                    return { ...old, previewGroup: pg } as GetPreviewGroupResponse
+                  },
+                )
+              } else {
+                void qc.invalidateQueries({
+                  queryKey: ['previewGroup'],
+                  predicate: (q) => q.queryKey[2] === pg.name,
+                })
+              }
             }
           }
+          if (aborted) return
+          await sleepAbortable(backoff(attemptRef.current++), ac.signal)
         } catch (err) {
           if (aborted) return
           const delay = backoff(attemptRef.current++)
           console.warn(`[watch-pg] reconnecting in ${Math.round(delay)}ms`, err)
-          await new Promise((r) => setTimeout(r, delay))
+          await sleepAbortable(delay, ac.signal)
         }
       }
     }

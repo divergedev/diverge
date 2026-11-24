@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
@@ -20,12 +23,13 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"time"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	pb "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 	"github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
 	"github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/server/auth"
+	"github.com/divergedev/diverge/internal/server/streaming"
 )
 
 func buildPreviewGroupTestSetup(t *testing.T) (client.Client, *fakek8s.Clientset, divergev1alpha1connect.PreviewGroupServiceHandler) {
@@ -596,4 +600,188 @@ func TestPreviewGroupService_MacaroonSandboxEscapeAndCrossNamespaceDeleteBlocked
 	}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+func TestPreviewGroupService_EffectiveEnvNamespaceAuthzAndLocalSourceClearOnDetach(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1alpha1.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	pg := &v1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "team-pg",
+			Annotations: map[string]string{
+				"divergedev.com/group-members": `[{"service":"api","namespace":"team-a","provider":"github","project":"acme/api","mr":10,"branch":"feat/x"},{"service":"custom-ui","namespace":"team-b","provider":"local"}]`,
+			},
+		},
+		Spec: v1alpha1.PreviewGroupSpec{
+			Source: v1alpha1.EnvironmentSource{
+				Provider: "github",
+				Project:  "acme/api",
+				MR:       10,
+				Branch:   "feat/x",
+			},
+			Services: []v1alpha1.PreviewGroupServiceSpec{
+				{Name: "api", Namespace: "team-a", Mode: v1alpha1.ServiceModeImage, Image: "acme/api:10"},
+				{Name: "custom-ui", Namespace: "team-b", Mode: v1alpha1.ServiceModeImage, Image: "acme/ui:dev"},
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pg).Build()
+	k8s := fakek8s.NewSimpleClientset()
+	k8s.PrependReactor("create", "subjectaccessreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		sar := action.(k8stesting.CreateAction).GetObject().(*authorizationv1.SubjectAccessReview)
+		ns := ""
+		if sar.Spec.ResourceAttributes != nil {
+			ns = sar.Spec.ResourceAttributes.Namespace
+		}
+		// Authorized only in "team-a" (NOT "default", NOT "team-b")
+		sar.Status.Allowed = ns == "team-a"
+		return true, sar, nil
+	})
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	svc := NewPreviewGroupService(c, k8s, nil, NewStreamLimiter(250, 20), logger, NewAuditLogger(logger))
+	ctx := auth.ContextWithUserInfo(context.Background(), &auth.UserInfo{Username: "team-a-user"})
+
+	got, err := svc.GetPreviewGroup(ctx, connect.NewRequest(&pb.GetPreviewGroupRequest{Name: "team-pg"}))
+	require.NoError(t, err)
+
+	// 1. Member mentioning EnvironmentName with empty Namespace & EnvironmentNamespace resolves to "default" -> DENIED
+	_, err = svc.UpdatePreviewGroup(ctx, connect.NewRequest(&pb.UpdatePreviewGroupRequest{
+		PreviewGroup: &pb.PreviewGroup{
+			Name:            "team-pg",
+			ResourceVersion: got.Msg.PreviewGroup.ResourceVersion,
+			Annotations: map[string]string{
+				"divergedev.com/group-members": `[{"service":"api","environmentName":"default-env","provider":"github","project":"acme/api","mr":10,"branch":"feat/x"},{"service":"custom-ui","namespace":"team-b","provider":"local"}]`,
+			},
+			Spec: got.Msg.PreviewGroup.Spec,
+		},
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+
+	// 2. Detaching creator MR ("api" in team-a) while untouched custom-ui in team-b remains clears Spec.Source to local MR 0 -> ALLOWED
+	detachProto := got.Msg.PreviewGroup
+	detachProto.Annotations = map[string]string{
+		"divergedev.com/group-members": `[{"service":"custom-ui","namespace":"team-b","provider":"local"}]`,
+	}
+	detachProto.Spec.Services = detachProto.Spec.Services[1:]
+	detachProto.Spec.Source = &pb.EnvironmentSource{
+		Provider: "local",
+		Project:  "",
+		Mr:       0,
+		Branch:   "team-pg",
+	}
+	upd, err := svc.UpdatePreviewGroup(ctx, connect.NewRequest(&pb.UpdatePreviewGroupRequest{
+		PreviewGroup: detachProto,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, "local", upd.Msg.PreviewGroup.Spec.Source.Provider)
+	assert.Equal(t, int32(0), upd.Msg.PreviewGroup.Spec.Source.Mr)
+}
+
+func TestPreviewGroupService_WatchStaleRVAndSameRVDeleted(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1alpha1.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	pg := &v1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            "watch-pg",
+			ResourceVersion: "5",
+		},
+		Spec: v1alpha1.PreviewGroupSpec{
+			Services: []v1alpha1.PreviewGroupServiceSpec{
+				{Name: "web", Namespace: "team-a", Mode: v1alpha1.ServiceModeImage, Image: "acme/web:v1"},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	informerMgr := streaming.NewInformerManager(logger, streaming.BroadcasterMetrics{})
+	defer informerMgr.Close()
+
+	baseClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pg).Build()
+	listHooked := false
+	ic := interceptor.NewClient(baseClient, interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			err := c.List(ctx, list, opts...)
+			if err == nil && !listHooked {
+				if pgList, ok := list.(*v1alpha1.PreviewGroupList); ok && len(pgList.Items) == 1 {
+					listHooked = true
+					// Inject an older pre-list MODIFIED event where pg was in another namespace (!matches)
+					// followed by an exact-snapshot ADDED and a same-RV DELETED (at listed RV "5"), plus duplicate DELETED.
+					stalePG := pgList.Items[0].DeepCopy()
+					stalePG.ResourceVersion = "2"
+					stalePG.Spec.Services[0].Namespace = "other-ns"
+					informerMgr.PgBroadcaster.Publish(streaming.Event[*v1alpha1.PreviewGroup]{
+						Type:    "MODIFIED",
+						Object:  stalePG,
+						Version: "2",
+					})
+					curObj := pgList.Items[0].DeepCopy()
+					informerMgr.PgBroadcaster.Publish(streaming.Event[*v1alpha1.PreviewGroup]{
+						Type:    "ADDED",
+						Object:  curObj,
+						Version: "5",
+					})
+					informerMgr.PgBroadcaster.Publish(streaming.Event[*v1alpha1.PreviewGroup]{
+						Type:    "DELETED",
+						Object:  curObj,
+						Version: "5",
+					})
+					informerMgr.PgBroadcaster.Publish(streaming.Event[*v1alpha1.PreviewGroup]{
+						Type:    "DELETED",
+						Object:  curObj,
+						Version: "5",
+					})
+				}
+			}
+			return err
+		},
+	})
+
+	k8s := fakek8s.NewSimpleClientset()
+	k8s.PrependReactor("create", "subjectaccessreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		sar := action.(k8stesting.CreateAction).GetObject().(*authorizationv1.SubjectAccessReview)
+		sar.Status.Allowed = true
+		return true, sar, nil
+	})
+
+	svc := NewPreviewGroupService(ic, k8s, informerMgr, NewStreamLimiter(250, 20), logger, NewAuditLogger(logger))
+	mux := http.NewServeMux()
+	path, handler := divergev1alpha1connect.NewPreviewGroupServiceHandler(svc)
+	mux.Handle(path, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := auth.ContextWithUserInfo(r.Context(), &auth.UserInfo{Username: "team-a-user"})
+		handler.ServeHTTP(w, r.WithContext(ctx))
+	}))
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	rpcClient := divergev1alpha1connect.NewPreviewGroupServiceClient(srv.Client(), srv.URL)
+	stream, err := rpcClient.WatchPreviewGroups(ctx, connect.NewRequest(&pb.WatchPreviewGroupsRequest{Namespace: "team-a"}))
+	require.NoError(t, err)
+	defer func() { _ = stream.Close() }()
+
+	var events []pb.WatchEventType
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		informerMgr.Close()
+	}()
+	for stream.Receive() {
+		events = append(events, stream.Msg().Type)
+	}
+
+	assert.Equal(t, []pb.WatchEventType{
+		pb.WatchEventType_WATCH_EVENT_TYPE_ADDED,
+		pb.WatchEventType_WATCH_EVENT_TYPE_DELETED,
+	}, events, "must ignore stale RV=2 !matches event, emit single DELETED at listed RV=5, and dedup repeat DELETED")
 }

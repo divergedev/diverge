@@ -144,7 +144,7 @@ func TestMultiMRJoinSyncAndDetachLifecycle(t *testing.T) {
 	assert.Equal(t, "ghcr.io/acme/web-app:sha-111", current.Spec.Services[0].Image)
 
 	// 4. Backend MR #42 merges -> DetachMemberByPR removes payments-api, keeps web-app (+ baseline gateway)
-	detached1, err := DetachMemberByPR(ctx, c, "acme/payments-api", 42, "")
+	detached1, err := DetachMemberByPR(ctx, c, "github", "acme/payments-api", 42, "")
 	require.NoError(t, err)
 	require.Len(t, detached1, 1)
 	assert.False(t, detached1[0].DeletedGroup)
@@ -155,7 +155,7 @@ func TestMultiMRJoinSyncAndDetachLifecycle(t *testing.T) {
 	require.Len(t, current.Spec.Services, 2) // web-app + baseline gateway
 
 	// 5. Frontend MR #101 merges (last active MR!) -> DetachMemberByPR deletes the entire PreviewGroup!
-	detached2, err := DetachMemberByPR(ctx, c, "acme/web-app", 101, "")
+	detached2, err := DetachMemberByPR(ctx, c, "github", "acme/web-app", 101, "")
 	require.NoError(t, err)
 	require.Len(t, detached2, 1)
 	assert.True(t, detached2[0].DeletedGroup)
@@ -256,11 +256,19 @@ func TestJoinCollisionGuardNamespaceLeaveHibernationAndTTLGuard(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, resA.Created)
 
-	// Standalone envTeamA should be automatically hibernated while attached
+	// Standalone envTeamA stays awake immediately after Join until controller confirms replacement is Running
 	var liveEnvA v1alpha1.Environment
 	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "pr-42", Namespace: "team-a"}, &liveEnvA))
-	assert.Equal(t, "true", liveEnvA.Annotations[AnnotationHibernated])
-	assert.Equal(t, "feat-x", liveEnvA.Annotations[AnnotationAttachedPreviewGroup])
+	assert.Empty(t, liveEnvA.Annotations[AnnotationHibernated])
+	assert.Empty(t, liveEnvA.Annotations[AnnotationAttachedPreviewGroup])
+
+	// Simulate controller hibernation after replacement becomes Running so Leave's wake path is verified below
+	liveEnvA.Annotations = map[string]string{
+		AnnotationHibernated:           "true",
+		AnnotationAttachedPreviewGroup: "feat-x",
+		AnnotationGroupHibernated:      "true",
+	}
+	require.NoError(t, c.Update(ctx, &liveEnvA))
 
 	// Cross-MR collision on service "worker" is rejected without AllowTakeover
 	collidingSvc := v1alpha1.PreviewGroupServiceSpec{
@@ -395,4 +403,135 @@ func TestSyncMemberEnvironment_DetachBetweenDiscoveryAndJoinRead(t *testing.T) {
 	members := ParseMembers(&stored)
 	require.Len(t, members, 1)
 	assert.Equal(t, "billing-api", members[0].Service)
+}
+
+func TestMemberMatchesEnvironmentSource_And_SameMemberOwner(t *testing.T) {
+	scmEnv := &v1alpha1.Environment{
+		Spec: v1alpha1.EnvironmentSpec{
+			Source: v1alpha1.EnvironmentSource{
+				Provider: "github",
+				Project:  "acme/api",
+				MR:       42,
+				Branch:   "feat/pay",
+			},
+		},
+	}
+
+	assert.False(t, MemberMatchesEnvironmentSource(MemberRecord{Service: "api", EnvironmentName: "pr-42"}, scmEnv),
+		"omitted SCM fields must not match a standalone Environment")
+	assert.False(t, MemberMatchesEnvironmentSource(MemberRecord{Provider: "gitlab", Project: "acme/api", MR: 42}, scmEnv),
+		"mismatched provider must be rejected")
+	assert.False(t, MemberMatchesEnvironmentSource(MemberRecord{Provider: "github", Project: "acme/api", MR: 99}, scmEnv),
+		"mismatched MR must be rejected")
+	assert.True(t, MemberMatchesEnvironmentSource(MemberRecord{Provider: "github", Project: "acme/api", MR: 42}, scmEnv))
+
+	localEnv := &v1alpha1.Environment{
+		Spec: v1alpha1.EnvironmentSpec{
+			Source: v1alpha1.EnvironmentSource{
+				Provider: "local",
+				Branch:   "feat/local",
+			},
+		},
+	}
+	assert.False(t, MemberMatchesEnvironmentSource(MemberRecord{Service: "api"}, localEnv))
+	assert.True(t, MemberMatchesEnvironmentSource(MemberRecord{Provider: "local", Branch: "feat/local"}, localEnv))
+
+	assert.False(t, SameMemberOwner(
+		MemberRecord{Service: "worker", MR: 42, EnvironmentName: "pr-worker", EnvironmentNamespace: "default"},
+		MemberRecord{Service: "worker", MR: 43, EnvironmentName: "pr-worker", EnvironmentNamespace: "default"},
+	), "different positive MR numbers must collide even when project is absent")
+	assert.True(t, SameMemberOwner(
+		MemberRecord{Service: "worker", MR: 42, EnvironmentName: "pr-worker", EnvironmentNamespace: "default"},
+		MemberRecord{Service: "worker", MR: 42, EnvironmentName: "pr-worker", EnvironmentNamespace: "default"},
+	))
+}
+
+func TestProviderIsolationLocalSourceClearAndChangedServicesRecovery(t *testing.T) {
+	ctx := context.Background()
+
+	// Orphaned standalone env originally joined via Deploy.ChangedServices without ServiceConfig.ServiceName or image
+	orphanedWorkerEnv := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pr-changed-svc",
+			Namespace: "jobs",
+			Annotations: map[string]string{
+				AnnotationAttachedPreviewGroup: "cross-prov",
+				AnnotationHibernated:           "true",
+				AnnotationGroupHibernated:      "true",
+			},
+		},
+		Spec: v1alpha1.EnvironmentSpec{
+			Deploy: v1alpha1.EnvironmentDeploy{
+				ChangedServices: []string{"worker"},
+			},
+		},
+	}
+
+	c := newTestClient(t, orphanedWorkerEnv)
+
+	_, err := Join(ctx, c, JoinOptions{
+		GroupName: "cross-prov",
+		Source: &v1alpha1.EnvironmentSource{
+			Provider: "github",
+			Project:  "acme/api",
+			MR:       7,
+			Branch:   "feat/x",
+		},
+		Services: []v1alpha1.PreviewGroupServiceSpec{
+			{Name: "gh-svc", Namespace: "default", Mode: v1alpha1.ServiceModeImage, Image: "acme/gh:7"},
+			{Name: "gl-svc", Namespace: "default", Mode: v1alpha1.ServiceModeImage, Image: "acme/gl:7"},
+			{Name: "custom-ui", Namespace: "default", Mode: v1alpha1.ServiceModeImage, Image: "acme/ui:dev"},
+		},
+		Members: []MemberRecord{
+			{Service: "gh-svc", Namespace: "default", Provider: "github", Project: "acme/api", MR: 7, Branch: "feat/x"},
+			{Service: "gl-svc", Namespace: "default", Provider: "gitlab", Project: "acme/api", MR: 7, Branch: "feat/y"},
+			{Service: "custom-ui", Namespace: "default", Provider: "local"},
+		},
+	})
+	require.NoError(t, err)
+
+	glGroups, err := FindGroupsForPR(ctx, c, "gitlab", "acme/api", 7, "")
+	require.NoError(t, err)
+	require.Len(t, glGroups, 1)
+
+	// GitHub DetachMemberByPR detaches ONLY gh-svc (preserves gl-svc from GitLab acme/api#7!)
+	// and promotes Spec.Source to surviving GitLab MR #7
+	detachedGH, err := DetachMemberByPR(ctx, c, "github", "acme/api", 7, "")
+	require.NoError(t, err)
+	require.Len(t, detachedGH, 1)
+	assert.Equal(t, []string{"gh-svc"}, detachedGH[0].RemovedServices)
+
+	var pg v1alpha1.PreviewGroup
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "cross-prov"}, &pg))
+	assert.Equal(t, "gitlab", pg.Spec.Source.Provider)
+	assert.Equal(t, 7, pg.Spec.Source.MR)
+	require.Len(t, pg.Spec.Services, 2)
+
+	// Detach GitLab MR #7 leaving only local custom-ui -> clears Spec.Source to local MR 0
+	_, err = Leave(ctx, c, LeaveOptions{
+		GroupName: "cross-prov",
+		Provider:  "gitlab",
+		Project:   "acme/api",
+		MR:        7,
+	})
+	require.NoError(t, err)
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "cross-prov"}, &pg))
+	assert.Equal(t, "local", pg.Spec.Source.Provider)
+	assert.Empty(t, pg.Spec.Source.Project)
+	assert.Zero(t, pg.Spec.Source.MR)
+	assert.Equal(t, "cross-prov", pg.Spec.Source.Branch)
+
+	// Leaving custom-ui by service name recovers orphaned worker env identified via Deploy.ChangedServices
+	resFinal, err := Leave(ctx, c, LeaveOptions{
+		GroupName:    "cross-prov",
+		Namespace:    "jobs",
+		ServiceNames: []string{"custom-ui", "worker"},
+	})
+	require.NoError(t, err)
+	assert.True(t, resFinal.DeletedGroup)
+
+	var recoveredEnv v1alpha1.Environment
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "pr-changed-svc", Namespace: "jobs"}, &recoveredEnv))
+	assert.Empty(t, recoveredEnv.Annotations[AnnotationAttachedPreviewGroup])
+	assert.Empty(t, recoveredEnv.Annotations[AnnotationHibernated])
 }

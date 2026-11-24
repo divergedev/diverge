@@ -718,6 +718,11 @@ spec:
                   group status.
                 format: int64
                 type: integer
+              commentSource:
+                description: |-
+                  CommentSource identifies the SCM PR/MR ("<provider>:<project>#<mr>") that CommentID belongs to,
+                  persisted atomically with CommentID in status so source promotion never leaves a stale CommentID.
+                type: string
               conditions:
                 description: |-
                   Conditions represent the latest available observations of the

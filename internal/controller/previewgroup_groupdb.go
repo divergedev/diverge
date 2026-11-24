@@ -14,8 +14,10 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -176,12 +178,37 @@ func groupDatabaseMigrationDigest(pg *divergeiov1alpha1.PreviewGroup, anchorEnvN
 	return fmt.Sprintf("%x", sum[:8])
 }
 
+func isGroupMigrationBlocking(db *divergeiov1alpha1.EnvironmentDatabase) bool {
+	if db == nil {
+		return true
+	}
+	if db.MigrationJob != nil && db.MigrationJob.Blocking != nil && !*db.MigrationJob.Blocking {
+		return false
+	}
+	if db.Atlas != nil && db.Atlas.Blocking != nil && !*db.Atlas.Blocking {
+		return false
+	}
+	return true
+}
+
+func blockingObservingAnchor(anchor *divergeiov1alpha1.Environment) *divergeiov1alpha1.Environment {
+	obs := anchor.DeepCopy()
+	t := true
+	if obs.Spec.Database.MigrationJob != nil {
+		obs.Spec.Database.MigrationJob.Blocking = &t
+	}
+	if obs.Spec.Database.Atlas != nil {
+		obs.Spec.Database.Atlas.Blocking = &t
+	}
+	return obs
+}
+
 // reconcileGroupDatabase provisions a single shared database for the PreviewGroup when Spec.Database is configured.
-// Returns (sharedEnvVars, anchorNamespace, handledByGroup, ready, cleanupPendingRequeue, error).
+// Returns (sharedEnvVars, anchorNamespace, handledByGroup, ready, requeueNeeded, error).
 func (r *PreviewGroupReconciler) reconcileGroupDatabase(
 	ctx context.Context,
 	pg *divergeiov1alpha1.PreviewGroup,
-) (envVars map[string]string, anchorNS string, handled bool, ready bool, cleanupPending bool, retErr error) {
+) (envVars map[string]string, anchorNS string, handled bool, ready bool, requeueNeeded bool, retErr error) {
 	if !hasDedicatedGroupDatabase(pg) {
 		hasPinned := pg != nil && pg.Annotations != nil &&
 			(strings.TrimSpace(pg.Annotations[annotationGroupDBNamespace]) != "" ||
@@ -281,23 +308,40 @@ func (r *PreviewGroupReconciler) reconcileGroupDatabase(
 		}
 	}
 
-	// Execute group-level MigrationJob / Atlas ONCE per digest against the shared database (recording completion durably across Job TTL GC).
+	// Execute group-level MigrationJob / Atlas ONCE per digest against the shared database (recording completion only after success).
+	migInProgressRequeue := false
 	if pg.Spec.Database != nil && (pg.Spec.Database.MigrationJob != nil || pg.Spec.Database.Atlas != nil) {
 		migDigest := groupDatabaseMigrationDigest(pg, anchorEnv.Name, anchorNS)
 		if pg.Annotations[annotationGroupDBMigrationHash] != migDigest {
-			if migErr := helper.runMigrations(tCtx, anchorEnv, dbRes); migErr != nil {
-				if errors.Is(migErr, ErrHookInProgress) {
-					return nil, anchorNS, true, false, false, nil
+			migHelper := helper
+			if target != nil && target.IsRemote && target.Client != nil {
+				migHelper = &EnvironmentReconciler{
+					Client:           target.Client,
+					Scheme:           r.Scheme,
+					DatabaseProvider: r.DatabaseProvider,
+					ClusterClients:   r.ClusterClients,
+					SetupRunner:      r.SetupRunner,
 				}
-				return nil, anchorNS, true, false, false, migErr
 			}
-			migBase := pg.DeepCopy()
-			if pg.Annotations == nil {
-				pg.Annotations = make(map[string]string)
-			}
-			pg.Annotations[annotationGroupDBMigrationHash] = migDigest
-			if patchErr := r.Patch(ctx, pg, client.MergeFrom(migBase)); patchErr != nil {
-				return nil, anchorNS, true, false, false, fmt.Errorf("failed to persist group migration completion: %w", patchErr)
+			obsAnchor := blockingObservingAnchor(anchorEnv)
+			if migErr := migHelper.runMigrations(tCtx, obsAnchor, dbRes); migErr != nil {
+				if errors.Is(migErr, ErrHookInProgress) {
+					if isGroupMigrationBlocking(pg.Spec.Database) {
+						return nil, anchorNS, true, false, false, nil
+					}
+					migInProgressRequeue = true
+				} else {
+					return nil, anchorNS, true, false, false, migErr
+				}
+			} else {
+				migBase := pg.DeepCopy()
+				if pg.Annotations == nil {
+					pg.Annotations = make(map[string]string)
+				}
+				pg.Annotations[annotationGroupDBMigrationHash] = migDigest
+				if patchErr := r.Patch(ctx, pg, client.MergeFrom(migBase)); patchErr != nil {
+					return nil, anchorNS, true, false, false, fmt.Errorf("failed to persist group migration completion: %w", patchErr)
+				}
 			}
 		}
 	}
@@ -312,7 +356,7 @@ func (r *PreviewGroupReconciler) reconcileGroupDatabase(
 	if len(outVars) == 0 {
 		return nil, anchorNS, true, false, false, nil
 	}
-	return outVars, anchorNS, true, true, false, nil
+	return outVars, anchorNS, true, true, migInProgressRequeue, nil
 }
 
 func isClusterLocalDBVars(vars map[string]string, anchorEnvName string) bool {
@@ -378,7 +422,7 @@ func (r *PreviewGroupReconciler) ensureChildSharedDBSecret(
 		effectiveClusterRef = svc.ClusterRef.DeepCopy()
 	}
 	if isClusterLocalDBVars(groupVars, groupDatabaseAnchorName(pg.Name)) &&
-		!divergeiov1alpha1.EqualClusterTargetRef(pg.Spec.ClusterRef, effectiveClusterRef, targetNS) {
+		!divergeiov1alpha1.EqualClusterTargetRefInNamespaces(pg.Spec.ClusterRef, anchorNS, effectiveClusterRef, targetNS) {
 		return "", fmt.Errorf("service %q targets a different cluster than shared group database in %q; cluster-local databases cannot be routed across clusters", svc.Name, anchorNS)
 	}
 	probeEnv := &divergeiov1alpha1.Environment{
@@ -440,8 +484,17 @@ func (r *PreviewGroupReconciler) teardownGroupDatabase(ctx context.Context, pg *
 	tdCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
-	if target, tErr := helper.resolveTarget(tdCtx, anchorEnv); tErr == nil && target != nil {
+	targetClient := r.Client
+	target, tErr := helper.resolveTarget(tdCtx, anchorEnv)
+	if tErr != nil {
+		if multicluster.IsRemoteEnv(anchorEnv) {
+			return fmt.Errorf("failed to resolve database target cluster for teardown: %w", tErr)
+		}
+	} else if target != nil {
 		tdCtx = multicluster.WithTarget(tdCtx, target)
+		if target.Client != nil {
+			targetClient = target.Client
+		}
 	}
 
 	dbProv, _, err := helper.resolveDatabaseProviderWithContext(tdCtx, anchorEnv, true)
@@ -457,20 +510,21 @@ func (r *PreviewGroupReconciler) teardownGroupDatabase(ctx context.Context, pg *
 		}
 	}
 
-	// Clean up any anchor migration/setup-sql DSN Secrets and Atlas CRs created without an Environment UID
-	targetClient := r.Client
-	if tClient, _, _, tErr := helper.resolveTargetCluster(tdCtx, anchorEnv); tErr == nil && tClient != nil {
-		targetClient = tClient
-	}
+	// Clean up any anchor migration/setup-sql DSN Secrets, Atlas CRs, and per-child shared DB Secrets
+	var errs []error
 	for _, labelVal := range []string{truncateLabel(anchorEnv.Name), truncateLabel(anchorEnv.Name + "-admin")} {
 		var secList corev1.SecretList
 		if lErr := targetClient.List(tdCtx, &secList, client.InNamespace(anchorNS), client.MatchingLabels{
 			labelEnvironment: labelVal,
-		}); lErr == nil {
-			for i := range secList.Items {
-				hk := secList.Items[i].Labels[labelHookType]
-				if hk == hookTypeMigration || hk == hookTypeSetupSQL {
-					_ = client.IgnoreNotFound(targetClient.Delete(tdCtx, &secList.Items[i]))
+		}); lErr != nil {
+			errs = append(errs, fmt.Errorf("failed to list migration/setup secrets in %s: %w", anchorNS, lErr))
+			continue
+		}
+		for i := range secList.Items {
+			hk := secList.Items[i].Labels[labelHookType]
+			if hk == hookTypeMigration || hk == hookTypeSetupSQL {
+				if dErr := targetClient.Delete(tdCtx, &secList.Items[i]); dErr != nil && !apierrors.IsNotFound(dErr) {
+					errs = append(errs, fmt.Errorf("failed to delete %s secret %s/%s: %w", hk, anchorNS, secList.Items[i].Name, dErr))
 				}
 			}
 		}
@@ -485,9 +539,153 @@ func (r *PreviewGroupReconciler) teardownGroupDatabase(ctx context.Context, pg *
 		u.SetKind(kind)
 		u.SetName(generateHookJobName(anchorEnv.Name, "atlas"))
 		u.SetNamespace(anchorNS)
-		_ = client.IgnoreNotFound(targetClient.Delete(tdCtx, u))
+		if dErr := targetClient.Delete(tdCtx, u); dErr != nil && !apierrors.IsNotFound(dErr) && !meta.IsNoMatchError(dErr) {
+			errs = append(errs, fmt.Errorf("failed to delete %s %s/%s: %w", kind, anchorNS, u.GetName(), dErr))
+		}
 	}
-	return nil
+	if secErr := r.cleanupOrphanedChildSharedDBSecrets(tdCtx, pg, nil); secErr != nil {
+		errs = append(errs, secErr)
+	}
+	return errors.Join(errs...)
+}
+
+func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
+	ctx context.Context,
+	pg *divergeiov1alpha1.PreviewGroup,
+	desiredEnvNames map[string]bool,
+) error {
+	if pg == nil || r.Client == nil {
+		return nil
+	}
+	children, err := r.listChildEnvironments(ctx, pg)
+	if err != nil {
+		return fmt.Errorf("failed to list child Environments for shared DB Secret cleanup: %w", err)
+	}
+	keepSecrets := make(map[string]bool, len(children)+len(desiredEnvNames))
+	for i := range children {
+		secName := sanitizeK8sName(fmt.Sprintf("diverge-db-env-%s", children[i].Name), children[i].Name, 63)
+		keepSecrets[children[i].Namespace+"/"+secName] = true
+	}
+	for envKey := range desiredEnvNames {
+		parts := strings.SplitN(envKey, "/", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		secName := sanitizeK8sName(fmt.Sprintf("diverge-db-env-%s", parts[1]), parts[1], 63)
+		keepSecrets[parts[0]+"/"+secName] = true
+	}
+
+	type targetScan struct {
+		client     client.Client
+		namespaces []string
+		isRemote   bool
+	}
+	scans := []targetScan{{client: r.Client}}
+	seenTargets := map[string]int{}
+	addRemoteScan := func(target *multicluster.Target, ns string) {
+		if target == nil || !target.IsRemote || target.Client == nil {
+			return
+		}
+		if idx, ok := seenTargets[target.Name]; ok {
+			if ns != "" && !containsString(scans[idx].namespaces, ns) {
+				scans[idx].namespaces = append(scans[idx].namespaces, ns)
+			}
+			return
+		}
+		var nss []string
+		if ns != "" {
+			nss = []string{ns}
+		}
+		seenTargets[target.Name] = len(scans)
+		scans = append(scans, targetScan{client: target.Client, namespaces: nss, isRemote: true})
+	}
+
+	helper := r.envProvisionHelper()
+	anchorNS := resolveGroupDatabaseAnchorNamespace(pg)
+	var errs []error
+	if pg.Spec.ClusterRef != nil {
+		probeAnchor := &divergeiov1alpha1.Environment{
+			ObjectMeta: metav1.ObjectMeta{Name: groupDatabaseAnchorName(pg.Name), Namespace: anchorNS},
+			Spec:       divergeiov1alpha1.EnvironmentSpec{Deploy: divergeiov1alpha1.EnvironmentDeploy{Namespace: "same", ClusterRef: pg.Spec.ClusterRef}},
+		}
+		if t, tErr := helper.resolveTarget(ctx, probeAnchor); tErr != nil {
+			if multicluster.IsRemoteEnv(probeAnchor) {
+				errs = append(errs, fmt.Errorf("failed to resolve anchor spoke cluster for shared DB Secret cleanup: %w", tErr))
+			}
+		} else {
+			addRemoteScan(t, anchorNS)
+		}
+	}
+	for _, svc := range pg.Spec.Services {
+		svcNS := strings.TrimSpace(svc.Namespace)
+		if svcNS == "" {
+			svcNS = "default"
+		}
+		if pg.Spec.ClusterRef != nil {
+			probeAnchor := &divergeiov1alpha1.Environment{
+				ObjectMeta: metav1.ObjectMeta{Name: groupDatabaseAnchorName(pg.Name), Namespace: anchorNS},
+				Spec:       divergeiov1alpha1.EnvironmentSpec{Deploy: divergeiov1alpha1.EnvironmentDeploy{Namespace: "same", ClusterRef: pg.Spec.ClusterRef}},
+			}
+			if t, tErr := helper.resolveTarget(ctx, probeAnchor); tErr == nil {
+				addRemoteScan(t, svcNS)
+			}
+		}
+		if svc.ClusterRef != nil {
+			probeSvc := &divergeiov1alpha1.Environment{
+				ObjectMeta: metav1.ObjectMeta{Name: childEnvironmentName(pg.Name, svc.Name), Namespace: svcNS},
+				Spec:       divergeiov1alpha1.EnvironmentSpec{Deploy: divergeiov1alpha1.EnvironmentDeploy{Namespace: "same", ClusterRef: svc.ClusterRef}},
+			}
+			if t, tErr := helper.resolveTarget(ctx, probeSvc); tErr != nil {
+				if multicluster.IsRemoteEnv(probeSvc) {
+					errs = append(errs, fmt.Errorf("failed to resolve spoke cluster for service %q shared DB Secret cleanup: %w", svc.Name, tErr))
+				}
+			} else {
+				addRemoteScan(t, svcNS)
+			}
+		}
+	}
+
+	matchLabels := client.MatchingLabels{
+		labelPreviewGroup:           truncateLabel(pg.Name),
+		"divergedev.com/managed-by": "diverge",
+	}
+	for _, scan := range scans {
+		var secList corev1.SecretList
+		if lErr := scan.client.List(ctx, &secList, matchLabels); lErr != nil {
+			if meta.IsNoMatchError(lErr) || runtime.IsNotRegisteredError(lErr) {
+				continue
+			}
+			if scan.isRemote && apierrors.IsForbidden(lErr) && len(scan.namespaces) > 0 {
+				for _, ns := range scan.namespaces {
+					var nsList corev1.SecretList
+					if nsErr := scan.client.List(ctx, &nsList, client.InNamespace(ns), matchLabels); nsErr != nil {
+						if meta.IsNoMatchError(nsErr) || runtime.IsNotRegisteredError(nsErr) {
+							continue
+						}
+						errs = append(errs, fmt.Errorf("failed to list shared DB Secrets in %s: %w", ns, nsErr))
+						continue
+					}
+					secList.Items = append(secList.Items, nsList.Items...)
+				}
+			} else {
+				errs = append(errs, fmt.Errorf("failed to list shared DB Secrets: %w", lErr))
+				continue
+			}
+		}
+		for i := range secList.Items {
+			sec := &secList.Items[i]
+			if !strings.HasPrefix(sec.Name, "diverge-db-env-") {
+				continue
+			}
+			if keepSecrets[sec.Namespace+"/"+sec.Name] {
+				continue
+			}
+			if dErr := scan.client.Delete(ctx, sec); dErr != nil && !apierrors.IsNotFound(dErr) {
+				errs = append(errs, fmt.Errorf("failed to delete orphaned shared DB Secret %s/%s: %w", sec.Namespace, sec.Name, dErr))
+			}
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // syncMemberStandaloneEnvironments hibernates standalone PR Environments whose replacement child service has reached
@@ -595,9 +793,14 @@ func (r *PreviewGroupReconciler) wakeUnclaimedStandaloneEnvironments(ctx context
 	}
 
 	var candidates []*divergeiov1alpha1.Environment
+	childEnvByKey := make(map[string]*divergeiov1alpha1.Environment)
 	for i := range envList.Items {
 		env := &envList.Items[i]
-		if !env.DeletionTimestamp.IsZero() || env.Labels[labelManagedBy] == "diverge-previewgroup" {
+		if !env.DeletionTimestamp.IsZero() {
+			continue
+		}
+		if env.Labels[labelManagedBy] == "diverge-previewgroup" {
+			childEnvByKey[env.Namespace+"/"+env.Name] = env
 			continue
 		}
 		if env.Annotations[previewgroup.AnnotationAttachedPreviewGroup] != groupName {
@@ -629,6 +832,10 @@ func (r *PreviewGroupReconciler) wakeUnclaimedStandaloneEnvironments(ctx context
 		if other.Name == groupName || !other.DeletionTimestamp.IsZero() {
 			continue
 		}
+		otherStatusPhase := make(map[string]divergeiov1alpha1.EnvironmentPhase, len(other.Status.Services))
+		for _, st := range other.Status.Services {
+			otherStatusPhase[st.Name] = st.Phase
+		}
 		svcNS := make(map[string]string, len(other.Spec.Services))
 		for _, s := range other.Spec.Services {
 			if s.Mode == divergeiov1alpha1.ServiceModeBaseline {
@@ -655,10 +862,20 @@ func (r *PreviewGroupReconciler) wakeUnclaimedStandaloneEnvironments(ctx context
 			if envNS == "" {
 				envNS = ns
 			}
-			if envNS == ns {
-				if cand, exists := candidateByKey[envNS+"/"+m.EnvironmentName]; exists && previewgroup.MemberMatchesEnvironmentSource(m, cand) {
-					otherOwner[envNS+"/"+m.EnvironmentName] = other.Name
-				}
+			if envNS != ns {
+				continue
+			}
+			if otherStatusPhase[m.Service] == divergeiov1alpha1.PhaseFailed {
+				continue
+			}
+			child := childEnvByKey[ns+"/"+childEnvironmentName(other.Name, m.Service)]
+			if child == nil || child.Status.Phase != divergeiov1alpha1.PhaseRunning ||
+				(child.Generation > 0 && child.Status.ObservedGeneration < child.Generation) ||
+				meta.IsStatusConditionFalse(child.Status.Conditions, "DatabaseReady") {
+				continue
+			}
+			if cand, exists := candidateByKey[envNS+"/"+m.EnvironmentName]; exists && previewgroup.MemberMatchesEnvironmentSource(m, cand) {
+				otherOwner[envNS+"/"+m.EnvironmentName] = other.Name
 			}
 		}
 	}

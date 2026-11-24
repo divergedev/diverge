@@ -256,6 +256,7 @@ func (h *GitLabWebhookHandler) handleNoteEvent(ctx context.Context, w http.Respo
 		branch = "main"
 	}
 
+	ctx = WithWebhookProvider(ctx, "gitlab")
 	var (
 		execErr  error
 		feedback string
@@ -281,6 +282,7 @@ func (h *GitLabWebhookHandler) handleNoteEvent(ctx context.Context, w http.Respo
 }
 
 func (h *GitLabWebhookHandler) handleFixCommand(ctx context.Context, payload *GitLabNotePayload, cmd *SlashCommand, repoURL, branch string, mrIID int) (string, error) {
+	ctx = WithWebhookProvider(ctx, "gitlab")
 	feedback, err := ExecuteSlashCommandWithFeedback(ctx, h.Client, h.DefaultNS, cmd, repoURL, branch, mrIID)
 	if err != nil {
 		return "", err
@@ -397,7 +399,7 @@ func (h *GitLabWebhookHandler) reconcileEnvironment(ctx context.Context, payload
 		if h.DisablePreviewGroups {
 			return nil
 		}
-		_, detachErr := previewgroup.DetachMemberByPR(ctx, h.Client, payload.Project.PathWithNamespace, payload.ObjectAttributes.IID, ns+"/"+envName)
+		_, detachErr := previewgroup.DetachMemberByPR(ctx, h.Client, "gitlab", payload.Project.PathWithNamespace, payload.ObjectAttributes.IID, ns+"/"+envName)
 		return detachErr
 	}
 	if err != nil {
@@ -430,7 +432,7 @@ func (h *GitLabWebhookHandler) deleteEnvironment(ctx context.Context, payload *G
 	if h.DisablePreviewGroups {
 		return nil
 	}
-	_, err := previewgroup.DetachMemberByPR(ctx, h.Client, payload.Project.PathWithNamespace, payload.ObjectAttributes.IID, ns+"/"+envName)
+	_, err := previewgroup.DetachMemberByPR(ctx, h.Client, "gitlab", payload.Project.PathWithNamespace, payload.ObjectAttributes.IID, ns+"/"+envName)
 	return err
 }
 

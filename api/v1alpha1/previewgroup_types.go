@@ -359,6 +359,11 @@ type PreviewGroupStatus struct {
 	// +optional
 	CommentID int64 `json:"commentID,omitempty"`
 
+	// CommentSource identifies the SCM PR/MR ("<provider>:<project>#<mr>") that CommentID belongs to,
+	// persisted atomically with CommentID in status so source promotion never leaves a stale CommentID.
+	// +optional
+	CommentSource string `json:"commentSource,omitempty"`
+
 	// LeaseRenewedAt is the last time the owning CLI heartbeat renewed the lease.
 	LeaseRenewedAt *metav1.Time `json:"leaseRenewedAt,omitempty"`
 

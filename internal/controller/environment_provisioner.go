@@ -198,6 +198,7 @@ func (r *EnvironmentReconciler) reconcileProvisioningWithTarget(ctx context.Cont
 		// Database lifecycle and diverge-db-env-<env> Secret are owned by the parent PreviewGroup.
 		sharedDSN, sharedReady, sharedErr := r.readSharedGroupDatabaseDSN(ctx, env)
 		if sharedErr != nil {
+			env.Status.Phase = divergeiov1alpha1.PhaseFailed
 			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 				Type:    "DatabaseReady",
 				Status:  metav1.ConditionFalse,
@@ -208,6 +209,7 @@ func (r *EnvironmentReconciler) reconcileProvisioningWithTarget(ctx context.Cont
 			return ctx, res, true, retErr
 		}
 		if !sharedReady {
+			env.Status.Phase = divergeiov1alpha1.PhaseDeploying
 			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
 				Type:    "DatabaseReady",
 				Status:  metav1.ConditionFalse,

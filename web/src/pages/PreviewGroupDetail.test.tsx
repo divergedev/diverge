@@ -8,6 +8,10 @@ import { ThemeProvider } from '@/components/ThemeProvider'
 import { AuthProvider } from '@/hooks/useAuth'
 import { MemoryRouter } from 'react-router-dom'
 import { render as rtlRender } from '@testing-library/react'
+import { previewGroupClient } from '@/api/client'
+import { queryKeys } from '@/api/queries'
+import { useWatchPreviewGroups } from '@/hooks/useWatch'
+import { WatchEventType } from '@/api/gen/diverge/v1alpha1/types_pb'
 
 vi.mock('react-router-dom', async (importOriginal) => {
   const mod = await importOriginal<typeof import('react-router-dom')>()
@@ -355,5 +359,119 @@ describe('PreviewGroupDetail', () => {
     )
     expect(seenIfMatchHeader).toBe('77')
     expect(await screen.findByText('newly-joined-web')).toBeInTheDocument()
+  })
+
+  it('clears spec.source to local when creator MR leaves and only custom local service remains', async () => {
+    let updatedPayload: Record<string, unknown> | undefined
+
+    server.use(
+      http.post('*/diverge.v1alpha1.PreviewGroupService/GetPreviewGroup', () =>
+        HttpResponse.json({
+          previewGroup: {
+            ...mockPreviewGroup.previewGroup,
+            resourceVersion: '60',
+            annotations: {
+              'divergedev.com/group-members': JSON.stringify([
+                {
+                  service: 'api-gateway',
+                  provider: 'github',
+                  project: 'org/checkout-monorepo',
+                  mr: 108,
+                  branch: 'feat/multi-service',
+                },
+                { service: 'custom-ui', namespace: 'default', provider: 'local' },
+              ]),
+            },
+            spec: {
+              ...mockPreviewGroup.previewGroup.spec,
+              services: [
+                { name: 'api-gateway', mode: 'image', namespace: 'default', image: 'img/gw:108' },
+                { name: 'custom-ui', mode: 'image', namespace: 'default', image: 'img/ui:local' },
+              ],
+            },
+          },
+        }),
+      ),
+      http.post('*/diverge.v1alpha1.PreviewGroupService/UpdatePreviewGroup', async ({ request }) => {
+        updatedPayload = (await request.json()) as Record<string, unknown>
+        return HttpResponse.json({ previewGroup: updatedPayload.previewGroup })
+      }),
+    )
+
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'Detach api-gateway' }))
+
+    await waitFor(() => {
+      expect(updatedPayload).toBeDefined()
+    })
+    const sent = updatedPayload?.previewGroup as {
+      spec: { source: { provider: string; project?: string; mr?: number; branch: string } }
+    }
+    expect(sent.spec.source).toEqual({
+      provider: 'local',
+      branch: 'pg-checkout',
+    })
+  })
+
+  it('useWatchPreviewGroups ignores older watch snapshots when cache already holds a newer resourceVersion', async () => {
+    localStorage.setItem('diverge:token', 'test-token')
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    queryClient.setQueryData(queryKeys.previewGroup('', 'pg-checkout'), {
+      previewGroup: {
+        name: 'pg-checkout',
+        namespace: '',
+        resourceVersion: '20',
+        spec: { services: [{ name: 'api-gateway' }, { name: 'payments' }] },
+      },
+    })
+
+    const spy = vi.spyOn(previewGroupClient, 'watchPreviewGroups').mockImplementation(async function* (_req, opts) {
+      yield {
+        type: WatchEventType.MODIFIED,
+        resourceVersion: '15',
+        previewGroup: {
+          name: 'pg-checkout',
+          namespace: '',
+          resourceVersion: '15',
+          spec: { services: [{ name: 'api-gateway' }] },
+        } as never,
+      } as never
+      await new Promise<void>((resolve) => {
+        if (opts?.signal?.aborted) {
+          resolve()
+          return
+        }
+        opts?.signal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+    })
+
+    function WatchHarness() {
+      useWatchPreviewGroups()
+      return null
+    }
+
+    let unmount: (() => void) | undefined
+    try {
+      const rendered = rtlRender(
+        <QueryClientProvider client={queryClient}>
+          <WatchHarness />
+        </QueryClientProvider>,
+      )
+      unmount = rendered.unmount
+
+      await waitFor(() => {
+        expect(spy).toHaveBeenCalled()
+      })
+      await new Promise((r) => setTimeout(r, 30))
+      const cached = queryClient.getQueryData<{ previewGroup?: { resourceVersion?: string; spec?: { services?: unknown[] } } }>(
+        queryKeys.previewGroup('', 'pg-checkout'),
+      )
+      expect(cached?.previewGroup?.resourceVersion).toBe('20')
+      expect(cached?.previewGroup?.spec?.services).toHaveLength(2)
+    } finally {
+      unmount?.()
+      spy.mockRestore()
+      localStorage.removeItem('diverge:token')
+    }
   })
 })

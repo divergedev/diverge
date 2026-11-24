@@ -111,6 +111,7 @@ type LeaveOptions struct {
 	GroupName            string
 	Namespace            string
 	ServiceNames         []string
+	Provider             string
 	Project              string
 	MR                   int
 	EnvironmentName      string // "<name>" or "<namespace>/<name>"
@@ -243,6 +244,45 @@ func knownSCMProvider(p string) string {
 	return trimmed
 }
 
+// memberMatchesSCMProvider compares a recorded member's provider with a requesting webhook/CLI provider.
+// When both sides specify a known SCM provider ("github" or "gitlab"), they must match so identical
+// org/repo#N paths across providers cannot collide. Members recorded without a known SCM provider
+// (empty or "local", e.g. legacy/CLI joins without --provider) still match on (Project, MR) for
+// backwards compatibility.
+func memberMatchesSCMProvider(memberProvider, reqProvider string) bool {
+	req := knownSCMProvider(reqProvider)
+	mem := knownSCMProvider(memberProvider)
+	if req != "" && mem != "" && req != mem {
+		return false
+	}
+	return true
+}
+
+// HasPRMember reports whether pg still tracks an active non-baseline service contributed by (provider, project, mr).
+func HasPRMember(pg *v1alpha1.PreviewGroup, provider, project string, mr int) bool {
+	if pg == nil || !pg.DeletionTimestamp.IsZero() || mr <= 0 {
+		return false
+	}
+	active := make(map[string]bool, len(pg.Spec.Services))
+	for _, svc := range pg.Spec.Services {
+		if svc.Mode != v1alpha1.ServiceModeBaseline {
+			active[svc.Name] = true
+		}
+	}
+	projClean := strings.TrimSpace(project)
+	for _, m := range ParseMembers(pg) {
+		if !active[m.Service] {
+			continue
+		}
+		if m.MR == mr &&
+			memberMatchesSCMProvider(m.Provider, provider) &&
+			(projClean == "" || strings.EqualFold(strings.TrimSpace(m.Project), projClean)) {
+			return true
+		}
+	}
+	return false
+}
+
 // SameReferencedEnvironment reports whether two MemberRecords refer to the exact same standalone Environment.
 func SameReferencedEnvironment(existing, incoming MemberRecord) bool {
 	exEnv := strings.TrimSpace(existing.EnvironmentName)
@@ -264,26 +304,48 @@ func SameReferencedEnvironment(existing, incoming MemberRecord) bool {
 	return true
 }
 
-// MemberMatchesEnvironmentSource verifies that a MemberRecord's SCM ownership metadata does not conflict
-// with a fetched standalone Environment's Spec.Source before claiming or hibernating that Environment.
+// MemberMatchesEnvironmentSource verifies that a MemberRecord carries sufficient SCM or local branch
+// identity matching a fetched standalone Environment's Spec.Source before claiming or hibernating that Environment.
 func MemberMatchesEnvironmentSource(m MemberRecord, env *v1alpha1.Environment) bool {
 	if env == nil {
 		return false
 	}
 	mProv := knownSCMProvider(m.Provider)
 	eProv := knownSCMProvider(env.Spec.Source.Provider)
-	if mProv != "" && eProv != "" && mProv != eProv {
-		return false
-	}
 	mProj := strings.TrimSpace(m.Project)
 	eProj := strings.TrimSpace(env.Spec.Source.Project)
-	if mProj != "" && eProj != "" && !strings.EqualFold(mProj, eProj) {
+	mBranch := strings.TrimSpace(m.Branch)
+	eBranch := strings.TrimSpace(env.Spec.Source.Branch)
+
+	if eProv != "" || eProj != "" || env.Spec.Source.MR > 0 {
+		if eProv != "" {
+			if mProv != eProv {
+				return false
+			}
+		} else if mProv != "" {
+			return false
+		}
+		if eProj != "" {
+			if mProj == "" || !strings.EqualFold(mProj, eProj) {
+				return false
+			}
+		} else if mProj != "" {
+			return false
+		}
+		if env.Spec.Source.MR > 0 {
+			if m.MR != env.Spec.Source.MR {
+				return false
+			}
+		} else if m.MR > 0 {
+			return false
+		}
+		return true
+	}
+
+	if mProv != "" || mProj != "" || m.MR > 0 {
 		return false
 	}
-	if m.MR > 0 && env.Spec.Source.MR > 0 && m.MR != env.Spec.Source.MR {
-		return false
-	}
-	return true
+	return eBranch != "" && mBranch != "" && mBranch == eBranch
 }
 
 // SameMemberOwner reports whether existing and incoming MemberRecords represent the same owning PR/MR or Environment.
@@ -311,6 +373,9 @@ func SameMemberOwner(existing, incoming MemberRecord) bool {
 
 	if exProj != "" && existing.MR > 0 && inProj != "" && incoming.MR > 0 {
 		return exProj == inProj && existing.MR == incoming.MR
+	}
+	if existing.MR > 0 && incoming.MR > 0 && existing.MR != incoming.MR {
+		return false
 	}
 	if exEnv != "" && inEnv != "" {
 		if exEnvNS != "" && inEnvNS != "" && exEnvNS != inEnvNS {
@@ -386,6 +451,26 @@ func normalizeProvider(provider string) string {
 	}
 }
 
+func resolveEnvironmentServiceName(env *v1alpha1.Environment) string {
+	if env == nil {
+		return ""
+	}
+	if env.Spec.ServiceConfig != nil && strings.TrimSpace(env.Spec.ServiceConfig.ServiceName) != "" {
+		return strings.TrimSpace(env.Spec.ServiceConfig.ServiceName)
+	}
+	for _, cs := range env.Spec.Deploy.ChangedServices {
+		if trimmed := strings.TrimSpace(cs); trimmed != "" {
+			return trimmed
+		}
+	}
+	if env.Labels != nil {
+		if svc := strings.TrimSpace(env.Labels["divergedev.com/service"]); svc != "" {
+			return svc
+		}
+	}
+	return strings.TrimSpace(env.Name)
+}
+
 // ServiceFromEnvironment extracts a PreviewGroupServiceSpec and MemberRecord from an Environment CR.
 // By default it preserves the Environment's per-service Database settings when non-empty.
 func ServiceFromEnvironment(env *v1alpha1.Environment) (v1alpha1.PreviewGroupServiceSpec, MemberRecord, error) {
@@ -393,24 +478,7 @@ func ServiceFromEnvironment(env *v1alpha1.Environment) (v1alpha1.PreviewGroupSer
 		return v1alpha1.PreviewGroupServiceSpec{}, MemberRecord{}, fmt.Errorf("environment must not be nil")
 	}
 
-	var svcName string
-	if env.Spec.ServiceConfig != nil && strings.TrimSpace(env.Spec.ServiceConfig.ServiceName) != "" {
-		svcName = strings.TrimSpace(env.Spec.ServiceConfig.ServiceName)
-	}
-	if svcName == "" {
-		for _, cs := range env.Spec.Deploy.ChangedServices {
-			if trimmed := strings.TrimSpace(cs); trimmed != "" {
-				svcName = trimmed
-				break
-			}
-		}
-	}
-	if svcName == "" && env.Labels != nil {
-		svcName = strings.TrimSpace(env.Labels["divergedev.com/service"])
-	}
-	if svcName == "" {
-		svcName = strings.TrimSpace(env.Name)
-	}
+	svcName := resolveEnvironmentServiceName(env)
 	if svcName == "" {
 		return v1alpha1.PreviewGroupServiceSpec{}, MemberRecord{}, fmt.Errorf("cannot determine service name from environment")
 	}
@@ -502,29 +570,7 @@ func getPreviewGroup(ctx context.Context, c client.Client, name, fallbackNamespa
 	return nil, err
 }
 
-func isMemberStillPresentInGroup(pg *v1alpha1.PreviewGroup, m MemberRecord, envNS, envName string) bool {
-	if pg == nil || !pg.DeletionTimestamp.IsZero() {
-		return false
-	}
-	hasActiveSvc := false
-	for _, svc := range pg.Spec.Services {
-		if svc.Name == m.Service && svc.Mode != v1alpha1.ServiceModeBaseline {
-			hasActiveSvc = true
-			break
-		}
-	}
-	if !hasActiveSvc {
-		return false
-	}
-	for _, cur := range ParseMembers(pg) {
-		if cur.Service == m.Service && matchesEnvironmentMember(cur, envNS, envName) {
-			return true
-		}
-	}
-	return false
-}
-
-func setStandaloneEnvHibernation(ctx context.Context, c client.Client, m MemberRecord, groupName, fallbackNS string, hibernate bool) error {
+func wakeStandaloneEnv(ctx context.Context, c client.Client, m MemberRecord) error {
 	envName := strings.TrimSpace(m.EnvironmentName)
 	if envName == "" || c == nil {
 		return nil
@@ -537,24 +583,7 @@ func setStandaloneEnvHibernation(ctx context.Context, c client.Client, m MemberR
 		envNS = "default"
 	}
 
-	didHibernate := false
-	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		didHibernate = false
-		if hibernate {
-			// Verify the member is still actively present in the PreviewGroup before hibernating its standalone preview,
-			// so a concurrent Leave cannot be overwritten by a delayed post-Join hibernation.
-			latestPG, pgErr := getPreviewGroup(ctx, c, groupName, fallbackNS)
-			if pgErr != nil {
-				if apierrors.IsNotFound(pgErr) {
-					return nil
-				}
-				return pgErr
-			}
-			if !isMemberStillPresentInGroup(latestPG, m, envNS, envName) {
-				return nil
-			}
-		}
-
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		var env v1alpha1.Environment
 		if err := c.Get(ctx, types.NamespacedName{Name: envName, Namespace: envNS}, &env); err != nil {
 			if apierrors.IsNotFound(err) {
@@ -568,35 +597,6 @@ func setStandaloneEnvHibernation(ctx context.Context, c client.Client, m MemberR
 		if env.Labels != nil && env.Labels["divergedev.com/managed-by"] == "diverge-previewgroup" {
 			return nil
 		}
-		if hibernate {
-			if !MemberMatchesEnvironmentSource(m, &env) {
-				return nil
-			}
-			if env.Annotations != nil && env.Annotations[AnnotationHibernated] == "true" && env.Annotations[AnnotationAttachedPreviewGroup] == groupName {
-				return nil
-			}
-			if env.Annotations == nil {
-				env.Annotations = make(map[string]string)
-			}
-			if env.Annotations[AnnotationHibernated] != "true" {
-				env.Annotations[AnnotationHibernated] = "true"
-				env.Annotations[AnnotationAttachedPreviewGroup] = groupName
-				env.Annotations[AnnotationGroupHibernated] = "true"
-				if uErr := c.Update(ctx, &env); uErr != nil {
-					return uErr
-				}
-				didHibernate = true
-				return nil
-			}
-			// Preserve independent manual/idle hibernation while still recording group attachment if unclaimed.
-			if strings.TrimSpace(env.Annotations[AnnotationAttachedPreviewGroup]) == "" {
-				env.Annotations[AnnotationAttachedPreviewGroup] = groupName
-				env.Annotations[AnnotationGroupHibernated] = "false"
-				return c.Update(ctx, &env)
-			}
-			return nil
-		}
-
 		// Wake only if attached to a PreviewGroup, preserving any independent manual/idle hibernation ("false").
 		if env.Annotations == nil || strings.TrimSpace(env.Annotations[AnnotationAttachedPreviewGroup]) == "" {
 			return nil
@@ -608,20 +608,6 @@ func setStandaloneEnvHibernation(ctx context.Context, c client.Client, m MemberR
 		delete(env.Annotations, AnnotationGroupHibernated)
 		return c.Update(ctx, &env)
 	})
-	if err != nil {
-		return err
-	}
-	if hibernate && didHibernate {
-		// Re-check membership once more after committing hibernation: if a concurrent Leave removed the member
-		// while Update(&env) was in flight, wake the Environment unless another group still claims it.
-		latestPG, pgErr := getPreviewGroup(ctx, c, groupName, fallbackNS)
-		if apierrors.IsNotFound(pgErr) || (pgErr == nil && !isMemberStillPresentInGroup(latestPG, m, envNS, envName)) {
-			if claimed, cErr := isEnvironmentClaimedByAnyGroup(ctx, c, envNS, envName); cErr == nil && !claimed {
-				_ = setStandaloneEnvHibernation(ctx, c, m, groupName, fallbackNS, false)
-			}
-		}
-	}
-	return nil
 }
 
 // Join creates a PreviewGroup or atomically merges/updates the specified services inside an existing PreviewGroup.
@@ -963,16 +949,18 @@ func Join(ctx context.Context, c client.Client, opts JoinOptions) (*JoinResult, 
 				}
 			}
 
-			// Prune services previously contributed by the exact same (Project, MR) when reverted in a new commit.
+			// Prune services previously contributed by the exact same (Provider, Project, MR) when reverted in a new commit.
 			if opts.PruneSameMR && opts.Source != nil && strings.TrimSpace(opts.Source.Project) != "" && opts.Source.MR > 0 {
 				sameMR := MemberRecord{
-					Project: opts.Source.Project,
-					MR:      opts.Source.MR,
+					Provider: opts.Source.Provider,
+					Project:  opts.Source.Project,
+					MR:       opts.Source.MR,
 				}
 				pruned := make([]v1alpha1.PreviewGroupServiceSpec, 0, len(merged))
 				for _, cur := range merged {
 					if !incomingNameSet[cur.Name] {
 						if curOwner, ok := priorByService[cur.Name]; ok &&
+							memberMatchesSCMProvider(curOwner.Provider, sameMR.Provider) &&
 							strings.EqualFold(strings.TrimSpace(curOwner.Project), strings.TrimSpace(sameMR.Project)) &&
 							curOwner.MR == sameMR.MR {
 							continue
@@ -1046,13 +1034,6 @@ func Join(ctx context.Context, c client.Client, opts JoinOptions) (*JoinResult, 
 	})
 	if err != nil {
 		return nil, err
-	}
-	if result != nil && !result.DeletedGroup && !opts.SyncOnlyIfMember {
-		for _, m := range result.Members {
-			if _, joinedNow := membersByService[m.Service]; joinedNow && m.EnvironmentName != "" {
-				_ = setStandaloneEnvHibernation(ctx, c, m, groupName, opts.Namespace, true)
-			}
-		}
 	}
 	return result, nil
 }
@@ -1211,27 +1192,50 @@ func Leave(ctx context.Context, c client.Client, opts LeaveOptions) (*LeaveResul
 			return err
 		}
 
-		// If the group's primary Spec.Source belonged to a detached member, promote the first remaining active member.
-		if len(keptMembers) > 0 && updated.Spec.Source.MR > 0 {
+		// If the group's primary Spec.Source belonged to a detached member, promote the first remaining MR member
+		// or clear back to local source when only non-MR services remain.
+		if updated.Spec.Source.MR > 0 {
 			stillPresent := false
 			for _, km := range keptMembers {
 				if km.MR == updated.Spec.Source.MR &&
+					memberMatchesSCMProvider(km.Provider, updated.Spec.Source.Provider) &&
 					(updated.Spec.Source.Project == "" || strings.EqualFold(strings.TrimSpace(km.Project), strings.TrimSpace(updated.Spec.Source.Project))) {
 					stillPresent = true
 					break
 				}
 			}
 			if !stillPresent {
-				next := keptMembers[0]
-				branch := strings.TrimSpace(next.Branch)
-				if branch == "" {
-					branch = updated.Name
+				var promoted *MemberRecord
+				for i := range keptMembers {
+					if keptMembers[i].MR > 0 && strings.TrimSpace(keptMembers[i].Project) != "" {
+						promoted = &keptMembers[i]
+						break
+					}
 				}
-				updated.Spec.Source = v1alpha1.EnvironmentSource{
-					Provider: normalizeProvider(next.Provider),
-					Project:  next.Project,
-					MR:       next.MR,
-					Branch:   branch,
+				if promoted == nil {
+					for i := range keptMembers {
+						if keptMembers[i].MR > 0 {
+							promoted = &keptMembers[i]
+							break
+						}
+					}
+				}
+				if promoted != nil {
+					branch := strings.TrimSpace(promoted.Branch)
+					if branch == "" {
+						branch = updated.Name
+					}
+					updated.Spec.Source = v1alpha1.EnvironmentSource{
+						Provider: normalizeProvider(promoted.Provider),
+						Project:  promoted.Project,
+						MR:       promoted.MR,
+						Branch:   branch,
+					}
+				} else {
+					updated.Spec.Source = v1alpha1.EnvironmentSource{
+						Provider: "local",
+						Branch:   updated.Name,
+					}
 				}
 			}
 		}
@@ -1289,7 +1293,7 @@ func Leave(ctx context.Context, c client.Client, opts LeaveOptions) (*LeaveResul
 			return nil, fErr
 		}
 		if !claimed {
-			if wErr := setStandaloneEnvHibernation(ctx, c, dm, groupName, opts.Namespace, false); wErr != nil {
+			if wErr := wakeStandaloneEnv(ctx, c, dm); wErr != nil {
 				return nil, wErr
 			}
 		}
@@ -1375,14 +1379,16 @@ func collectOrphanedAttachedMembers(ctx context.Context, c client.Client, groupN
 			continue
 		}
 		if opts.MR > 0 && env.Spec.Source.MR == opts.MR &&
+			memberMatchesSCMProvider(env.Spec.Source.Provider, opts.Provider) &&
 			(projTarget == "" || strings.EqualFold(strings.TrimSpace(env.Spec.Source.Project), projTarget)) {
 			out = append(out, MemberRecord{EnvironmentName: env.Name, EnvironmentNamespace: env.Namespace})
 			continue
 		}
 		if len(opts.ServiceNames) > 0 {
+			resolvedSvcName := resolveEnvironmentServiceName(env)
 			for _, svcName := range opts.ServiceNames {
 				svcClean := strings.TrimSpace(svcName)
-				if svcClean != "" && ((env.Spec.ServiceConfig != nil && env.Spec.ServiceConfig.ServiceName == svcClean) || env.Labels["divergedev.com/service"] == svcClean) {
+				if svcClean != "" && resolvedSvcName == svcClean {
 					out = append(out, MemberRecord{EnvironmentName: env.Name, EnvironmentNamespace: env.Namespace})
 					break
 				}
@@ -1422,7 +1428,8 @@ func resolveServicesToRemove(pg *v1alpha1.PreviewGroup, members []MemberRecord, 
 			continue
 		}
 		if opts.MR > 0 && m.MR == opts.MR {
-			if projTarget == "" || strings.EqualFold(strings.TrimSpace(m.Project), projTarget) {
+			if memberMatchesSCMProvider(m.Provider, opts.Provider) &&
+				(projTarget == "" || strings.EqualFold(strings.TrimSpace(m.Project), projTarget)) {
 				remove[m.Service] = true
 			}
 		}
@@ -1440,9 +1447,9 @@ func resolveServicesToRemove(pg *v1alpha1.PreviewGroup, members []MemberRecord, 
 	return remove
 }
 
-// FindGroupsForPR returns all PreviewGroups where the given project/MR or environmentName ("<name>" or "<ns>/<name>") is a recorded member.
+// FindGroupsForPR returns all PreviewGroups where the given provider/project/MR or environmentName ("<name>" or "<ns>/<name>") is a recorded member.
 // Authorization errors (403 Forbidden) are returned to callers so destructive commands can distinguish RBAC denial from an empty list.
-func FindGroupsForPR(ctx context.Context, c client.Client, project string, mr int, envRef string) ([]v1alpha1.PreviewGroup, error) {
+func FindGroupsForPR(ctx context.Context, c client.Client, provider, project string, mr int, envRef string) ([]v1alpha1.PreviewGroup, error) {
 	if c == nil {
 		return nil, nil
 	}
@@ -1466,7 +1473,9 @@ func FindGroupsForPR(ctx context.Context, c client.Client, project string, mr in
 				matched = append(matched, pg)
 				break
 			}
-			if mr > 0 && m.MR == mr && (projClean == "" || strings.EqualFold(strings.TrimSpace(m.Project), projClean)) {
+			if mr > 0 && m.MR == mr &&
+				memberMatchesSCMProvider(m.Provider, provider) &&
+				(projClean == "" || strings.EqualFold(strings.TrimSpace(m.Project), projClean)) {
 				matched = append(matched, pg)
 				break
 			}
@@ -1477,8 +1486,8 @@ func FindGroupsForPR(ctx context.Context, c client.Client, project string, mr in
 
 // FindGroupsForPROptional is like FindGroupsForPR, except 403 Forbidden (e.g. namespace-scoped RBAC installs)
 // is treated as empty discovery for non-destructive / background callers.
-func FindGroupsForPROptional(ctx context.Context, c client.Client, project string, mr int, envRef string) ([]v1alpha1.PreviewGroup, error) {
-	groups, err := FindGroupsForPR(ctx, c, project, mr, envRef)
+func FindGroupsForPROptional(ctx context.Context, c client.Client, provider, project string, mr int, envRef string) ([]v1alpha1.PreviewGroup, error) {
+	groups, err := FindGroupsForPR(ctx, c, provider, project, mr, envRef)
 	if apierrors.IsForbidden(err) {
 		return nil, nil
 	}
@@ -1500,7 +1509,7 @@ func SyncMemberEnvironment(ctx context.Context, c client.Client, env *v1alpha1.E
 	}
 
 	envRef := formatEnvSelector(env.Namespace, env.Name)
-	groups, err := FindGroupsForPROptional(ctx, c, env.Spec.Source.Project, env.Spec.Source.MR, envRef)
+	groups, err := FindGroupsForPROptional(ctx, c, env.Spec.Source.Provider, env.Spec.Source.Project, env.Spec.Source.MR, envRef)
 	if err != nil {
 		return nil, err
 	}
@@ -1532,8 +1541,8 @@ func SyncMemberEnvironment(ctx context.Context, c client.Client, env *v1alpha1.E
 
 // DetachMemberByPR detaches a closed/merged PR/MR's services from all composed PreviewGroups it joined,
 // automatically deleting any PreviewGroup whose last active service was removed.
-func DetachMemberByPR(ctx context.Context, c client.Client, project string, mr int, envRef string) ([]LeaveResult, error) {
-	groups, err := FindGroupsForPR(ctx, c, project, mr, envRef)
+func DetachMemberByPR(ctx context.Context, c client.Client, provider, project string, mr int, envRef string) ([]LeaveResult, error) {
+	groups, err := FindGroupsForPR(ctx, c, provider, project, mr, envRef)
 	if err != nil {
 		return nil, err
 	}
@@ -1543,6 +1552,7 @@ func DetachMemberByPR(ctx context.Context, c client.Client, project string, mr i
 		res, leaveErr := Leave(ctx, c, LeaveOptions{
 			GroupName:            pg.Name,
 			Namespace:            pg.Namespace,
+			Provider:             provider,
 			Project:              project,
 			MR:                   mr,
 			EnvironmentName:      envName,

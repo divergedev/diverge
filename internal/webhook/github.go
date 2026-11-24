@@ -257,6 +257,7 @@ func (h *GitHubWebhookHandler) handleIssueComment(ctx context.Context, w http.Re
 		branch = "main"
 	}
 
+	ctx = WithWebhookProvider(ctx, "github")
 	var (
 		execErr  error
 		feedback string
@@ -282,6 +283,7 @@ func (h *GitHubWebhookHandler) handleIssueComment(ctx context.Context, w http.Re
 }
 
 func (h *GitHubWebhookHandler) handleFixCommand(ctx context.Context, payload *GitHubIssueCommentPayload, cmd *SlashCommand, repoURL, branch string, prNumber int) (string, error) {
+	ctx = WithWebhookProvider(ctx, "github")
 	feedback, err := ExecuteSlashCommandWithFeedback(ctx, h.Client, h.DefaultNS, cmd, repoURL, branch, prNumber)
 	if err != nil {
 		return "", err
@@ -446,7 +448,7 @@ func (h *GitHubWebhookHandler) reconcileEnvironment(ctx context.Context, payload
 		if h.DisablePreviewGroups {
 			return nil
 		}
-		_, detachErr := previewgroup.DetachMemberByPR(ctx, h.Client, payload.Repository.FullName, payload.PullRequest.Number, ns+"/"+envName)
+		_, detachErr := previewgroup.DetachMemberByPR(ctx, h.Client, "github", payload.Repository.FullName, payload.PullRequest.Number, ns+"/"+envName)
 		return detachErr
 	}
 	if err != nil {
@@ -479,7 +481,7 @@ func (h *GitHubWebhookHandler) deleteEnvironment(ctx context.Context, payload *G
 	if h.DisablePreviewGroups {
 		return nil
 	}
-	_, err := previewgroup.DetachMemberByPR(ctx, h.Client, payload.Repository.FullName, payload.PullRequest.Number, ns+"/"+envName)
+	_, err := previewgroup.DetachMemberByPR(ctx, h.Client, "github", payload.Repository.FullName, payload.PullRequest.Number, ns+"/"+envName)
 	return err
 }
 

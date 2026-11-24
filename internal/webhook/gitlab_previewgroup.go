@@ -223,14 +223,17 @@ func (h *GitLabPreviewGroupWebhookHandler) reconcilePreviewGroup(ctx context.Con
 	if err != nil {
 		return err
 	}
-	return h.syncSharedGroupsFromSinglePG(ctx, pg, payload)
+	if syncErr := h.syncSharedGroupsFromSinglePG(ctx, pg, payload); syncErr != nil {
+		log.FromContext(ctx).WithName("gitlab-previewgroup-webhook").Error(syncErr, "Best-effort shared group sync failed after saving single-MR PreviewGroup", "group", pg.Name)
+	}
+	return nil
 }
 
 func (h *GitLabPreviewGroupWebhookHandler) syncSharedGroupsFromSinglePG(ctx context.Context, singlePG *v1alpha1.PreviewGroup, payload *GitLabMRPayload) error {
 	if singlePG == nil || len(singlePG.Spec.Services) == 0 {
 		return nil
 	}
-	groups, err := previewgroup.FindGroupsForPR(ctx, h.Client, payload.Project.PathWithNamespace, payload.ObjectAttributes.IID, "")
+	groups, err := previewgroup.FindGroupsForPROptional(ctx, h.Client, "gitlab", payload.Project.PathWithNamespace, payload.ObjectAttributes.IID, "")
 	if err != nil || len(groups) == 0 {
 		return err
 	}
@@ -299,6 +302,6 @@ func (h *GitLabPreviewGroupWebhookHandler) deletePreviewGroup(ctx context.Contex
 			}
 		}
 	}
-	_, err := previewgroup.DetachMemberByPR(ctx, h.Client, payload.Project.PathWithNamespace, payload.ObjectAttributes.IID, "")
+	_, err := previewgroup.DetachMemberByPR(ctx, h.Client, "gitlab", payload.Project.PathWithNamespace, payload.ObjectAttributes.IID, "")
 	return err
 }

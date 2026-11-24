@@ -425,7 +425,10 @@ func executeGuideCommand(ctx context.Context, c client.Client, ns, guidance, rep
 // executePreviewCommand provisions or updates an Environment CR for a PR/MR.
 func executePreviewCommand(ctx context.Context, c client.Client, ns, repoURL, branch string, prNumber int) (string, error) {
 	project := projectFromRepoURL(repoURL)
-	provider := providerFromRepoURL(repoURL)
+	provider := resolveRequestProvider(ctx, repoURL)
+	if provider == "" {
+		provider = "github"
+	}
 	prefix := "pr"
 	if provider == "gitlab" {
 		prefix = "mr"
@@ -553,7 +556,8 @@ func resolvePreviewTargetWithGroup(ctx context.Context, c client.Client, ns, rep
 		}
 		recordedAttachment = strings.TrimSpace(hibernatedEnvs[0].Annotations[previewgroup.AnnotationAttachedPreviewGroup])
 	}
-	pgs, err := previewgroup.FindGroupsForPROptional(ctx, c, projectFromRepoURL(repoURL), prNumber, firstHibernatedRef)
+	reqProvider := resolveRequestProvider(ctx, repoURL)
+	pgs, err := previewgroup.FindGroupsForPROptional(ctx, c, reqProvider, projectFromRepoURL(repoURL), prNumber, firstHibernatedRef)
 	if err != nil {
 		return "", "", "", "", "", "", "", nil, false, err
 	}
@@ -935,7 +939,8 @@ func executeTeardownCommand(ctx context.Context, c client.Client, ns, repoURL st
 
 	// Detach this PR/MR's services from composed PreviewGroups FIRST (before deleting standalone Environments)
 	// so sibling MRs' services are preserved and retries can still locate members by Environment reference if detach fails.
-	detachResults, err := previewgroup.DetachMemberByPR(ctx, c, project, prNumber, firstEnvRef)
+	reqProvider := resolveRequestProvider(ctx, repoURL)
+	detachResults, err := previewgroup.DetachMemberByPR(ctx, c, reqProvider, project, prNumber, firstEnvRef)
 	if err != nil {
 		return "", err
 	}
@@ -952,11 +957,12 @@ func executeTeardownCommand(ctx context.Context, c client.Client, ns, repoURL st
 	}
 	for i := range pgs {
 		pgKey := client.ObjectKey{Name: pgs[i].Name, Namespace: pgs[i].Namespace}
+		origUID := pgs[i].UID
 		curPG := pgs[i]
 		deletedThisPG := false
 		if delErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 			// Never delete a PreviewGroup that still holds active non-baseline services belonging to other MRs.
-			if previewGroupHasOtherMRServices(&curPG, project, prNumber) {
+			if previewGroupHasOtherMRServices(&curPG, reqProvider, project, prNumber) {
 				deletedThisPG = false
 				return nil
 			}
@@ -986,6 +992,10 @@ func executeTeardownCommand(ctx context.Context, c client.Client, ns, repoURL st
 							return nil
 						}
 						return gErr
+					}
+					if origUID != "" && latest.UID != origUID {
+						deletedThisPG = false
+						return nil
 					}
 					curPG = latest
 				}
@@ -1030,9 +1040,13 @@ func executeTeardownCommand(ctx context.Context, c client.Client, ns, repoURL st
 	return feedback, nil
 }
 
-func previewGroupHasOtherMRServices(pg *v1alpha1.PreviewGroup, tearingDownProject string, tearingDownMR int) bool {
+func previewGroupHasOtherMRServices(pg *v1alpha1.PreviewGroup, tearingDownProvider, tearingDownProject string, tearingDownMR int) bool {
 	if pg == nil {
 		return false
+	}
+	reqProv := strings.ToLower(strings.TrimSpace(tearingDownProvider))
+	if reqProv == "local" {
+		reqProv = ""
 	}
 	members := previewgroup.ParseMembers(pg)
 	memberByService := make(map[string]previewgroup.MemberRecord, len(members))
@@ -1050,7 +1064,12 @@ func previewGroupHasOtherMRServices(pg *v1alpha1.PreviewGroup, tearingDownProjec
 			}
 			continue
 		}
-		sameMR := tearingDownMR > 0 && m.MR == tearingDownMR &&
+		mProv := strings.ToLower(strings.TrimSpace(m.Provider))
+		if mProv == "local" {
+			mProv = ""
+		}
+		provMatch := reqProv == "" || mProv == "" || mProv == reqProv
+		sameMR := tearingDownMR > 0 && m.MR == tearingDownMR && provMatch &&
 			(tearingDownProject == "" || m.Project == "" || strings.EqualFold(strings.TrimSpace(m.Project), strings.TrimSpace(tearingDownProject)))
 		if !sameMR {
 			return true
@@ -1087,13 +1106,19 @@ func executeExtendTTLCommand(ctx context.Context, c client.Client, ns string, du
 		updatedEnvs++
 	}
 
+	reqProvider := resolveRequestProvider(ctx, repoURL)
+	project := projectFromRepoURL(repoURL)
 	pgs, err := findMatchingPreviewGroupsOptional(ctx, c, repoURL, prNumber)
 	if err != nil {
 		return "", err
 	}
-	memberPGs, mErr := previewgroup.FindGroupsForPROptional(ctx, c, projectFromRepoURL(repoURL), prNumber, "")
+	memberPGs, mErr := previewgroup.FindGroupsForPROptional(ctx, c, reqProvider, project, prNumber, "")
 	if mErr != nil {
 		return "", mErr
+	}
+	directPG := make(map[string]bool, len(pgs))
+	for _, pg := range pgs {
+		directPG[pg.Name] = true
 	}
 	seenPG := make(map[string]bool, len(pgs)+len(memberPGs))
 	var pgKeys []client.ObjectKey
@@ -1106,7 +1131,10 @@ func executeExtendTTLCommand(ctx context.Context, c client.Client, ns string, du
 	updatedPGs := 0
 	for _, key := range pgKeys {
 		notFound := false
+		skipped := false
 		if uErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			notFound = false
+			skipped = false
 			var freshPG v1alpha1.PreviewGroup
 			if gErr := c.Get(ctx, key, &freshPG); gErr != nil {
 				if apierrors.IsNotFound(gErr) && key.Namespace != "" {
@@ -1121,6 +1149,10 @@ func executeExtendTTLCommand(ctx context.Context, c client.Client, ns string, du
 				return gErr
 			}
 		applyTTL:
+			if !directPG[key.Name] && !previewgroup.HasPRMember(&freshPG, reqProvider, project, prNumber) {
+				skipped = true
+				return nil
+			}
 			if freshPG.Annotations == nil {
 				freshPG.Annotations = make(map[string]string)
 			}
@@ -1133,7 +1165,7 @@ func executeExtendTTLCommand(ctx context.Context, c client.Client, ns string, du
 		}); uErr != nil {
 			return "", uErr
 		}
-		if !notFound {
+		if !notFound && !skipped {
 			updatedPGs++
 		}
 	}
@@ -1284,7 +1316,7 @@ func executeStatusCommand(ctx context.Context, c client.Client, ns, repoURL stri
 		return "", fmt.Errorf("list environments: %w", err)
 	}
 
-	sharedGroups, err := previewgroup.FindGroupsForPROptional(ctx, c, projectFromRepoURL(repoURL), prNumber, "")
+	sharedGroups, err := previewgroup.FindGroupsForPROptional(ctx, c, resolveRequestProvider(ctx, repoURL), projectFromRepoURL(repoURL), prNumber, "")
 	if err != nil {
 		return "", fmt.Errorf("list shared preview groups: %w", err)
 	}
@@ -1424,10 +1456,7 @@ func findMatchingEnvironments(ctx context.Context, c client.Client, ns, repoURL 
 	}
 
 	project := projectFromRepoURL(repoURL)
-	var reqProvider string
-	if strings.TrimSpace(repoURL) != "" {
-		reqProvider = providerFromRepoURL(repoURL)
-	}
+	reqProvider := resolveRequestProvider(ctx, repoURL)
 	expectedPRName := previewEnvName("pr", project, prNumber)
 	expectedMRName := previewEnvName("mr", project, prNumber)
 	prStr := strconv.Itoa(prNumber)
@@ -1480,10 +1509,7 @@ func findMatchingPreviewGroups(ctx context.Context, c client.Client, repoURL str
 	}
 
 	project := projectFromRepoURL(repoURL)
-	var reqProvider string
-	if strings.TrimSpace(repoURL) != "" {
-		reqProvider = providerFromRepoURL(repoURL)
-	}
+	reqProvider := resolveRequestProvider(ctx, repoURL)
 	prStr := strconv.Itoa(prNumber)
 	var matched []v1alpha1.PreviewGroup
 	for _, pg := range pgList.Items {
@@ -1534,10 +1560,61 @@ func projectFromRepoURL(repoURL string) string {
 	return strings.Trim(trimmed, "/")
 }
 
-// providerFromRepoURL infers the SCM provider ("gitlab" or "github") from a repository URL.
+type webhookProviderCtxKey struct{}
+
+// WithWebhookProvider attaches an explicit SCM provider ("github" or "gitlab") to ctx
+// so webhook matchers and composed-group helpers do not misclassify URLs whose org/repo path contains another provider name.
+func WithWebhookProvider(ctx context.Context, provider string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	norm := strings.ToLower(strings.TrimSpace(provider))
+	if norm != "github" && norm != "gitlab" {
+		return ctx
+	}
+	return context.WithValue(ctx, webhookProviderCtxKey{}, norm)
+}
+
+// WebhookProviderFromContext returns the explicit SCM provider stored on ctx, if any.
+func WebhookProviderFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if v, ok := ctx.Value(webhookProviderCtxKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
+func resolveRequestProvider(ctx context.Context, repoURL string) string {
+	if p := WebhookProviderFromContext(ctx); p != "" {
+		return p
+	}
+	if strings.TrimSpace(repoURL) != "" {
+		return providerFromRepoURL(repoURL)
+	}
+	return ""
+}
+
+// providerFromRepoURL infers the SCM provider ("gitlab" or "github") from a repository URL's hostname.
 func providerFromRepoURL(repoURL string) string {
-	lower := strings.ToLower(repoURL)
-	if strings.Contains(lower, "gitlab") {
+	trimmed := strings.TrimSpace(repoURL)
+	if trimmed == "" {
+		return "github"
+	}
+	var host string
+	if parsed, err := url.Parse(trimmed); err == nil && parsed.Hostname() != "" {
+		host = strings.ToLower(parsed.Hostname())
+	} else if at := strings.Index(trimmed, "@"); at >= 0 {
+		rest := trimmed[at+1:]
+		if colon := strings.Index(rest, ":"); colon >= 0 {
+			host = strings.ToLower(rest[:colon])
+		}
+	} else if strings.Contains(trimmed, ".") {
+		firstSeg := strings.SplitN(trimmed, "/", 2)[0]
+		host = strings.ToLower(strings.SplitN(firstSeg, ":", 2)[0])
+	}
+	if strings.Contains(host, "gitlab") {
 		return "gitlab"
 	}
 	return "github"
