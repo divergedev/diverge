@@ -359,3 +359,59 @@ func TestGitHubPreviewGroupNotifier_RecoveredIDStaysProvisionalOnPatchFailure(t 
 	require.Error(t, err)
 	assert.Zero(t, pg.Status.CommentID, "recovered comment ID must stay provisional until PATCH succeeds")
 }
+
+func TestGitHubPreviewGroupNotifier_TemporaryUserLookupFailureRetainsExistingComment(t *testing.T) {
+	pg := &v1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "pg-temp-user-err"},
+		Spec: v1alpha1.PreviewGroupSpec{
+			Source: v1alpha1.EnvironmentSource{
+				Provider: "github",
+				Project:  "owner/repo",
+				MR:       42,
+			},
+		},
+	}
+	marker := previewGroupCommentMarker(pg)
+	userStatus := http.StatusInternalServerError
+	var methods []string
+	var postCount int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method)
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && r.URL.Path == "/user" {
+			w.WriteHeader(userStatus)
+			if userStatus == http.StatusOK {
+				_, _ = w.Write([]byte(`{"id": 99, "login": "diverge-bot"}`))
+			}
+			return
+		}
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
+				{"id": 7777, "body": "existing\n\n" + marker, "user": map[string]interface{}{"id": 99, "login": "diverge-bot"}},
+			})
+			return
+		}
+		if r.Method == http.MethodPost {
+			postCount++
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id": 8888}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id": 7777}`))
+	}))
+	defer server.Close()
+
+	n := NewGitHubPreviewGroupNotifier(server.URL, "token")
+	err := n.PostGroupReady(context.Background(), pg)
+	require.Error(t, err, "temporary /user 500 must fail recovery rather than posting a duplicate")
+	assert.Zero(t, postCount)
+	assert.Zero(t, pg.Status.CommentID)
+
+	userStatus = http.StatusOK
+	require.NoError(t, n.PostGroupReady(context.Background(), pg))
+	assert.Zero(t, postCount, "recovery after /user recovers must PATCH existing comment instead of POSTing duplicate")
+	assert.Equal(t, []string{http.MethodGet, http.MethodGet, http.MethodGet, http.MethodPatch}, methods)
+	assert.Equal(t, int64(7777), pg.Status.CommentID)
+}

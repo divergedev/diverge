@@ -349,3 +349,69 @@ func TestGitLabPreviewGroupNotifier_RecoveredIDStaysProvisionalOnPutFailure(t *t
 		t.Fatalf("recovered note ID must stay provisional until PUT succeeds, got %d", pg.Status.CommentID)
 	}
 }
+
+func TestGitLabPreviewGroupNotifier_TemporaryUserLookupFailureRetainsExistingNote(t *testing.T) {
+	pg := &v1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "pg-temp-user-err"},
+		Spec: v1alpha1.PreviewGroupSpec{
+			Source: v1alpha1.EnvironmentSource{
+				Provider: "gitlab",
+				Project:  "owner/repo",
+				MR:       42,
+			},
+		},
+	}
+	marker := previewGroupCommentMarker(pg)
+	userStatus := http.StatusInternalServerError
+	var methods []string
+	var postCount int
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method)
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v4/user" {
+			w.WriteHeader(userStatus)
+			if userStatus == http.StatusOK {
+				_, _ = w.Write([]byte(`{"id": 99, "username": "diverge-bot"}`))
+			}
+			return
+		}
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
+				{"id": 9001, "body": "existing\n\n" + marker, "author": map[string]interface{}{"id": 99, "username": "diverge-bot"}},
+			})
+			return
+		}
+		if r.Method == http.MethodPost {
+			postCount++
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id": 9002}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id": 9001}`))
+	}))
+	defer ts.Close()
+
+	n := NewGitLabPreviewGroupNotifier(ts.URL, "test-token")
+	if err := n.PostGroupReady(context.Background(), pg); err == nil {
+		t.Fatalf("expected error on temporary /api/v4/user 500, got nil")
+	}
+	if postCount != 0 || pg.Status.CommentID != 0 {
+		t.Fatalf("expected no duplicate POST and zero CommentID, got postCount=%d CommentID=%d", postCount, pg.Status.CommentID)
+	}
+
+	userStatus = http.StatusOK
+	if err := n.PostGroupReady(context.Background(), pg); err != nil {
+		t.Fatalf("expected recovery after /api/v4/user recovers, got %v", err)
+	}
+	if postCount != 0 {
+		t.Fatalf("expected no duplicate POST after /api/v4/user recovery, got %d", postCount)
+	}
+	if len(methods) != 4 || methods[0] != http.MethodGet || methods[1] != http.MethodGet || methods[2] != http.MethodGet || methods[3] != http.MethodPut {
+		t.Fatalf("expected [GET GET GET PUT], got %v", methods)
+	}
+	if pg.Status.CommentID != 9001 {
+		t.Fatalf("expected recovered CommentID 9001, got %d", pg.Status.CommentID)
+	}
+}

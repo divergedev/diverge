@@ -66,7 +66,7 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 
 	// Build envFrom for database secret injection
 	var containerEnvFrom []interface{}
-	dbSecretName := resolveDBSecret(env)
+	dbSecretName := resolveDBSecretWithContext(ctx, env)
 	if dbSecretName != "" {
 		containerEnvFrom = append(containerEnvFrom, map[string]interface{}{
 			"secretRef": map[string]interface{}{
@@ -293,14 +293,24 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 //  2. Auto-provisioned Secret from SchemaProvider (diverge-db-env-<env.Name>)
 //  3. Empty string (no database injection)
 func resolveDBSecret(env *v1alpha1.Environment) string {
+	return resolveDBSecretWithContext(context.Background(), env)
+}
+
+func resolveDBSecretWithContext(ctx context.Context, env *v1alpha1.Environment) string {
+	if env == nil {
+		return ""
+	}
 	db := env.Spec.Database
 	connRef := strings.TrimSpace(db.ConnectionRef)
 	providerAnno := strings.TrimSpace(env.Annotations["divergedev.com/database-provider"])
-	// Explicitly shared-group children use their group ConnectionRef even if Status.DatabaseProvider
-	// still reflects an earlier standalone Neon database.
-	if connRef != "" && (env.Annotations["divergedev.com/shared-group-db"] == "true" ||
-		(strings.EqualFold(strings.TrimSpace(db.Mode), "shared") && providerAnno != "neon")) {
-		return connRef
+	// Explicitly shared-group children use their group ConnectionRef (or the ready shared Secret
+	// identified during readiness for legacy children before ConnectionRef is populated), even if
+	// Status.DatabaseProvider still records an earlier standalone Neon database for teardown.
+	if env.Annotations["divergedev.com/shared-group-db"] == "true" {
+		if connRef != "" {
+			return connRef
+		}
+		return database.ResolvedSharedDBSecret(ctx, env.Namespace, env.Name)
 	}
 	isNeon := db.Mode == "neon" || providerAnno == "neon" || strings.TrimSpace(env.Status.DatabaseProvider) == "neon"
 

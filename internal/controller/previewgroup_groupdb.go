@@ -788,17 +788,6 @@ func namespaceWorkloadsStillUseSecret(
 	return false, nil
 }
 
-func probeClusterUID(ctx context.Context, c client.Client) string {
-	if c == nil {
-		return ""
-	}
-	var ns corev1.Namespace
-	if err := c.Get(ctx, types.NamespacedName{Name: "kube-system"}, &ns); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(ns.UID))
-}
-
 func namespacePodsStillUseSecret(ctx context.Context, c client.Client, ns, secretName string) (bool, error) {
 	if c == nil || ns == "" || secretName == "" {
 		return false, nil
@@ -1514,13 +1503,7 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 	}
 	scans := []targetScan{{client: r.Client}}
 	seenTargets := map[string]int{}
-	if hubUID := probeClusterUID(ctx, r.Client); hubUID != "" {
-		seenTargets["cluster:"+hubUID] = 0
-	}
 	remoteScanKey := func(target *multicluster.Target, ns string, ref *divergeiov1alpha1.ClusterTargetRef) string {
-		if cUID := probeClusterUID(ctx, target.Client); cUID != "" {
-			return "cluster:" + cUID
-		}
 		if target.Client != nil {
 			v := reflect.ValueOf(target.Client)
 			switch v.Kind() {
@@ -1576,6 +1559,9 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 	keepSecrets := make(map[targetSecretKey]bool, (len(children)+len(desiredEnvNames))*2)
 	deferredKeepSecrets := make(map[targetSecretKey]bool)
 	liveChildLegacySecrets := make(map[targetSecretKey]bool)
+	unlistedKeepSecrets := make(map[string]bool)
+	unlistedDeferredKeepSecrets := make(map[string]bool)
+	unlistedLiveChildLegacy := make(map[string]bool)
 	drainingClearCandidates := make(map[string]bool)
 	childScanIdx := make(map[string]int)
 	childScanFailed := make(map[string]bool)
@@ -1620,6 +1606,9 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 				if t, tErr := helper.resolveTarget(ctx, probeSvc); tErr != nil {
 					if multicluster.IsRemoteEnv(probeSvc) {
 						errs = append(errs, fmt.Errorf("failed to resolve spoke cluster for service %q shared DB Secret cleanup: %w", svc.Name, tErr))
+						if desiredEnvNames[envKey] {
+							unlistedKeepSecrets[svcNS+"/"+sharedGroupDBSecretName(childName)] = true
+						}
 						continue
 					}
 				} else if idx, ok := addRemoteScan(t, svcNS, effClusterRef); ok {
@@ -1654,6 +1643,11 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 				if multicluster.IsRemoteEnv(probeChild) {
 					errs = append(errs, fmt.Errorf("failed to resolve spoke cluster for child %s/%s shared DB Secret cleanup: %w", child.Namespace, child.Name, tErr))
 					childScanFailed[childKey] = true
+					for _, ns := range childNSList {
+						unlistedKeepSecrets[ns+"/"+sharedSecName] = true
+						unlistedKeepSecrets[ns+"/"+legacySecName] = true
+						unlistedLiveChildLegacy[ns+"/"+legacySecName] = true
+					}
 					continue
 				}
 			} else if t != nil && t.IsRemote && t.Client != nil {
@@ -1859,8 +1853,6 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 			}
 		}
 	}
-	unlistedKeepSecrets := make(map[string]bool)
-	unlistedDeferredKeepSecrets := make(map[string]bool)
 	for k := range keepSecrets {
 		if k.scanIdx < 0 || k.scanIdx >= len(listings) {
 			continue
@@ -1963,7 +1955,7 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 				}
 				continue
 			}
-			hasLiveChild := liveChildLegacySecrets[tsKey] || (sec.UID != "" && liveChildLegacyUIDs[sec.UID])
+			hasLiveChild := liveChildLegacySecrets[tsKey] || (sec.UID != "" && liveChildLegacyUIDs[sec.UID]) || unlistedLiveChildLegacy[secKey]
 			val := strings.TrimSpace(sec.Annotations[annotationLegacyGroupDBDraining])
 			if val == legacyGroupDBDrainingPending {
 				if hasLiveChild {

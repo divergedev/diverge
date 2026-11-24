@@ -196,7 +196,7 @@ func (r *EnvironmentReconciler) reconcileProvisioningWithTarget(ctx context.Cont
 	var resolvedDBName string
 	if env.Annotations != nil && env.Annotations[annotationSharedGroupDB] == "true" {
 		// Database lifecycle and diverge-db-env-<env> Secret are owned by the parent PreviewGroup.
-		sharedDSN, sharedReady, sharedErr := r.readSharedGroupDatabaseDSN(ctx, env)
+		sharedSecretName, sharedDSN, sharedReady, sharedErr := r.readSharedGroupDatabaseDSN(ctx, env)
 		if sharedErr != nil {
 			env.Status.Phase = divergeiov1alpha1.PhaseFailed
 			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
@@ -219,7 +219,10 @@ func (r *EnvironmentReconciler) reconcileProvisioningWithTarget(ctx context.Cont
 			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, nil, 3*time.Second)
 			return ctx, res, true, retErr
 		}
-		env.Status.DatabaseProvider = ""
+		// Retain env.Status.DatabaseProvider so handleTeardown still releases any prior standalone database provisioned before adoption.
+		if sharedSecretName != "" {
+			ctx = internaldb.WithResolvedSharedDBSecret(ctx, env.Namespace, env.Name, sharedSecretName)
+		}
 		dbStatus = &pkgdb.DatabaseResult{
 			DSN:              sharedDSN,
 			Ready:            true,
@@ -1070,13 +1073,13 @@ func (r *EnvironmentReconciler) ensureDatabaseEnvSecret(ctx context.Context, env
 	return nil
 }
 
-func (r *EnvironmentReconciler) readSharedGroupDatabaseDSN(ctx context.Context, env *divergeiov1alpha1.Environment) (string, bool, error) {
+func (r *EnvironmentReconciler) readSharedGroupDatabaseDSN(ctx context.Context, env *divergeiov1alpha1.Environment) (string, string, bool, error) {
 	targetClient, _, _, err := r.resolveTargetCluster(ctx, env)
 	if err != nil {
-		return "", false, err
+		return "", "", false, err
 	}
 	if targetClient == nil {
-		return "", false, fmt.Errorf("target cluster client unavailable for shared database lookup")
+		return "", "", false, fmt.Errorf("target cluster client unavailable for shared database lookup")
 	}
 	targetNS := env.Namespace
 	if env.Spec.Deploy.Namespace == "create" {
@@ -1087,31 +1090,31 @@ func (r *EnvironmentReconciler) readSharedGroupDatabaseDSN(ctx context.Context, 
 	if secretName != "" {
 		if err := targetClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: targetNS}, &sec); err != nil {
 			if apierrors.IsNotFound(err) {
-				return "", false, nil
+				return "", "", false, nil
 			}
-			return "", false, fmt.Errorf("failed to get shared group database secret %s/%s: %w", targetNS, secretName, err)
+			return "", "", false, fmt.Errorf("failed to get shared group database secret %s/%s: %w", targetNS, secretName, err)
 		}
 	} else {
 		secretName = sharedGroupDBSecretName(env.Name)
 		if err := targetClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: targetNS}, &sec); err != nil {
 			if !apierrors.IsNotFound(err) {
-				return "", false, fmt.Errorf("failed to get shared group database secret %s/%s: %w", targetNS, secretName, err)
+				return "", "", false, fmt.Errorf("failed to get shared group database secret %s/%s: %w", targetNS, secretName, err)
 			}
 			secretName = legacySharedGroupDBSecretName(env.Name)
 			if lErr := targetClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: targetNS}, &sec); lErr != nil {
 				if apierrors.IsNotFound(lErr) {
-					return "", false, nil
+					return "", "", false, nil
 				}
-				return "", false, fmt.Errorf("failed to get shared group database secret %s/%s: %w", targetNS, secretName, lErr)
+				return "", "", false, fmt.Errorf("failed to get shared group database secret %s/%s: %w", targetNS, secretName, lErr)
 			}
 		}
 	}
 	dsn := strings.TrimSpace(string(sec.Data["DATABASE_URL"]))
 	if dsn == "" && len(sec.Data) == 0 {
-		return "", false, nil
+		return "", "", false, nil
 	}
 	if dsn == "" && (env.Spec.Database.MigrationJob != nil || env.Spec.Database.Atlas != nil) {
-		return "", false, fmt.Errorf("shared group database secret %s/%s is missing DATABASE_URL", targetNS, secretName)
+		return "", "", false, fmt.Errorf("shared group database secret %s/%s is missing DATABASE_URL", targetNS, secretName)
 	}
-	return dsn, true, nil
+	return secretName, dsn, true, nil
 }

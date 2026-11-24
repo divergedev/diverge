@@ -1578,9 +1578,10 @@ func TestSharedDB_LegacyGroupOwnedSecretMigration(t *testing.T) {
 	// Verify readSharedGroupDatabaseDSN falls back cleanly to legacy group Secret when ConnectionRef is unset.
 	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&divergeiov1alpha1.PreviewGroup{}, &corev1.Pod{}).WithObjects(pg, child, legacyGroupSec, oldPod).Build()
 	envRec := &EnvironmentReconciler{Client: c, Scheme: s}
-	dsn, ready, dsnErr := envRec.readSharedGroupDatabaseDSN(ctx, child)
+	secName, dsn, ready, dsnErr := envRec.readSharedGroupDatabaseDSN(ctx, child)
 	require.NoError(t, dsnErr)
 	assert.True(t, ready)
+	assert.Equal(t, legacySecName, secName)
 	assert.Equal(t, "postgres://legacy-group", dsn)
 
 	// Opt-out transition removes annotationSharedGroupDB; old Running Pod referencing legacy group Secret still holds teardown.
@@ -3316,4 +3317,305 @@ func TestSharedDB_SameSpokeDifferentClientsPreservesDesiredSecret(t *testing.T) 
 
 	var kept corev1.Secret
 	require.NoError(t, sharedSpoke.Get(ctx, types.NamespacedName{Name: secName, Namespace: "backend"}, &kept), "desired Secret must be preserved across distinct client views of the same spoke")
+}
+
+func TestSharedDB_AdoptedDedicatedChildRetainsProviderForTeardownAndDeploysLegacySecret(t *testing.T) {
+	ctx := context.Background()
+	s := runtime.NewScheme()
+	require.NoError(t, divergeiov1alpha1.AddToScheme(s))
+	require.NoError(t, corev1.AddToScheme(s))
+	require.NoError(t, appsv1.AddToScheme(s))
+	require.NoError(t, batchv1.AddToScheme(s))
+
+	envName := "pg-adopted-api"
+	legacySecName := database.EnvSecretName(envName)
+	legacySec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      legacySecName,
+			Namespace: "default",
+			Labels: map[string]string{
+				labelPreviewGroup:           "pg-adopted",
+				"divergedev.com/managed-by": "diverge",
+			},
+		},
+		Data: map[string][]byte{
+			"DATABASE_URL": []byte("postgres://shared-legacy:pw@cnpg-rw:5432/app"),
+		},
+	}
+	priorCluster := &unstructured.Unstructured{}
+	priorCluster.SetGroupVersionKind(cnpg.ClusterGVK)
+	priorCluster.SetName(cnpg.ClusterName(envName))
+	priorCluster.SetNamespace("default")
+
+	child := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       envName,
+			Namespace:  "default",
+			Finalizers: []string{environmentFinalizer},
+			Labels: map[string]string{
+				labelPreviewGroup: "pg-adopted",
+				labelManagedBy:    "diverge-previewgroup",
+			},
+			Annotations: map[string]string{
+				annotationSharedGroupDB: "true",
+			},
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Database: divergeiov1alpha1.EnvironmentDatabase{
+				Mode: "shared",
+			},
+			ServiceConfig: &divergeiov1alpha1.ServicePreviewConfig{
+				ServiceName: "api",
+				Port:        8080,
+				Image:       "acme/api:v1",
+			},
+		},
+		Status: divergeiov1alpha1.EnvironmentStatus{
+			DatabaseProvider: "cnpg",
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithStatusSubresource(&divergeiov1alpha1.Environment{}, &appsv1.Deployment{}).
+		WithObjects(child, legacySec, priorCluster).
+		Build()
+	envRec := &EnvironmentReconciler{
+		Client:   c,
+		Scheme:   s,
+		Recorder: events.NewRecorder(k8sevents.NewFakeRecorder(10)),
+		Router:   &mockRouter{url: "https://preview.example.com"},
+		Deployer: &deployer.DirectDeployer{
+			Client:  c,
+			Fetcher: &deployer.ServiceConfigFetcher{},
+		},
+	}
+
+	// 1. Reconcile adopted child: retain recorded DatabaseProvider ("cnpg") AND deploy with ready legacy Secret
+	_, err := envRec.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: envName, Namespace: "default"}})
+	require.NoError(t, err)
+
+	var updatedEnv divergeiov1alpha1.Environment
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: envName, Namespace: "default"}, &updatedEnv))
+	assert.Equal(t, "cnpg", updatedEnv.Status.DatabaseProvider, "shared adoption must retain prior DatabaseProvider until teardown releases it")
+
+	var dep appsv1.Deployment
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: envName + "-api", Namespace: "default"}, &dep))
+	require.Len(t, dep.Spec.Template.Spec.Containers, 1)
+	require.Len(t, dep.Spec.Template.Spec.Containers[0].EnvFrom, 1)
+	require.NotNil(t, dep.Spec.Template.Spec.Containers[0].EnvFrom[0].SecretRef)
+	assert.Equal(t, legacySecName, dep.Spec.Template.Spec.Containers[0].EnvFrom[0].SecretRef.Name, "deployment must mount the legacy Secret verified by readSharedGroupDatabaseDSN")
+
+	// 2. Delete adopted child: teardown must release the prior CNPG cluster using retained Status.DatabaseProvider
+	require.NoError(t, c.Delete(ctx, &updatedEnv))
+	_, err = envRec.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: envName, Namespace: "default"}})
+	require.NoError(t, err)
+
+	var gotCluster unstructured.Unstructured
+	gotCluster.SetGroupVersionKind(cnpg.ClusterGVK)
+	err = c.Get(ctx, types.NamespacedName{Name: cnpg.ClusterName(envName), Namespace: "default"}, &gotCluster)
+	assert.True(t, apierrors.IsNotFound(err), "teardown must delete prior standalone CNPG Cluster when child was adopted into shared group DB")
+
+	err = c.Get(ctx, types.NamespacedName{Name: envName, Namespace: "default"}, &updatedEnv)
+	assert.True(t, apierrors.IsNotFound(err))
+}
+
+func TestSharedDB_SameSpokeDifferentNamespaceScopedClientsTeardownSucceeds(t *testing.T) {
+	ctx := context.Background()
+	s := runtime.NewScheme()
+	require.NoError(t, divergeiov1alpha1.AddToScheme(s))
+	require.NoError(t, corev1.AddToScheme(s))
+	require.NoError(t, appsv1.AddToScheme(s))
+
+	kubeSystemNS := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "kube-system",
+			UID:  types.UID("shared-cluster-uid-1"),
+		},
+	}
+
+	// A. Two kubeconfigs pointing at the same spoke cluster (identical kube-system UID) with disjoint namespace RBAC
+	pgName := "pg-same-spoke-rbac"
+	spokeARef := &divergeiov1alpha1.ClusterTargetRef{
+		Name:                "spoke-rbac-a",
+		KubeconfigSecretRef: &divergeiov1alpha1.SecretRef{Name: "spoke-a-kc", Namespace: "kube-system"},
+	}
+	spokeBRef := &divergeiov1alpha1.ClusterTargetRef{
+		Name:                "spoke-rbac-b",
+		KubeconfigSecretRef: &divergeiov1alpha1.SecretRef{Name: "spoke-b-kc", Namespace: "kube-system"},
+	}
+	encodedTargets, err := json.Marshal([]recordedGroupDBSecretTarget{
+		{Namespace: "team-a", ClusterRef: spokeARef},
+		{Namespace: "team-b", ClusterRef: spokeBRef},
+	})
+	require.NoError(t, err)
+
+	orphanSecA := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      sharedGroupDBSecretName(childEnvironmentName(pgName, "svc-a")),
+			Namespace: "team-a",
+			UID:       types.UID("uid-orphan-a"),
+			Labels: map[string]string{
+				labelPreviewGroup:           pgName,
+				"divergedev.com/managed-by": "diverge",
+				labelSharedGroupDBSecret:    "true",
+			},
+		},
+	}
+	orphanSecB := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      sharedGroupDBSecretName(childEnvironmentName(pgName, "svc-b")),
+			Namespace: "team-b",
+			UID:       types.UID("uid-orphan-b"),
+			Labels: map[string]string{
+				labelPreviewGroup:           pgName,
+				"divergedev.com/managed-by": "diverge",
+				labelSharedGroupDBSecret:    "true",
+			},
+		},
+	}
+	sharedSpoke := fake.NewClientBuilder().WithScheme(s).WithObjects(kubeSystemNS, orphanSecA, orphanSecB).Build()
+
+	makeScopedView := func(allowedNamespaces ...string) client.Client {
+		allowed := make(map[string]bool, len(allowedNamespaces))
+		for _, ns := range allowedNamespaces {
+			allowed[ns] = true
+		}
+		return fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, _ client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				return sharedSpoke.Get(ctx, key, obj, opts...)
+			},
+			List: func(ctx context.Context, _ client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, isSecList := list.(*corev1.SecretList); isSecList {
+					listOpts := &client.ListOptions{}
+					for _, o := range opts {
+						o.ApplyToList(listOpts)
+					}
+					if listOpts.Namespace == "" || !allowed[listOpts.Namespace] {
+						return apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, listOpts.Namespace, errors.New("namespace RBAC forbidden"))
+					}
+				}
+				return sharedSpoke.List(ctx, list, opts...)
+			},
+			Delete: func(ctx context.Context, _ client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if _, isSec := obj.(*corev1.Secret); isSec && !allowed[obj.GetNamespace()] {
+					return apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, obj.GetName(), errors.New("namespace RBAC forbidden"))
+				}
+				return sharedSpoke.Delete(ctx, obj, opts...)
+			},
+		}).Build()
+	}
+
+	now := metav1.Now()
+	pg := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              pgName,
+			DeletionTimestamp: &now,
+			Finalizers:        []string{previewGroupFinalizer},
+			Annotations: map[string]string{
+				annotationGroupDBNamespace:     "default",
+				annotationGroupDBSecretTargets: string(encodedTargets),
+			},
+		},
+	}
+	hubClient := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&divergeiov1alpha1.PreviewGroup{}).WithObjects(pg).Build()
+	dbProv := &countingGroupDBProvider{dsn: "postgres://unused"}
+	r := &PreviewGroupReconciler{
+		Client:           hubClient,
+		Scheme:           s,
+		Recorder:         events.NewRecorder(k8sevents.NewFakeRecorder(10)),
+		DatabaseProvider: dbProv,
+		ClusterClients: &clusterNameSpokeResolver{
+			byName: map[string]*multicluster.Target{
+				"spoke-rbac-a": {Name: "spoke-rbac-a", IsRemote: true, Client: makeScopedView("team-a")},
+				"spoke-rbac-b": {Name: "spoke-rbac-b", IsRemote: true, Client: makeScopedView("team-b")},
+			},
+		},
+	}
+
+	_, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pgName}})
+	require.NoError(t, err, "distinct RBAC-scoped clients reaching same spoke must not be merged into one Forbidden client")
+	assert.Equal(t, int32(1), dbProv.teardowns.Load(), "teardown must reach DB provider after scoped cleanup succeeds")
+
+	var chkA, chkB corev1.Secret
+	assert.True(t, apierrors.IsNotFound(sharedSpoke.Get(ctx, types.NamespacedName{Name: orphanSecA.Name, Namespace: "team-a"}, &chkA)))
+	assert.True(t, apierrors.IsNotFound(sharedSpoke.Get(ctx, types.NamespacedName{Name: orphanSecB.Name, Namespace: "team-b"}, &chkB)))
+
+	var gotPG divergeiov1alpha1.PreviewGroup
+	assert.True(t, apierrors.IsNotFound(hubClient.Get(ctx, types.NamespacedName{Name: pgName}, &gotPG)))
+
+	// B. Even when kube-system UID is readable by two distinct clients, Secret UID correlation still protects desired Secrets across scans
+	pgActiveName := "pg-same-spoke-uid-corr"
+	activeChildName := childEnvironmentName(pgActiveName, "api")
+	activeSecName := sharedGroupDBSecretName(activeChildName)
+	activeEncodedTargets, err := json.Marshal([]recordedGroupDBSecretTarget{
+		{Namespace: "team-b", ClusterRef: spokeARef},
+		{Namespace: "team-b", ClusterRef: spokeBRef},
+	})
+	require.NoError(t, err)
+	desiredSec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      activeSecName,
+			Namespace: "team-b",
+			UID:       types.UID("uid-desired-b"),
+			Labels: map[string]string{
+				labelPreviewGroup:           pgActiveName,
+				"divergedev.com/managed-by": "diverge",
+				labelSharedGroupDBSecret:    "true",
+			},
+		},
+	}
+	sharedSpoke2 := fake.NewClientBuilder().WithScheme(s).WithObjects(kubeSystemNS.DeepCopy(), desiredSec).Build()
+	makeSharedUIDView := func(allowedNS ...string) client.Client {
+		allowed := make(map[string]bool, len(allowedNS))
+		for _, ns := range allowedNS {
+			allowed[ns] = true
+		}
+		return fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, _ client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				return sharedSpoke2.Get(ctx, key, obj, opts...)
+			},
+			List: func(ctx context.Context, _ client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, isSecList := list.(*corev1.SecretList); isSecList {
+					listOpts := &client.ListOptions{}
+					for _, o := range opts {
+						o.ApplyToList(listOpts)
+					}
+					if listOpts.Namespace == "" || !allowed[listOpts.Namespace] {
+						return apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, listOpts.Namespace, errors.New("namespace RBAC forbidden"))
+					}
+				}
+				return sharedSpoke2.List(ctx, list, opts...)
+			},
+			Delete: func(ctx context.Context, _ client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				return sharedSpoke2.Delete(ctx, obj, opts...)
+			},
+		}).Build()
+	}
+	pgActive := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        pgActiveName,
+			Labels:      map[string]string{previewgroup.LabelComposedGroup: "true"},
+			Annotations: map[string]string{annotationGroupDBNamespace: "default", annotationGroupDBSecretTargets: string(activeEncodedTargets)},
+		},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Database: &divergeiov1alpha1.EnvironmentDatabase{Mode: "cnpg"},
+			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{Name: "api", Namespace: "team-b", Mode: divergeiov1alpha1.ServiceModeImage, Image: "img:1", ClusterRef: spokeBRef},
+			},
+		},
+	}
+	rActive := &PreviewGroupReconciler{
+		Client: fake.NewClientBuilder().WithScheme(s).WithObjects(pgActive).Build(),
+		Scheme: s,
+		ClusterClients: &clusterNameSpokeResolver{
+			byName: map[string]*multicluster.Target{
+				"spoke-rbac-a": {Name: "spoke-rbac-a", IsRemote: true, Client: makeSharedUIDView("team-a", "team-b")},
+				"spoke-rbac-b": {Name: "spoke-rbac-b", IsRemote: true, Client: makeSharedUIDView("team-b")},
+			},
+		},
+	}
+	_, err = rActive.cleanupOrphanedChildSharedDBSecrets(ctx, pgActive, map[string]bool{"team-b/" + activeChildName: true})
+	require.NoError(t, err)
+	var keptDesired corev1.Secret
+	require.NoError(t, sharedSpoke2.Get(ctx, types.NamespacedName{Name: activeSecName, Namespace: "team-b"}, &keptDesired), "desired Secret UID must protect it across distinct client scans reaching the same spoke")
 }

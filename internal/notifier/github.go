@@ -275,17 +275,17 @@ func (g *GitHubPreviewGroupNotifier) setCommentID(pg *v1alpha1.PreviewGroup, id 
 	pg.Status.CommentID = id
 }
 
-func (g *GitHubPreviewGroupNotifier) resolveAuthenticatedAuthor(ctx context.Context) (int64, string) {
+func (g *GitHubPreviewGroupNotifier) resolveAuthenticatedAuthor(ctx context.Context) (int64, string, error) {
 	if id, login, needFetch := g.authorCache.get(g.AuthorLogin); !needFetch {
-		return id, login
+		return id, login, nil
 	}
 	baseURL := strings.TrimRight(strings.TrimSpace(g.BaseURL), "/")
 	if baseURL == "" {
-		return 0, ""
+		return 0, "", nil
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/user", nil)
 	if err != nil {
-		return 0, ""
+		return 0, "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+g.Token)
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
@@ -295,16 +295,21 @@ func (g *GitHubPreviewGroupNotifier) resolveAuthenticatedAuthor(ctx context.Cont
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return 0, ""
+		return 0, "", fmt.Errorf("github /user lookup failed: %w", err)
+	}
+	if resp.StatusCode == http.StatusForbidden &&
+		(resp.Header.Get("Retry-After") != "" || resp.Header.Get("X-RateLimit-Remaining") == "0") {
+		_ = resp.Body.Close()
+		return 0, "", fmt.Errorf("github /user lookup rate limited: status %d", resp.StatusCode)
 	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound {
 		_ = resp.Body.Close()
 		g.authorCache.markChecked()
-		return 0, ""
+		return 0, "", nil
 	}
 	if resp.StatusCode != http.StatusOK {
 		_ = resp.Body.Close()
-		return 0, ""
+		return 0, "", fmt.Errorf("github /user lookup returned status: %d", resp.StatusCode)
 	}
 	var u struct {
 		ID    int64  `json:"id"`
@@ -315,36 +320,43 @@ func (g *GitHubPreviewGroupNotifier) resolveAuthenticatedAuthor(ctx context.Cont
 	if decErr == nil && strings.TrimSpace(u.Login) != "" {
 		login := strings.TrimSpace(u.Login)
 		g.authorCache.record(u.ID, login)
-		return u.ID, login
+		return u.ID, login, nil
 	}
 	g.authorCache.markChecked()
-	return 0, ""
+	return 0, "", nil
 }
 
-func (g *GitHubPreviewGroupNotifier) findExistingCommentID(ctx context.Context, escapedProject string, mr int, marker string) int64 {
+func (g *GitHubPreviewGroupNotifier) findExistingCommentID(ctx context.Context, escapedProject string, mr int, marker string) (int64, error) {
 	if marker == "" {
-		return 0
+		return 0, nil
 	}
-	authID, authLogin := g.resolveAuthenticatedAuthor(ctx)
+	authID, authLogin, err := g.resolveAuthenticatedAuthor(ctx)
+	if err != nil {
+		return 0, err
+	}
 	if authID == 0 && authLogin == "" {
-		return 0
+		return 0, nil
+	}
+	httpClient := g.HTTPClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
 	}
 	nextURL := fmt.Sprintf("%s/repos/%s/issues/%d/comments?per_page=100", g.BaseURL, escapedProject, mr)
 	var matchedID int64
 	for page := 0; page < 5 && nextURL != ""; page++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, nextURL, nil)
 		if err != nil {
-			return matchedID
+			return 0, err
 		}
 		req.Header.Set("Authorization", "Bearer "+g.Token)
 		req.Header.Set("Accept", "application/vnd.github.v3+json")
-		resp, err := g.HTTPClient.Do(req)
+		resp, err := httpClient.Do(req)
 		if err != nil {
-			return matchedID
+			return 0, fmt.Errorf("github comment lookup failed: %w", err)
 		}
 		if resp.StatusCode != http.StatusOK {
 			_ = resp.Body.Close()
-			return matchedID
+			return 0, fmt.Errorf("github comment lookup returned status: %d", resp.StatusCode)
 		}
 		var comments []struct {
 			ID   int64  `json:"id"`
@@ -358,7 +370,7 @@ func (g *GitHubPreviewGroupNotifier) findExistingCommentID(ctx context.Context, 
 		linkHeader := resp.Header.Get("Link")
 		_ = resp.Body.Close()
 		if decErr != nil {
-			return matchedID
+			return 0, fmt.Errorf("decoding github comment lookup response: %w", decErr)
 		}
 		for _, c := range comments {
 			if c.ID != 0 && notifierAuthorMatches(authID, authLogin, c.User.ID, c.User.Login) && strings.Contains(c.Body, marker) {
@@ -367,7 +379,7 @@ func (g *GitHubPreviewGroupNotifier) findExistingCommentID(ctx context.Context, 
 		}
 		nextURL = parseNextLink(linkHeader)
 	}
-	return matchedID
+	return matchedID, nil
 }
 
 func (g *GitHubPreviewGroupNotifier) postOrUpdateComment(ctx context.Context, pg *v1alpha1.PreviewGroup, body string) error {
@@ -384,7 +396,11 @@ func (g *GitHubPreviewGroupNotifier) postOrUpdateComment(ctx context.Context, pg
 	commentID := g.getCommentID(pg)
 	var recoveredID int64
 	if commentID == 0 {
-		if existingID := g.findExistingCommentID(ctx, escapedProject, mr, previewGroupCommentMarker(pg)); existingID != 0 {
+		existingID, lookupErr := g.findExistingCommentID(ctx, escapedProject, mr, previewGroupCommentMarker(pg))
+		if lookupErr != nil {
+			return lookupErr
+		}
+		if existingID != 0 {
 			commentID = existingID
 			recoveredID = existingID
 		}

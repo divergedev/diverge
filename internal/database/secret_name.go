@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"regexp"
@@ -74,4 +75,40 @@ func EnvSecretName(envName string) string {
 // GroupEnvSecretName returns the deterministic Secret name for a PreviewGroup child's shared DB credentials.
 func GroupEnvSecretName(childEnvName string) string {
 	return SanitizeK8sSecretName(GroupDBEnvSecretPrefix+childEnvName, childEnvName, 63)
+}
+
+type resolvedSharedDBSecretContextKey struct{}
+
+type resolvedSharedDBSecretValue struct {
+	namespace  string
+	envName    string
+	secretName string
+}
+
+// WithResolvedSharedDBSecret attaches the Secret name verified during shared group DB readiness to ctx for env.
+func WithResolvedSharedDBSecret(ctx context.Context, namespace, envName, secretName string) context.Context {
+	secretName = strings.TrimSpace(secretName)
+	if ctx == nil || secretName == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, resolvedSharedDBSecretContextKey{}, resolvedSharedDBSecretValue{
+		namespace:  strings.TrimSpace(namespace),
+		envName:    strings.TrimSpace(envName),
+		secretName: secretName,
+	})
+}
+
+// ResolvedSharedDBSecret retrieves the ready shared group DB Secret name attached to ctx for env, if any.
+func ResolvedSharedDBSecret(ctx context.Context, namespace, envName string) string {
+	if ctx == nil {
+		return ""
+	}
+	val, ok := ctx.Value(resolvedSharedDBSecretContextKey{}).(resolvedSharedDBSecretValue)
+	if !ok {
+		return ""
+	}
+	if val.namespace != strings.TrimSpace(namespace) || val.envName != strings.TrimSpace(envName) {
+		return ""
+	}
+	return val.secretName
 }
