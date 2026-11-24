@@ -1,0 +1,20 @@
+{{- if and .Values.server.enabled .Values.server.tunnelProxy .Values.server.tunnelProxy.service .Values.server.tunnelProxy.service.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "diverge.fullname" . }}-tunnel-proxy
+  labels:
+    {{- include "diverge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tunnel-proxy
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.server.tunnelProxy.service.port | default 8081 }}
+      targetPort: http-tunnel
+      protocol: TCP
+      name: http-tunnel
+      appProtocol: {{ .Values.server.tunnelProxy.service.appProtocol | default "http" }}
+  selector:
+    {{- include "diverge.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+{{- end }}

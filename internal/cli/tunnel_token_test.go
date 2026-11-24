@@ -54,9 +54,7 @@ func TestFileTokenSource(t *testing.T) {
 	newModTime := time.Now().Add(1 * time.Second)
 	require.NoError(t, os.Chtimes(tokenPath, newModTime, newModTime))
 
-	fts.mu.Lock()
-	fts.lastCheck = time.Time{} // force re-check
-	fts.mu.Unlock()
+	fts.Invalidate()
 
 	tok2, err := fts.Token(context.Background())
 	require.NoError(t, err)
@@ -340,5 +338,56 @@ func TestResolveTunnelToken_PBT(t *testing.T) {
 
 		_, err = resolveTunnelToken(onlyWS, nil)
 		assert.ErrorIs(t, err, ErrNoTunnelCredential)
+	})
+}
+
+func TestResolveStandaloneTunnelTokenSource(t *testing.T) {
+	t.Run("rejects both --token-cmd and --token-file", func(t *testing.T) {
+		_, err := resolveStandaloneTunnelTokenSource(t.Context(), "echo a", "/tmp/tok")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "cannot both be set")
+	})
+
+	t.Run("validates --token-cmd POSIX syntax without executing eagerly", func(t *testing.T) {
+		t.Setenv(tunnelTokenEnvVar, "env-tok")
+		_, err := resolveStandaloneTunnelTokenSource(t.Context(), "echo a | cat", "")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "without a shell")
+
+		ts, err := resolveStandaloneTunnelTokenSource(t.Context(), "printf cmd-tok", "")
+		require.NoError(t, err)
+		tok, err := ts.Token(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, "cmd-tok", tok)
+	})
+
+	t.Run("uses --token-file over DIVERGE_TOKEN", func(t *testing.T) {
+		t.Setenv(tunnelTokenEnvVar, "env-tok")
+		tokPath := filepath.Join(t.TempDir(), "token")
+		require.NoError(t, os.WriteFile(tokPath, []byte("file-tok\n"), 0o600))
+
+		ts, err := resolveStandaloneTunnelTokenSource(t.Context(), "", tokPath)
+		require.NoError(t, err)
+		tok, err := ts.Token(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, "file-tok", tok)
+	})
+
+	t.Run("falls back to DIVERGE_TOKEN", func(t *testing.T) {
+		t.Setenv(tunnelTokenEnvVar, "env-only-tok")
+		ts, err := resolveStandaloneTunnelTokenSource(t.Context(), "", "")
+		require.NoError(t, err)
+		tok, err := ts.Token(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, "env-only-tok", tok)
+	})
+
+	t.Run("returns actionable ErrNoTunnelCredential when unconfigured", func(t *testing.T) {
+		t.Setenv(tunnelTokenEnvVar, "")
+		_, err := resolveStandaloneTunnelTokenSource(t.Context(), "", "")
+		require.ErrorIs(t, err, ErrNoTunnelCredential)
+		assert.Contains(t, err.Error(), "--token-cmd")
+		assert.Contains(t, err.Error(), "--token-file")
+		assert.Contains(t, err.Error(), tunnelTokenEnvVar)
 	})
 }

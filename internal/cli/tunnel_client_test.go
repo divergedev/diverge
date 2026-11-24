@@ -14,6 +14,7 @@ import (
 	"connectrpc.com/connect"
 	pb "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 	"github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
+	"github.com/divergedev/diverge/internal/tunnelclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -114,7 +115,7 @@ func TestTunnelClient(t *testing.T) {
 	defer cancel()
 
 	// Run client
-	go tc.ConnectWithRetry(ctx)
+	go func() { _ = tc.ConnectWithRetry(ctx) }()
 
 	// Wait for Register
 	var regMsg *pb.TunnelServiceTunnelRequest
@@ -124,7 +125,7 @@ func TestTunnelClient(t *testing.T) {
 		t.Fatal("timeout waiting for register")
 	}
 	assert.Equal(t, "test-preview", regMsg.GetRegister().PreviewId)
-	assert.Equal(t, int32(2), regMsg.GetRegister().ProtocolVersion)
+	assert.Equal(t, int32(tunnelclient.ProtocolVersion), regMsg.GetRegister().ProtocolVersion)
 
 	// Wait for Pong
 	var pongMsg *pb.TunnelServiceTunnelRequest
@@ -175,7 +176,7 @@ func TestTunnelClient_ReadyChannel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go tc.ConnectWithRetry(ctx)
+	go func() { _ = tc.ConnectWithRetry(ctx) }()
 
 	select {
 	case <-tc.Ready:
@@ -241,7 +242,7 @@ func TestTunnelClient_Reconnect(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go tc.ConnectWithRetry(ctx)
+	go func() { _ = tc.ConnectWithRetry(ctx) }()
 
 	// Wait for first Register
 	select {
@@ -308,7 +309,7 @@ func TestTunnelAuthTransport_DoesNotMutateRequest(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	transport := &tunnelAuthTransport{base: http.DefaultTransport, tokenSource: StaticTokenSource("tok")}
+	transport := &tunnelclient.AuthTransport{Base: http.DefaultTransport, TokenSource: StaticTokenSource("tok")}
 	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
 	require.NoError(t, err)
 
@@ -348,7 +349,7 @@ func TestTunnelAuthTransport_DynamicTokenSource(t *testing.T) {
 	currentToken = "token-phase-1"
 	tokenMu.Unlock()
 
-	tc := NewTunnelClientWithTokenSource(srv.URL, 8080, "preview-1", "svc", "ns", dynamicTS, nil, slog.Default())
+	tc := NewTunnelClientWithTokenSource(srv.URL, 8080, "preview-1", "svc", "ns", dynamicTS, http.DefaultTransport, slog.Default())
 
 	// First request with phase 1 token
 	req1, err := http.NewRequest(http.MethodPost, srv.URL, nil)
@@ -385,9 +386,9 @@ func (f *testFuncTokenSource) Token(ctx context.Context) (string, error) {
 }
 
 func TestTunnelAuthTransport_RejectsNonLoopbackHTTP(t *testing.T) {
-	transport := &tunnelAuthTransport{
-		base:        http.DefaultTransport,
-		tokenSource: StaticTokenSource("secret-token"),
+	transport := &tunnelclient.AuthTransport{
+		Base:        http.DefaultTransport,
+		TokenSource: StaticTokenSource("secret-token"),
 	}
 
 	// Non-loopback HTTP must be rejected without sending credentials
@@ -426,7 +427,7 @@ func TestTunnelClient_RejectsCrossHostRedirect(t *testing.T) {
 	}))
 	defer redirectSrv.Close()
 
-	tc := NewTunnelClientWithTokenSource(redirectSrv.URL, 8080, "p1", "svc", "ns", StaticTokenSource("tok"), nil, slog.Default())
+	tc := NewTunnelClientWithTokenSource(redirectSrv.URL, 8080, "p1", "svc", "ns", StaticTokenSource("tok"), http.DefaultTransport, slog.Default())
 	req, err := http.NewRequest(http.MethodGet, redirectSrv.URL, nil)
 	require.NoError(t, err)
 

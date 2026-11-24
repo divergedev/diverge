@@ -24,6 +24,7 @@ import (
 	"github.com/divergedev/diverge/internal/config"
 	"github.com/divergedev/diverge/internal/git"
 	"github.com/divergedev/diverge/internal/proxy"
+	"github.com/divergedev/diverge/internal/tunnelclient"
 	"github.com/divergedev/diverge/pkg/devsession"
 )
 
@@ -148,8 +149,39 @@ type runDevParams struct {
 	Force      bool
 }
 
-func runDev(p runDevParams) error {
-	ctx := p.Cmd.Context()
+var errTunnelClosedByServer = errors.New("tunnel closed by server")
+
+type fatalTunnelError struct {
+	err error
+}
+
+func (e *fatalTunnelError) Error() string { return e.err.Error() }
+func (e *fatalTunnelError) Unwrap() error { return e.err }
+
+func runDev(p runDevParams) (retErr error) {
+	var parentCtx context.Context
+	if p.Cmd != nil {
+		parentCtx = p.Cmd.Context()
+	}
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+	ctx, cancelSession := context.WithCancelCause(parentCtx)
+	defer cancelSession(nil)
+	defer func() {
+		if parentCtx.Err() != nil {
+			return
+		}
+		cause := context.Cause(ctx)
+		var ftErr *fatalTunnelError
+		if errors.As(cause, &ftErr) && (retErr == nil || errors.Is(retErr, context.Canceled)) {
+			retErr = ftErr.err
+			return
+		}
+		if errors.Is(cause, errTunnelClosedByServer) && errors.Is(retErr, context.Canceled) {
+			retErr = nil
+		}
+	}()
 
 	if p.Devspace {
 		defaultService := "my-service"
@@ -313,6 +345,13 @@ dev:
 		}
 		return fmt.Errorf("failed to acquire dev session lock: %w", acquireErr)
 	}
+	defer func() {
+		sessCtx, sessCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		if err := sessionMgr.Release(sessCtx, ns, serviceName, sessionID); err != nil {
+			slog.Debug("failed to release dev session", "error", err)
+		}
+		sessCancel()
+	}()
 
 	if conflicted && existingSess != nil {
 		confErr := &devsession.ConflictError{
@@ -375,18 +414,39 @@ dev:
 		}
 
 		tc := NewTunnelClientWithTokenSource(sAddr, int(port), headerValue, serviceName, ns, tokenSource, tunnelBaseTransport(sAddr), slog.Default())
-		go tc.ConnectWithRetry(ctx)
+		tunnelErrCh := make(chan error, 1)
+		go func() {
+			tunnelErrCh <- tc.ConnectWithRetry(ctx)
+		}()
+		defer cancelSession(nil)
 
 		select {
 		case <-tc.Ready:
+			go func() {
+				err := <-tunnelErrCh
+				if ctx.Err() != nil {
+					return
+				}
+				if err != nil {
+					slog.Error("tunnel terminated unexpectedly", "error", err)
+					cancelSession(&fatalTunnelError{err: fmt.Errorf("tunnel terminated: %w", err)})
+					return
+				}
+				slog.Info("tunnel closed by server, ending dev session")
+				cancelSession(errTunnelClosedByServer)
+			}()
+		case err := <-tunnelErrCh:
+			if err != nil {
+				return fmt.Errorf("tunnel failed: %w", err)
+			}
+			return errors.New("tunnel closed before becoming ready")
 		case <-time.After(15 * time.Second):
 			return fmt.Errorf("tunnel connection timed out")
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 
-		// If using tunnel, the PreviewGroup should point to the tunnel's Headless Service.
-		endpoint = fmt.Sprintf("diverge-tunnel-%s.%s.svc.cluster.local:%d", headerValue, ns, port)
+		endpoint = resolveDevTunnelEndpoint(tc.ReadyInfo(), headerValue, ns, port)
 	}
 
 	// 6. Create PreviewGroup CR
@@ -426,7 +486,7 @@ dev:
 	fmt.Printf("Routing traffic with header %s: %s to %s\n", "x-diverge-env", headerValue, endpoint)
 
 	// Atomic Create — handle collision
-
+	pgManaged := false
 	if err := c.Create(ctx, pg); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			// Fetch existing PG
@@ -443,6 +503,7 @@ dev:
 			if updateErr := c.Update(ctx, &existing); updateErr != nil {
 				return fmt.Errorf("failed to update PreviewGroup: %w", updateErr)
 			}
+			pgManaged = true
 		} else if apierrors.IsInvalid(err) {
 			// A DEGRADED SESSION, NOT A DEAD ONE. The installed CRD refuses
 			// this spec — today that is guaranteed: dev sets
@@ -460,6 +521,20 @@ dev:
 		} else {
 			return fmt.Errorf("failed to create PreviewGroup: %w", err)
 		}
+	} else {
+		pgManaged = true
+	}
+	if pgManaged {
+		defer func() {
+			fmt.Printf("\nCleaning up PreviewGroup %q...\n", groupName)
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := c.Delete(cleanupCtx, pg); err != nil && !apierrors.IsNotFound(err) {
+				slog.Error("failed to clean up PreviewGroup", "name", groupName, "error", err)
+			} else {
+				fmt.Println("Goodbye!")
+			}
+		}()
 	}
 
 	// Start loopback proxy and config watcher
@@ -582,23 +657,6 @@ dev:
 					slog.Error("heartbeat failed", "error", retryErr)
 				}
 			}
-		}
-	}()
-
-	defer func() {
-		sessCtx, sessCancel := context.WithTimeout(context.Background(), 2*time.Second)
-		if err := sessionMgr.Release(sessCtx, ns, serviceName, sessionID); err != nil {
-			slog.Debug("failed to release dev session", "error", err)
-		}
-		sessCancel()
-
-		fmt.Printf("\nCleaning up PreviewGroup %q...\n", groupName)
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := c.Delete(cleanupCtx, pg); err != nil && !apierrors.IsNotFound(err) {
-			slog.Error("failed to clean up PreviewGroup", "name", groupName, "error", err)
-		} else {
-			fmt.Println("Goodbye!")
 		}
 	}()
 
@@ -920,4 +978,17 @@ func waitForAsyncRoutes(ctx context.Context, c client.Client, groupName string, 
 		asyncVars[k] = v
 	}
 	return asyncVars, nil
+}
+
+func resolveDevTunnelEndpoint(info tunnelclient.ReadyInfo, headerValue, ns string, port int32) string {
+	if info.K8sServiceName != "" {
+		return fmt.Sprintf("%s.%s.svc.cluster.local:%d", info.K8sServiceName, ns, port)
+	}
+	if info.ProxyService != "" {
+		return info.ProxyService
+	}
+	if info.ProtocolVersion >= tunnelclient.ProtocolVersion && info.Endpoint != "" {
+		return info.Endpoint
+	}
+	return fmt.Sprintf("diverge-tunnel-%s.%s.svc.cluster.local:%d", headerValue, ns, port)
 }

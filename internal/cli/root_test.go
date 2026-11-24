@@ -49,3 +49,23 @@ func TestNewRootCmdHasPersistentPreRunE(t *testing.T) {
 	cmd := NewRootCmd(app)
 	assert.NotNil(t, cmd.PersistentPreRunE, "root command should have PersistentPreRunE set")
 }
+
+func TestCmdRequiresKube(t *testing.T) {
+	cmd := NewRootCmd(&App{})
+
+	tunnelCmd, _, err := cmd.Find([]string{"tunnel"})
+	assert.NoError(t, err)
+	assert.False(t, cmdRequiresKube(tunnelCmd), "tunnel command must not require kubeconfig")
+
+	tunnelListCmd, _, err := cmd.Find([]string{"tunnel", "list"})
+	assert.NoError(t, err)
+	assert.False(t, cmdRequiresKube(tunnelListCmd), "tunnel list subcommand must not require kubeconfig")
+
+	devCmd, _, err := cmd.Find([]string{"dev"})
+	assert.NoError(t, err)
+	assert.True(t, cmdRequiresKube(devCmd), "dev command requires kubeconfig")
+
+	listCmd, _, err := cmd.Find([]string{"list"})
+	assert.NoError(t, err)
+	assert.True(t, cmdRequiresKube(listCmd), "list command requires kubeconfig")
+}

@@ -257,4 +257,84 @@ subjects:
     namespace: {{ $.Release.Namespace }}
 {{- end }}
 {{- end }}
+{{- if and .Values.server.rbac .Values.server.rbac.oidcTunnelGroups }}
+{{- $prefix := "oidc:" }}
+{{- if and .Values.server.auth .Values.server.auth.oidc .Values.server.auth.oidc.groupsPrefix }}
+  {{- if eq .Values.server.auth.oidc.groupsPrefix "-" }}
+    {{- $prefix = "" }}
+  {{- else }}
+    {{- $prefix = .Values.server.auth.oidc.groupsPrefix }}
+  {{- end }}
+{{- end }}
+{{- $oidcTunnelNamespaces := .Values.server.rbac.oidcTunnelNamespaces | default .Values.server.rbac.targetNamespaces }}
+{{- if .Values.server.rbac.oidcTunnelClusterWide }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "diverge.fullname" . }}-oidc-tunnel-users
+  labels:
+    {{- include "diverge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+rules:
+  - apiGroups: ["divergedev.com"]
+    resources: ["environments"]
+    verbs: ["create", "get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "diverge.fullname" . }}-oidc-tunnel-users
+  labels:
+    {{- include "diverge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "diverge.fullname" . }}-oidc-tunnel-users
+subjects:
+  {{- range .Values.server.rbac.oidcTunnelGroups }}
+  - kind: Group
+    name: {{ printf "%s%s" $prefix . | quote }}
+    apiGroup: rbac.authorization.k8s.io
+  {{- end }}
+{{- else if $oidcTunnelNamespaces }}
+{{- range $namespace := $oidcTunnelNamespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "diverge.fullname" $ }}-oidc-tunnel-users
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "diverge.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: server
+rules:
+  - apiGroups: ["divergedev.com"]
+    resources: ["environments"]
+    verbs: ["create", "get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "diverge.fullname" $ }}-oidc-tunnel-users
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "diverge.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: server
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "diverge.fullname" $ }}-oidc-tunnel-users
+subjects:
+  {{- range $.Values.server.rbac.oidcTunnelGroups }}
+  - kind: Group
+    name: {{ printf "%s%s" $prefix . | quote }}
+    apiGroup: rbac.authorization.k8s.io
+  {{- end }}
+{{- end }}
+{{- else }}
+{{- fail "server.rbac.oidcTunnelGroups requires server.rbac.oidcTunnelNamespaces, server.rbac.targetNamespaces, or server.rbac.oidcTunnelClusterWide=true" }}
+{{- end }}
+{{- end }}
 {{- end }}

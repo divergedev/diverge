@@ -199,13 +199,17 @@ server:
     tag: ""  # defaults to image.tag, then .Chart.AppVersion
   resources:
     limits:
-      memory: 256Mi
+      memory: 512Mi
     requests:
       cpu: 100m
       memory: 128Mi
+  # -- Optional Go memory soft limit (GOMEMLIMIT). When empty, derived as ~84% of resources.limits.memory (fallback 430MiB).
+  goMemLimit: ""
   service:
     type: ClusterIP
     port: 8443
+    # -- Kubernetes Service appProtocol on the grpc port (defaults to kubernetes.io/h2c; use http2 for Istio <1.22 or https when TLS-terminated)
+    appProtocol: ""
   auth:
     tokenCacheTTL: 5s
     audiences:
@@ -239,6 +243,12 @@ server:
       groupsClaim: "groups"
       # -- Restrict access to users in these groups (comma-separated, empty = all)
       allowedGroups: ""
+      # -- Public PKCE client ID published for diverge login CLI
+      cliClientId: ""
+      # -- Prefix applied to OIDC/session usernames before K8s SAR ('-' disables)
+      usernamePrefix: "oidc:"
+      # -- Prefix applied to OIDC/session groups before K8s SAR ('-' disables)
+      groupsPrefix: "oidc:"
     # -- Session JWT configuration (used for OIDC sessions)
     session:
       # -- Session cookie max age in seconds
@@ -272,6 +282,30 @@ server:
     # Prefer listing explicit Secret names in multiClusterSecretNames over broad Secret read access.
     multiClusterSecrets: false
     multiClusterSecretNames: []
+    # -- OIDC groups granted permissions to create/get/list environments for standalone tunnel sessions
+    oidcTunnelGroups: []
+    # -- Explicit opt-in to grant oidcTunnelGroups cluster-wide access via ClusterRoleBinding (default false; prefer oidcTunnelNamespaces)
+    oidcTunnelClusterWide: false
+    # -- Namespaces where oidcTunnelGroups get Role/RoleBinding access (falls back to targetNamespaces when unset)
+    oidcTunnelNamespaces: []
+  tunnelProxy:
+    # -- Create per-tunnel Kubernetes Services/EndpointSlices/Endpoints for v3 tunnels
+    createPerTunnelServices: true
+    # -- Default namespace when omitted by tunnel clients
+    defaultNamespace: ""
+    # -- Owner usernames (e.g. CI service accounts) onto whose disjoint previews other users may attach unforced
+    sharedPreviewOwners: []
+    # -- Optional override for --tunnel-proxy-service-addr (defaults to <fullname>-tunnel-proxy.<namespace>.svc.cluster.local:<port> when tunnelProxy.service.enabled=true)
+    proxyServiceAddr: ""
+    # -- Optional Kubernetes Secret holding shared secret checked via X-Diverge-Proxy-Token on :8081
+    authTokenSecretRef:
+      name: ""
+      key: "token"
+    service:
+      # -- Expose cluster-internal :8081 tunnel proxy & PreviewResolverService
+      enabled: false
+      port: 8081
+      appProtocol: "http"
   metrics:
     serviceMonitor:
       enabled: false

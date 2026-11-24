@@ -13,6 +13,7 @@ spec:
       targetPort: grpc
       protocol: TCP
       name: grpc
+      appProtocol: {{ .Values.server.service.appProtocol | default "kubernetes.io/h2c" }}
     {{- if ne (int .Values.server.service.port) 8080 }}
     - port: 8080
       targetPort: grpc
