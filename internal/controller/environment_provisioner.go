@@ -219,6 +219,7 @@ func (r *EnvironmentReconciler) reconcileProvisioningWithTarget(ctx context.Cont
 			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, nil, 3*time.Second)
 			return ctx, res, true, retErr
 		}
+		env.Status.DatabaseProvider = ""
 		dbStatus = &pkgdb.DatabaseResult{
 			DSN:              sharedDSN,
 			Ready:            true,

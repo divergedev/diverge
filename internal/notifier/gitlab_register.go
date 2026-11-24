@@ -67,7 +67,11 @@ func init() {
 			if token == "" {
 				return &NoopPreviewGroupNotifier{}, nil
 			}
-			return NewGitLabPreviewGroupNotifier(url, token), nil
+			n := NewGitLabPreviewGroupNotifier(url, token)
+			if author := strings.TrimSpace(os.Getenv("DIVERGE_NOTIFIER_AUTHOR")); author != "" {
+				n.AuthorUsername = author
+			}
+			return n, nil
 		},
 		Description: "GitLab MR group comments",
 	})

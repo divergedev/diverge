@@ -233,11 +233,17 @@ func TestGitHubPreviewGroupNotifier_RecoversExistingCommentByMarker(t *testing.T
 		methods = append(methods, r.Method)
 		paths = append(paths, r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && r.URL.Path == "/user" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id": 99, "login": "diverge-bot"}`))
+			return
+		}
 		if r.Method == http.MethodGet {
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
-				{"id": 1001, "body": "other comment <!-- diverge:previewgroup=other source=github:owner/repo#42 -->"},
-				{"id": 7777, "body": "previous status\n\n" + marker},
+				{"id": 1001, "body": "other comment <!-- diverge:previewgroup=other source=github:owner/repo#42 -->", "user": map[string]interface{}{"id": 99, "login": "diverge-bot"}},
+				{"id": 7777, "body": "previous status\n\n" + marker, "user": map[string]interface{}{"id": 99, "login": "diverge-bot"}},
+				{"id": 8888, "body": "human quoted\n\n" + marker, "user": map[string]interface{}{"id": 500, "login": "alice"}},
 			})
 			return
 		}
@@ -248,7 +254,108 @@ func TestGitHubPreviewGroupNotifier_RecoversExistingCommentByMarker(t *testing.T
 
 	n := NewGitHubPreviewGroupNotifier(server.URL, "token")
 	require.NoError(t, n.PostGroupReady(context.Background(), pg))
+	assert.Equal(t, []string{http.MethodGet, http.MethodGet, http.MethodPatch}, methods)
+	assert.Equal(t, []string{"/user", "/repos/owner/repo/issues/42/comments", "/repos/owner/repo/issues/comments/7777"}, paths)
+	assert.Equal(t, int64(7777), pg.Status.CommentID)
+}
+
+func TestGitHubPreviewGroupNotifier_IgnoresHumanQuotedMarkerAndReusesLearnedAuthor(t *testing.T) {
+	pg := &v1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "pg-learned-author"},
+		Spec: v1alpha1.PreviewGroupSpec{
+			Source: v1alpha1.EnvironmentSource{
+				Provider: "github",
+				Project:  "owner/repo",
+				MR:       42,
+			},
+		},
+	}
+	marker := previewGroupCommentMarker(pg)
+	allowUserCall := true
+	commentsList := []map[string]interface{}{
+		{"id": 8888, "body": "human quote\n\n" + marker, "user": map[string]interface{}{"id": 500, "login": "alice"}},
+	}
+	var methods []string
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method)
+		paths = append(paths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && r.URL.Path == "/user" {
+			if !allowUserCall {
+				t.Fatalf("unexpected /user request after author identity was learned")
+			}
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(commentsList)
+			return
+		}
+		if r.Method == http.MethodPost {
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id": 7777, "user": {"id": 99, "login": "diverge-bot"}}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id": 7777}`))
+	}))
+	defer server.Close()
+
+	n := NewGitHubPreviewGroupNotifier(server.URL, "token")
+	require.NoError(t, n.PostGroupCreated(context.Background(), pg))
+	assert.Equal(t, []string{http.MethodGet, http.MethodPost}, methods)
+	assert.Equal(t, []string{"/user", "/repos/owner/repo/issues/42/comments"}, paths)
+	assert.Equal(t, int64(7777), pg.Status.CommentID)
+
+	// Simulate status conflict dropping CommentID and adding the newly created bot comment before retry
+	allowUserCall = false
+	pg.Status.CommentID = 0
+	commentsList = append(commentsList, map[string]interface{}{
+		"id": 7777, "body": "created\n\n" + marker, "user": map[string]interface{}{"id": 99, "login": "diverge-bot"},
+	})
+	methods = nil
+	paths = nil
+
+	require.NoError(t, n.PostGroupReady(context.Background(), pg))
 	assert.Equal(t, []string{http.MethodGet, http.MethodPatch}, methods)
 	assert.Equal(t, []string{"/repos/owner/repo/issues/42/comments", "/repos/owner/repo/issues/comments/7777"}, paths)
 	assert.Equal(t, int64(7777), pg.Status.CommentID)
+}
+
+func TestGitHubPreviewGroupNotifier_RecoveredIDStaysProvisionalOnPatchFailure(t *testing.T) {
+	pg := &v1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "pg-provisional"},
+		Spec: v1alpha1.PreviewGroupSpec{
+			Source: v1alpha1.EnvironmentSource{
+				Provider: "github",
+				Project:  "owner/repo",
+				MR:       42,
+			},
+		},
+	}
+	marker := previewGroupCommentMarker(pg)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && r.URL.Path == "/user" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id": 99, "login": "diverge-bot"}`))
+			return
+		}
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
+				{"id": 7777, "body": marker, "user": map[string]interface{}{"id": 99, "login": "diverge-bot"}},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	n := NewGitHubPreviewGroupNotifier(server.URL, "token")
+	err := n.PostGroupReady(context.Background(), pg)
+	require.Error(t, err)
+	assert.Zero(t, pg.Status.CommentID, "recovered comment ID must stay provisional until PATCH succeeds")
 }

@@ -16,9 +16,12 @@ import (
 
 // GitLabPreviewGroupNotifier implements PreviewGroupNotifier for GitLab.
 type GitLabPreviewGroupNotifier struct {
-	BaseURL    string
-	Token      string
-	HTTPClient *http.Client
+	BaseURL        string
+	Token          string
+	HTTPClient     *http.Client
+	AuthorUsername string
+
+	authorCache cachedNotifierAuthor
 }
 
 // NewGitLabPreviewGroupNotifier performs its designated operation.
@@ -54,8 +57,57 @@ func (g *GitLabPreviewGroupNotifier) setCommentID(pg *v1alpha1.PreviewGroup, id 
 	pg.Status.CommentID = id
 }
 
+func (g *GitLabPreviewGroupNotifier) resolveAuthenticatedAuthor(ctx context.Context) (int64, string) {
+	if id, username, needFetch := g.authorCache.get(g.AuthorUsername); !needFetch {
+		return id, username
+	}
+	baseURL := strings.TrimRight(strings.TrimSpace(g.BaseURL), "/")
+	if baseURL == "" {
+		return 0, ""
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/api/v4/user", nil)
+	if err != nil {
+		return 0, ""
+	}
+	req.Header.Set("PRIVATE-TOKEN", g.Token)
+	httpClient := g.HTTPClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return 0, ""
+	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound {
+		_ = resp.Body.Close()
+		g.authorCache.markChecked()
+		return 0, ""
+	}
+	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
+		return 0, ""
+	}
+	var u struct {
+		ID       int64  `json:"id"`
+		Username string `json:"username"`
+	}
+	decErr := json.NewDecoder(resp.Body).Decode(&u)
+	_ = resp.Body.Close()
+	if decErr == nil && strings.TrimSpace(u.Username) != "" {
+		username := strings.TrimSpace(u.Username)
+		g.authorCache.record(u.ID, username)
+		return u.ID, username
+	}
+	g.authorCache.markChecked()
+	return 0, ""
+}
+
 func (g *GitLabPreviewGroupNotifier) findExistingNoteID(ctx context.Context, escapedProject string, mr int, marker string) int64 {
 	if marker == "" {
+		return 0
+	}
+	authID, authUsername := g.resolveAuthenticatedAuthor(ctx)
+	if authID == 0 && authUsername == "" {
 		return 0
 	}
 	nextURL := fmt.Sprintf("%s/api/v4/projects/%s/merge_requests/%d/notes?per_page=100&sort=desc&order_by=updated_at", g.BaseURL, escapedProject, mr)
@@ -74,8 +126,12 @@ func (g *GitLabPreviewGroupNotifier) findExistingNoteID(ctx context.Context, esc
 			return 0
 		}
 		var notes []struct {
-			ID   int64  `json:"id"`
-			Body string `json:"body"`
+			ID     int64  `json:"id"`
+			Body   string `json:"body"`
+			Author struct {
+				ID       int64  `json:"id"`
+				Username string `json:"username"`
+			} `json:"author"`
 		}
 		decErr := json.NewDecoder(resp.Body).Decode(&notes)
 		linkHeader := resp.Header.Get("Link")
@@ -84,7 +140,7 @@ func (g *GitLabPreviewGroupNotifier) findExistingNoteID(ctx context.Context, esc
 			return 0
 		}
 		for _, n := range notes {
-			if n.ID != 0 && strings.Contains(n.Body, marker) {
+			if n.ID != 0 && notifierAuthorMatches(authID, authUsername, n.Author.ID, n.Author.Username) && strings.Contains(n.Body, marker) {
 				return n.ID
 			}
 		}
@@ -99,9 +155,12 @@ func (g *GitLabPreviewGroupNotifier) postOrUpdateComment(ctx context.Context, pg
 		return err
 	}
 
-	if g.getCommentID(pg) == 0 {
+	commentID := g.getCommentID(pg)
+	var recoveredID int64
+	if commentID == 0 {
 		if existingID := g.findExistingNoteID(ctx, project, mr, previewGroupCommentMarker(pg)); existingID != 0 {
-			g.setCommentID(pg, existingID)
+			commentID = existingID
+			recoveredID = existingID
 		}
 	}
 
@@ -110,7 +169,6 @@ func (g *GitLabPreviewGroupNotifier) postOrUpdateComment(ctx context.Context, pg
 	jsonPayload, _ := json.Marshal(payload)
 
 	for attempt := 0; attempt < 3; attempt++ {
-		commentID := g.getCommentID(pg)
 		var reqURL string
 		var method string
 
@@ -152,6 +210,8 @@ func (g *GitLabPreviewGroupNotifier) postOrUpdateComment(ctx context.Context, pg
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			_ = resp.Body.Close()
 			if commentID != 0 && resp.StatusCode == http.StatusNotFound {
+				commentID = 0
+				recoveredID = 0
 				g.setCommentID(pg, 0)
 				continue
 			}
@@ -160,11 +220,20 @@ func (g *GitLabPreviewGroupNotifier) postOrUpdateComment(ctx context.Context, pg
 
 		if commentID == 0 {
 			var result struct {
-				ID int64 `json:"id"`
+				ID     int64 `json:"id"`
+				Author struct {
+					ID       int64  `json:"id"`
+					Username string `json:"username"`
+				} `json:"author"`
 			}
-			if err := json.NewDecoder(resp.Body).Decode(&result); err == nil && result.ID != 0 {
-				g.setCommentID(pg, result.ID)
+			if err := json.NewDecoder(resp.Body).Decode(&result); err == nil {
+				if result.ID != 0 {
+					g.setCommentID(pg, result.ID)
+				}
+				g.authorCache.record(result.Author.ID, result.Author.Username)
 			}
+		} else if recoveredID != 0 {
+			g.setCommentID(pg, recoveredID)
 		}
 		_ = resp.Body.Close()
 		break

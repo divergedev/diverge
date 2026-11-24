@@ -88,6 +88,20 @@ func TestResolveDBSecret_TrimsWhitespace(t *testing.T) {
 	assert.Empty(t, resolveDBSecret(envBlank), "whitespace-only connectionRef should be treated as unset")
 }
 
+func TestResolveDBSecret_FormerNeonChildJoiningSharedGroupDB(t *testing.T) {
+	sharedSec := "diverge-group-db-env-pg-api-12345678"
+	envShared := testEnvWithDB("pg-api", "shared", sharedSec, "")
+	envShared.Annotations = map[string]string{"divergedev.com/shared-group-db": "true"}
+	envShared.Status.DatabaseProvider = "neon"
+	envShared.Status.DatabaseStatus = "Using shared PreviewGroup database"
+	assert.Equal(t, sharedSec, resolveDBSecret(envShared), "shared-group child ConnectionRef must take precedence over historical Neon Status.DatabaseProvider")
+
+	envNeon := testEnvWithDB("pg-api", "neon", "neon-api-creds", "")
+	envNeon.Status.DatabaseProvider = "neon"
+	envNeon.Status.DatabaseStatus = "Neon branch ready"
+	assert.Equal(t, sanitizeDBEnvSecretName("diverge-db-env-pg-api", "pg-api", 63), resolveDBSecret(envNeon), "child still provisioning Neon must continue using per-service Secret")
+}
+
 func TestServiceConfigFetcher_WithSchemaDB_NoEnvFrom(t *testing.T) {
 	env := testEnvWithDB("preview-42", "schema", "", "")
 	fetcher := &ServiceConfigFetcher{}

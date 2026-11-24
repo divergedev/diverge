@@ -3109,6 +3109,7 @@ func TestSharedDB_OrphanedPendingDrainRecordRecoversWhenConsumersExit(t *testing
 	s := runtime.NewScheme()
 	require.NoError(t, divergeiov1alpha1.AddToScheme(s))
 	require.NoError(t, corev1.AddToScheme(s))
+	require.NoError(t, appsv1.AddToScheme(s))
 
 	pgName := "pg-orphan-pending-drain"
 	childName := childEnvironmentName(pgName, "api")
@@ -3148,6 +3149,26 @@ func TestSharedDB_OrphanedPendingDrainRecordRecoversWhenConsumersExit(t *testing
 		},
 		Data: map[string][]byte{"DATABASE_URL": []byte("postgres://per-service-keep")},
 	}
+	zeroReplicas := int32(0)
+	scaledZeroDep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      childName + "-api",
+			Namespace: "backend",
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &zeroReplicas,
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name:    "api",
+						Image:   "img:1",
+						EnvFrom: []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: legacySecName}}}},
+					}},
+				},
+			},
+		},
+		Status: appsv1.DeploymentStatus{Replicas: 0},
+	}
 	runningPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      childName + "-pod",
@@ -3164,7 +3185,7 @@ func TestSharedDB_OrphanedPendingDrainRecordRecoversWhenConsumersExit(t *testing
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
 
-	spokeClient := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&corev1.Pod{}).WithObjects(pendingTakeoverSec, runningPod).Build()
+	spokeClient := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&corev1.Pod{}, &appsv1.Deployment{}).WithObjects(pendingTakeoverSec, scaledZeroDep, runningPod).Build()
 	hubClient := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&divergeiov1alpha1.PreviewGroup{}).WithObjects(pg).Build()
 	dbProv := &countingGroupDBProvider{dsn: "postgres://unused"}
 	r := &PreviewGroupReconciler{
@@ -3206,4 +3227,93 @@ func TestSharedDB_OrphanedPendingDrainRecordRecoversWhenConsumersExit(t *testing
 	var gotPG divergeiov1alpha1.PreviewGroup
 	err = hubClient.Get(ctx, types.NamespacedName{Name: pgName}, &gotPG)
 	assert.True(t, apierrors.IsNotFound(err))
+}
+
+func TestSharedDB_SameSpokeDifferentClientsPreservesDesiredSecret(t *testing.T) {
+	ctx := context.Background()
+	s := runtime.NewScheme()
+	require.NoError(t, divergeiov1alpha1.AddToScheme(s))
+	require.NoError(t, corev1.AddToScheme(s))
+	require.NoError(t, appsv1.AddToScheme(s))
+
+	pgName := "pg-same-spoke-two-clients"
+	spokeRefA := &divergeiov1alpha1.ClusterTargetRef{
+		Name:                "spoke-kc-a",
+		KubeconfigSecretRef: &divergeiov1alpha1.SecretRef{Name: "spoke-a-kc", Namespace: "kube-system"},
+	}
+	spokeRefB := &divergeiov1alpha1.ClusterTargetRef{
+		Name:                "spoke-kc-b",
+		KubeconfigSecretRef: &divergeiov1alpha1.SecretRef{Name: "spoke-b-kc", Namespace: "kube-system"},
+	}
+	encodedTargets, err := json.Marshal([]recordedGroupDBSecretTarget{
+		{Namespace: "backend", ClusterRef: spokeRefA},
+		{Namespace: "backend", ClusterRef: spokeRefB},
+	})
+	require.NoError(t, err)
+
+	childName := childEnvironmentName(pgName, "api")
+	secName := sharedGroupDBSecretName(childName)
+	pg := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        pgName,
+			Labels:      map[string]string{previewgroup.LabelComposedGroup: "true"},
+			Finalizers:  []string{previewGroupFinalizer},
+			Annotations: map[string]string{annotationGroupDBNamespace: "default", annotationGroupDBSecretTargets: string(encodedTargets)},
+		},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Database: &divergeiov1alpha1.EnvironmentDatabase{Mode: "cnpg"},
+			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{Name: "api", Namespace: "backend", Mode: divergeiov1alpha1.ServiceModeImage, Image: "img:1", ClusterRef: spokeRefB},
+			},
+		},
+	}
+
+	// Secret already created on the spoke before any child Deployment/Pod exists
+	desiredSec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secName,
+			Namespace: "backend",
+			UID:       types.UID("uid-same-spoke-sec"),
+			Labels: map[string]string{
+				labelPreviewGroup:           pgName,
+				"divergedev.com/managed-by": "diverge",
+				labelSharedGroupDBSecret:    "true",
+			},
+		},
+	}
+	sharedSpoke := fake.NewClientBuilder().WithScheme(s).WithObjects(desiredSec).Build()
+	makeSpokeView := func() client.Client {
+		return fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, _ client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, isNS := obj.(*corev1.Namespace); isNS && key.Name == "kube-system" {
+					return apierrors.NewForbidden(schema.GroupResource{Resource: "namespaces"}, key.Name, errors.New("forbidden"))
+				}
+				return sharedSpoke.Get(ctx, key, obj, opts...)
+			},
+			List: func(ctx context.Context, _ client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				return sharedSpoke.List(ctx, list, opts...)
+			},
+			Delete: func(ctx context.Context, _ client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				return sharedSpoke.Delete(ctx, obj, opts...)
+			},
+		}).Build()
+	}
+
+	hubClient := fake.NewClientBuilder().WithScheme(s).WithObjects(pg).Build()
+	r := &PreviewGroupReconciler{
+		Client: hubClient,
+		Scheme: s,
+		ClusterClients: &clusterNameSpokeResolver{
+			byName: map[string]*multicluster.Target{
+				"spoke-kc-a": {Name: "spoke-kc-a", IsRemote: true, Client: makeSpokeView()},
+				"spoke-kc-b": {Name: "spoke-kc-b", IsRemote: true, Client: makeSpokeView()},
+			},
+		},
+	}
+
+	_, cErr := r.cleanupOrphanedChildSharedDBSecrets(ctx, pg, map[string]bool{"backend/" + childName: true})
+	require.NoError(t, cErr)
+
+	var kept corev1.Secret
+	require.NoError(t, sharedSpoke.Get(ctx, types.NamespacedName{Name: secName, Namespace: "backend"}, &kept), "desired Secret must be preserved across distinct client views of the same spoke")
 }

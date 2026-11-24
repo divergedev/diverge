@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
@@ -212,4 +213,63 @@ func parseNextLink(header string) string {
 		}
 	}
 	return ""
+}
+
+func notifierAuthorMatches(authID int64, authLogin string, candID int64, candLogin string) bool {
+	authLogin = strings.TrimSpace(authLogin)
+	candLogin = strings.TrimSpace(candLogin)
+	if authID == 0 && authLogin == "" {
+		return false
+	}
+	if authID != 0 && candID != 0 {
+		return authID == candID
+	}
+	if authLogin != "" && candLogin != "" {
+		return strings.EqualFold(authLogin, candLogin)
+	}
+	return false
+}
+
+type cachedNotifierAuthor struct {
+	mu      sync.Mutex
+	checked bool
+	id      int64
+	login   string
+}
+
+func (a *cachedNotifierAuthor) record(id int64, login string) {
+	login = strings.TrimSpace(login)
+	if id == 0 && login == "" {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if id != 0 {
+		a.id = id
+	}
+	if login != "" {
+		a.login = login
+	}
+	a.checked = true
+}
+
+func (a *cachedNotifierAuthor) get(explicit string) (id int64, login string, shouldFetch bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if exp := strings.TrimSpace(explicit); exp != "" {
+		if a.id != 0 && strings.EqualFold(a.login, exp) {
+			return a.id, exp, false
+		}
+		return 0, exp, false
+	}
+	if a.id != 0 || a.login != "" || a.checked {
+		return a.id, a.login, false
+	}
+	return 0, "", true
+}
+
+func (a *cachedNotifierAuthor) markChecked() {
+	a.mu.Lock()
+	a.checked = true
+	a.mu.Unlock()
 }

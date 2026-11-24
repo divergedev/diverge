@@ -788,6 +788,40 @@ func namespaceWorkloadsStillUseSecret(
 	return false, nil
 }
 
+func probeClusterUID(ctx context.Context, c client.Client) string {
+	if c == nil {
+		return ""
+	}
+	var ns corev1.Namespace
+	if err := c.Get(ctx, types.NamespacedName{Name: "kube-system"}, &ns); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(ns.UID))
+}
+
+func namespacePodsStillUseSecret(ctx context.Context, c client.Client, ns, secretName string) (bool, error) {
+	if c == nil || ns == "" || secretName == "" {
+		return false, nil
+	}
+	var podList corev1.PodList
+	if err := c.List(ctx, &podList, client.InNamespace(ns)); err != nil {
+		if !isIgnorableWorkloadListErr(err, false) {
+			return true, fmt.Errorf("failed to list pods in %s for legacy takeover recovery: %w", ns, err)
+		}
+		return false, nil
+	}
+	for i := range podList.Items {
+		pod := &podList.Items[i]
+		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+			continue
+		}
+		if podSpecReferencesAnySecret(&pod.Spec, []string{secretName}) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func childEffectiveSharedDBNamespaces(child *divergeiov1alpha1.Environment) []string {
 	if child == nil {
 		return nil
@@ -1350,12 +1384,12 @@ func (r *PreviewGroupReconciler) teardownGroupDatabase(ctx context.Context, pg *
 		return false, nil
 	}
 
-	baseTDCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-
 	// Check and clean up any orphaned per-child shared DB Secrets BEFORE tearing down the
 	// database provider, so a Running Pod on a disappeared child still blocks DB destruction.
-	secRequeue, secErr := r.cleanupOrphanedChildSharedDBSecrets(baseTDCtx, pg, nil)
+	// Run the sweep under its own bounded deadline so it does not consume provider teardown budget.
+	sweepCtx, cancelSweep := context.WithTimeout(ctx, 20*time.Second)
+	secRequeue, secErr := r.cleanupOrphanedChildSharedDBSecrets(sweepCtx, pg, nil)
+	cancelSweep()
 	if secErr != nil {
 		return false, secErr
 	}
@@ -1366,6 +1400,9 @@ func (r *PreviewGroupReconciler) teardownGroupDatabase(ctx context.Context, pg *
 	if !hasDedicatedGroupDatabase(pg) && !hasPinned {
 		return false, nil
 	}
+
+	baseTDCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
 
 	anchorNS := resolveGroupDatabaseAnchorNamespace(pg)
 	anchorEnv := r.buildGroupDatabaseAnchor(pg, anchorNS)
@@ -1477,7 +1514,13 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 	}
 	scans := []targetScan{{client: r.Client}}
 	seenTargets := map[string]int{}
+	if hubUID := probeClusterUID(ctx, r.Client); hubUID != "" {
+		seenTargets["cluster:"+hubUID] = 0
+	}
 	remoteScanKey := func(target *multicluster.Target, ns string, ref *divergeiov1alpha1.ClusterTargetRef) string {
+		if cUID := probeClusterUID(ctx, target.Client); cUID != "" {
+			return "cluster:" + cUID
+		}
 		if target.Client != nil {
 			v := reflect.ValueOf(target.Client)
 			switch v.Kind() {
@@ -1762,32 +1805,99 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 	}
 	requeueNeeded := len(deferredKeepSecrets) > 0
 	prunableKeys := make(map[string]bool)
-	scanGroupClusterOK := make([]bool, len(scans))
-	scanGroupNSOK := make([]map[string]bool, len(scans))
-	scanTakeoverClusterOK := make([]bool, len(scans))
-	scanTakeoverNSOK := make([]map[string]bool, len(scans))
+
+	type scanListing struct {
+		secItems          []corev1.Secret
+		groupClusterOK    bool
+		groupNSOK         map[string]bool
+		takeoverItems     []corev1.Secret
+		takeoverClusterOK bool
+		takeoverNSOK      map[string]bool
+	}
+	listings := make([]scanListing, len(scans))
+	protectedSecretUIDs := make(map[types.UID]bool)
+	deferredProtectedUIDs := make(map[types.UID]bool)
+	liveChildLegacyUIDs := make(map[types.UID]bool)
+	for scanIdx, scan := range scans {
+		secItems, groupClusterOK, groupNSOK := listSecretsWithFallback(scan, matchLabels, "shared DB Secrets")
+		takeoverItems, takeoverClusterOK, takeoverNSOK := listSecretsWithFallback(scan, takeoverMatchLabels, "legacy takeover DB Secrets")
+		listings[scanIdx] = scanListing{
+			secItems:          secItems,
+			groupClusterOK:    groupClusterOK,
+			groupNSOK:         groupNSOK,
+			takeoverItems:     takeoverItems,
+			takeoverClusterOK: takeoverClusterOK,
+			takeoverNSOK:      takeoverNSOK,
+		}
+		for i := range secItems {
+			sec := &secItems[i]
+			if sec.UID == "" {
+				continue
+			}
+			tsKey := targetSecretKey{scanIdx: scanIdx, ns: sec.Namespace, name: sec.Name}
+			if keepSecrets[tsKey] {
+				protectedSecretUIDs[sec.UID] = true
+				if deferredKeepSecrets[tsKey] {
+					deferredProtectedUIDs[sec.UID] = true
+				}
+			}
+		}
+		for i := range takeoverItems {
+			sec := &takeoverItems[i]
+			if sec.UID == "" {
+				continue
+			}
+			tsKey := targetSecretKey{scanIdx: scanIdx, ns: sec.Namespace, name: sec.Name}
+			if keepSecrets[tsKey] {
+				protectedSecretUIDs[sec.UID] = true
+				if deferredKeepSecrets[tsKey] {
+					deferredProtectedUIDs[sec.UID] = true
+				}
+			}
+			if liveChildLegacySecrets[tsKey] {
+				liveChildLegacyUIDs[sec.UID] = true
+			}
+		}
+	}
+	unlistedKeepSecrets := make(map[string]bool)
+	unlistedDeferredKeepSecrets := make(map[string]bool)
+	for k := range keepSecrets {
+		if k.scanIdx < 0 || k.scanIdx >= len(listings) {
+			continue
+		}
+		groupOK := listings[k.scanIdx].groupClusterOK || listings[k.scanIdx].groupNSOK[k.ns]
+		takeoverOK := listings[k.scanIdx].takeoverClusterOK || listings[k.scanIdx].takeoverNSOK[k.ns]
+		if !groupOK || !takeoverOK {
+			secKey := k.ns + "/" + k.name
+			unlistedKeepSecrets[secKey] = true
+			if deferredKeepSecrets[k] {
+				unlistedDeferredKeepSecrets[secKey] = true
+			}
+		}
+	}
+
 	scanRemainingSecrets := make([]map[string]bool, len(scans))
 	for scanIdx, scan := range scans {
 		remainingNS := make(map[string]bool)
 		remainingSecrets := make(map[string]bool)
 		handledGroupKeys := make(map[string]bool)
+		listing := &listings[scanIdx]
 
-		secItems, groupClusterOK, groupNSOK := listSecretsWithFallback(scan, matchLabels, "shared DB Secrets")
-		scanGroupClusterOK[scanIdx] = groupClusterOK
-		scanGroupNSOK[scanIdx] = groupNSOK
 		scanRemainingSecrets[scanIdx] = remainingSecrets
-		for i := range secItems {
-			sec := &secItems[i]
+		for i := range listing.secItems {
+			sec := &listing.secItems[i]
 			if !isGroupOwnedSharedDBSecret(sec, pg.Name) {
 				continue
 			}
 			secKey := sec.Namespace + "/" + sec.Name
 			tsKey := targetSecretKey{scanIdx: scanIdx, ns: sec.Namespace, name: sec.Name}
 			handledGroupKeys[secKey] = true
-			if keepSecrets[tsKey] {
+			isKept := keepSecrets[tsKey] || (sec.UID != "" && protectedSecretUIDs[sec.UID]) || unlistedKeepSecrets[secKey]
+			isDeferred := deferredKeepSecrets[tsKey] || (sec.UID != "" && deferredProtectedUIDs[sec.UID]) || unlistedDeferredKeepSecrets[secKey]
+			if isKept {
 				remainingNS[sec.Namespace] = true
 				remainingSecrets[secKey] = true
-				if deferredKeepSecrets[tsKey] {
+				if isDeferred {
 					requeueNeeded = true
 				}
 				continue
@@ -1834,35 +1944,35 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 
 		// Independently inspect legacy takeover drain records even when the child Environment is gone,
 		// holding DB teardown while tracked Pods still run without deleting the per-service Secret.
-		takeoverItems, takeoverClusterOK, takeoverNSOK := listSecretsWithFallback(scan, takeoverMatchLabels, "legacy takeover DB Secrets")
-		scanTakeoverClusterOK[scanIdx] = takeoverClusterOK
-		scanTakeoverNSOK[scanIdx] = takeoverNSOK
 		seenTakeoverKeys := make(map[string]bool)
-		for i := range takeoverItems {
-			sec := &takeoverItems[i]
+		for i := range listing.takeoverItems {
+			sec := &listing.takeoverItems[i]
 			secKey := sec.Namespace + "/" + sec.Name
 			tsKey := targetSecretKey{scanIdx: scanIdx, ns: sec.Namespace, name: sec.Name}
 			if seenTakeoverKeys[secKey] || handledGroupKeys[secKey] || isGroupOwnedSharedDBSecret(sec, pg.Name) {
 				continue
 			}
 			seenTakeoverKeys[secKey] = true
-			if keepSecrets[tsKey] {
+			isKept := keepSecrets[tsKey] || (sec.UID != "" && protectedSecretUIDs[sec.UID]) || unlistedKeepSecrets[secKey]
+			isDeferred := deferredKeepSecrets[tsKey] || (sec.UID != "" && deferredProtectedUIDs[sec.UID]) || unlistedDeferredKeepSecrets[secKey]
+			if isKept {
 				remainingNS[sec.Namespace] = true
 				remainingSecrets[secKey] = true
-				if deferredKeepSecrets[tsKey] {
+				if isDeferred {
 					requeueNeeded = true
 				}
 				continue
 			}
+			hasLiveChild := liveChildLegacySecrets[tsKey] || (sec.UID != "" && liveChildLegacyUIDs[sec.UID])
 			val := strings.TrimSpace(sec.Annotations[annotationLegacyGroupDBDraining])
 			if val == legacyGroupDBDrainingPending {
-				if liveChildLegacySecrets[tsKey] {
+				if hasLiveChild {
 					remainingNS[sec.Namespace] = true
 					remainingSecrets[secKey] = true
 					requeueNeeded = true
 					continue
 				}
-				inUse, checkErr := namespaceWorkloadsStillUseSecret(ctx, scan.client, sec.Namespace, "", []string{sec.Name}, false, nil, "")
+				inUse, checkErr := namespacePodsStillUseSecret(ctx, scan.client, sec.Namespace, sec.Name)
 				if checkErr != nil {
 					remainingNS[sec.Namespace] = true
 					remainingSecrets[secKey] = true
@@ -1931,8 +2041,8 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 		}
 
 		for _, rt := range scan.recordedInactive {
-			groupOK := groupClusterOK || groupNSOK[rt.ns]
-			takeoverOK := takeoverClusterOK || takeoverNSOK[rt.ns]
+			groupOK := listing.groupClusterOK || listing.groupNSOK[rt.ns]
+			takeoverOK := listing.takeoverClusterOK || listing.takeoverNSOK[rt.ns]
 			if groupOK && takeoverOK && !remainingNS[rt.ns] && !nonPrunableKeys[rt.key] {
 				prunableKeys[rt.key] = true
 			}
@@ -1958,8 +2068,8 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 		legacySecName := legacySharedGroupDBSecretName(child.Name)
 		canClear := true
 		for _, ns := range checkNS {
-			groupOK := scanGroupClusterOK[scanIdx] || scanGroupNSOK[scanIdx][ns]
-			takeoverOK := scanTakeoverClusterOK[scanIdx] || scanTakeoverNSOK[scanIdx][ns]
+			groupOK := listings[scanIdx].groupClusterOK || listings[scanIdx].groupNSOK[ns]
+			takeoverOK := listings[scanIdx].takeoverClusterOK || listings[scanIdx].takeoverNSOK[ns]
 			if !groupOK || !takeoverOK {
 				canClear = false
 				break

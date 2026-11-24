@@ -294,7 +294,14 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 //  3. Empty string (no database injection)
 func resolveDBSecret(env *v1alpha1.Environment) string {
 	db := env.Spec.Database
+	connRef := strings.TrimSpace(db.ConnectionRef)
 	providerAnno := strings.TrimSpace(env.Annotations["divergedev.com/database-provider"])
+	// Explicitly shared-group children use their group ConnectionRef even if Status.DatabaseProvider
+	// still reflects an earlier standalone Neon database.
+	if connRef != "" && (env.Annotations["divergedev.com/shared-group-db"] == "true" ||
+		(strings.EqualFold(strings.TrimSpace(db.Mode), "shared") && providerAnno != "neon")) {
+		return connRef
+	}
 	isNeon := db.Mode == "neon" || providerAnno == "neon" || strings.TrimSpace(env.Status.DatabaseProvider) == "neon"
 
 	// For Neon CoW branching, connectionRef holds the hub-side Neon API credentials Secret,
@@ -307,7 +314,7 @@ func resolveDBSecret(env *v1alpha1.Environment) string {
 	}
 
 	// Primary path: user-provided connection secret
-	if connRef := strings.TrimSpace(db.ConnectionRef); connRef != "" {
+	if connRef != "" {
 		return connRef
 	}
 

@@ -204,10 +204,16 @@ func TestGitLabPreviewGroupNotifier_RecoversExistingNoteByMarker(t *testing.T) {
 		methods = append(methods, r.Method)
 		paths = append(paths, r.URL.String())
 		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v4/user" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id": 99, "username": "diverge-bot"}`))
+			return
+		}
 		if r.Method == http.MethodGet {
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
-				{"id": 9001, "body": "prior note\n\n" + marker},
+				{"id": 9999, "body": "human quoted\n\n" + marker, "author": map[string]interface{}{"id": 500, "username": "alice"}},
+				{"id": 9001, "body": "prior note\n\n" + marker, "author": map[string]interface{}{"id": 99, "username": "diverge-bot"}},
 			})
 			return
 		}
@@ -220,13 +226,126 @@ func TestGitLabPreviewGroupNotifier_RecoversExistingNoteByMarker(t *testing.T) {
 	if err := n.PostGroupReady(context.Background(), pg); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if len(methods) != 2 || methods[0] != http.MethodGet || methods[1] != http.MethodPut {
-		t.Fatalf("expected [GET PUT], got %v", methods)
+	if len(methods) != 3 || methods[0] != http.MethodGet || methods[1] != http.MethodGet || methods[2] != http.MethodPut {
+		t.Fatalf("expected [GET GET PUT], got %v", methods)
 	}
-	if paths[1] != "/api/v4/projects/owner%2Frepo/merge_requests/42/notes/9001" {
-		t.Fatalf("unexpected note update path: %s", paths[1])
+	if paths[2] != "/api/v4/projects/owner%2Frepo/merge_requests/42/notes/9001" {
+		t.Fatalf("unexpected note update path: %s", paths[2])
 	}
 	if pg.Status.CommentID != 9001 {
 		t.Fatalf("expected recovered CommentID 9001, got %d", pg.Status.CommentID)
+	}
+}
+
+func TestGitLabPreviewGroupNotifier_IgnoresHumanQuotedMarkerAndReusesLearnedAuthor(t *testing.T) {
+	pg := &v1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "pg-learned-author"},
+		Spec: v1alpha1.PreviewGroupSpec{
+			Source: v1alpha1.EnvironmentSource{
+				Provider: "gitlab",
+				Project:  "owner/repo",
+				MR:       42,
+			},
+		},
+	}
+	marker := previewGroupCommentMarker(pg)
+	allowUserCall := true
+	notesList := []map[string]interface{}{
+		{"id": 9999, "body": "human quoted\n\n" + marker, "author": map[string]interface{}{"id": 500, "username": "alice"}},
+	}
+	var methods []string
+	var paths []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method)
+		paths = append(paths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v4/user" {
+			if !allowUserCall {
+				t.Fatalf("unexpected /api/v4/user request after author identity was learned")
+			}
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(notesList)
+			return
+		}
+		if r.Method == http.MethodPost {
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id": 9001, "author": {"id": 99, "username": "diverge-bot"}}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id": 9001}`))
+	}))
+	defer ts.Close()
+
+	n := NewGitLabPreviewGroupNotifier(ts.URL, "test-token")
+	if err := n.PostGroupCreated(context.Background(), pg); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if len(methods) != 2 || methods[0] != http.MethodGet || methods[1] != http.MethodPost {
+		t.Fatalf("expected [GET POST], got %v", methods)
+	}
+	if pg.Status.CommentID != 9001 {
+		t.Fatalf("expected CommentID 9001, got %d", pg.Status.CommentID)
+	}
+
+	allowUserCall = false
+	pg.Status.CommentID = 0
+	notesList = append([]map[string]interface{}{
+		{"id": 9001, "body": "created\n\n" + marker, "author": map[string]interface{}{"id": 99, "username": "diverge-bot"}},
+	}, notesList...)
+	methods = nil
+	paths = nil
+
+	if err := n.PostGroupReady(context.Background(), pg); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if len(methods) != 2 || methods[0] != http.MethodGet || methods[1] != http.MethodPut {
+		t.Fatalf("expected [GET PUT], got %v (%v)", methods, paths)
+	}
+	if pg.Status.CommentID != 9001 {
+		t.Fatalf("expected recovered CommentID 9001, got %d", pg.Status.CommentID)
+	}
+}
+
+func TestGitLabPreviewGroupNotifier_RecoveredIDStaysProvisionalOnPutFailure(t *testing.T) {
+	pg := &v1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "pg-provisional"},
+		Spec: v1alpha1.PreviewGroupSpec{
+			Source: v1alpha1.EnvironmentSource{
+				Provider: "gitlab",
+				Project:  "owner/repo",
+				MR:       42,
+			},
+		},
+	}
+	marker := previewGroupCommentMarker(pg)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v4/user" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id": 99, "username": "diverge-bot"}`))
+			return
+		}
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
+				{"id": 9001, "body": marker, "author": map[string]interface{}{"id": 99, "username": "diverge-bot"}},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	n := NewGitLabPreviewGroupNotifier(ts.URL, "test-token")
+	if err := n.PostGroupReady(context.Background(), pg); err == nil {
+		t.Fatalf("expected PUT error, got nil")
+	}
+	if pg.Status.CommentID != 0 {
+		t.Fatalf("recovered note ID must stay provisional until PUT succeeds, got %d", pg.Status.CommentID)
 	}
 }
