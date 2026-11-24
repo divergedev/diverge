@@ -493,7 +493,10 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	// Delete orphaned Environments (services removed from spec)
-	orphanCleanupErr := r.deleteOrphanedEnvironments(ctx, &pg, desiredEnvNames)
+	orphanCleanupRequeue, orphanCleanupErr := r.deleteOrphanedEnvironments(ctx, &pg, desiredEnvNames)
+	if orphanCleanupRequeue && (shortRequeue == 0 || 3*time.Second < shortRequeue) {
+		shortRequeue = 3 * time.Second
+	}
 	if orphanCleanupErr != nil {
 		logger.Error(orphanCleanupErr, "failed to delete orphaned Environments")
 	}
@@ -1004,12 +1007,12 @@ func (r *PreviewGroupReconciler) propagateForceTeardownToChild(ctx context.Conte
 }
 
 // deleteOrphanedEnvironments removes child Environments that are no longer in the spec.
-func (r *PreviewGroupReconciler) deleteOrphanedEnvironments(ctx context.Context, pg *divergeiov1alpha1.PreviewGroup, desired map[string]bool) error {
+func (r *PreviewGroupReconciler) deleteOrphanedEnvironments(ctx context.Context, pg *divergeiov1alpha1.PreviewGroup, desired map[string]bool) (bool, error) {
 	logger := log.FromContext(ctx)
 
 	children, err := r.listChildEnvironments(ctx, pg)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	var errs []error
@@ -1055,12 +1058,15 @@ func (r *PreviewGroupReconciler) deleteOrphanedEnvironments(ctx context.Context,
 	hasPinned := pg != nil && pg.Annotations != nil &&
 		(strings.TrimSpace(pg.Annotations[annotationGroupDBNamespace]) != "" ||
 			strings.TrimSpace(pg.Annotations[annotationGroupDBProvider]) != "")
+	secRequeue := false
 	if hasDedicatedGroupDatabase(pg) || hasPinned {
-		if secErr := r.cleanupOrphanedChildSharedDBSecrets(ctx, pg, desired); secErr != nil {
+		var secErr error
+		secRequeue, secErr = r.cleanupOrphanedChildSharedDBSecrets(ctx, pg, desired)
+		if secErr != nil {
 			errs = append(errs, secErr)
 		}
 	}
-	return errors.Join(errs...)
+	return secRequeue, errors.Join(errs...)
 }
 
 // derivePreviewGroupPhase computes the aggregate phase from per-service statuses.

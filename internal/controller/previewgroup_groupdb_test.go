@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -989,4 +990,266 @@ func TestEnvironmentReconciler_FailedDeployDoesNotAdvanceObservedGeneration(t *t
 	assert.Equal(t, metav1.ConditionTrue, svcReady.Status)
 	assert.Equal(t, int64(2), svcReady.ObservedGeneration)
 	assert.False(t, childStillUsesSharedDBSecret(&updated, "diverge-db-env-deploy-guard-env"))
+}
+
+func TestSharedDBTeardownWaitsForRolloutAndOldPods(t *testing.T) {
+	ctx := context.Background()
+	s := runtime.NewScheme()
+	require.NoError(t, divergeiov1alpha1.AddToScheme(s))
+	require.NoError(t, corev1.AddToScheme(s))
+	require.NoError(t, appsv1.AddToScheme(s))
+	require.NoError(t, batchv1.AddToScheme(s))
+
+	childName := childEnvironmentName("pg-rollout-guard", "api")
+	secName := sanitizeK8sName("diverge-db-env-"+childName, childName, 63)
+	spokeRef := &divergeiov1alpha1.ClusterTargetRef{
+		Name:                "spoke-a",
+		KubeconfigSecretRef: &divergeiov1alpha1.SecretRef{Name: "kubeconfig"},
+	}
+
+	child := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        childName,
+			Namespace:   "backend",
+			Generation:  3,
+			Labels:      map[string]string{labelPreviewGroup: "pg-rollout-guard", labelManagedBy: "diverge-previewgroup"},
+			Annotations: map[string]string{},
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Deploy: divergeiov1alpha1.EnvironmentDeploy{
+				Namespace:  "same",
+				ClusterRef: spokeRef,
+			},
+			Database: divergeiov1alpha1.EnvironmentDatabase{Mode: "fresh"},
+		},
+		Status: divergeiov1alpha1.EnvironmentStatus{
+			ObservedGeneration: 3,
+			Phase:              divergeiov1alpha1.PhaseRunning,
+			Conditions: []metav1.Condition{{
+				Type:               "ServicesReady",
+				Status:             metav1.ConditionTrue,
+				ObservedGeneration: 3,
+				Reason:             "ServicesDeployed",
+				Message:            "applied",
+			}},
+		},
+	}
+	pg := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "pg-rollout-guard",
+			Finalizers: []string{previewGroupFinalizer},
+			Annotations: map[string]string{
+				annotationGroupDBNamespace: "default",
+			},
+		},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			ClusterRef: spokeRef,
+			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{Name: "api", Namespace: "backend", Mode: divergeiov1alpha1.ServiceModeImage, Image: "img:2"},
+			},
+		},
+	}
+
+	rollout := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "argoproj.io/v1alpha1",
+			"kind":       "Rollout",
+			"metadata": map[string]interface{}{
+				"name":       childName,
+				"namespace":  "backend",
+				"generation": int64(2),
+				"labels": map[string]interface{}{
+					"divergedev.com/environment": childName,
+				},
+			},
+			"spec": map[string]interface{}{
+				"replicas": int64(2),
+			},
+			"status": map[string]interface{}{
+				"observedGeneration": "2",
+				"phase":              "Progressing",
+				"stableRS":           "old-rs",
+				"currentPodHash":     "new-hash",
+				"replicas":           int64(2),
+				"updatedReplicas":    int64(1),
+			},
+		},
+	}
+
+	sec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secName,
+			Namespace: "backend",
+			Labels: map[string]string{
+				labelPreviewGroup:           "pg-rollout-guard",
+				"divergedev.com/managed-by": "diverge",
+			},
+		},
+	}
+
+	spokeBackendClient := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&corev1.Pod{}, &appsv1.Deployment{}).WithObjects(sec, rollout).Build()
+	spokeAnchorClient := fake.NewClientBuilder().WithScheme(s).Build()
+	hubClient := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&divergeiov1alpha1.PreviewGroup{}).WithObjects(pg, child).Build()
+	dbProv := &countingGroupDBProvider{dsn: "postgres://u:p@db-rw.default.svc/app"}
+	r := &PreviewGroupReconciler{
+		Client:           hubClient,
+		Scheme:           s,
+		Recorder:         events.NewRecorder(k8sevents.NewFakeRecorder(10)),
+		DatabaseProvider: dbProv,
+		ClusterClients: &nsAwareSpokeResolver{
+			byNamespace: map[string]*multicluster.Target{
+				"backend": {Name: "spoke-a", IsRemote: true, Client: spokeBackendClient},
+			},
+			fallback: &multicluster.Target{Name: "spoke-a", IsRemote: true, Client: spokeAnchorClient},
+		},
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "pg-rollout-guard"}}
+
+	// 1. Even with ServicesReady=True and ObservedGeneration==Generation, an in-progress Rollout delays teardown & preserves Secret
+	res, err := r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.Greater(t, res.RequeueAfter, time.Duration(0))
+	assert.Zero(t, dbProv.teardowns.Load(), "must not tear down shared DB while Argo Rollout is still progressing")
+	var keptSec corev1.Secret
+	require.NoError(t, spokeBackendClient.Get(ctx, types.NamespacedName{Name: secName, Namespace: "backend"}, &keptSec))
+
+	// 2. Even after Rollout becomes Healthy, a non-terminal old Pod referencing the Secret delays teardown
+	require.NoError(t, spokeBackendClient.Get(ctx, types.NamespacedName{Name: childName, Namespace: "backend"}, rollout))
+	require.NoError(t, unstructured.SetNestedField(rollout.Object, "Healthy", "status", "phase"))
+	require.NoError(t, unstructured.SetNestedField(rollout.Object, "new-hash", "status", "stableRS"))
+	require.NoError(t, unstructured.SetNestedField(rollout.Object, int64(2), "status", "updatedReplicas"))
+	require.NoError(t, spokeBackendClient.Update(ctx, rollout))
+
+	oldPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      childName + "-old-pod",
+			Namespace: "backend",
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{
+				Name:  "api",
+				Image: "img:1",
+				EnvFrom: []corev1.EnvFromSource{{
+					SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: secName}},
+				}},
+			}},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	require.NoError(t, spokeBackendClient.Create(ctx, oldPod))
+
+	res, err = r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.Greater(t, res.RequeueAfter, time.Duration(0))
+	assert.Zero(t, dbProv.teardowns.Load(), "must not tear down shared DB while an old Running Pod still mounts its Secret")
+	require.NoError(t, spokeBackendClient.Get(ctx, types.NamespacedName{Name: secName, Namespace: "backend"}, &keptSec))
+
+	// 3. Once the old Pod terminates (PodSucceeded) and Rollout is Healthy, teardown deletes the Secret and clears pinned annotations
+	require.NoError(t, spokeBackendClient.Get(ctx, types.NamespacedName{Name: oldPod.Name, Namespace: "backend"}, oldPod))
+	oldPod.Status.Phase = corev1.PodSucceeded
+	require.NoError(t, spokeBackendClient.Status().Update(ctx, oldPod))
+
+	_, err = r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), dbProv.teardowns.Load())
+	err = spokeBackendClient.Get(ctx, types.NamespacedName{Name: secName, Namespace: "backend"}, &keptSec)
+	assert.True(t, apierrors.IsNotFound(err))
+	var updatedPG divergeiov1alpha1.PreviewGroup
+	require.NoError(t, hubClient.Get(ctx, types.NamespacedName{Name: "pg-rollout-guard"}, &updatedPG))
+	assert.Empty(t, updatedPG.Annotations[annotationGroupDBNamespace])
+	assert.Empty(t, updatedPG.Annotations[annotationGroupDBProvider])
+
+	// 4. Per-service opt-out while group DB stays active: rolling Deployment / live Pod protects Secret and signals requeue
+	pgActive := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "pg-active-optout",
+			Annotations: map[string]string{annotationGroupDBNamespace: "default", annotationGroupDBProvider: "cnpg"},
+		},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			ClusterRef: spokeRef,
+			Database:   &divergeiov1alpha1.EnvironmentDatabase{Mode: "fresh"},
+			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{Name: "api", Namespace: "backend", Mode: divergeiov1alpha1.ServiceModeImage, Image: "img:2", Database: &divergeiov1alpha1.EnvironmentDatabase{Mode: "fresh"}},
+				{Name: "web", Namespace: "default", Mode: divergeiov1alpha1.ServiceModeImage, Image: "web:1"},
+			},
+		},
+	}
+	optOutName := childEnvironmentName("pg-active-optout", "api")
+	optOutSecName := sanitizeK8sName("diverge-db-env-"+optOutName, optOutName, 63)
+	optOutChild := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       optOutName,
+			Namespace:  "backend",
+			Generation: 2,
+			Labels:     map[string]string{labelPreviewGroup: "pg-active-optout", labelManagedBy: "diverge-previewgroup"},
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Deploy:   divergeiov1alpha1.EnvironmentDeploy{Namespace: "same", ClusterRef: spokeRef},
+			Database: divergeiov1alpha1.EnvironmentDatabase{Mode: "fresh"},
+		},
+		Status: divergeiov1alpha1.EnvironmentStatus{
+			ObservedGeneration: 2,
+			Phase:              divergeiov1alpha1.PhaseRunning,
+			Conditions: []metav1.Condition{{
+				Type:               "ServicesReady",
+				Status:             metav1.ConditionTrue,
+				ObservedGeneration: 2,
+				Reason:             "ServicesDeployed",
+			}},
+		},
+	}
+	optOutSec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      optOutSecName,
+			Namespace: "backend",
+			Labels:    map[string]string{labelPreviewGroup: "pg-active-optout", "divergedev.com/managed-by": "diverge"},
+		},
+	}
+	rollingReplicas := int32(2)
+	rollingDep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       optOutName,
+			Namespace:  "backend",
+			Generation: 2,
+			Labels:     map[string]string{"divergedev.com/environment": optOutName},
+		},
+		Spec: appsv1.DeploymentSpec{Replicas: &rollingReplicas},
+		Status: appsv1.DeploymentStatus{
+			ObservedGeneration: 2,
+			Replicas:           2,
+			UpdatedReplicas:    1,
+		},
+	}
+	spokeOptOutClient := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&corev1.Pod{}, &appsv1.Deployment{}).WithObjects(optOutSec, rollingDep).Build()
+	hubOptOut := fake.NewClientBuilder().WithScheme(s).WithObjects(pgActive, optOutChild).Build()
+	rOptOut := &PreviewGroupReconciler{
+		Client: hubOptOut,
+		Scheme: s,
+		ClusterClients: &nsAwareSpokeResolver{
+			byNamespace: map[string]*multicluster.Target{
+				"backend": {Name: "spoke-a", IsRemote: true, Client: spokeOptOutClient},
+			},
+			fallback: &multicluster.Target{Name: "spoke-a", IsRemote: true, Client: spokeAnchorClient},
+		},
+	}
+	desired := map[string]bool{
+		"backend/" + optOutName: true,
+		"default/" + childEnvironmentName("pg-active-optout", "web"): true,
+	}
+
+	requeue, cErr := rOptOut.cleanupOrphanedChildSharedDBSecrets(ctx, pgActive, desired)
+	require.NoError(t, cErr)
+	assert.True(t, requeue, "must request requeue while opted-out child Deployment still has un-updated replicas")
+	require.NoError(t, spokeOptOutClient.Get(ctx, types.NamespacedName{Name: optOutSecName, Namespace: "backend"}, &keptSec))
+
+	require.NoError(t, spokeOptOutClient.Get(ctx, types.NamespacedName{Name: optOutName, Namespace: "backend"}, rollingDep))
+	rollingDep.Status.UpdatedReplicas = 2
+	require.NoError(t, spokeOptOutClient.Status().Update(ctx, rollingDep))
+
+	requeue, cErr = rOptOut.cleanupOrphanedChildSharedDBSecrets(ctx, pgActive, desired)
+	require.NoError(t, cErr)
+	assert.False(t, requeue)
+	err = spokeOptOutClient.Get(ctx, types.NamespacedName{Name: optOutSecName, Namespace: "backend"}, &keptSec)
+	assert.True(t, apierrors.IsNotFound(err))
 }

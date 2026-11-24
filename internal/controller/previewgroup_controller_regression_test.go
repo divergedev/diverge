@@ -109,7 +109,7 @@ func TestDeleteOrphanedEnvironments_CleansUp(t *testing.T) {
 		"env-2": true,
 	}
 
-	err := r.deleteOrphanedEnvironments(context.Background(), pg, desired)
+	_, err := r.deleteOrphanedEnvironments(context.Background(), pg, desired)
 	require.NoError(t, err)
 
 	children, err := r.listChildEnvironments(context.Background(), pg)

@@ -9,7 +9,8 @@ import { AuthProvider } from '@/hooks/useAuth'
 import { MemoryRouter } from 'react-router-dom'
 import { render as rtlRender } from '@testing-library/react'
 import { previewGroupClient } from '@/api/client'
-import { queryKeys } from '@/api/queries'
+import { queryKeys, useListPreviewGroups } from '@/api/queries'
+import { Code, ConnectError } from '@connectrpc/connect'
 import { useWatchPreviewGroups } from '@/hooks/useWatch'
 import { WatchEventType } from '@/api/gen/diverge/v1alpha1/types_pb'
 
@@ -678,6 +679,159 @@ describe('PreviewGroupDetail', () => {
       unmount?.()
       spy.mockRestore()
       localStorage.removeItem('diverge:token')
+    }
+  })
+
+  it('useWatchPreviewGroups reconciles active list and detail queries on stale DELETED', async () => {
+    const scenarios = ['absent', 'replaced'] as const
+    for (const scenario of scenarios) {
+      localStorage.setItem('diverge:token', 'test-token')
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, staleTime: 60_000 } },
+      })
+      const baseGroup = {
+        ...mockPreviewGroup.previewGroup,
+        resourceVersion: '20',
+      }
+      queryClient.setQueryData(queryKeys.previewGroups('default'), {
+        previewGroups: [baseGroup],
+      })
+      queryClient.setQueryData(queryKeys.previewGroup('default', 'pg-checkout'), {
+        previewGroup: baseGroup,
+      })
+
+      let releaseDelete!: () => void
+      const deleteGate = new Promise<void>((resolve) => {
+        releaseDelete = resolve
+      })
+
+      const replacementGroup = {
+        ...mockPreviewGroup.previewGroup,
+        resourceVersion: '25',
+        spec: {
+          ...mockPreviewGroup.previewGroup.spec,
+          services: [
+            ...mockPreviewGroup.previewGroup.spec.services,
+            { name: 'billing', mode: 'full' },
+          ],
+        },
+        status: {
+          ...mockPreviewGroup.previewGroup.status,
+          serviceCount: 3,
+          services: [
+            ...mockPreviewGroup.previewGroup.status.services,
+            {
+              name: 'billing',
+              environmentName: 'pg-checkout-billing',
+              namespace: 'default',
+              phase: 'Ready',
+              url: 'https://billing.preview.example.com',
+            },
+          ],
+        },
+      }
+
+      const listSpy = vi
+        .spyOn(previewGroupClient, 'listPreviewGroups')
+        .mockImplementation(async () =>
+          scenario === 'absent'
+            ? ({ previewGroups: [] } as never)
+            : ({ previewGroups: [replacementGroup] } as never),
+        )
+      const getSpy = vi
+        .spyOn(previewGroupClient, 'getPreviewGroup')
+        .mockImplementation(async () => {
+          if (scenario === 'absent') {
+            throw new ConnectError('not found', Code.NotFound)
+          }
+          return { previewGroup: replacementGroup } as never
+        })
+      const watchSpy = vi
+        .spyOn(previewGroupClient, 'watchPreviewGroups')
+        .mockImplementation(async function* (_req, opts) {
+          await deleteGate
+          yield {
+            type: WatchEventType.DELETED,
+            resourceVersion: '18',
+            previewGroup: {
+              name: 'pg-checkout',
+              namespace: 'default',
+              resourceVersion: '18',
+              spec: { services: [] },
+            } as never,
+          } as never
+          await new Promise<void>((resolve) => {
+            if (opts?.signal?.aborted) {
+              resolve()
+              return
+            }
+            opts?.signal?.addEventListener('abort', () => resolve(), { once: true })
+          })
+        })
+
+      function ActiveReconcileHarness() {
+        useWatchPreviewGroups('default')
+        const listQuery = useListPreviewGroups({ namespace: 'default' })
+        return (
+          <>
+            <ul data-testid="active-pg-list">
+              {(listQuery.data?.previewGroups ?? []).map((p) => (
+                <li key={p.name}>{p.name}</li>
+              ))}
+            </ul>
+            <PreviewGroupDetail />
+          </>
+        )
+      }
+
+      let unmount: (() => void) | undefined
+      try {
+        const rendered = rtlRender(
+          <MemoryRouter>
+            <QueryClientProvider client={queryClient}>
+              <ThemeProvider defaultTheme="dark">
+                <AuthProvider>
+                  <ActiveReconcileHarness />
+                </AuthProvider>
+              </ThemeProvider>
+            </QueryClientProvider>
+          </MemoryRouter>,
+        )
+        unmount = rendered.unmount
+
+        expect(screen.getByTestId('active-pg-list')).toHaveTextContent('pg-checkout')
+        expect(screen.getByRole('heading', { name: 'pg-checkout' })).toBeInTheDocument()
+
+        releaseDelete()
+
+        if (scenario === 'absent') {
+          await waitFor(() => {
+            expect(listSpy).toHaveBeenCalled()
+            expect(getSpy).toHaveBeenCalled()
+            expect(screen.getByTestId('active-pg-list').textContent).toBe('')
+            expect(screen.getByText('Failed to load preview group')).toBeInTheDocument()
+          })
+          expect(screen.queryByRole('heading', { name: 'pg-checkout' })).not.toBeInTheDocument()
+        } else {
+          await waitFor(() => {
+            expect(listSpy).toHaveBeenCalled()
+            expect(getSpy).toHaveBeenCalled()
+            expect(screen.getByText('pg-checkout-billing')).toBeInTheDocument()
+          })
+          expect(screen.getByTestId('active-pg-list')).toHaveTextContent('pg-checkout')
+          expect(screen.getByRole('heading', { name: 'pg-checkout' })).toBeInTheDocument()
+          const updatedList = queryClient.getQueryData<{
+            previewGroups: Array<{ resourceVersion?: string }>
+          }>(queryKeys.previewGroups('default'))
+          expect(updatedList?.previewGroups[0]?.resourceVersion).toBe('25')
+        }
+      } finally {
+        unmount?.()
+        watchSpy.mockRestore()
+        listSpy.mockRestore()
+        getSpy.mockRestore()
+        localStorage.removeItem('diverge:token')
+      }
     }
   })
 })
