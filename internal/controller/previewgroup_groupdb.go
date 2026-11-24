@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -214,7 +215,16 @@ func childStillUsesSharedDBSecret(child *divergeiov1alpha1.Environment, secName 
 	if secName != "" && strings.TrimSpace(child.Spec.Database.ConnectionRef) == secName {
 		return true
 	}
-	return child.Generation > 0 && child.Status.ObservedGeneration < child.Generation
+	if child.Generation > 0 {
+		if child.Status.ObservedGeneration < child.Generation || child.Status.Phase != divergeiov1alpha1.PhaseRunning {
+			return true
+		}
+		servicesReady := meta.FindStatusCondition(child.Status.Conditions, "ServicesReady")
+		if servicesReady == nil || servicesReady.Status != metav1.ConditionTrue || servicesReady.ObservedGeneration < child.Generation {
+			return true
+		}
+	}
+	return false
 }
 
 // reconcileGroupDatabase provisions a single shared database for the PreviewGroup when Spec.Database is configured.
@@ -621,11 +631,38 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 	}
 	scans := []targetScan{{client: r.Client}}
 	seenTargets := map[string]int{}
-	addRemoteScan := func(target *multicluster.Target, ns string) {
+	remoteScanKey := func(target *multicluster.Target, ns string, ref *divergeiov1alpha1.ClusterTargetRef) string {
+		if target.Client != nil {
+			v := reflect.ValueOf(target.Client)
+			switch v.Kind() {
+			case reflect.Pointer, reflect.Map, reflect.Chan, reflect.Func, reflect.UnsafePointer:
+				if p := v.Pointer(); p != 0 {
+					return fmt.Sprintf("ptr:%x", p)
+				}
+			}
+		}
+		if ref != nil && ref.KubeconfigSecretRef != nil {
+			secNS := strings.TrimSpace(ref.KubeconfigSecretRef.Namespace)
+			if secNS == "" {
+				secNS = strings.TrimSpace(ns)
+			}
+			secName := strings.TrimSpace(ref.KubeconfigSecretRef.Name)
+			secKey := strings.TrimSpace(ref.KubeconfigSecretRef.Key)
+			if secKey == "" {
+				secKey = "kubeconfig"
+			}
+			if secName != "" {
+				return fmt.Sprintf("secret:%s/%s/%s", secNS, secName, secKey)
+			}
+		}
+		return "name:" + target.Name
+	}
+	addRemoteScan := func(target *multicluster.Target, ns string, ref *divergeiov1alpha1.ClusterTargetRef) {
 		if target == nil || !target.IsRemote || target.Client == nil {
 			return
 		}
-		if idx, ok := seenTargets[target.Name]; ok {
+		key := remoteScanKey(target, ns, ref)
+		if idx, ok := seenTargets[key]; ok {
 			if ns != "" && !containsString(scans[idx].namespaces, ns) {
 				scans[idx].namespaces = append(scans[idx].namespaces, ns)
 			}
@@ -635,7 +672,7 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 		if ns != "" {
 			nss = []string{ns}
 		}
-		seenTargets[target.Name] = len(scans)
+		seenTargets[key] = len(scans)
 		scans = append(scans, targetScan{client: target.Client, namespaces: nss, isRemote: true})
 	}
 
@@ -652,7 +689,7 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 				errs = append(errs, fmt.Errorf("failed to resolve anchor spoke cluster for shared DB Secret cleanup: %w", tErr))
 			}
 		} else {
-			addRemoteScan(t, anchorNS)
+			addRemoteScan(t, anchorNS, pg.Spec.ClusterRef)
 		}
 	}
 	for _, svc := range pg.Spec.Services {
@@ -674,7 +711,7 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 					errs = append(errs, fmt.Errorf("failed to resolve spoke cluster for service %q shared DB Secret cleanup: %w", svc.Name, tErr))
 				}
 			} else {
-				addRemoteScan(t, svcNS)
+				addRemoteScan(t, svcNS, effClusterRef)
 			}
 		}
 	}
@@ -692,7 +729,7 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 				errs = append(errs, fmt.Errorf("failed to resolve spoke cluster for child %s/%s shared DB Secret cleanup: %w", child.Namespace, child.Name, tErr))
 			}
 		} else {
-			addRemoteScan(t, child.Namespace)
+			addRemoteScan(t, child.Namespace, child.Spec.Deploy.ClusterRef)
 		}
 	}
 

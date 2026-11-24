@@ -590,6 +590,7 @@ describe('PreviewGroupDetail', () => {
       const afterStale = readCached('pg-checkout')
       expect(afterStale?.previewGroup?.resourceVersion).toBe('20')
       expect(afterStale?.previewGroup?.spec?.services).toHaveLength(2)
+      expect(queryClient.getQueryState(queryKeys.previewGroup('', 'pg-checkout'))?.isInvalidated).toBe(true)
 
       releaseNewer()
       await waitFor(() => {
@@ -598,6 +599,81 @@ describe('PreviewGroupDetail', () => {
       const afterNewer = readCached('pg-checkout')
       expect(afterNewer?.previewGroup?.resourceVersion).toBe('25')
       expect(afterNewer?.previewGroup?.spec?.services).toHaveLength(3)
+    } finally {
+      unmount?.()
+      spy.mockRestore()
+      localStorage.removeItem('diverge:token')
+    }
+  })
+
+  it('useWatchPreviewGroups invalidates stale list and detail caches on DELETED', async () => {
+    localStorage.setItem('diverge:token', 'test-token')
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    queryClient.setQueryData(queryKeys.previewGroups(undefined), {
+      previewGroups: [
+        {
+          name: 'pg-checkout',
+          namespace: '',
+          resourceVersion: '20',
+          spec: { services: [{ name: 'api-gateway' }, { name: 'payments' }] },
+        },
+      ],
+    })
+    queryClient.setQueryData(queryKeys.previewGroup('', 'pg-checkout'), {
+      previewGroup: {
+        name: 'pg-checkout',
+        namespace: '',
+        resourceVersion: '20',
+        spec: { services: [{ name: 'api-gateway' }, { name: 'payments' }] },
+      },
+    })
+
+    const spy = vi.spyOn(previewGroupClient, 'watchPreviewGroups').mockImplementation(async function* (_req, opts) {
+      yield {
+        type: WatchEventType.DELETED,
+        resourceVersion: '18',
+        previewGroup: {
+          name: 'pg-checkout',
+          namespace: '',
+          resourceVersion: '18',
+          spec: { services: [] },
+        } as never,
+      } as never
+      await new Promise<void>((resolve) => {
+        if (opts?.signal?.aborted) {
+          resolve()
+          return
+        }
+        opts?.signal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+    })
+
+    function WatchHarness() {
+      useWatchPreviewGroups()
+      return null
+    }
+
+    let unmount: (() => void) | undefined
+    try {
+      const rendered = rtlRender(
+        <QueryClientProvider client={queryClient}>
+          <WatchHarness />
+        </QueryClientProvider>,
+      )
+      unmount = rendered.unmount
+
+      await waitFor(() => {
+        expect(queryClient.getQueryState(queryKeys.previewGroups(undefined))?.isInvalidated).toBe(true)
+        expect(queryClient.getQueryState(queryKeys.previewGroup('', 'pg-checkout'))?.isInvalidated).toBe(true)
+      })
+      const listData = queryClient.getQueryData<{
+        previewGroups: Array<{ name: string; resourceVersion: string }>
+      }>(queryKeys.previewGroups(undefined))
+      expect(listData?.previewGroups.find((p) => p.name === 'pg-checkout')?.resourceVersion).toBe('20')
+      const detailData = queryClient.getQueryData<{
+        previewGroup?: { resourceVersion: string }
+      }>(queryKeys.previewGroup('', 'pg-checkout'))
+      expect(detailData?.previewGroup?.resourceVersion).toBe('20')
     } finally {
       unmount?.()
       spy.mockRestore()

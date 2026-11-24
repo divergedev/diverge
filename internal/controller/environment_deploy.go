@@ -26,11 +26,13 @@ func (r *EnvironmentReconciler) reconcileDeploy(ctx context.Context, env *diverg
 		if driftErr != nil {
 			log.FromContext(ctx).Error(driftErr, "failed to evaluate baseline drift")
 			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
-				Type:    "ServicesReady",
-				Status:  metav1.ConditionFalse,
-				Reason:  "DeployFailed",
-				Message: driftErr.Error(),
+				Type:               "ServicesReady",
+				Status:             metav1.ConditionFalse,
+				ObservedGeneration: env.Generation,
+				Reason:             "DeployFailed",
+				Message:            driftErr.Error(),
 			})
+			env.Status.Phase = derivePhase(env.Status.Conditions)
 			r.notifyFailed(ctx, env, driftErr.Error())
 			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, driftErr, 0)
 			return res, true, retErr
@@ -57,11 +59,13 @@ func (r *EnvironmentReconciler) reconcileDeploy(ctx context.Context, env *diverg
 				delete(env.Annotations, AnnotationBaselineFingerprint)
 			}
 			meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
-				Type:    "ServicesReady",
-				Status:  metav1.ConditionFalse,
-				Reason:  "DeployFailed",
-				Message: err.Error(),
+				Type:               "ServicesReady",
+				Status:             metav1.ConditionFalse,
+				ObservedGeneration: env.Generation,
+				Reason:             "DeployFailed",
+				Message:            err.Error(),
 			})
+			env.Status.Phase = derivePhase(env.Status.Conditions)
 			r.notifyFailed(ctx, env, err.Error())
 			res, retErr := r.updateStatusWithRequeue(ctx, env, statusBase, err, 0)
 			return res, true, retErr
@@ -72,10 +76,11 @@ func (r *EnvironmentReconciler) reconcileDeploy(ctx context.Context, env *diverg
 	}
 
 	meta.SetStatusCondition(&env.Status.Conditions, metav1.Condition{
-		Type:    "ServicesReady",
-		Status:  metav1.ConditionTrue,
-		Reason:  "ServicesDeployed",
-		Message: "Services deployed successfully",
+		Type:               "ServicesReady",
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: env.Generation,
+		Reason:             "ServicesDeployed",
+		Message:            "Services deployed successfully",
 	})
 	if prevFP == "" {
 		if _, _, driftErr := r.reconcileBaselineDrift(ctx, env); driftErr != nil {

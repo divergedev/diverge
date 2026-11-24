@@ -105,6 +105,7 @@ export function useWatchPreviewGroups(namespace?: string) {
             const pg = msg.previewGroup
             if (!pg) continue
 
+            let staleListDelete = false
             qc.setQueryData(
               queryKeys.previewGroups(namespace),
               (old: ListPreviewGroupsResponse | undefined) => {
@@ -114,7 +115,11 @@ export function useWatchPreviewGroups(namespace?: string) {
                   (p: PreviewGroup) => p.name === pg.name && p.namespace === pg.namespace,
                 )
                 if (msg.type === WatchEventType.DELETED) {
-                  if (idx >= 0 && !isStaleEnvironmentRevision(list[idx].resourceVersion, msg.resourceVersion)) {
+                  if (idx >= 0) {
+                    if (isStaleEnvironmentRevision(list[idx].resourceVersion, msg.resourceVersion)) {
+                      staleListDelete = true
+                      return old
+                    }
                     list.splice(idx, 1)
                   }
                 } else {
@@ -130,16 +135,34 @@ export function useWatchPreviewGroups(namespace?: string) {
                 return { ...old, previewGroups: list }
               },
             )
+            if (staleListDelete) {
+              void qc.invalidateQueries({ queryKey: queryKeys.previewGroups(namespace) })
+            }
             if (msg.type === WatchEventType.DELETED) {
               const shouldRemove = (q: { queryKey: readonly unknown[]; state: { data: unknown } }) => {
                 if (q.queryKey[2] !== pg.name) return false
                 const old = q.state.data as GetPreviewGroupResponse | undefined
                 return !isStaleEnvironmentRevision(old?.previewGroup?.resourceVersion, msg.resourceVersion)
               }
+              const isStaleDetailDelete = (q: {
+                queryKey: readonly unknown[]
+                state: { data: unknown }
+              }) => {
+                if (q.queryKey[2] !== pg.name) return false
+                const old = q.state.data as GetPreviewGroupResponse | undefined
+                return (
+                  old?.previewGroup !== undefined &&
+                  isStaleEnvironmentRevision(old.previewGroup.resourceVersion, msg.resourceVersion)
+                )
+              }
               void qc.cancelQueries({ queryKey: ['previewGroup'], predicate: shouldRemove })
               qc.removeQueries({
                 queryKey: ['previewGroup'],
                 predicate: shouldRemove,
+              })
+              void qc.invalidateQueries({
+                queryKey: ['previewGroup'],
+                predicate: isStaleDetailDelete,
               })
             } else {
               const pgRV = pg.resourceVersion?.trim() ?? ''

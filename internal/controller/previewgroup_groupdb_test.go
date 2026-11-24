@@ -12,6 +12,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -803,9 +804,9 @@ func TestPR351_ControllerGroupDBFailurePromotionNonBlockingFailSwitchOffSpokeAnd
 		DatabaseProvider: &countingGroupDBProvider{dsn: "postgres://u:p@db-rw.default.svc/app"},
 		ClusterClients: &nsAwareSpokeResolver{
 			byNamespace: map[string]*multicluster.Target{
-				"backend": {Name: "spoke-backend", IsRemote: true, Client: spokeBackendClient},
+				"backend": {Name: "spoke-a", IsRemote: true, Client: spokeBackendClient},
 			},
-			fallback: &multicluster.Target{Name: "spoke-anchor", IsRemote: true, Client: spokeAnchorClient},
+			fallback: &multicluster.Target{Name: "spoke-a", IsRemote: true, Client: spokeAnchorClient},
 		},
 	}
 
@@ -815,15 +816,58 @@ func TestPR351_ControllerGroupDBFailurePromotionNonBlockingFailSwitchOffSpokeAnd
 	var keptSpokeSec corev1.Secret
 	require.NoError(t, spokeBackendClient.Get(ctx, types.NamespacedName{Name: switchSecName, Namespace: "backend"}, &keptSpokeSec))
 
-	// Workload observes child spec change (ObservedGeneration == Generation) -> next reconcile deletes spoke Secret and clears pinned annotations
+	// Even when ObservedGeneration == Generation, failed deploy or stale ServicesReady must keep spoke Secret
 	require.NoError(t, hubSwitch.Get(ctx, types.NamespacedName{Name: switchChildName, Namespace: "backend"}, switchChild))
 	switchChild.Status.ObservedGeneration = switchChild.Generation
+	switchChild.Status.Phase = divergeiov1alpha1.PhaseFailed
+	switchChild.Status.Conditions = []metav1.Condition{{
+		Type:               "ServicesReady",
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: switchChild.Generation,
+		Reason:             "DeployFailed",
+		Message:            "boom",
+	}}
 	require.NoError(t, hubSwitch.Update(ctx, switchChild))
 
 	_, err = rSwitch.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "pg-switch"}})
 	require.NoError(t, err)
 	err = spokeBackendClient.Get(ctx, types.NamespacedName{Name: switchSecName, Namespace: "backend"}, &keptSpokeSec)
-	assert.True(t, apierrors.IsNotFound(err), "shared DB Secret on svcNS spoke must be deleted after child workload observes switch-off")
+	require.NoError(t, err, "shared DB Secret must be preserved while replacement deploy is failing at current generation")
+
+	// PhaseRunning alone with stale ServicesReady.ObservedGeneration (< Generation) must still preserve Secret
+	require.NoError(t, hubSwitch.Get(ctx, types.NamespacedName{Name: switchChildName, Namespace: "backend"}, switchChild))
+	switchChild.Status.Phase = divergeiov1alpha1.PhaseRunning
+	switchChild.Status.Conditions = []metav1.Condition{{
+		Type:               "ServicesReady",
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: switchChild.Generation - 1,
+		Reason:             "ServicesDeployed",
+		Message:            "stale generation",
+	}}
+	require.NoError(t, hubSwitch.Update(ctx, switchChild))
+
+	_, err = rSwitch.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "pg-switch"}})
+	require.NoError(t, err)
+	err = spokeBackendClient.Get(ctx, types.NamespacedName{Name: switchSecName, Namespace: "backend"}, &keptSpokeSec)
+	require.NoError(t, err, "shared DB Secret must be preserved while ServicesReady.ObservedGeneration lags child.Generation")
+
+	// Workload deploys at current Generation (ObservedGeneration == Generation, PhaseRunning, ServicesReady=True@Gen) -> deletes spoke Secret
+	require.NoError(t, hubSwitch.Get(ctx, types.NamespacedName{Name: switchChildName, Namespace: "backend"}, switchChild))
+	switchChild.Status.ObservedGeneration = switchChild.Generation
+	switchChild.Status.Phase = divergeiov1alpha1.PhaseRunning
+	switchChild.Status.Conditions = []metav1.Condition{{
+		Type:               "ServicesReady",
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: switchChild.Generation,
+		Reason:             "ServicesDeployed",
+		Message:            "ok",
+	}}
+	require.NoError(t, hubSwitch.Update(ctx, switchChild))
+
+	_, err = rSwitch.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "pg-switch"}})
+	require.NoError(t, err)
+	err = spokeBackendClient.Get(ctx, types.NamespacedName{Name: switchSecName, Namespace: "backend"}, &keptSpokeSec)
+	assert.True(t, apierrors.IsNotFound(err), "shared DB Secret on svcNS spoke must be deleted after child workload deploys switch-off")
 	var switchedPG divergeiov1alpha1.PreviewGroup
 	require.NoError(t, hubSwitch.Get(ctx, types.NamespacedName{Name: "pg-switch"}, &switchedPG))
 	assert.Empty(t, switchedPG.Annotations[annotationGroupDBNamespace])
@@ -887,4 +931,62 @@ func TestPR351_ControllerGroupDBFailurePromotionNonBlockingFailSwitchOffSpokeAnd
 	require.NoError(t, cStaleWake.Get(ctx, types.NamespacedName{Name: "pr-88", Namespace: "default"}, &wokenFromStale))
 	assert.Empty(t, wokenFromStale.Annotations[previewgroup.AnnotationAttachedPreviewGroup])
 	assert.Empty(t, wokenFromStale.Annotations[metrics.AnnotationHibernated])
+}
+
+func TestEnvironmentReconciler_FailedDeployDoesNotAdvanceObservedGeneration(t *testing.T) {
+	ctx := context.Background()
+	env := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "deploy-guard-env",
+			Namespace:  "default",
+			Generation: 2,
+			Finalizers: []string{environmentFinalizer},
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Deploy: divergeiov1alpha1.EnvironmentDeploy{
+				Namespace: "create",
+			},
+		},
+		Status: divergeiov1alpha1.EnvironmentStatus{
+			ObservedGeneration: 1,
+			Phase:              divergeiov1alpha1.PhaseRunning,
+			Conditions: []metav1.Condition{{
+				Type:               "ServicesReady",
+				Status:             metav1.ConditionTrue,
+				ObservedGeneration: 1,
+				Reason:             "ServicesDeployed",
+				Message:            "previous gen ready",
+			}},
+		},
+	}
+
+	r, c, dep, _, _ := newTestReconciler(t, env, &pkgdb.DatabaseResult{Ready: true}, "https://guard.example.com")
+	dep.deployErr = errors.New("image pull failed")
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: env.Name, Namespace: env.Namespace}}
+	_, err := r.Reconcile(ctx, req)
+	require.Error(t, err)
+
+	var updated divergeiov1alpha1.Environment
+	require.NoError(t, c.Get(ctx, req.NamespacedName, &updated))
+	assert.Equal(t, int64(1), updated.Status.ObservedGeneration, "failed deploy must not advance ObservedGeneration")
+	assert.Equal(t, divergeiov1alpha1.PhaseFailed, updated.Status.Phase)
+	svcReady := meta.FindStatusCondition(updated.Status.Conditions, "ServicesReady")
+	require.NotNil(t, svcReady)
+	assert.Equal(t, metav1.ConditionFalse, svcReady.Status)
+	assert.Equal(t, int64(2), svcReady.ObservedGeneration)
+	assert.True(t, childStillUsesSharedDBSecret(&updated, "diverge-db-env-deploy-guard-env"))
+
+	dep.deployErr = nil
+	_, err = r.Reconcile(ctx, req)
+	require.NoError(t, err)
+
+	require.NoError(t, c.Get(ctx, req.NamespacedName, &updated))
+	assert.Equal(t, int64(2), updated.Status.ObservedGeneration, "successful deploy must advance ObservedGeneration")
+	assert.Equal(t, divergeiov1alpha1.PhaseRunning, updated.Status.Phase)
+	svcReady = meta.FindStatusCondition(updated.Status.Conditions, "ServicesReady")
+	require.NotNil(t, svcReady)
+	assert.Equal(t, metav1.ConditionTrue, svcReady.Status)
+	assert.Equal(t, int64(2), svcReady.ObservedGeneration)
+	assert.False(t, childStillUsesSharedDBSecret(&updated, "diverge-db-env-deploy-guard-env"))
 }
