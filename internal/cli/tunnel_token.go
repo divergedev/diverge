@@ -223,7 +223,16 @@ func resolveTunnelToken(explicit string, restCfg *rest.Config) (string, error) {
 // 1. --token-cmd (uncached POSIX command, mutually exclusive with --token-file)
 // 2. --token-file (dynamic reloadable token file)
 // 3. DIVERGE_TOKEN environment variable
-func resolveStandaloneTunnelTokenSource(ctx context.Context, tokenCmd, tokenFile string) (TokenSource, error) {
+// 4. Stored OIDC credentials from ~/.config/diverge/credentials.json (`diverge login`)
+func resolveStandaloneTunnelTokenSource(ctx context.Context, serverAddr, tokenCmd, tokenFile string) (TokenSource, error) {
+	return resolveStandaloneTunnelTokenSourceWithStore(ctx, serverAddr, tokenCmd, tokenFile, "", nil)
+}
+
+func resolveStandaloneTunnelTokenSourceWithStore(
+	ctx context.Context,
+	serverAddr, tokenCmd, tokenFile, credStorePath string,
+	httpClient *http.Client,
+) (TokenSource, error) {
 	cmdStr := strings.TrimSpace(tokenCmd)
 	fileStr := strings.TrimSpace(tokenFile)
 	if cmdStr != "" && fileStr != "" {
@@ -247,6 +256,26 @@ func resolveStandaloneTunnelTokenSource(ctx context.Context, tokenCmd, tokenFile
 		}
 		return src, nil
 	}
+	storePath := strings.TrimSpace(credStorePath)
+	if storePath == "" {
+		var err error
+		storePath, err = CredentialsPath()
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve credentials store path: %w", err)
+		}
+	}
+	hasCred, err := hasStoredCredential(storePath, serverAddr)
+	if err != nil {
+		return nil, err
+	}
+	if hasCred {
+		src := NewStoredCredentialTokenSource(storePath, serverAddr, httpClient)
+		if _, err := src.Token(ctx); err != nil {
+			return nil, err
+		}
+		return src, nil
+	}
 
-	return nil, fmt.Errorf("%w: pass --token-cmd, pass --token-file, or set %s", ErrNoTunnelCredential, tunnelTokenEnvVar)
+	return nil, fmt.Errorf("%w: run 'diverge login --server %s', pass --token-cmd, pass --token-file, or set %s",
+		ErrNoTunnelCredential, serverAddr, tunnelTokenEnvVar)
 }

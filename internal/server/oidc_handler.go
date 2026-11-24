@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -26,6 +27,9 @@ type OIDCHandlerConfig struct {
 	IssuerURL string
 	// ClientID is the OIDC client ID.
 	ClientID string
+	// CLIClientID is an optional public PKCE client ID published via /auth/config for CLI login.
+	// Falls back to ClientID when empty.
+	CLIClientID string
 	// ClientSecret is the OIDC client secret.
 	ClientSecret string
 	// RedirectURL is the callback URL (e.g. https://diverge.example.com/auth/callback).
@@ -64,6 +68,9 @@ type OIDCHandler struct {
 	groupsClaim    string
 	allowedGroups  []string
 	providerName   string
+	issuerURL      string
+	cliClientID    string
+	scopes         []string
 	logger         *slog.Logger
 }
 
@@ -75,7 +82,7 @@ func NewOIDCHandler(cfg OIDCHandlerConfig) (*OIDCHandler, error) {
 		return nil, fmt.Errorf("oidc discovery failed for %q: %w", cfg.IssuerURL, err)
 	}
 
-	scopes := cfg.Scopes
+	scopes := normalizeOIDCScopes(cfg.Scopes)
 	if len(scopes) == 0 {
 		scopes = []string{oidc.ScopeOpenID, "profile", "email", "groups"}
 	}
@@ -99,6 +106,11 @@ func NewOIDCHandler(cfg OIDCHandlerConfig) (*OIDCHandler, error) {
 		providerName = "SSO"
 	}
 
+	cliClientID := strings.TrimSpace(cfg.CLIClientID)
+	if cliClientID == "" {
+		cliClientID = strings.TrimSpace(cfg.ClientID)
+	}
+
 	return &OIDCHandler{
 		config:   cfg,
 		provider: provider,
@@ -117,8 +129,21 @@ func NewOIDCHandler(cfg OIDCHandlerConfig) (*OIDCHandler, error) {
 		groupsClaim:    groupsClaim,
 		allowedGroups:  cfg.AllowedGroups,
 		providerName:   providerName,
+		issuerURL:      strings.TrimSpace(cfg.IssuerURL),
+		cliClientID:    cliClientID,
+		scopes:         scopes,
 		logger:         cfg.Logger,
 	}, nil
+}
+
+func normalizeOIDCScopes(raw []string) []string {
+	out := make([]string, 0, len(raw))
+	for _, s := range raw {
+		if trimmed := strings.TrimSpace(s); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 // sanitizeReturnURL ensures a return URL is a safe relative path and prevents open redirects.
@@ -157,7 +182,7 @@ func (h *OIDCHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	// Store sanitized return URL in state cookie
 	returnURL := sanitizeReturnURL(r.URL.Query().Get("return_url"))
 
-	// Set state cookie (SameSite=Strict for CSRF protection)
+	// Set state cookie (SameSite=Lax allows top-level cross-site IdP redirects to deliver state)
 	http.SetCookie(w, &http.Cookie{
 		Name:     "diverge_oauthstate",
 		Value:    state,
@@ -165,7 +190,7 @@ func (h *OIDCHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   300, // 5 minutes
 		HttpOnly: true,
 		Secure:   h.secureCookies,
-		SameSite: http.SameSiteStrictMode,
+		SameSite: http.SameSiteLaxMode,
 	})
 
 	// Store return URL in a separate cookie
@@ -176,7 +201,7 @@ func (h *OIDCHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   300,
 		HttpOnly: true,
 		Secure:   h.secureCookies,
-		SameSite: http.SameSiteStrictMode,
+		SameSite: http.SameSiteLaxMode,
 	})
 
 	// Redirect to OIDC provider
@@ -204,7 +229,7 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	state := r.URL.Query().Get("state")
-	if state == "" || state != stateCookie.Value {
+	if state == "" || subtle.ConstantTimeCompare([]byte(state), []byte(stateCookie.Value)) != 1 {
 		h.renderCallbackError(w, http.StatusBadRequest, "Invalid OAuth state. This may be a CSRF attack. Please try again.")
 		return
 	}
@@ -342,19 +367,45 @@ func (h *OIDCHandler) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", http.StatusFound)
 }
 
-// authConfigResponse is returned by /auth/config for the frontend.
+// authConfigResponse is returned by /auth/config for the frontend and CLI PKCE login.
 type authConfigResponse struct {
-	OIDCEnabled  bool   `json:"oidcEnabled"`
-	ProviderName string `json:"providerName,omitempty"`
-	LoginURL     string `json:"loginUrl,omitempty"`
+	OIDCEnabled  bool     `json:"oidcEnabled"`
+	ProviderName string   `json:"providerName,omitempty"`
+	LoginURL     string   `json:"loginUrl,omitempty"`
+	IssuerURL    string   `json:"issuerUrl,omitempty"`
+	CLIClientID  string   `json:"cliClientId,omitempty"`
+	Scopes       []string `json:"scopes,omitempty"`
 }
 
-// HandleConfig returns the public auth configuration for the frontend.
+// HandleConfig returns the public auth configuration for the frontend and CLI.
 func (h *OIDCHandler) HandleConfig(w http.ResponseWriter, r *http.Request) {
+	issuerURL := h.issuerURL
+	if issuerURL == "" {
+		issuerURL = strings.TrimSpace(h.config.IssuerURL)
+	}
+	cliClientID := h.cliClientID
+	if cliClientID == "" {
+		cliClientID = strings.TrimSpace(h.config.CLIClientID)
+	}
+	if cliClientID == "" {
+		cliClientID = strings.TrimSpace(h.config.ClientID)
+	}
+	scopes := h.scopes
+	if len(scopes) == 0 {
+		scopes = normalizeOIDCScopes(h.config.Scopes)
+	}
+	var scopesCopy []string
+	if len(scopes) > 0 {
+		scopesCopy = append([]string(nil), scopes...)
+	}
+
 	resp := authConfigResponse{
 		OIDCEnabled:  true,
 		ProviderName: h.providerName,
 		LoginURL:     "/auth/login",
+		IssuerURL:    issuerURL,
+		CLIClientID:  cliClientID,
+		Scopes:       scopesCopy,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
@@ -399,6 +450,6 @@ func (h *OIDCHandler) clearCookie(w http.ResponseWriter, name, path string) {
 		MaxAge:   -1,
 		HttpOnly: true,
 		Secure:   h.secureCookies,
-		SameSite: http.SameSiteStrictMode,
+		SameSite: http.SameSiteLaxMode,
 	})
 }

@@ -60,6 +60,7 @@ type TunnelDefaults struct {
 type tunnelDeps struct {
 	detector       EnvironmentDetector
 	userConfigPath string
+	credStorePath  string
 	workDir        string
 	baseTransport  http.RoundTripper
 	httpClient     *http.Client
@@ -502,7 +503,7 @@ func runTunnel(ctx context.Context, cmd *cobra.Command, opts tunnelRunOptions, d
 		return failEarly(err)
 	}
 
-	tokenSource, err := resolveStandaloneTunnelTokenSource(ctx, opts.TokenCmd, opts.TokenFile)
+	tokenSource, err := resolveStandaloneTunnelTokenSourceWithStore(ctx, serverAddr, opts.TokenCmd, opts.TokenFile, deps.credStorePath, deps.httpClient)
 	if err != nil {
 		return failEarly(err)
 	}
@@ -772,7 +773,7 @@ func runTunnelList(ctx context.Context, cmd *cobra.Command, opts tunnelListOptio
 		return fail(err)
 	}
 
-	tokenSource, err := resolveStandaloneTunnelTokenSource(ctx, opts.TokenCmd, opts.TokenFile)
+	tokenSource, err := resolveStandaloneTunnelTokenSourceWithStore(ctx, serverAddr, opts.TokenCmd, opts.TokenFile, deps.credStorePath, deps.httpClient)
 	if err != nil {
 		return fail(err)
 	}

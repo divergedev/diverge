@@ -619,3 +619,118 @@ func TestOIDCProvider_PrefixesAndReservedPrincipals(t *testing.T) {
 	assert.Equal(t, "alice", unprefUser.Username)
 	assert.Equal(t, []string{"engineering", "platform"}, unprefUser.Groups)
 }
+
+func TestOIDCProvider_DualAudienceClientIDs(t *testing.T) {
+	issuer, _, sign := startTestOIDCProviderServer(t)
+	sm, err := NewSessionManager(SessionConfig{})
+	require.NoError(t, err)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	provider, err := NewOIDCProvider(context.Background(), OIDCProviderConfig{
+		IssuerURL:     issuer,
+		ClientID:      "diverge-web",
+		CLIClientID:   "diverge-cli",
+		AllowedGroups: []string{"engineering"},
+	}, sm, logger)
+	require.NoError(t, err)
+
+	exp := time.Now().Add(15 * time.Minute).UTC().Truncate(time.Second)
+
+	webTok := sign(map[string]any{
+		"iss":                issuer,
+		"aud":                "diverge-web",
+		"sub":                "sub-alice",
+		"preferred_username": "alice",
+		"email":              "alice@example.com",
+		"groups":             []string{"engineering"},
+		"exp":                exp.Unix(),
+		"iat":                time.Now().Add(-time.Minute).Unix(),
+	})
+	webUser, err := provider.Authenticate(context.Background(), webTok)
+	require.NoError(t, err)
+	assert.Equal(t, "oidc:alice", webUser.Username)
+	assert.Equal(t, []string{"oidc:engineering"}, webUser.Groups)
+
+	cliTok := sign(map[string]any{
+		"iss":                issuer,
+		"aud":                "diverge-cli",
+		"sub":                "sub-alice",
+		"preferred_username": "alice",
+		"email":              "alice@example.com",
+		"groups":             []string{"engineering", "platform"},
+		"exp":                exp.Unix(),
+		"iat":                time.Now().Add(-time.Minute).Unix(),
+	})
+	cliUser, err := provider.Authenticate(context.Background(), cliTok)
+	require.NoError(t, err)
+	assert.Equal(t, "oidc:alice", cliUser.Username)
+	assert.Equal(t, []string{"oidc:engineering", "oidc:platform"}, cliUser.Groups)
+	assert.Equal(t, "oidc", cliUser.AuthType)
+	assert.Equal(t, exp.Unix(), cliUser.ExpiresAt.Unix())
+
+	multiAudTok := sign(map[string]any{
+		"iss":                issuer,
+		"aud":                []string{"diverge-cli", "other-app"},
+		"sub":                "sub-alice",
+		"preferred_username": "alice",
+		"groups":             []string{"engineering"},
+		"exp":                exp.Unix(),
+		"iat":                time.Now().Add(-time.Minute).Unix(),
+	})
+	multiUser, err := provider.Authenticate(context.Background(), multiAudTok)
+	require.NoError(t, err)
+	assert.Equal(t, "oidc:alice", multiUser.Username)
+
+	otherAudTok := sign(map[string]any{
+		"iss":                issuer,
+		"aud":                "unrelated-client",
+		"sub":                "sub-alice",
+		"preferred_username": "alice",
+		"groups":             []string{"engineering"},
+		"exp":                exp.Unix(),
+		"iat":                time.Now().Add(-time.Minute).Unix(),
+	})
+	_, err = provider.Authenticate(context.Background(), otherAudTok)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "oidc token verification failed")
+
+	// Reserved principal blocking still applies to CLI client tokens.
+	reservedCLITok := sign(map[string]any{
+		"iss":                issuer,
+		"aud":                "diverge-cli",
+		"sub":                "sub-bad",
+		"preferred_username": "system:admin",
+		"groups":             []string{"engineering"},
+		"exp":                exp.Unix(),
+		"iat":                time.Now().Add(-time.Minute).Unix(),
+	})
+	_, err = provider.Authenticate(context.Background(), reservedCLITok)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reserved prefix")
+
+	// Expired web token must preserve expiration error rather than being masked by audience mismatch.
+	expiredWebTok := sign(map[string]any{
+		"iss":                issuer,
+		"aud":                "diverge-web",
+		"sub":                "sub-alice",
+		"preferred_username": "alice",
+		"groups":             []string{"engineering"},
+		"exp":                time.Now().Add(-time.Hour).Unix(),
+		"iat":                time.Now().Add(-2 * time.Hour).Unix(),
+	})
+	_, err = provider.Authenticate(context.Background(), expiredWebTok)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "expired")
+}
+
+func TestNewOIDCProvider_RequiresClientID(t *testing.T) {
+	sm, err := NewSessionManager(SessionConfig{})
+	require.NoError(t, err)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	_, err = NewOIDCProvider(context.Background(), OIDCProviderConfig{
+		IssuerURL: "https://issuer.example.com",
+	}, sm, logger)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "client_id")
+}

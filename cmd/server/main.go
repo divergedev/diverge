@@ -64,6 +64,7 @@ func main() {
 		// OIDC SSO flags
 		oidcIssuerURL      string
 		oidcClientID       string
+		oidcCLIClientID    string
 		oidcClientSecret   string
 		oidcRedirectURL    string
 		oidcScopes         string
@@ -106,6 +107,7 @@ func main() {
 	// OIDC SSO
 	flag.StringVar(&oidcIssuerURL, "oidc-issuer-url", "", "OIDC provider issuer URL (empty = SSO disabled)")
 	flag.StringVar(&oidcClientID, "oidc-client-id", "", "OIDC client ID")
+	flag.StringVar(&oidcCLIClientID, "oidc-cli-client-id", "", "Optional public PKCE client ID for CLI OIDC login (falls back to --oidc-client-id; or DIVERGE_OIDC_CLI_CLIENT_ID)")
 	flag.StringVar(&oidcClientSecret, "oidc-client-secret", "", "OIDC client secret (or set DIVERGE_OIDC_CLIENT_SECRET env)")
 	flag.StringVar(&oidcRedirectURL, "oidc-redirect-url", "", "OIDC callback URL (e.g. https://diverge.example.com/auth/callback)")
 	flag.StringVar(&oidcScopes, "oidc-scopes", "openid,profile,email,groups", "Comma-separated OIDC scopes")
@@ -141,6 +143,9 @@ func main() {
 		if v, ok := os.LookupEnv("DIVERGE_OIDC_GROUPS_PREFIX"); ok {
 			oidcGroupsPrefix = v
 		}
+	}
+	if !explicitFlags["oidc-cli-client-id"] && oidcCLIClientID == "" {
+		oidcCLIClientID = os.Getenv("DIVERGE_OIDC_CLI_CLIENT_ID")
 	}
 	if !explicitFlags["tunnel-namespaces"] && tunnelNamespaces == "" {
 		tunnelNamespaces = os.Getenv("DIVERGE_TUNNEL_NAMESPACES")
@@ -310,12 +315,13 @@ func main() {
 			}
 		}
 
-		scopes := strings.Split(oidcScopes, ",")
+		scopes := splitCSV(oidcScopes)
 
 		// Create OIDC auth provider for JWT verification
 		oidcProvider, err = auth.NewOIDCProvider(context.Background(), auth.OIDCProviderConfig{
 			IssuerURL:      oidcIssuerURL,
 			ClientID:       oidcClientID,
+			CLIClientID:    oidcCLIClientID,
 			UsernameClaim:  oidcUsernameClaim,
 			GroupsClaim:    oidcGroupsClaim,
 			AllowedGroups:  allowedGroups,
@@ -345,6 +351,7 @@ func main() {
 		oidcHandler, err = server.NewOIDCHandler(server.OIDCHandlerConfig{
 			IssuerURL:      oidcIssuerURL,
 			ClientID:       oidcClientID,
+			CLIClientID:    oidcCLIClientID,
 			ClientSecret:   oidcClientSecret,
 			RedirectURL:    oidcRedirectURL,
 			Scopes:         scopes,

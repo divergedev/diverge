@@ -61,6 +61,14 @@ func TestCmdRequiresKube(t *testing.T) {
 	assert.NoError(t, err)
 	assert.False(t, cmdRequiresKube(tunnelListCmd), "tunnel list subcommand must not require kubeconfig")
 
+	loginCmd, _, err := cmd.Find([]string{"login"})
+	assert.NoError(t, err)
+	assert.False(t, cmdRequiresKube(loginCmd), "login command must not require kubeconfig")
+
+	loginStatusCmd, _, err := cmd.Find([]string{"login", "status"})
+	assert.NoError(t, err)
+	assert.False(t, cmdRequiresKube(loginStatusCmd), "login status subcommand must not require kubeconfig")
+
 	devCmd, _, err := cmd.Find([]string{"dev"})
 	assert.NoError(t, err)
 	assert.True(t, cmdRequiresKube(devCmd), "dev command requires kubeconfig")
