@@ -262,16 +262,20 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 					}
 				}
 			}
-			currentCommentSource, sourcePromoted := resetCommentIfSourcePromoted(&pg)
+			currentCommentSource, prevCommentSource, sourcePromoted := resetCommentIfSourcePromoted(&pg)
+			var notifyErr error
 			if r.Notifier != nil && (pg.Status.Phase != prevPhase || sourcePromoted) {
 				notifyCtx, cancelN := context.WithTimeout(ctx, 15*time.Second)
-				_ = r.Notifier.PostGroupFailed(notifyCtx, &pg, "GroupDatabaseFailed")
+				notifyErr = r.Notifier.PostGroupFailed(notifyCtx, &pg, "GroupDatabaseFailed")
 				cancelN()
 			}
 			if pg.Status.CommentID != 0 {
 				if currentCommentSource != "" {
 					pg.Status.CommentSource = currentCommentSource
 				}
+			} else if sourcePromoted && notifyErr != nil && currentCommentSource != "" {
+				// Keep old CommentID cleared, but preserve previous source marker so next reconcile retries posting on promoted MR.
+				pg.Status.CommentSource = prevCommentSource
 			} else {
 				pg.Status.CommentSource = ""
 			}
@@ -357,6 +361,9 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		var sharedDBSecretName string
 		if groupDBHandled && svc.Database == nil && len(groupDBVars) > 0 {
 			secName, secErr := r.ensureChildSharedDBSecret(ctx, &pg, svc, envName, targetNS, groupDBAnchorNS, groupDBVars)
+			// Refresh statusBase ResourceVersion/annotations in case ensureChildSharedDBSecret recorded a remote target on pg
+			statusBase.ResourceVersion = pg.ResourceVersion
+			statusBase.Annotations = pg.DeepCopy().Annotations
 			if secErr != nil {
 				svcStatus.Phase = divergeiov1alpha1.PhaseFailed
 				svcStatus.Reason = "SharedDatabaseSecretFailed"
@@ -448,8 +455,13 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			}
 		}
 
-		// Run post-deploy hooks
-		if svc.PostDeploy != nil && svcStatus.Phase == divergeiov1alpha1.PhaseRunning {
+		childPendingSync := childExists && svcStatus.Phase == divergeiov1alpha1.PhaseRunning &&
+			(childSpecUpdated ||
+				(existingEnv.Generation > 0 && existingEnv.Status.ObservedGeneration < existingEnv.Generation) ||
+				meta.IsStatusConditionFalse(existingEnv.Status.Conditions, "DatabaseReady"))
+
+		// Run post-deploy hooks only after the child Environment has converged on the current revision
+		if childExists && svc.PostDeploy != nil && svcStatus.Phase == divergeiov1alpha1.PhaseRunning && !childPendingSync {
 			if err := r.runPostDeployJob(ctx, &existingEnv, svc.PostDeploy); err != nil {
 				if errors.Is(err, ErrHookInProgress) {
 					blocking := svc.PostDeploy.Blocking != nil && *svc.PostDeploy.Blocking
@@ -472,10 +484,7 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 
 		handoffPhase := svcStatus.Phase
-		if childExists && handoffPhase == divergeiov1alpha1.PhaseRunning &&
-			(childSpecUpdated ||
-				(existingEnv.Generation > 0 && existingEnv.Status.ObservedGeneration < existingEnv.Generation) ||
-				meta.IsStatusConditionFalse(existingEnv.Status.Conditions, "DatabaseReady")) {
+		if childPendingSync {
 			handoffPhase = divergeiov1alpha1.PhaseDeploying
 			svcStatus.Phase = divergeiov1alpha1.PhaseDeploying
 			if svcStatus.Reason == "" {
@@ -498,6 +507,9 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	// Delete orphaned Environments (services removed from spec)
 	orphanCleanupRequeue, orphanCleanupErr := r.deleteOrphanedEnvironments(ctx, &pg, desiredEnvNames)
+	// Refresh statusBase ResourceVersion/annotations in case cleanupOrphanedChildSharedDBSecrets pruned recorded targets on pg
+	statusBase.ResourceVersion = pg.ResourceVersion
+	statusBase.Annotations = pg.DeepCopy().Annotations
 	if orphanCleanupRequeue && (shortRequeue == 0 || 3*time.Second < shortRequeue) {
 		shortRequeue = 3 * time.Second
 	}
@@ -536,7 +548,7 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	meta.SetStatusCondition(&pg.Status.Conditions, readyCondition)
 
 	prevPhase := statusBase.Status.Phase
-	currentCommentSource, sourcePromoted := resetCommentIfSourcePromoted(&pg)
+	currentCommentSource, prevCommentSource, sourcePromoted := resetCommentIfSourcePromoted(&pg)
 
 	prevReportedCommit := ""
 	if pg.Annotations != nil {
@@ -572,6 +584,7 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	// Run SCM notifications BEFORE Status().Patch so newly created Status.CommentID and Status.CommentSource are persisted atomically together,
 	// and only emit notifications when phase, service statuses, or promoted source MR changed.
+	var notifyErr error
 	if r.Notifier != nil {
 		servicesChanged := !equality.Semantic.DeepEqual(statusBase.Status.Services, pg.Status.Services)
 		if pg.Status.Phase != prevPhase || sourcePromoted {
@@ -580,19 +593,23 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			case divergeiov1alpha1.PreviewGroupPhaseRunning:
 				if err := r.Notifier.PostGroupReady(notifyCtx, &pg); err != nil {
 					logger.Error(err, "failed to post group ready notification")
+					notifyErr = err
 				}
 			case divergeiov1alpha1.PreviewGroupPhaseFailed, divergeiov1alpha1.PreviewGroupPhaseDegraded:
 				if err := r.Notifier.PostGroupFailed(notifyCtx, &pg, readyCondition.Reason); err != nil {
 					logger.Error(err, "failed to post group failed notification")
+					notifyErr = err
 				}
 			default:
 				if pg.Status.CommentID == 0 {
 					if err := r.Notifier.PostGroupCreated(notifyCtx, &pg); err != nil {
 						logger.Error(err, "failed to post group created notification")
+						notifyErr = err
 					}
 				} else {
 					if err := r.Notifier.UpdateGroupStatus(notifyCtx, &pg); err != nil {
 						logger.Error(err, "failed to update group status notification")
+						notifyErr = err
 					}
 				}
 			}
@@ -601,6 +618,7 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			if err := r.Notifier.UpdateGroupStatus(notifyCtx, &pg); err != nil {
 				logger.Error(err, "failed to update group status notification")
+				notifyErr = err
 			}
 			cancel()
 		}
@@ -610,6 +628,10 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		if currentCommentSource != "" {
 			pg.Status.CommentSource = currentCommentSource
 		}
+	} else if sourcePromoted && notifyErr != nil && currentCommentSource != "" {
+		// Keep old CommentID cleared, but preserve previous source marker so next reconcile retries posting on promoted MR.
+		pg.Status.CommentSource = prevCommentSource
+		requeue = true
 	} else {
 		pg.Status.CommentSource = ""
 	}
@@ -677,10 +699,25 @@ func (r *PreviewGroupReconciler) handleTeardown(ctx context.Context, pg *diverge
 		return ctrl.Result{}, fmt.Errorf("failed to list child Environments: %w", err)
 	}
 
+	hasPinned := pg.Annotations != nil &&
+		(strings.TrimSpace(pg.Annotations[annotationGroupDBNamespace]) != "" ||
+			strings.TrimSpace(pg.Annotations[annotationGroupDBProvider]) != "")
+	usesSharedGroupSecrets := hasDedicatedGroupDatabase(pg) || hasPinned
+
 	// Delete children that haven't been deleted yet
 	remaining := 0
 	for i := range children {
 		child := &children[i]
+		if child.Spec.Deploy.ClusterRef != nil && multicluster.IsRemoteEnv(child) &&
+			(usesSharedGroupSecrets ||
+				child.Annotations[annotationSharedGroupDB] == "true" ||
+				child.Annotations[annotationSharedGroupDBDraining] == "true") {
+			if recErr := r.recordSharedDBSecretTarget(ctx, pg, child.Namespace, child.Spec.Deploy.ClusterRef); recErr != nil {
+				logger.Error(recErr, "failed to record remote spoke target before deleting child Environment", "name", child.Name, "namespace", child.Namespace)
+				remaining++
+				continue
+			}
+		}
 		if child.DeletionTimestamp.IsZero() {
 			hookCtx, cancelHook := context.WithTimeout(ctx, 15*time.Second)
 			hookErr := r.cleanupPostDeployJobs(hookCtx, child)
@@ -729,9 +766,14 @@ func (r *PreviewGroupReconciler) handleTeardown(ctx context.Context, pg *diverge
 	}
 
 	// All child Environments have drained — tear down any shared group-level database and wake attached standalone PR Environments
-	if err := r.teardownGroupDatabase(ctx, pg); err != nil {
+	tdRequeue, err := r.teardownGroupDatabase(ctx, pg)
+	if err != nil {
 		logger.Error(err, "failed to teardown shared group database", "group", pg.Name)
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, err
+	}
+	if tdRequeue {
+		logger.Info("Waiting for shared group database workloads or Secrets to drain before removing finalizer", "group", pg.Name)
+		return ctrl.Result{RequeueAfter: 3 * time.Second}, nil
 	}
 	if err := r.wakeUnclaimedStandaloneEnvironments(ctx, pg.Name, nil); err != nil {
 		logger.Error(err, "failed to wake standalone PR Environments during teardown", "group", pg.Name)
@@ -939,23 +981,24 @@ func previewGroupCommentSourceKey(pg *divergeiov1alpha1.PreviewGroup) string {
 	)
 }
 
-func resetCommentIfSourcePromoted(pg *divergeiov1alpha1.PreviewGroup) (string, bool) {
+func resetCommentIfSourcePromoted(pg *divergeiov1alpha1.PreviewGroup) (string, string, bool) {
 	if pg == nil {
-		return "", false
+		return "", "", false
 	}
 	currentCommentSource := previewGroupCommentSourceKey(pg)
 	prevCommentSource := strings.TrimSpace(pg.Status.CommentSource)
 	if prevCommentSource == "" && pg.Annotations != nil {
 		prevCommentSource = strings.TrimSpace(pg.Annotations[annotationCommentSource])
 	}
-	if pg.Status.CommentID != 0 && prevCommentSource != "" && prevCommentSource != currentCommentSource {
+	if prevCommentSource != "" && prevCommentSource != currentCommentSource &&
+		(pg.Status.CommentID != 0 || currentCommentSource != "") {
 		// Creator MR left and Spec.Source promoted to a new MR (potentially in the same monorepo):
 		// reset CommentID and CommentSource so we post a fresh comment on the promoted MR instead of editing the closed PR's comment.
 		pg.Status.CommentID = 0
 		pg.Status.CommentSource = ""
-		return currentCommentSource, true
+		return currentCommentSource, prevCommentSource, true
 	}
-	return currentCommentSource, false
+	return currentCommentSource, prevCommentSource, false
 }
 
 // listChildEnvironments returns all Environments owned by this PreviewGroup.
@@ -1019,11 +1062,25 @@ func (r *PreviewGroupReconciler) deleteOrphanedEnvironments(ctx context.Context,
 		return false, err
 	}
 
+	hasPinned := pg != nil && pg.Annotations != nil &&
+		(strings.TrimSpace(pg.Annotations[annotationGroupDBNamespace]) != "" ||
+			strings.TrimSpace(pg.Annotations[annotationGroupDBProvider]) != "")
+	usesSharedGroupSecrets := hasDedicatedGroupDatabase(pg) || hasPinned
+
 	var errs []error
 	for i := range children {
 		child := &children[i]
 		if !desired[child.Namespace+"/"+child.Name] && !desired[child.Name] {
 			logger.Info("Deleting orphaned Environment", "name", child.Name, "namespace", child.Namespace)
+			if child.Spec.Deploy.ClusterRef != nil && multicluster.IsRemoteEnv(child) &&
+				(usesSharedGroupSecrets ||
+					child.Annotations[annotationSharedGroupDB] == "true" ||
+					child.Annotations[annotationSharedGroupDBDraining] == "true") {
+				if recErr := r.recordSharedDBSecretTarget(ctx, pg, child.Namespace, child.Spec.Deploy.ClusterRef); recErr != nil {
+					errs = append(errs, fmt.Errorf("failed to record remote spoke target for orphaned Environment %s/%s: %w", child.Namespace, child.Name, recErr))
+					continue
+				}
+			}
 			hookCtx, cancelHook := context.WithTimeout(ctx, 15*time.Second)
 			hookErr := r.cleanupPostDeployJobs(hookCtx, child)
 			cancelHook()
@@ -1059,11 +1116,8 @@ func (r *PreviewGroupReconciler) deleteOrphanedEnvironments(ctx context.Context,
 				"Deleted orphaned Environment %s/%s", child.Namespace, child.Name)
 		}
 	}
-	hasPinned := pg != nil && pg.Annotations != nil &&
-		(strings.TrimSpace(pg.Annotations[annotationGroupDBNamespace]) != "" ||
-			strings.TrimSpace(pg.Annotations[annotationGroupDBProvider]) != "")
 	secRequeue := false
-	if hasDedicatedGroupDatabase(pg) || hasPinned {
+	if usesSharedGroupSecrets || hasRecordedSharedDBSecretTargets(pg) {
 		var secErr error
 		secRequeue, secErr = r.cleanupOrphanedChildSharedDBSecrets(ctx, pg, desired)
 		if secErr != nil {

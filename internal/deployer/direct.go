@@ -2,9 +2,7 @@ package deployer
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
-	"regexp"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -23,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/database"
 	"github.com/divergedev/diverge/internal/multicluster"
 )
 
@@ -507,11 +506,6 @@ func (d *DirectDeployer) Teardown(ctx context.Context, env *v1alpha1.Environment
 	return nil
 }
 
-var (
-	nonAlnumHyphenRegex = regexp.MustCompile(`[^a-z0-9-]`)
-	multiHyphenRegex    = regexp.MustCompile(`-{2,}`)
-)
-
 func errOrNil(err error) error { return err }
 
 func (d *DirectDeployer) fetchedObjectsByKind(ctx context.Context, env *v1alpha1.Environment, targetNS string) (map[string][]unstructured.Unstructured, error) {
@@ -644,33 +638,12 @@ func isControllerDeferredConfigMap(env *v1alpha1.Environment, name string) bool 
 	return name == featuresCM || name == bannerCM
 }
 
-func sanitizeControllerEnvSecretName(prefix, envName string) string {
-	raw := strings.ToLower(prefix + envName)
-	raw = strings.NewReplacer(".", "-", "_", "-").Replace(raw)
-	raw = nonAlnumHyphenRegex.ReplaceAllString(raw, "")
-	raw = multiHyphenRegex.ReplaceAllString(raw, "-")
-	raw = strings.Trim(raw, "-")
-	if raw == "" {
-		raw = "resource"
-	}
-	sum := sha256.Sum256([]byte(envName))
-	hash := fmt.Sprintf("%x", sum)[:8]
-	prefixPart := raw
-	if len(prefixPart) > 63-9 {
-		prefixPart = strings.TrimRight(prefixPart[:63-9], "-")
-	}
-	if prefixPart == "" {
-		prefixPart = "r"
-	}
-	return prefixPart + "-" + hash
-}
-
 func controllerDBEnvSecretName(envName string) string {
-	return sanitizeControllerEnvSecretName("diverge-db-env-", envName)
+	return database.EnvSecretName(envName)
 }
 
 func controllerGroupDBEnvSecretName(envName string) string {
-	return sanitizeControllerEnvSecretName("diverge-group-db-env-", envName)
+	return database.GroupEnvSecretName(envName)
 }
 
 func isControllerDeferredSecret(env *v1alpha1.Environment, name string) bool {

@@ -931,7 +931,7 @@ func (r *EnvironmentReconciler) ensureDatabaseEnvSecret(ctx context.Context, env
 		return err
 	}
 
-	secretName := sanitizeK8sName(fmt.Sprintf("diverge-db-env-%s", env.Name), env.Name, 63)
+	secretName := internaldb.EnvSecretName(env.Name)
 
 	targetNS := env.Namespace
 	if env.Spec.Deploy.Namespace == "create" {
@@ -946,6 +946,13 @@ func (r *EnvironmentReconciler) ensureDatabaseEnvSecret(ctx context.Context, env
 	}
 
 	_, err = controllerutil.CreateOrUpdate(ctx, targetClient, secret, func() error {
+		prevGroup := ""
+		if secret.Labels != nil {
+			prevGroup = strings.TrimSpace(secret.Labels[labelPreviewGroup])
+		}
+		wasGroupOwned := (secret.Labels != nil && secret.Labels[labelSharedGroupDBSecret] == "true") ||
+			(prevGroup != "" && !hasEnvironmentControllerOwnerRef(secret))
+
 		if secret.Labels == nil {
 			secret.Labels = make(map[string]string)
 		}
@@ -979,6 +986,16 @@ func (r *EnvironmentReconciler) ensureDatabaseEnvSecret(ctx context.Context, env
 			}
 		}
 
+		if wasGroupOwned {
+			if secret.Annotations == nil {
+				secret.Annotations = make(map[string]string)
+			}
+			secret.Annotations[annotationLegacyGroupDBDraining] = legacyGroupDBDrainingPending
+			if prevGroup != "" {
+				secret.Annotations[annotationLegacyGroupDBOwner] = prevGroup
+			}
+		}
+
 		newData := make(map[string][]byte, len(envVars))
 		for k, v := range envVars {
 			newData[k] = []byte(v)
@@ -989,6 +1006,44 @@ func (r *EnvironmentReconciler) ensureDatabaseEnvSecret(ctx context.Context, env
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create or update database env secret: %w", err)
+	}
+
+	if secret.Annotations[annotationLegacyGroupDBDraining] == legacyGroupDBDrainingPending {
+		var podList corev1.PodList
+		if lErr := targetClient.List(ctx, &podList, client.InNamespace(targetNS)); lErr != nil {
+			if !isIgnorableWorkloadListErr(lErr, false) {
+				return fmt.Errorf("failed to list pods in %s after legacy DB Secret takeover: %w", targetNS, lErr)
+			}
+		}
+		seenIDs := make(map[string]bool)
+		var podIDs []string
+		for i := range podList.Items {
+			pod := &podList.Items[i]
+			if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+				continue
+			}
+			if podSpecReferencesAnySecret(&pod.Spec, []string{secretName}) {
+				id := podTrackID(pod)
+				if !seenIDs[id] {
+					seenIDs[id] = true
+					podIDs = append(podIDs, id)
+				}
+			}
+		}
+		sort.Strings(podIDs)
+		base := secret.DeepCopy()
+		if len(podIDs) > 0 {
+			if secret.Annotations == nil {
+				secret.Annotations = make(map[string]string)
+			}
+			secret.Annotations[annotationLegacyGroupDBDraining] = legacyGroupDBDrainingUIDPrefix + strings.Join(podIDs, ",")
+		} else {
+			delete(secret.Annotations, annotationLegacyGroupDBDraining)
+			delete(secret.Annotations, annotationLegacyGroupDBOwner)
+		}
+		if pErr := targetClient.Patch(ctx, secret, client.MergeFrom(base)); pErr != nil && !apierrors.IsNotFound(pErr) {
+			return fmt.Errorf("failed to record draining pods on legacy DB Secret %s/%s: %w", targetNS, secretName, pErr)
+		}
 	}
 	return nil
 }

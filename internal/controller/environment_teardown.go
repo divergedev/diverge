@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/database"
 	"github.com/divergedev/diverge/internal/finops"
 	"github.com/divergedev/diverge/internal/metrics"
 	"github.com/divergedev/diverge/internal/multicluster"
@@ -132,11 +133,13 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		// Wait for preview workloads to be fully terminated before deleting
 		// feature flag ConfigMaps or namespaces, preventing live preview pods
 		// from encountering volume or ConfigMap missing errors during shutdown.
+		var deployerStatusErr error
 		if r.Deployer != nil {
 			tCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			status, err := r.Deployer.Status(tCtx, env)
 			cancel()
 			if err != nil {
+				deployerStatusErr = err
 				errs = append(errs, fmt.Errorf("failed to check deployer status during teardown: %w", err))
 			} else if len(status) > 0 {
 				log.FromContext(ctx).Info("Waiting for deployer resources to be fully deleted", "remaining", len(status))
@@ -149,19 +152,23 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		if env.Spec.Deploy.Namespace == "create" {
 			targetNS = env.PreviewNamespace()
 		}
-		if !skipRemoteTargetCleanup && targetClient != nil {
-			dbSecretName := sanitizeK8sName(fmt.Sprintf("diverge-db-env-%s", env.Name), env.Name, 63)
-			dbSecret := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      dbSecretName,
-					Namespace: targetNS,
-				},
+		if !skipRemoteTargetCleanup && targetClient != nil && deployerStatusErr == nil {
+			for _, dbSecretName := range []string{
+				database.EnvSecretName(env.Name),
+				database.GroupEnvSecretName(env.Name),
+			} {
+				dbSecret := &corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      dbSecretName,
+						Namespace: targetNS,
+					},
+				}
+				delSecCtx, cancelDelSec := context.WithTimeout(ctx, 15*time.Second)
+				if err := targetClient.Delete(delSecCtx, dbSecret); err != nil && !apierrors.IsNotFound(err) {
+					errs = append(errs, fmt.Errorf("failed to delete database env secret: %w", err))
+				}
+				cancelDelSec()
 			}
-			delSecCtx, cancelDelSec := context.WithTimeout(ctx, 15*time.Second)
-			if err := targetClient.Delete(delSecCtx, dbSecret); err != nil && !apierrors.IsNotFound(err) {
-				errs = append(errs, fmt.Errorf("failed to delete database env secret: %w", err))
-			}
-			cancelDelSec()
 
 			// On remote spoke clusters in "same" namespace mode, OwnerReferences are omitted, so also clean up any banner ConfigMap.
 			if isRemote && env.Spec.Deploy.Namespace != "create" {

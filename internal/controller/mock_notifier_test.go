@@ -7,10 +7,11 @@ import (
 )
 
 type mockNotifier struct {
-	nextCommentID int64
-	createdCalls  []*divergeiov1alpha1.PreviewGroup
-	readyCalls    []*divergeiov1alpha1.PreviewGroup
-	failedCalls   []struct {
+	nextCommentID  int64
+	failNextFailed error
+	createdCalls   []*divergeiov1alpha1.PreviewGroup
+	readyCalls     []*divergeiov1alpha1.PreviewGroup
+	failedCalls    []struct {
 		pg     *divergeiov1alpha1.PreviewGroup
 		reason string
 	}
@@ -38,11 +39,16 @@ func (m *mockNotifier) PostGroupReady(ctx context.Context, pg *divergeiov1alpha1
 }
 
 func (m *mockNotifier) PostGroupFailed(ctx context.Context, pg *divergeiov1alpha1.PreviewGroup, reason string) error {
-	m.assignCommentID(pg)
 	m.failedCalls = append(m.failedCalls, struct {
 		pg     *divergeiov1alpha1.PreviewGroup
 		reason string
 	}{pg, reason})
+	if m.failNextFailed != nil {
+		err := m.failNextFailed
+		m.failNextFailed = nil
+		return err
+	}
+	m.assignCommentID(pg)
 	return nil
 }
 

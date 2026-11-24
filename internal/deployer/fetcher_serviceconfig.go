@@ -2,15 +2,14 @@ package deployer
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/database"
 	"github.com/divergedev/diverge/pkg/features"
 )
 
@@ -294,7 +293,7 @@ func resolveDBSecret(env *v1alpha1.Environment) string {
 	// NOT the application DATABASE_URL; preview pods always consume diverge-db-env-<env.Name>.
 	if isNeon {
 		if env.Status.DatabaseStatus != "" || len(env.Status.Conditions) == 0 {
-			return sanitizeDBEnvSecretName(fmt.Sprintf("diverge-db-env-%s", env.Name), env.Name, 63)
+			return database.EnvSecretName(env.Name)
 		}
 		return ""
 	}
@@ -309,33 +308,12 @@ func resolveDBSecret(env *v1alpha1.Environment) string {
 	isAutoEnvSecretMode := db.Mode == "schema" || db.Mode == "cnpg" || db.Mode == "snapshot" || db.Mode == "fresh" ||
 		providerAnno == "cnpg" || providerAnno == "snapshot" || providerAnno == "fresh" || providerAnno == "schema"
 	if isAutoEnvSecretMode && (env.Status.DatabaseStatus != "" || len(env.Status.Conditions) == 0) {
-		return sanitizeDBEnvSecretName(fmt.Sprintf("diverge-db-env-%s", env.Name), env.Name, 63)
+		return database.EnvSecretName(env.Name)
 	}
 
 	return ""
 }
 
 func sanitizeDBEnvSecretName(raw, hashInput string, maxLength int) string {
-	if maxLength < 10 {
-		maxLength = 10
-	}
-	raw = strings.ToLower(raw)
-	raw = strings.NewReplacer(".", "-", "_", "-").Replace(raw)
-	raw = regexp.MustCompile(`[^a-z0-9-]`).ReplaceAllString(raw, "")
-	raw = regexp.MustCompile(`-{2,}`).ReplaceAllString(raw, "-")
-	raw = strings.Trim(raw, "-")
-
-	if raw == "" {
-		raw = "resource"
-	}
-
-	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(hashInput)))[:8]
-	prefix := raw
-	if len(prefix) > maxLength-9 {
-		prefix = strings.TrimRight(prefix[:maxLength-9], "-")
-	}
-	if prefix == "" {
-		prefix = "r"
-	}
-	return prefix + "-" + hash
+	return database.SanitizeK8sSecretName(raw, hashInput, maxLength)
 }
