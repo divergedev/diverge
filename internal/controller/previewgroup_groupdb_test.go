@@ -2725,3 +2725,485 @@ func TestPreviewGroupReconcile_NegativeLeaseDelayPreservesShortRequeue(t *testin
 	assert.Greater(t, res.RequeueAfter, time.Duration(0), "pending child sync / near-expired lease must always return positive RequeueAfter")
 	assert.LessOrEqual(t, res.RequeueAfter, time.Second)
 }
+
+type clusterNameSpokeResolver struct {
+	byName map[string]*multicluster.Target
+}
+
+func (r *clusterNameSpokeResolver) Resolve(_ context.Context, env *divergeiov1alpha1.Environment) (*multicluster.Target, error) {
+	if env != nil && env.Spec.Deploy.ClusterRef != nil {
+		if t, ok := r.byName[env.Spec.Deploy.ClusterRef.Name]; ok {
+			return t, nil
+		}
+	}
+	return nil, errors.New("unknown spoke target")
+}
+
+func TestPreviewGroupReconcile_StatusConflictPersistsAcceptedCommentID(t *testing.T) {
+	ctx := context.Background()
+	s := runtime.NewScheme()
+	require.NoError(t, divergeiov1alpha1.AddToScheme(s))
+	require.NoError(t, corev1.AddToScheme(s))
+
+	// A. Promoted comment created by Notifier is preserved when Status().Patch hits an optimistic-lock conflict
+	pgName := "pg-comment-conflict"
+	pg := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       pgName,
+			Labels:     map[string]string{previewgroup.LabelComposedGroup: "true"},
+			Finalizers: []string{previewGroupFinalizer},
+		},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Source: divergeiov1alpha1.EnvironmentSource{
+				Provider: "github",
+				Project:  "acme/mono",
+				MR:       101,
+				Branch:   "feat/101",
+			},
+			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{Name: "api", Namespace: "default", Mode: divergeiov1alpha1.ServiceModeImage, Image: "img:1"},
+			},
+		},
+		Status: divergeiov1alpha1.PreviewGroupStatus{
+			Phase:         divergeiov1alpha1.PreviewGroupPhasePending,
+			CommentID:     888,
+			CommentSource: "github:acme/mono#10",
+		},
+	}
+	rTmp := &PreviewGroupReconciler{}
+	child := rTmp.buildChildEnvironmentWithSharedDB(pg, pg.Spec.Services[0], childEnvironmentName(pgName, "api"), "default", false, "")
+	child.Status = divergeiov1alpha1.EnvironmentStatus{
+		Phase:              divergeiov1alpha1.PhaseRunning,
+		ObservedGeneration: child.Generation,
+	}
+
+	var injectMainStatusConflict atomic.Bool
+	injectMainStatusConflict.Store(true)
+	notif := &mockNotifier{nextCommentID: 1001}
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithStatusSubresource(&divergeiov1alpha1.PreviewGroup{}, &divergeiov1alpha1.Environment{}).
+		WithObjects(pg, child).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(ctx context.Context, cl client.Client, subResourceName string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+				if subResourceName == "status" {
+					if _, ok := obj.(*divergeiov1alpha1.PreviewGroup); ok && injectMainStatusConflict.Swap(false) {
+						return apierrors.NewConflict(schema.GroupResource{Group: "divergedev.com", Resource: "previewgroups"}, obj.GetName(), errors.New("concurrent lease renewal"))
+					}
+				}
+				return cl.Status().Patch(ctx, obj, patch, opts...)
+			},
+		}).Build()
+
+	r := &PreviewGroupReconciler{
+		Client:   c,
+		Scheme:   s,
+		Recorder: events.NewRecorder(k8sevents.NewFakeRecorder(10)),
+		Notifier: notif,
+	}
+
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pgName}})
+	require.NoError(t, err)
+	assert.Equal(t, 100*time.Millisecond, res.RequeueAfter)
+	require.Len(t, notif.readyCalls, 1)
+
+	var gotPG divergeiov1alpha1.PreviewGroup
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: pgName}, &gotPG))
+	assert.Equal(t, int64(1001), gotPG.Status.CommentID, "accepted comment ID must be persisted across status conflict")
+	assert.Equal(t, "github:acme/mono#101", gotPG.Status.CommentSource)
+
+	// Reconcile 2: phase Running updates from Pending -> Running (updating CommentID 1001, not creating 1002)
+	_, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pgName}})
+	require.NoError(t, err)
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: pgName}, &gotPG))
+	assert.Equal(t, int64(1001), gotPG.Status.CommentID, "existing comment ID must be reused without creating a duplicate")
+
+	// B. Stale source change on server prevents stamping old PR comment ID
+	pgStale := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "pg-comment-stale-src",
+			Finalizers: []string{previewGroupFinalizer},
+		},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Source: divergeiov1alpha1.EnvironmentSource{Provider: "github", Project: "acme/mono", MR: 202},
+		},
+	}
+	cStale := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&divergeiov1alpha1.PreviewGroup{}).WithObjects(pgStale).Build()
+	rStale := &PreviewGroupReconciler{Client: cStale, Scheme: s}
+	rStale.persistAcceptedCommentOnConflict(ctx, "pg-comment-stale-src", 5555, "github:acme/mono#101")
+	require.NoError(t, cStale.Get(ctx, types.NamespacedName{Name: "pg-comment-stale-src"}, &gotPG))
+	assert.Zero(t, gotPG.Status.CommentID, "must not stamp comment ID belonging to an older promoted source MR")
+}
+
+func TestDeleteOrphanedEnvironments_TargetRecordConflictStopsBeforeDeletingNextChild(t *testing.T) {
+	ctx := context.Background()
+	s := runtime.NewScheme()
+	require.NoError(t, divergeiov1alpha1.AddToScheme(s))
+	require.NoError(t, corev1.AddToScheme(s))
+
+	pgName := "pg-orphan-conflict"
+	spokeRef := &divergeiov1alpha1.ClusterTargetRef{
+		Name:                "spoke-a",
+		KubeconfigSecretRef: &divergeiov1alpha1.SecretRef{Name: "spoke-a-kc", Namespace: "kube-system"},
+	}
+	pg := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        pgName,
+			Annotations: map[string]string{annotationGroupDBNamespace: "default"},
+		},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Database: &divergeiov1alpha1.EnvironmentDatabase{Mode: "cnpg"},
+		},
+	}
+	// Prefix names so orphanA is visited before webChild
+	orphanA := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        pgName + "-a-orphan",
+			Namespace:   "default",
+			Labels:      map[string]string{labelPreviewGroup: pgName, labelManagedBy: "diverge-previewgroup"},
+			Annotations: map[string]string{annotationSharedGroupDB: "true"},
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Deploy: divergeiov1alpha1.EnvironmentDeploy{Namespace: "same", ClusterRef: spokeRef},
+		},
+	}
+	webChild := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        pgName + "-z-web",
+			Namespace:   "default",
+			Labels:      map[string]string{labelPreviewGroup: pgName, labelManagedBy: "diverge-previewgroup"},
+			Annotations: map[string]string{annotationSharedGroupDB: "true"},
+		},
+	}
+	spokeSec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      sharedGroupDBSecretName(pgName + "-z-web"),
+			Namespace: "default",
+			Labels: map[string]string{
+				labelPreviewGroup:           pgName,
+				"divergedev.com/managed-by": "diverge",
+				labelSharedGroupDBSecret:    "true",
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(pg, orphanA, webChild, spokeSec).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				if pObj, ok := obj.(*divergeiov1alpha1.PreviewGroup); ok && pObj.Annotations[annotationGroupDBSecretTargets] != "" {
+					return apierrors.NewConflict(schema.GroupResource{Group: "divergedev.com", Resource: "previewgroups"}, obj.GetName(), errors.New("concurrent spec edit"))
+				}
+				return cl.Patch(ctx, obj, patch, opts...)
+			},
+		}).Build()
+
+	r := &PreviewGroupReconciler{
+		Client:   c,
+		Scheme:   s,
+		Recorder: events.NewRecorder(k8sevents.NewFakeRecorder(10)),
+	}
+
+	_, err := r.deleteOrphanedEnvironments(ctx, pg, map[string]bool{})
+	require.Error(t, err)
+	assert.True(t, isConflictError(err))
+
+	var keptWeb divergeiov1alpha1.Environment
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: webChild.Name, Namespace: "default"}, &keptWeb), "must stop immediately on conflict before deleting next child")
+	var keptSec corev1.Secret
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: spokeSec.Name, Namespace: "default"}, &keptSec), "must stop before sweeping Secrets on conflict")
+}
+
+func TestSharedDB_SameNamespaceChildFallbackDoesNotListUnusedPreviewNamespace(t *testing.T) {
+	ctx := context.Background()
+	s := runtime.NewScheme()
+	require.NoError(t, divergeiov1alpha1.AddToScheme(s))
+	require.NoError(t, corev1.AddToScheme(s))
+	require.NoError(t, appsv1.AddToScheme(s))
+
+	pgName := "pg-same-ns-fallback"
+	spokeRef := &divergeiov1alpha1.ClusterTargetRef{
+		Name:                "spoke-a",
+		KubeconfigSecretRef: &divergeiov1alpha1.SecretRef{Name: "spoke-a-kc", Namespace: "kube-system"},
+	}
+	childName := childEnvironmentName(pgName, "api")
+	child := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        childName,
+			Namespace:   "backend",
+			Generation:  2,
+			Labels:      map[string]string{labelPreviewGroup: pgName, labelManagedBy: "diverge-previewgroup"},
+			Annotations: map[string]string{annotationSharedGroupDBDraining: "true"},
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Deploy:   divergeiov1alpha1.EnvironmentDeploy{Namespace: "same", ClusterRef: spokeRef},
+			Database: divergeiov1alpha1.EnvironmentDatabase{Mode: "fresh"},
+		},
+		Status: divergeiov1alpha1.EnvironmentStatus{
+			ObservedGeneration: 2,
+			Phase:              divergeiov1alpha1.PhaseRunning,
+			Conditions: []metav1.Condition{{
+				Type:               "ServicesReady",
+				Status:             metav1.ConditionTrue,
+				ObservedGeneration: 2,
+				Reason:             "ServicesDeployed",
+			}},
+		},
+	}
+	orphanSec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      sharedGroupDBSecretName(childName),
+			Namespace: "backend",
+			Labels: map[string]string{
+				labelPreviewGroup:           pgName,
+				"divergedev.com/managed-by": "diverge",
+				labelSharedGroupDBSecret:    "true",
+			},
+		},
+	}
+	pg := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        pgName,
+			Annotations: map[string]string{annotationGroupDBNamespace: "default"},
+		},
+	}
+
+	spokeClient := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(orphanSec).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, isSecList := list.(*corev1.SecretList); isSecList {
+					listOpts := &client.ListOptions{}
+					for _, o := range opts {
+						o.ApplyToList(listOpts)
+					}
+					if listOpts.Namespace != "backend" {
+						return apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "", errors.New("only backend namespace Secrets may be listed"))
+					}
+				}
+				return cl.List(ctx, list, opts...)
+			},
+		}).Build()
+	hubClient := fake.NewClientBuilder().WithScheme(s).WithObjects(pg, child).Build()
+
+	r := &PreviewGroupReconciler{
+		Client: hubClient,
+		Scheme: s,
+		ClusterClients: &nsAwareSpokeResolver{
+			byNamespace: map[string]*multicluster.Target{
+				"backend": {Name: "spoke-a", IsRemote: true, Client: spokeClient},
+			},
+		},
+	}
+
+	requeue, err := r.cleanupOrphanedChildSharedDBSecrets(ctx, pg, map[string]bool{})
+	require.NoError(t, err, "must not query unused PreviewNamespace() when child uses deploy.namespace=same")
+	assert.False(t, requeue)
+
+	var sec corev1.Secret
+	err = spokeClient.Get(ctx, types.NamespacedName{Name: orphanSec.Name, Namespace: "backend"}, &sec)
+	assert.True(t, apierrors.IsNotFound(err), "orphan Secret in backend namespace must be deleted")
+
+	var updatedChild divergeiov1alpha1.Environment
+	require.NoError(t, hubClient.Get(ctx, types.NamespacedName{Name: childName, Namespace: "backend"}, &updatedChild))
+	assert.Empty(t, updatedChild.Annotations[annotationSharedGroupDBDraining], "draining annotation must be cleared cleanly")
+}
+
+func TestSharedDB_KeepSecretsScopedToResolvedTarget(t *testing.T) {
+	ctx := context.Background()
+	s := runtime.NewScheme()
+	require.NoError(t, divergeiov1alpha1.AddToScheme(s))
+	require.NoError(t, corev1.AddToScheme(s))
+	require.NoError(t, appsv1.AddToScheme(s))
+
+	pgName := "pg-target-scoped"
+	spokeARef := &divergeiov1alpha1.ClusterTargetRef{
+		Name:                "spoke-a",
+		KubeconfigSecretRef: &divergeiov1alpha1.SecretRef{Name: "spoke-a-kc", Namespace: "kube-system"},
+	}
+	spokeBRef := &divergeiov1alpha1.ClusterTargetRef{
+		Name:                "spoke-b",
+		KubeconfigSecretRef: &divergeiov1alpha1.SecretRef{Name: "spoke-b-kc", Namespace: "kube-system"},
+	}
+	encodedTargets, err := json.Marshal([]recordedGroupDBSecretTarget{
+		{Namespace: "backend", ClusterRef: spokeARef},
+		{Namespace: "backend", ClusterRef: spokeBRef},
+	})
+	require.NoError(t, err)
+
+	childName := childEnvironmentName(pgName, "api")
+	secName := sharedGroupDBSecretName(childName)
+	pg := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        pgName,
+			Labels:      map[string]string{previewgroup.LabelComposedGroup: "true"},
+			Finalizers:  []string{previewGroupFinalizer},
+			Annotations: map[string]string{annotationGroupDBNamespace: "default", annotationGroupDBSecretTargets: string(encodedTargets)},
+		},
+		Spec: divergeiov1alpha1.PreviewGroupSpec{
+			Database: &divergeiov1alpha1.EnvironmentDatabase{Mode: "cnpg"},
+			Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+				{Name: "api", Namespace: "backend", Mode: divergeiov1alpha1.ServiceModeImage, Image: "img:1", ClusterRef: spokeBRef},
+			},
+		},
+	}
+	childOnB := &divergeiov1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        childName,
+			Namespace:   "backend",
+			Labels:      map[string]string{labelPreviewGroup: pgName, labelManagedBy: "diverge-previewgroup"},
+			Annotations: map[string]string{annotationSharedGroupDB: "true"},
+		},
+		Spec: divergeiov1alpha1.EnvironmentSpec{
+			Deploy:   divergeiov1alpha1.EnvironmentDeploy{Namespace: "same", ClusterRef: spokeBRef},
+			Database: divergeiov1alpha1.EnvironmentDatabase{Mode: "shared", ConnectionRef: secName},
+		},
+	}
+	secOnA := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secName,
+			Namespace: "backend",
+			Labels: map[string]string{
+				labelPreviewGroup:           pgName,
+				"divergedev.com/managed-by": "diverge",
+				labelSharedGroupDBSecret:    "true",
+			},
+		},
+	}
+	secOnB := secOnA.DeepCopy()
+
+	spokeAClient := fake.NewClientBuilder().WithScheme(s).WithObjects(secOnA).Build()
+	spokeBClient := fake.NewClientBuilder().WithScheme(s).WithObjects(secOnB).Build()
+	hubClient := fake.NewClientBuilder().WithScheme(s).WithObjects(pg, childOnB).Build()
+
+	r := &PreviewGroupReconciler{
+		Client: hubClient,
+		Scheme: s,
+		ClusterClients: &clusterNameSpokeResolver{
+			byName: map[string]*multicluster.Target{
+				"spoke-a": {Name: "spoke-a", IsRemote: true, Client: spokeAClient},
+				"spoke-b": {Name: "spoke-b", IsRemote: true, Client: spokeBClient},
+			},
+		},
+	}
+
+	requeue, cErr := r.cleanupOrphanedChildSharedDBSecrets(ctx, pg, map[string]bool{"backend/" + childName: true})
+	require.NoError(t, cErr)
+	assert.False(t, requeue)
+
+	var gotB corev1.Secret
+	require.NoError(t, spokeBClient.Get(ctx, types.NamespacedName{Name: secName, Namespace: "backend"}, &gotB), "active Secret on spoke B must be preserved")
+
+	var gotA corev1.Secret
+	err = spokeAClient.Get(ctx, types.NamespacedName{Name: secName, Namespace: "backend"}, &gotA)
+	assert.True(t, apierrors.IsNotFound(err), "orphan Secret on spoke A with same namespace/name must be deleted independently of spoke B")
+
+	var updatedPG divergeiov1alpha1.PreviewGroup
+	require.NoError(t, hubClient.Get(ctx, types.NamespacedName{Name: pgName}, &updatedPG))
+	recorded := parseRecordedSharedDBSecretTargets(&updatedPG)
+	require.Len(t, recorded, 1, "spoke A recorded target must be pruned while keeping spoke B")
+	assert.Equal(t, "spoke-b", recorded[0].ClusterRef.Name)
+}
+
+func TestSharedDB_OrphanedPendingDrainRecordRecoversWhenConsumersExit(t *testing.T) {
+	ctx := context.Background()
+	s := runtime.NewScheme()
+	require.NoError(t, divergeiov1alpha1.AddToScheme(s))
+	require.NoError(t, corev1.AddToScheme(s))
+
+	pgName := "pg-orphan-pending-drain"
+	childName := childEnvironmentName(pgName, "api")
+	legacySecName := database.EnvSecretName(childName)
+	spokeRef := &divergeiov1alpha1.ClusterTargetRef{
+		Name:                "spoke-a",
+		KubeconfigSecretRef: &divergeiov1alpha1.SecretRef{Name: "spoke-a-kc", Namespace: "kube-system"},
+	}
+	encodedTargets, err := json.Marshal([]recordedGroupDBSecretTarget{{Namespace: "backend", ClusterRef: spokeRef}})
+	require.NoError(t, err)
+
+	now := metav1.Now()
+	pg := &divergeiov1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              pgName,
+			DeletionTimestamp: &now,
+			Finalizers:        []string{previewGroupFinalizer},
+			Annotations: map[string]string{
+				annotationGroupDBNamespace:     "default",
+				annotationGroupDBSecretTargets: string(encodedTargets),
+			},
+		},
+	}
+	pendingTakeoverSec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      legacySecName,
+			Namespace: "backend",
+			Labels: map[string]string{
+				"divergedev.com/environment":    truncateLabel(childName),
+				"divergedev.com/managed-by":     "diverge",
+				labelLegacyGroupDBDrainingOwner: pgName,
+			},
+			Annotations: map[string]string{
+				annotationLegacyGroupDBDraining: legacyGroupDBDrainingPending,
+				annotationLegacyGroupDBOwner:    pgName,
+			},
+		},
+		Data: map[string][]byte{"DATABASE_URL": []byte("postgres://per-service-keep")},
+	}
+	runningPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      childName + "-pod",
+			Namespace: "backend",
+			UID:       types.UID("pod-pending-1"),
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{
+				Name:    "api",
+				Image:   "img:1",
+				EnvFrom: []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: legacySecName}}}},
+			}},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+
+	spokeClient := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&corev1.Pod{}).WithObjects(pendingTakeoverSec, runningPod).Build()
+	hubClient := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&divergeiov1alpha1.PreviewGroup{}).WithObjects(pg).Build()
+	dbProv := &countingGroupDBProvider{dsn: "postgres://unused"}
+	r := &PreviewGroupReconciler{
+		Client:           hubClient,
+		Scheme:           s,
+		Recorder:         events.NewRecorder(k8sevents.NewFakeRecorder(10)),
+		DatabaseProvider: dbProv,
+		ClusterClients: &nsAwareSpokeResolver{
+			byNamespace: map[string]*multicluster.Target{
+				"backend": {Name: "spoke-a", IsRemote: true, Client: spokeClient},
+			},
+		},
+	}
+
+	// Reconcile 1: child is gone, pending drain record + Running Pod blocks DB teardown
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pgName}})
+	require.NoError(t, err)
+	assert.Greater(t, res.RequeueAfter, time.Duration(0))
+	assert.Zero(t, dbProv.teardowns.Load(), "pending drain record with Running consumer Pod must block DB teardown")
+
+	var keptSec corev1.Secret
+	require.NoError(t, spokeClient.Get(ctx, types.NamespacedName{Name: legacySecName, Namespace: "backend"}, &keptSec))
+	assert.Equal(t, legacyGroupDBDrainingPending, keptSec.Annotations[annotationLegacyGroupDBDraining])
+
+	// Complete Pod -> orphaned pending drain record recovers, clears drain metadata WITHOUT deleting per-service Secret, tears down DB, releases finalizer
+	require.NoError(t, spokeClient.Get(ctx, types.NamespacedName{Name: runningPod.Name, Namespace: "backend"}, runningPod))
+	runningPod.Status.Phase = corev1.PodSucceeded
+	require.NoError(t, spokeClient.Status().Update(ctx, runningPod))
+
+	_, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pgName}})
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), dbProv.teardowns.Load())
+	require.NoError(t, spokeClient.Get(ctx, types.NamespacedName{Name: legacySecName, Namespace: "backend"}, &keptSec), "per-service Secret must be retained after pending drain recovery")
+	assert.Equal(t, "postgres://per-service-keep", string(keptSec.Data["DATABASE_URL"]))
+	assert.Empty(t, keptSec.Annotations[annotationLegacyGroupDBDraining])
+	assert.Empty(t, keptSec.Annotations[annotationLegacyGroupDBOwner])
+	assert.Empty(t, keptSec.Labels[labelLegacyGroupDBDrainingOwner])
+
+	var gotPG divergeiov1alpha1.PreviewGroup
+	err = hubClient.Get(ctx, types.NamespacedName{Name: pgName}, &gotPG)
+	assert.True(t, apierrors.IsNotFound(err))
+}

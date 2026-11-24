@@ -3,6 +3,7 @@ package notifier
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 	"time"
@@ -171,4 +172,44 @@ func buildPreviewGroupLinks(rawURL, headerValue string) (cleanBase, openURL, exi
 	exitCopy.RawQuery = exitQ.Encode()
 	exitURL = exitCopy.String()
 	return cleanBase, openURL, exitURL
+}
+
+func previewGroupCommentMarker(pg *v1alpha1.PreviewGroup) string {
+	if pg == nil {
+		return ""
+	}
+	src := fmt.Sprintf("%s:%s#%d",
+		strings.TrimSpace(pg.Spec.Source.Provider),
+		strings.TrimSpace(pg.Spec.Source.Project),
+		pg.Spec.Source.MR,
+	)
+	return fmt.Sprintf("<!-- diverge:previewgroup=%s source=%s -->", strings.TrimSpace(pg.Name), src)
+}
+
+func withPreviewGroupCommentMarker(pg *v1alpha1.PreviewGroup, body string) string {
+	marker := previewGroupCommentMarker(pg)
+	if marker == "" || strings.Contains(body, marker) {
+		return body
+	}
+	return body + "\n\n" + marker
+}
+
+func parseNextLink(header string) string {
+	for _, part := range strings.Split(header, ",") {
+		segments := strings.Split(strings.TrimSpace(part), ";")
+		if len(segments) < 2 {
+			continue
+		}
+		rawURL := strings.TrimSpace(segments[0])
+		if !strings.HasPrefix(rawURL, "<") || !strings.HasSuffix(rawURL, ">") {
+			continue
+		}
+		for _, param := range segments[1:] {
+			p := strings.TrimSpace(param)
+			if strings.EqualFold(p, `rel="next"`) || strings.EqualFold(p, "rel=next") {
+				return rawURL[1 : len(rawURL)-1]
+			}
+		}
+	}
+	return ""
 }

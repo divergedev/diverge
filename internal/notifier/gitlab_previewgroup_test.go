@@ -17,6 +17,11 @@ func TestGitLabPreviewGroupNotifier_PostGroupCreated(t *testing.T) {
 	var requestBody map[string]string
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
 		requestedMethod = r.Method
 		requestedURL = r.URL.String()
 
@@ -178,5 +183,50 @@ func TestGitLabPreviewGroupNotifier_Coverage(t *testing.T) {
 	}
 	if err := n.UpdateGroupStatus(context.Background(), pg); err != nil {
 		t.Errorf("UpdateGroupStatus: %v", err)
+	}
+}
+
+func TestGitLabPreviewGroupNotifier_RecoversExistingNoteByMarker(t *testing.T) {
+	pg := &v1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "pg-recover"},
+		Spec: v1alpha1.PreviewGroupSpec{
+			Source: v1alpha1.EnvironmentSource{
+				Provider: "gitlab",
+				Project:  "owner/repo",
+				MR:       42,
+			},
+		},
+	}
+	marker := previewGroupCommentMarker(pg)
+	var methods []string
+	var paths []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method)
+		paths = append(paths, r.URL.String())
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
+				{"id": 9001, "body": "prior note\n\n" + marker},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id": 9001}`))
+	}))
+	defer ts.Close()
+
+	n := NewGitLabPreviewGroupNotifier(ts.URL, "test-token")
+	if err := n.PostGroupReady(context.Background(), pg); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if len(methods) != 2 || methods[0] != http.MethodGet || methods[1] != http.MethodPut {
+		t.Fatalf("expected [GET PUT], got %v", methods)
+	}
+	if paths[1] != "/api/v4/projects/owner%2Frepo/merge_requests/42/notes/9001" {
+		t.Fatalf("unexpected note update path: %s", paths[1])
+	}
+	if pg.Status.CommentID != 9001 {
+		t.Fatalf("expected recovered CommentID 9001, got %d", pg.Status.CommentID)
 	}
 }

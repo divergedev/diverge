@@ -307,8 +307,8 @@ func resolveDBSecret(env *v1alpha1.Environment) string {
 	}
 
 	// Primary path: user-provided connection secret
-	if db.ConnectionRef != "" {
-		return db.ConnectionRef
+	if connRef := strings.TrimSpace(db.ConnectionRef); connRef != "" {
+		return connRef
 	}
 
 	// Auto-provisioned secret for schema and branching modes (when database provisioning has

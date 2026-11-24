@@ -272,6 +272,47 @@ func (g *GitHubPreviewGroupNotifier) setCommentID(pg *v1alpha1.PreviewGroup, id 
 	pg.Status.CommentID = id
 }
 
+func (g *GitHubPreviewGroupNotifier) findExistingCommentID(ctx context.Context, escapedProject string, mr int, marker string) int64 {
+	if marker == "" {
+		return 0
+	}
+	nextURL := fmt.Sprintf("%s/repos/%s/issues/%d/comments?per_page=100", g.BaseURL, escapedProject, mr)
+	var matchedID int64
+	for page := 0; page < 5 && nextURL != ""; page++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, nextURL, nil)
+		if err != nil {
+			return matchedID
+		}
+		req.Header.Set("Authorization", "Bearer "+g.Token)
+		req.Header.Set("Accept", "application/vnd.github.v3+json")
+		resp, err := g.HTTPClient.Do(req)
+		if err != nil {
+			return matchedID
+		}
+		if resp.StatusCode != http.StatusOK {
+			_ = resp.Body.Close()
+			return matchedID
+		}
+		var comments []struct {
+			ID   int64  `json:"id"`
+			Body string `json:"body"`
+		}
+		decErr := json.NewDecoder(resp.Body).Decode(&comments)
+		linkHeader := resp.Header.Get("Link")
+		_ = resp.Body.Close()
+		if decErr != nil {
+			return matchedID
+		}
+		for _, c := range comments {
+			if c.ID != 0 && strings.Contains(c.Body, marker) {
+				matchedID = c.ID
+			}
+		}
+		nextURL = parseNextLink(linkHeader)
+	}
+	return matchedID
+}
+
 func (g *GitHubPreviewGroupNotifier) postOrUpdateComment(ctx context.Context, pg *v1alpha1.PreviewGroup, body string) error {
 	project, mr, err := g.getProjectAndMR(pg)
 	if err != nil {
@@ -283,6 +324,13 @@ func (g *GitHubPreviewGroupNotifier) postOrUpdateComment(ctx context.Context, pg
 		return err
 	}
 
+	if g.getCommentID(pg) == 0 {
+		if existingID := g.findExistingCommentID(ctx, escapedProject, mr, previewGroupCommentMarker(pg)); existingID != 0 {
+			g.setCommentID(pg, existingID)
+		}
+	}
+
+	body = withPreviewGroupCommentMarker(pg, body)
 	payload := map[string]string{"body": body}
 	jsonPayload, _ := json.Marshal(payload)
 

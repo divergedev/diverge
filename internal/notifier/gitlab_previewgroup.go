@@ -54,12 +54,58 @@ func (g *GitLabPreviewGroupNotifier) setCommentID(pg *v1alpha1.PreviewGroup, id 
 	pg.Status.CommentID = id
 }
 
+func (g *GitLabPreviewGroupNotifier) findExistingNoteID(ctx context.Context, escapedProject string, mr int, marker string) int64 {
+	if marker == "" {
+		return 0
+	}
+	nextURL := fmt.Sprintf("%s/api/v4/projects/%s/merge_requests/%d/notes?per_page=100&sort=desc&order_by=updated_at", g.BaseURL, escapedProject, mr)
+	for page := 0; page < 5 && nextURL != ""; page++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, nextURL, nil)
+		if err != nil {
+			return 0
+		}
+		req.Header.Set("PRIVATE-TOKEN", g.Token)
+		resp, err := g.HTTPClient.Do(req)
+		if err != nil {
+			return 0
+		}
+		if resp.StatusCode != http.StatusOK {
+			_ = resp.Body.Close()
+			return 0
+		}
+		var notes []struct {
+			ID   int64  `json:"id"`
+			Body string `json:"body"`
+		}
+		decErr := json.NewDecoder(resp.Body).Decode(&notes)
+		linkHeader := resp.Header.Get("Link")
+		_ = resp.Body.Close()
+		if decErr != nil {
+			return 0
+		}
+		for _, n := range notes {
+			if n.ID != 0 && strings.Contains(n.Body, marker) {
+				return n.ID
+			}
+		}
+		nextURL = parseNextLink(linkHeader)
+	}
+	return 0
+}
+
 func (g *GitLabPreviewGroupNotifier) postOrUpdateComment(ctx context.Context, pg *v1alpha1.PreviewGroup, body string) error {
 	project, mr, err := g.getProjectAndMR(pg)
 	if err != nil {
 		return err
 	}
 
+	if g.getCommentID(pg) == 0 {
+		if existingID := g.findExistingNoteID(ctx, project, mr, previewGroupCommentMarker(pg)); existingID != 0 {
+			g.setCommentID(pg, existingID)
+		}
+	}
+
+	body = withPreviewGroupCommentMarker(pg, body)
 	payload := map[string]string{"body": body}
 	jsonPayload, _ := json.Marshal(payload)
 

@@ -34,6 +34,12 @@ func TestGitHubPreviewGroupNotifier_PostGroupCreated(t *testing.T) {
 	var requestedBody map[string]interface{}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
 		requestedPath = r.URL.Path
 		requestedMethod = r.Method
 		_ = json.NewDecoder(r.Body).Decode(&requestedBody)
@@ -141,6 +147,12 @@ func TestGitHubPreviewGroupNotifier_RecreateOn404(t *testing.T) {
 func TestGitHubPreviewGroupNotifier_RateLimitBackoff(t *testing.T) {
 	callCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
 		callCount++
 		w.Header().Set("Content-Type", "application/json")
 		if callCount == 1 {
@@ -201,4 +213,42 @@ func TestGitHubRegistryProvidersHonorBaseURLEnv(t *testing.T) {
 	nDefault, err := Providers.Create("github", registry.Deps{})
 	require.NoError(t, err)
 	assert.Equal(t, "https://api.github.com", nDefault.(*GitHubNotifier).BaseURL)
+}
+
+func TestGitHubPreviewGroupNotifier_RecoversExistingCommentByMarker(t *testing.T) {
+	pg := &v1alpha1.PreviewGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "pg-recover"},
+		Spec: v1alpha1.PreviewGroupSpec{
+			Source: v1alpha1.EnvironmentSource{
+				Provider: "github",
+				Project:  "owner/repo",
+				MR:       42,
+			},
+		},
+	}
+	marker := previewGroupCommentMarker(pg)
+	var methods []string
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method)
+		paths = append(paths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
+				{"id": 1001, "body": "other comment <!-- diverge:previewgroup=other source=github:owner/repo#42 -->"},
+				{"id": 7777, "body": "previous status\n\n" + marker},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id": 7777}`))
+	}))
+	defer server.Close()
+
+	n := NewGitHubPreviewGroupNotifier(server.URL, "token")
+	require.NoError(t, n.PostGroupReady(context.Background(), pg))
+	assert.Equal(t, []string{http.MethodGet, http.MethodPatch}, methods)
+	assert.Equal(t, []string{"/repos/owner/repo/issues/42/comments", "/repos/owner/repo/issues/comments/7777"}, paths)
+	assert.Equal(t, int64(7777), pg.Status.CommentID)
 }

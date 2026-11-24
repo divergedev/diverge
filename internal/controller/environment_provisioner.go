@@ -297,8 +297,9 @@ func (r *EnvironmentReconciler) reconcileProvisioningWithTarget(ctx context.Cont
 			resolvedDBName == "neon" ||
 			strings.TrimSpace(env.Status.DatabaseProvider) == "neon" ||
 			env.Annotations["divergedev.com/database-provider"] != ""
+		connRef := strings.TrimSpace(env.Spec.Database.ConnectionRef)
 		if env.Annotations[annotationSharedGroupDB] != "true" &&
-			(env.Spec.Database.ConnectionRef == "" || env.Spec.Database.ConnectionRef == internaldb.EnvSecretName(env.Name) || isBranchingMode) &&
+			(connRef == "" || connRef == internaldb.EnvSecretName(env.Name) || isBranchingMode) &&
 			(len(dbStatus.EnvVars) > 0 || env.Spec.Database.Mode == "schema") {
 			envVars := dbStatus.EnvVars
 			if len(envVars) == 0 {

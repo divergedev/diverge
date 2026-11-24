@@ -77,6 +77,17 @@ func TestResolveDBSecret_ConnectionRefOverridesSchemaMode(t *testing.T) {
 	assert.Equal(t, "custom-secret", secret, "connectionRef should override schema auto-provision")
 }
 
+func TestResolveDBSecret_TrimsWhitespace(t *testing.T) {
+	env := testEnvWithDB("preview-42", "schema", " group-db ", "")
+	assert.Equal(t, "group-db", resolveDBSecret(env), "leading/trailing whitespace in connectionRef should be normalized")
+
+	envUnpadded := testEnvWithDB("preview-42", "schema", "group-db", "")
+	assert.Equal(t, "group-db", resolveDBSecret(envUnpadded), "unpadded connectionRef must remain valid")
+
+	envBlank := testEnvWithDB("preview-42", "", "   ", "")
+	assert.Empty(t, resolveDBSecret(envBlank), "whitespace-only connectionRef should be treated as unset")
+}
+
 func TestServiceConfigFetcher_WithSchemaDB_NoEnvFrom(t *testing.T) {
 	env := testEnvWithDB("preview-42", "schema", "", "")
 	fetcher := &ServiceConfigFetcher{}

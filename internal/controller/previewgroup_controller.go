@@ -281,7 +281,9 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			if statusBase.ResourceVersion != "" {
 				statusPatch = client.MergeFromWithOptions(statusBase, client.MergeFromWithOptimisticLock{})
 			}
-			_ = r.Status().Patch(ctx, &pg, statusPatch)
+			if pErr := r.Status().Patch(ctx, &pg, statusPatch); isConflictError(pErr) {
+				r.persistAcceptedCommentIfChanged(ctx, &pg, statusBase)
+			}
 			return ctrl.Result{}, groupDBErr
 		}
 		if !groupDBReady {
@@ -651,11 +653,13 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		})
 		if mErr != nil {
 			if isConflictError(mErr) {
+				r.persistAcceptedCommentIfChanged(ctx, &pg, statusBase)
 				return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
 			}
 			return ctrl.Result{}, fmt.Errorf("failed to persist PreviewGroup notification metadata: %w", mErr)
 		}
 		if revChanged {
+			r.persistAcceptedCommentIfChanged(ctx, &pg, statusBase)
 			return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
 		}
 		statusBase.ResourceVersion = pg.ResourceVersion
@@ -669,6 +673,7 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 	if err := r.Status().Patch(ctx, &pg, patch); err != nil {
 		if isConflictError(err) {
+			r.persistAcceptedCommentIfChanged(ctx, &pg, statusBase)
 			return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("failed to update PreviewGroup status: %w", err)
@@ -1007,6 +1012,45 @@ func resetCommentIfSourcePromoted(pg *divergeiov1alpha1.PreviewGroup) (string, s
 	return currentCommentSource, prevCommentSource, false
 }
 
+func (r *PreviewGroupReconciler) persistAcceptedCommentIfChanged(ctx context.Context, pg, statusBase *divergeiov1alpha1.PreviewGroup) {
+	if pg == nil || statusBase == nil {
+		return
+	}
+	if pg.Status.CommentID != 0 && pg.Status.CommentSource != "" &&
+		(pg.Status.CommentID != statusBase.Status.CommentID || pg.Status.CommentSource != statusBase.Status.CommentSource) {
+		r.persistAcceptedCommentOnConflict(ctx, pg.Name, pg.Status.CommentID, pg.Status.CommentSource)
+	}
+}
+
+func (r *PreviewGroupReconciler) persistAcceptedCommentOnConflict(ctx context.Context, pgName string, commentID int64, commentSource string) {
+	if r == nil || r.Client == nil || pgName == "" || commentID == 0 || commentSource == "" {
+		return
+	}
+	for attempt := 0; attempt < 3; attempt++ {
+		var latest divergeiov1alpha1.PreviewGroup
+		if err := r.Get(ctx, types.NamespacedName{Name: pgName}, &latest); err != nil {
+			return
+		}
+		if previewGroupCommentSourceKey(&latest) != commentSource {
+			return
+		}
+		if latest.Status.CommentID == commentID && latest.Status.CommentSource == commentSource {
+			return
+		}
+		base := latest.DeepCopy()
+		latest.Status.CommentID = commentID
+		latest.Status.CommentSource = commentSource
+		patch := client.MergeFrom(base)
+		if base.ResourceVersion != "" {
+			patch = client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
+		}
+		err := r.Status().Patch(ctx, &latest, patch)
+		if err == nil || !isConflictError(err) {
+			return
+		}
+	}
+}
+
 // listChildEnvironments returns all Environments owned by this PreviewGroup.
 func (r *PreviewGroupReconciler) listChildEnvironments(ctx context.Context, pg *divergeiov1alpha1.PreviewGroup) ([]divergeiov1alpha1.Environment, error) {
 	var envList divergeiov1alpha1.EnvironmentList
@@ -1080,11 +1124,13 @@ func (r *PreviewGroupReconciler) deleteOrphanedEnvironments(ctx context.Context,
 			logger.Info("Deleting orphaned Environment", "name", child.Name, "namespace", child.Namespace)
 			if child.Spec.Deploy.ClusterRef != nil && multicluster.IsRemoteEnv(child) && childMayHoldSharedDBSecret(child, nil) {
 				if recRevChanged, recErr := r.recordSharedDBSecretTarget(ctx, pg, child.Namespace, child.Spec.Deploy.ClusterRef); recErr != nil {
+					if isConflictError(recErr) {
+						return false, recErr
+					}
 					errs = append(errs, fmt.Errorf("failed to record remote spoke target for orphaned Environment %s/%s: %w", child.Namespace, child.Name, recErr))
 					continue
 				} else if recRevChanged {
-					errs = append(errs, errPreviewGroupRevisionChanged)
-					continue
+					return false, errPreviewGroupRevisionChanged
 				}
 			}
 			hookCtx, cancelHook := context.WithTimeout(ctx, 15*time.Second)

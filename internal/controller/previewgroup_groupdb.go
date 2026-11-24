@@ -788,6 +788,25 @@ func namespaceWorkloadsStillUseSecret(
 	return false, nil
 }
 
+func childEffectiveSharedDBNamespaces(child *divergeiov1alpha1.Environment) []string {
+	if child == nil {
+		return nil
+	}
+	targetNS := strings.TrimSpace(child.Namespace)
+	if child.Spec.Deploy.Namespace == "create" {
+		targetNS = strings.TrimSpace(child.PreviewNamespace())
+	}
+	seen := make(map[string]bool, 2)
+	var namespaces []string
+	for _, ns := range []string{targetNS, strings.TrimSpace(child.Namespace)} {
+		if ns != "" && !seen[ns] {
+			seen[ns] = true
+			namespaces = append(namespaces, ns)
+		}
+	}
+	return namespaces
+}
+
 func (r *PreviewGroupReconciler) childTargetClientAndNamespaces(
 	ctx context.Context,
 	child *divergeiov1alpha1.Environment,
@@ -802,21 +821,7 @@ func (r *PreviewGroupReconciler) childTargetClientAndNamespaces(
 	if targetClient == nil {
 		targetClient = r.Client
 	}
-
-	targetNS := child.Namespace
-	if child.Spec.Deploy.Namespace == "create" {
-		targetNS = child.PreviewNamespace()
-	}
-	seenNS := make(map[string]bool, 2)
-	var namespaces []string
-	for _, ns := range []string{targetNS, child.Namespace} {
-		ns = strings.TrimSpace(ns)
-		if ns != "" && !seenNS[ns] {
-			seenNS[ns] = true
-			namespaces = append(namespaces, ns)
-		}
-	}
-	return targetClient, namespaces, nil
+	return targetClient, childEffectiveSharedDBNamespaces(child), nil
 }
 
 func hasGroupOwnedSecretInNamespaces(
@@ -1455,61 +1460,11 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 			sharedDesiredKeys[svcNS+"/"+childEnvironmentName(pg.Name, svc.Name)] = true
 		}
 	}
-	keepSecrets := make(map[string]bool, (len(children)+len(desiredEnvNames))*2)
-	deferredKeepSecrets := make(map[string]bool)
-	drainingClearCandidates := make(map[string]bool)
-	var errs []error
-	for i := range children {
-		child := &children[i]
-		childKey := child.Namespace + "/" + child.Name
-		if multicluster.IsRemoteEnv(child) &&
-			!childMayHoldSharedDBSecret(child, sharedDesiredKeys) &&
-			!hasRecordedTargetForNamespaceAndRef(pg, child.Namespace, child.Spec.Deploy.ClusterRef) {
-			continue
-		}
-		sharedSecName := sharedGroupDBSecretName(child.Name)
-		legacySecName := legacySharedGroupDBSecretName(child.Name)
-		sharedKey := child.Namespace + "/" + sharedSecName
-		legacyKey := child.Namespace + "/" + legacySecName
-
-		inUse, useErr := r.childOrWorkloadStillUsesSharedDBSecret(ctx, pg.Name, child)
-		if useErr != nil {
-			keepSecrets[sharedKey] = true
-			keepSecrets[legacyKey] = true
-			errs = append(errs, useErr)
-			continue
-		}
-		if inUse {
-			keepSecrets[sharedKey] = true
-			if !sharedDesiredKeys[childKey] {
-				keepSecrets[legacyKey] = true
-				deferredKeepSecrets[sharedKey] = true
-				deferredKeepSecrets[legacyKey] = true
-			} else {
-				legacyInUse, legErr := r.legacyGroupSecretStillUsed(ctx, pg.Name, child, legacySecName)
-				if legErr != nil {
-					keepSecrets[legacyKey] = true
-					errs = append(errs, legErr)
-				} else if legacyInUse {
-					keepSecrets[legacyKey] = true
-					deferredKeepSecrets[legacyKey] = true
-				}
-			}
-		} else if !sharedDesiredKeys[childKey] && child.Annotations[annotationSharedGroupDBDraining] == "true" {
-			drainingClearCandidates[childKey] = true
-		}
+	type targetSecretKey struct {
+		scanIdx int
+		ns      string
+		name    string
 	}
-	for envKey := range desiredEnvNames {
-		if !sharedDesiredKeys[envKey] {
-			continue
-		}
-		parts := strings.SplitN(envKey, "/", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		keepSecrets[parts[0]+"/"+sharedGroupDBSecretName(parts[1])] = true
-	}
-
 	type recordedTargetRef struct {
 		key string
 		ns  string
@@ -1575,6 +1530,14 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 		(strings.TrimSpace(pg.Annotations[annotationGroupDBNamespace]) != "" ||
 			strings.TrimSpace(pg.Annotations[annotationGroupDBProvider]) != "")
 	activeRemoteTargetKeys := make(map[string]bool)
+	keepSecrets := make(map[targetSecretKey]bool, (len(children)+len(desiredEnvNames))*2)
+	deferredKeepSecrets := make(map[targetSecretKey]bool)
+	liveChildLegacySecrets := make(map[targetSecretKey]bool)
+	drainingClearCandidates := make(map[string]bool)
+	childScanIdx := make(map[string]int)
+	childScanFailed := make(map[string]bool)
+	var errs []error
+
 	if pg.Spec.ClusterRef != nil && (hasDedicatedGroupDatabase(pg) || hasPinned) {
 		activeRemoteTargetKeys[canonicalClusterRefKey(anchorNS, pg.Spec.ClusterRef)] = true
 		probeAnchor := &divergeiov1alpha1.Environment{
@@ -1598,54 +1561,132 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 			if svcNS == "" {
 				svcNS = "default"
 			}
+			childName := childEnvironmentName(pg.Name, svc.Name)
+			envKey := svcNS + "/" + childName
 			effClusterRef := pg.Spec.ClusterRef
 			if svc.ClusterRef != nil {
 				effClusterRef = svc.ClusterRef
 			}
+			scanIdx := 0
 			if effClusterRef != nil {
 				activeRemoteTargetKeys[canonicalClusterRefKey(svcNS, effClusterRef)] = true
 				probeSvc := &divergeiov1alpha1.Environment{
-					ObjectMeta: metav1.ObjectMeta{Name: childEnvironmentName(pg.Name, svc.Name), Namespace: svcNS},
+					ObjectMeta: metav1.ObjectMeta{Name: childName, Namespace: svcNS},
 					Spec:       divergeiov1alpha1.EnvironmentSpec{Deploy: divergeiov1alpha1.EnvironmentDeploy{Namespace: "same", ClusterRef: effClusterRef}},
 				}
 				if t, tErr := helper.resolveTarget(ctx, probeSvc); tErr != nil {
 					if multicluster.IsRemoteEnv(probeSvc) {
 						errs = append(errs, fmt.Errorf("failed to resolve spoke cluster for service %q shared DB Secret cleanup: %w", svc.Name, tErr))
+						continue
 					}
-				} else {
-					addRemoteScan(t, svcNS, effClusterRef)
+				} else if idx, ok := addRemoteScan(t, svcNS, effClusterRef); ok {
+					scanIdx = idx
 				}
+			}
+			if desiredEnvNames[envKey] {
+				keepSecrets[targetSecretKey{scanIdx: scanIdx, ns: svcNS, name: sharedGroupDBSecretName(childName)}] = true
 			}
 		}
 	}
-	childScanIdx := make(map[string]int)
-	childScanFailed := make(map[string]bool)
 	for i := range children {
 		child := &children[i]
-		if child.Spec.Deploy.ClusterRef == nil || !childMayHoldSharedDBSecret(child, sharedDesiredKeys) {
+		childKey := child.Namespace + "/" + child.Name
+		mayHold := childMayHoldSharedDBSecret(child, sharedDesiredKeys)
+		hasRecorded := hasRecordedTargetForNamespaceAndRef(pg, child.Namespace, child.Spec.Deploy.ClusterRef)
+		if multicluster.IsRemoteEnv(child) && !mayHold && !hasRecorded {
 			continue
 		}
-		childKey := child.Namespace + "/" + child.Name
-		sharedKey := child.Namespace + "/" + sharedGroupDBSecretName(child.Name)
-		legacyKey := child.Namespace + "/" + legacySharedGroupDBSecretName(child.Name)
-		if sharedDesiredKeys[childKey] || keepSecrets[sharedKey] || keepSecrets[legacyKey] {
-			activeRemoteTargetKeys[canonicalClusterRefKey(child.Namespace, child.Spec.Deploy.ClusterRef)] = true
-		}
-		probeChild := &divergeiov1alpha1.Environment{
-			ObjectMeta: metav1.ObjectMeta{Name: child.Name, Namespace: child.Namespace},
-			Spec:       divergeiov1alpha1.EnvironmentSpec{Deploy: divergeiov1alpha1.EnvironmentDeploy{Namespace: "same", ClusterRef: child.Spec.Deploy.ClusterRef}},
-		}
-		if t, tErr := helper.resolveTarget(ctx, probeChild); tErr != nil {
-			if multicluster.IsRemoteEnv(probeChild) {
-				errs = append(errs, fmt.Errorf("failed to resolve spoke cluster for child %s/%s shared DB Secret cleanup: %w", child.Namespace, child.Name, tErr))
-				childScanFailed[childKey] = true
+		sharedSecName := sharedGroupDBSecretName(child.Name)
+		legacySecName := legacySharedGroupDBSecretName(child.Name)
+		childNSList := childEffectiveSharedDBNamespaces(child)
+
+		scanIdx := 0
+		if child.Spec.Deploy.ClusterRef != nil {
+			probeChild := &divergeiov1alpha1.Environment{
+				ObjectMeta: metav1.ObjectMeta{Name: child.Name, Namespace: child.Namespace},
+				Spec:       divergeiov1alpha1.EnvironmentSpec{Deploy: divergeiov1alpha1.EnvironmentDeploy{Namespace: "same", ClusterRef: child.Spec.Deploy.ClusterRef}},
 			}
-		} else {
-			if idx, ok := addRemoteScan(t, child.Namespace, child.Spec.Deploy.ClusterRef); ok {
-				childScanIdx[childKey] = idx
+			t, tErr := helper.resolveTarget(ctx, probeChild)
+			if tErr != nil {
+				if multicluster.IsRemoteEnv(probeChild) {
+					errs = append(errs, fmt.Errorf("failed to resolve spoke cluster for child %s/%s shared DB Secret cleanup: %w", child.Namespace, child.Name, tErr))
+					childScanFailed[childKey] = true
+					continue
+				}
+			} else if t != nil && t.IsRemote && t.Client != nil {
+				for _, ns := range childNSList {
+					if idx, ok := addRemoteScan(t, ns, child.Spec.Deploy.ClusterRef); ok {
+						scanIdx = idx
+						childScanIdx[childKey] = idx
+					}
+				}
 			}
-			if previewNS := child.PreviewNamespace(); previewNS != "" && previewNS != child.Namespace {
-				addRemoteScan(t, previewNS, child.Spec.Deploy.ClusterRef)
+		}
+		for _, ns := range childNSList {
+			liveChildLegacySecrets[targetSecretKey{scanIdx: scanIdx, ns: ns, name: legacySecName}] = true
+		}
+
+		markKeepShared := func() {
+			for _, ns := range childNSList {
+				keepSecrets[targetSecretKey{scanIdx: scanIdx, ns: ns, name: sharedSecName}] = true
+			}
+		}
+		markKeepLegacy := func(deferred bool) {
+			for _, ns := range childNSList {
+				lKey := targetSecretKey{scanIdx: scanIdx, ns: ns, name: legacySecName}
+				keepSecrets[lKey] = true
+				if deferred {
+					deferredKeepSecrets[lKey] = true
+				}
+			}
+		}
+		markKeepBoth := func(deferred bool) {
+			for _, ns := range childNSList {
+				sKey := targetSecretKey{scanIdx: scanIdx, ns: ns, name: sharedSecName}
+				lKey := targetSecretKey{scanIdx: scanIdx, ns: ns, name: legacySecName}
+				keepSecrets[sKey] = true
+				keepSecrets[lKey] = true
+				if deferred {
+					deferredKeepSecrets[sKey] = true
+					deferredKeepSecrets[lKey] = true
+				}
+			}
+		}
+
+		inUse, useErr := r.childOrWorkloadStillUsesSharedDBSecret(ctx, pg.Name, child)
+		if useErr != nil {
+			markKeepBoth(false)
+			errs = append(errs, useErr)
+		} else if inUse {
+			if !sharedDesiredKeys[childKey] {
+				markKeepBoth(true)
+			} else {
+				markKeepShared()
+				legacyInUse, legErr := r.legacyGroupSecretStillUsed(ctx, pg.Name, child, legacySecName)
+				if legErr != nil {
+					markKeepLegacy(false)
+					errs = append(errs, legErr)
+				} else if legacyInUse {
+					markKeepLegacy(true)
+				}
+			}
+		} else if !sharedDesiredKeys[childKey] && child.Annotations[annotationSharedGroupDBDraining] == "true" {
+			drainingClearCandidates[childKey] = true
+		}
+
+		if child.Spec.Deploy.ClusterRef != nil && mayHold {
+			childRetained := sharedDesiredKeys[childKey]
+			if !childRetained {
+				for _, ns := range childNSList {
+					if keepSecrets[targetSecretKey{scanIdx: scanIdx, ns: ns, name: sharedSecName}] ||
+						keepSecrets[targetSecretKey{scanIdx: scanIdx, ns: ns, name: legacySecName}] {
+						childRetained = true
+						break
+					}
+				}
+			}
+			if childRetained {
+				activeRemoteTargetKeys[canonicalClusterRefKey(child.Namespace, child.Spec.Deploy.ClusterRef)] = true
 			}
 		}
 	}
@@ -1741,11 +1782,12 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 				continue
 			}
 			secKey := sec.Namespace + "/" + sec.Name
+			tsKey := targetSecretKey{scanIdx: scanIdx, ns: sec.Namespace, name: sec.Name}
 			handledGroupKeys[secKey] = true
-			if keepSecrets[secKey] {
+			if keepSecrets[tsKey] {
 				remainingNS[sec.Namespace] = true
 				remainingSecrets[secKey] = true
-				if deferredKeepSecrets[secKey] {
+				if deferredKeepSecrets[tsKey] {
 					requeueNeeded = true
 				}
 				continue
@@ -1799,24 +1841,40 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 		for i := range takeoverItems {
 			sec := &takeoverItems[i]
 			secKey := sec.Namespace + "/" + sec.Name
+			tsKey := targetSecretKey{scanIdx: scanIdx, ns: sec.Namespace, name: sec.Name}
 			if seenTakeoverKeys[secKey] || handledGroupKeys[secKey] || isGroupOwnedSharedDBSecret(sec, pg.Name) {
 				continue
 			}
 			seenTakeoverKeys[secKey] = true
-			if keepSecrets[secKey] {
+			if keepSecrets[tsKey] {
 				remainingNS[sec.Namespace] = true
 				remainingSecrets[secKey] = true
-				if deferredKeepSecrets[secKey] {
+				if deferredKeepSecrets[tsKey] {
 					requeueNeeded = true
 				}
 				continue
 			}
 			val := strings.TrimSpace(sec.Annotations[annotationLegacyGroupDBDraining])
 			if val == legacyGroupDBDrainingPending {
-				remainingNS[sec.Namespace] = true
-				remainingSecrets[secKey] = true
-				requeueNeeded = true
-				continue
+				if liveChildLegacySecrets[tsKey] {
+					remainingNS[sec.Namespace] = true
+					remainingSecrets[secKey] = true
+					requeueNeeded = true
+					continue
+				}
+				inUse, checkErr := namespaceWorkloadsStillUseSecret(ctx, scan.client, sec.Namespace, "", []string{sec.Name}, false, nil, "")
+				if checkErr != nil {
+					remainingNS[sec.Namespace] = true
+					remainingSecrets[secKey] = true
+					errs = append(errs, checkErr)
+					continue
+				}
+				if inUse {
+					remainingNS[sec.Namespace] = true
+					remainingSecrets[secKey] = true
+					requeueNeeded = true
+					continue
+				}
 			}
 			if strings.HasPrefix(val, legacyGroupDBDrainingUIDPrefix) {
 				rawIDs := strings.TrimPrefix(val, legacyGroupDBDrainingUIDPrefix)
@@ -1895,10 +1953,7 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 			}
 			scanIdx = idx
 		}
-		checkNS := []string{child.Namespace}
-		if previewNS := child.PreviewNamespace(); previewNS != "" && previewNS != child.Namespace {
-			checkNS = append(checkNS, previewNS)
-		}
+		checkNS := childEffectiveSharedDBNamespaces(child)
 		sharedSecName := sharedGroupDBSecretName(child.Name)
 		legacySecName := legacySharedGroupDBSecretName(child.Name)
 		canClear := true
@@ -1913,8 +1968,8 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 			legacyKey := ns + "/" + legacySecName
 			if scanRemainingSecrets[scanIdx][sharedKey] ||
 				scanRemainingSecrets[scanIdx][legacyKey] ||
-				keepSecrets[sharedKey] ||
-				keepSecrets[legacyKey] {
+				keepSecrets[targetSecretKey{scanIdx: scanIdx, ns: ns, name: sharedSecName}] ||
+				keepSecrets[targetSecretKey{scanIdx: scanIdx, ns: ns, name: legacySecName}] {
 				canClear = false
 				break
 			}
