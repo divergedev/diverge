@@ -20,6 +20,7 @@ import (
 	"github.com/divergedev/diverge/internal/config"
 	"github.com/divergedev/diverge/internal/deployer"
 	"github.com/divergedev/diverge/internal/metrics"
+	"github.com/divergedev/diverge/internal/previewgroup"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -35,8 +36,9 @@ type GitHubWebhookHandler struct {
 	DefaultNS     string
 	// SkipWithoutConfig ignores events from projects with no .diverge.yaml on
 	// the source branch, for deployers that cannot run without one.
-	SkipWithoutConfig bool
-	Dedup             *DeliveryDedup
+	SkipWithoutConfig    bool
+	DisablePreviewGroups bool
+	Dedup                *DeliveryDedup
 }
 
 type GitHubPRPayload struct {
@@ -114,7 +116,7 @@ func (h *GitHubWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	event := r.Header.Get("X-GitHub-Event")
 	if event == "issue_comment" {
 		action = "issue_comment"
-		h.handleIssueComment(ctx, w, bodyBytes)
+		h.handleIssueComment(ctx, w, bodyBytes, deliveryID)
 		return
 	}
 	if event != "pull_request" {
@@ -136,12 +138,14 @@ func (h *GitHubWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	switch payload.Action {
 	case "opened", "reopened", "synchronize":
 		if err := h.reconcileEnvironment(ctx, &payload); err != nil {
+			h.Dedup.Release(deliveryID)
 			logger.Error(err, "Failed to reconcile environment")
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
 	case "closed":
 		if err := h.deleteEnvironment(ctx, &payload); err != nil {
+			h.Dedup.Release(deliveryID)
 			logger.Error(err, "Failed to delete environment")
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
@@ -186,7 +190,7 @@ func isAuthorizedGitHubCommenter(assoc string) bool {
 	}
 }
 
-func (h *GitHubWebhookHandler) handleIssueComment(ctx context.Context, w http.ResponseWriter, bodyBytes []byte) {
+func (h *GitHubWebhookHandler) handleIssueComment(ctx context.Context, w http.ResponseWriter, bodyBytes []byte, deliveryID string) {
 	logger := log.FromContext(ctx).WithName("github-webhook")
 
 	var payload GitHubIssueCommentPayload
@@ -263,6 +267,7 @@ func (h *GitHubWebhookHandler) handleIssueComment(ctx context.Context, w http.Re
 		feedback, execErr = ExecuteSlashCommandWithFeedback(ctx, h.Client, h.DefaultNS, cmd, repoURL, branch, prNumber)
 	}
 	if execErr != nil {
+		h.Dedup.Release(deliveryID)
 		logger.Error(execErr, "Failed to execute slash command", "action", cmd.Action, "pr", prNumber)
 		h.postFeedbackComment(ctx, payload.Repository.FullName, prNumber, fmt.Sprintf("❌ **Diverge Command Error**\n\nFailed to execute `/diverge %s`: %v\n\nRun `/diverge help` for a list of available commands.", cmd.Action, execErr))
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -435,9 +440,24 @@ func (h *GitHubWebhookHandler) reconcileEnvironment(ctx context.Context, payload
 	})
 	if errors.Is(err, errNoDotDiverge) {
 		log.FromContext(ctx).WithName("github-webhook").Info("Skipping project without .diverge.yaml", "project", env.Spec.Source.Project, "ref", env.Spec.Source.Branch)
-		return client.IgnoreNotFound(h.Client.Delete(ctx, env))
+		if delErr := client.IgnoreNotFound(h.Client.Delete(ctx, env)); delErr != nil {
+			return delErr
+		}
+		if h.DisablePreviewGroups {
+			return nil
+		}
+		_, detachErr := previewgroup.DetachMemberByPR(ctx, h.Client, payload.Repository.FullName, payload.PullRequest.Number, ns+"/"+envName)
+		return detachErr
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if !h.DisablePreviewGroups {
+		if _, syncErr := previewgroup.SyncMemberEnvironment(ctx, h.Client, env); syncErr != nil {
+			return fmt.Errorf("failed to sync Environment %s/%s to shared PreviewGroups: %w", ns, env.Name, syncErr)
+		}
+	}
+	return nil
 }
 
 func (h *GitHubWebhookHandler) deleteEnvironment(ctx context.Context, payload *GitHubPRPayload) error {
@@ -453,7 +473,14 @@ func (h *GitHubWebhookHandler) deleteEnvironment(ctx context.Context, payload *G
 			Namespace: ns,
 		},
 	}
-	return client.IgnoreNotFound(h.Client.Delete(ctx, env))
+	if err := client.IgnoreNotFound(h.Client.Delete(ctx, env)); err != nil {
+		return err
+	}
+	if h.DisablePreviewGroups {
+		return nil
+	}
+	_, err := previewgroup.DetachMemberByPR(ctx, h.Client, payload.Repository.FullName, payload.PullRequest.Number, ns+"/"+envName)
+	return err
 }
 
 // normalizeGitHubAction maps webhook actions to a bounded set of known values

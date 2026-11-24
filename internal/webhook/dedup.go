@@ -73,3 +73,13 @@ func (d *DeliveryDedup) IsDuplicate(id string) bool {
 	d.entries[id] = now
 	return false
 }
+
+// Release removes a delivery ID after a transient 5xx failure so SCM webhook retries can re-run unfinished work.
+func (d *DeliveryDedup) Release(id string) {
+	if d == nil || id == "" {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	delete(d.entries, id)
+}

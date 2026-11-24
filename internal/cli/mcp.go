@@ -315,6 +315,26 @@ var agentTaskToolMetadata = map[string]mcpToolMeta{
 			OpenWorldHint:   mcp.ToBoolPtr(false),
 		},
 	},
+	"diverge_join_preview_group": {
+		description: joinPreviewGroupToolDescription,
+		annotations: mcp.ToolAnnotation{
+			Title:           "Join Multi-MR Preview Group",
+			ReadOnlyHint:    mcp.ToBoolPtr(false),
+			DestructiveHint: mcp.ToBoolPtr(false),
+			IdempotentHint:  mcp.ToBoolPtr(true),
+			OpenWorldHint:   mcp.ToBoolPtr(false),
+		},
+	},
+	"diverge_leave_preview_group": {
+		description: leavePreviewGroupToolDescription,
+		annotations: mcp.ToolAnnotation{
+			Title:           "Leave Multi-MR Preview Group",
+			ReadOnlyHint:    mcp.ToBoolPtr(false),
+			DestructiveHint: mcp.ToBoolPtr(true),
+			IdempotentHint:  mcp.ToBoolPtr(true),
+			OpenWorldHint:   mcp.ToBoolPtr(false),
+		},
+	},
 }
 
 func newMCPServer(envClient divergev1alpha1connect.EnvironmentServiceClient, pgClient divergev1alpha1connect.PreviewGroupServiceClient, taskClient divergev1alpha1connect.AgentTaskServiceClient, allowDestructive bool, diagnoser ...*doctor.Diagnoser) *server.MCPServer {
@@ -337,6 +357,7 @@ func newMCPServerWithCluster(envClient divergev1alpha1connect.EnvironmentService
 
 	registerCustomTools(registry, envClient, diagnoser...)
 	registerCostSummaryTool(registry, clusterClient)
+	registerPreviewGroupComposeTools(registry, envClient, pgClient)
 
 	mcpServer := server.NewMCPServer("diverge", "1.0.0")
 
@@ -351,8 +372,8 @@ func newMCPServerWithCluster(envClient divergev1alpha1connect.EnvironmentService
 			continue
 		}
 
-		// Only register if allowed (simple destructive check)
-		if !allowDestructive && strings.Contains(toolName, "delete") {
+		// Only register destructive tools (delete or group leave/teardown) when --allow-destructive is enabled
+		if !allowDestructive && (strings.Contains(toolName, "delete") || toolName == "diverge_leave_preview_group") {
 			continue
 		}
 

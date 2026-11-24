@@ -188,3 +188,13 @@ progress.budget-progress::-moz-progress-bar {
     outline-offset: 2px;
   }
 }
+
+/* Native modal <dialog> scroll containment so backdrop/modal scrolling does not chain to the page */
+dialog:modal {
+  overscroll-behavior: contain;
+}
+
+dialog::backdrop {
+  overflow: hidden;
+  overscroll-behavior: contain;
+}

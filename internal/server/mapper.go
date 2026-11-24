@@ -108,13 +108,26 @@ func CRDPgToProto(crd *v1alpha1.PreviewGroup) (*pb.PreviewGroup, error) {
 	if crd == nil {
 		return nil, nil
 	}
-	b, err := json.Marshal(crd)
+	crdCopy := crd.DeepCopy()
+	if crdCopy.Spec.Lifecycle != nil {
+		crdCopy.Spec.Lifecycle.TTL = nil
+	}
+	b, err := json.Marshal(crdCopy)
 	if err != nil {
 		return nil, err
 	}
 	var proto pb.PreviewGroup
 	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(b, &proto); err != nil {
 		return nil, err
+	}
+	if crd.Spec.Lifecycle != nil && crd.Spec.Lifecycle.TTL != nil {
+		if proto.Spec == nil {
+			proto.Spec = &pb.PreviewGroupSpec{}
+		}
+		if proto.Spec.Lifecycle == nil {
+			proto.Spec.Lifecycle = &pb.PreviewGroupLifecycle{}
+		}
+		proto.Spec.Lifecycle.Ttl = durationpb.New(crd.Spec.Lifecycle.TTL.Duration)
 	}
 	proto.Name = crd.Name
 	proto.Namespace = crd.Namespace

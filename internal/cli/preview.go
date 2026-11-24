@@ -23,10 +23,11 @@ import (
 	"github.com/divergedev/diverge/internal/config"
 	"github.com/divergedev/diverge/internal/git"
 	"github.com/divergedev/diverge/internal/multicluster"
+	"github.com/divergedev/diverge/internal/previewgroup"
 )
 
 // newPreviewCmd creates the `diverge preview` parent command with
-// create, status, delete, and watch subcommands.
+// create, join, leave, status, delete, and watch subcommands.
 func newPreviewCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "preview",
@@ -39,6 +40,8 @@ or use the baseline (production) version.
 
 Examples:
   diverge preview create --service payments-api,consent-mgr
+  diverge preview join feat-checkout --service web-app=ghcr.io/acme/web-app:mr-101 --mr 101
+  diverge preview leave feat-checkout --service web-app
   diverge preview status mr-42
   diverge preview delete mr-42
   diverge preview watch mr-42`,
@@ -46,6 +49,8 @@ Examples:
 	}
 
 	cmd.AddCommand(newPreviewCreateCmd(app))
+	cmd.AddCommand(newPreviewJoinCmd(app))
+	cmd.AddCommand(newPreviewLeaveCmd(app))
 	cmd.AddCommand(newPreviewStatusCmd(app))
 	cmd.AddCommand(newPreviewDeleteCmd(app))
 	cmd.AddCommand(newPreviewWatchCmd(app))
@@ -80,6 +85,7 @@ func newPreviewCreateCmd(app *App) *cobra.Command {
 		configPath       string
 		clusterName      string
 		clusterSecret    string
+		upsert           bool
 	)
 
 	cmd := &cobra.Command{
@@ -131,7 +137,7 @@ Examples:
   diverge preview create --service payments-api=img:8080 --dry-run`,
 		// editorconfig-checker-enable
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPreviewCreateWithCluster(cmd, app, configPath, name, services, headerKey, headerValue, ttl, mrNumber, dryRun, migrationImage, migrationArgs, migrationBlock,
+			return runPreviewCreateWithCluster(cmd, app, configPath, name, services, headerKey, headerValue, ttl, mrNumber, dryRun, upsert, migrationImage, migrationArgs, migrationBlock,
 				atlasMode, atlasEngine, atlasDir, atlasSchema, atlasConfigMap, atlasImage, atlasBlocking, atlasDestructive, atlasArgs, clusterName, clusterSecret)
 		},
 	}
@@ -144,6 +150,7 @@ Examples:
 	cmd.Flags().StringVar(&ttl, "ttl", "", "auto-delete after duration (e.g. 72h)")
 	cmd.Flags().IntVar(&mrNumber, "mr", 0, "MR/PR number")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print PreviewGroup YAML without creating")
+	cmd.Flags().BoolVar(&upsert, "upsert", false, "update existing PreviewGroup in place if it already exists")
 	cmd.Flags().StringVar(&clusterName, "cluster", "", "target spoke cluster name for the preview group (or 'local' to force hub)")
 	cmd.Flags().StringVar(&clusterSecret, "cluster-secret", "", "same-namespace Secret (<name> or <name>/<key>) holding spoke kubeconfig")
 	cmd.Flags().StringVar(&migrationImage, "migration-image", "", "container image for database migration Job")
@@ -164,7 +171,7 @@ Examples:
 	return cmd
 }
 
-func runPreviewCreateWithCluster(cmd *cobra.Command, app *App, configPath, name string, services []string, headerKey, headerValue, ttl string, mrNumber int, dryRun bool, migrationImage string, migrationArgs []string, migrationBlock bool,
+func runPreviewCreateWithCluster(cmd *cobra.Command, app *App, configPath, name string, services []string, headerKey, headerValue, ttl string, mrNumber int, dryRun, upsert bool, migrationImage string, migrationArgs []string, migrationBlock bool,
 	atlasMode, atlasEngine, atlasDir, atlasSchema, atlasConfigMap, atlasImage string, atlasBlocking bool, atlasDestructive string, atlasArgs []string, clusterName, clusterSecret string) error {
 	// Detect git context
 	gitCtx, err := git.Detect()
@@ -358,6 +365,41 @@ func runPreviewCreateWithCluster(cmd *cobra.Command, app *App, configPath, name 
 		return fmt.Errorf("failed to create Kubernetes client: %w", err)
 	}
 
+	if upsert {
+		var ttlDur *time.Duration
+		if pg.Spec.Lifecycle != nil && pg.Spec.Lifecycle.TTL != nil {
+			d := pg.Spec.Lifecycle.TTL.Duration
+			ttlDur = &d
+		}
+		res, joinErr := previewgroup.Join(cmd.Context(), c, previewgroup.JoinOptions{
+			GroupName:           pg.Name,
+			Namespace:           app.Namespace,
+			Services:            svcSpecs,
+			Source:              &pg.Spec.Source,
+			HeaderKey:           headerKey,
+			HeaderKeyExplicit:   cmd.Flags().Changed("header-key"),
+			HeaderValue:         headerValue,
+			HeaderValueExplicit: cmd.Flags().Changed("header-value"),
+			TTL:                 ttlDur,
+			TTLExplicit:         cmd.Flags().Changed("ttl"),
+			GroupDatabase:       pg.Spec.Database,
+			ClusterRef:          pg.Spec.ClusterRef,
+			ClusterRefExplicit:  cmd.Flags().Changed("cluster") || cmd.Flags().Changed("cluster-secret") || pg.Spec.ClusterRef != nil,
+			ReplaceServices:     true,
+		})
+		if joinErr != nil {
+			return fmt.Errorf("failed to upsert PreviewGroup: %w", joinErr)
+		}
+		verb := "updated"
+		if res.Created {
+			verb = "created"
+		}
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "✅ PreviewGroup %q %s (%d services)\n", res.PreviewGroup.Name, verb, len(svcSpecs))
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "   Header: %s: %s\n", res.PreviewGroup.Spec.Routing.HeaderKey, res.PreviewGroup.Spec.Routing.HeaderValue)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "   Run 'diverge preview status %s' to monitor.\n", res.PreviewGroup.Name)
+		return nil
+	}
+
 	if err := c.Create(cmd.Context(), pg); err != nil {
 		return fmt.Errorf("failed to create PreviewGroup: %w", err)
 	}
@@ -373,6 +415,10 @@ func runPreviewCreateWithCluster(cmd *cobra.Command, app *App, configPath, name 
 // If no '=' is present, the service is treated as baseline.
 // The port is detected as the last segment if it's purely numeric.
 func parseServiceSpecs(services []string) ([]divergeiov1alpha1.PreviewGroupServiceSpec, error) {
+	return parseServiceSpecsWithDefaultPort(services, 8080)
+}
+
+func parseServiceSpecsWithDefaultPort(services []string, defaultPort int32) ([]divergeiov1alpha1.PreviewGroupServiceSpec, error) {
 	specs := make([]divergeiov1alpha1.PreviewGroupServiceSpec, 0, len(services))
 	for _, s := range services {
 		s = strings.TrimSpace(s)
@@ -394,7 +440,7 @@ func parseServiceSpecs(services []string) ([]divergeiov1alpha1.PreviewGroupServi
 
 		// Check if last colon-segment is a port number
 		var image string
-		var port int32 = 8080
+		port := defaultPort
 		lastColon := strings.LastIndex(rest, ":")
 		if lastColon > 0 {
 			maybePart := rest[lastColon+1:]
@@ -404,7 +450,7 @@ func parseServiceSpecs(services []string) ([]divergeiov1alpha1.PreviewGroupServi
 			} else {
 				// Not a port — whole thing is image (e.g. image:tag)
 				image = rest
-				port = 8080
+				port = defaultPort
 			}
 		} else {
 			image = rest
@@ -472,6 +518,14 @@ func runPreviewStatus(ctx context.Context, app *App, name string, out io.Writer)
 		}
 	}
 
+	if members := previewgroup.ParseMembers(&pg); len(members) > 0 {
+		_, _ = fmt.Fprintln(out, "   Members:")
+		for _, m := range members {
+			origin := formatMemberOrigin(m)
+			_, _ = fmt.Fprintf(out, "     • %s ← %s\n", m.Service, origin)
+		}
+	}
+
 	hasRemoteSvc := false
 	for _, svc := range pg.Status.Services {
 		if tc := strings.TrimSpace(svc.TargetCluster); tc != "" && tc != multicluster.LocalClusterName {
@@ -516,8 +570,15 @@ func runPreviewStatus(ctx context.Context, app *App, name string, out io.Writer)
 	var asyncRoutes []divergeiov1alpha1.AsyncRouteSpec
 	for _, svc := range pg.Status.Services {
 		if svc.EnvironmentName != "" {
+			childNS := strings.TrimSpace(svc.Namespace)
+			if childNS == "" {
+				childNS = app.Namespace
+			}
+			if childNS == "" {
+				childNS = "default"
+			}
 			var childEnv divergeiov1alpha1.Environment
-			if err := c.Get(ctx, types.NamespacedName{Name: svc.EnvironmentName, Namespace: app.Namespace}, &childEnv); err == nil {
+			if err := c.Get(ctx, types.NamespacedName{Name: svc.EnvironmentName, Namespace: childNS}, &childEnv); err == nil {
 				asyncRoutes = append(asyncRoutes, childEnv.Spec.Routing.AsyncRoutes...)
 			}
 		}
@@ -573,9 +634,19 @@ func runPreviewStatus(ctx context.Context, app *App, name string, out io.Writer)
 	var hookJobs batchv1.JobList
 	for _, svc := range pg.Status.Services {
 		if svc.EnvironmentName != "" {
+			jobNS := strings.TrimSpace(svc.Namespace)
+			if jobNS == "" {
+				jobNS = strings.TrimSpace(pg.Namespace)
+			}
+			if jobNS == "" {
+				jobNS = strings.TrimSpace(app.Namespace)
+			}
+			if jobNS == "" {
+				jobNS = "default"
+			}
 			var jobs batchv1.JobList
 			if err := c.List(ctx, &jobs,
-				client.InNamespace(pg.Namespace),
+				client.InNamespace(jobNS),
 				client.MatchingLabels{"divergedev.com/environment": truncateLabel(svc.EnvironmentName)},
 			); err != nil {
 				_, _ = fmt.Fprintf(out, "   ⚠️  Failed to list hooks: %v\n", err)

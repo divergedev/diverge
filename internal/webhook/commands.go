@@ -15,11 +15,14 @@ import (
 	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/previewgroup"
 	"github.com/divergedev/diverge/pkg/doctor"
 	"github.com/divergedev/diverge/pkg/replay"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -42,6 +45,8 @@ Use ` + "`/diverge <command>`" + ` in any PR or MR comment to manage preview env
 | ` + "`/diverge resume [+$amount] [tokens]`" + ` | Resume agent with optional budget bump | ` + "`/diverge resume +$5.00`" + ` |
 | ` + "`/diverge status`" + ` | Report active tasks and preview environments | ` + "`/diverge status`" + ` |
 | ` + "`/diverge preview`" + ` | Deploy preview environment for this branch | ` + "`/diverge preview`" + ` |
+| ` + "`/diverge group <name> [--db-mode <mode>]`" + ` | Join this PR/MR into a shared multi-MR PreviewGroup | ` + "`/diverge group feat-checkout`" + ` |
+| ` + "`/diverge ungroup [name]`" + ` | Detach this PR/MR from a shared PreviewGroup | ` + "`/diverge ungroup feat-checkout`" + ` |
 | ` + "`/diverge verify [path] [--fix]`" + ` | Run health diagnostics & HTTP probe against preview | ` + "`/diverge verify /healthz --fix`" + ` |
 | ` + "`/diverge replay [path ...] [--fix]`" + ` | Replay baseline vs preview parity checks | ` + "`/diverge replay /api/v1/health /api/v1/status --fix`" + ` |
 | ` + "`/diverge extend-ttl [duration]`" + ` | Extend preview TTL (default 24h) | ` + "`/diverge extend-ttl 48h`" + ` |
@@ -59,6 +64,8 @@ type SlashCommand struct {
 	Tokens    int64
 	Paths     []string
 	AutoFix   bool
+	GroupName string
+	DBMode    string
 }
 
 // ParseSlashCommand parses a PR/MR comment body for a /diverge slash command.
@@ -110,6 +117,32 @@ func ParseSlashCommand(commentBody string) (*SlashCommand, bool) {
 		case "preview":
 			return &SlashCommand{
 				Action: "preview",
+			}, true
+		case "group", "join", "attach":
+			groupName, dbMode, ok := parseGroupCommandArgs(fields[1:])
+			if !ok {
+				return nil, false
+			}
+			return &SlashCommand{
+				Action:    "group",
+				GroupName: groupName,
+				DBMode:    dbMode,
+			}, true
+		case "ungroup", "leave", "detach":
+			if len(fields) > 2 {
+				return nil, false
+			}
+			var groupName string
+			if len(fields) == 2 {
+				norm, err := previewgroup.NormalizeGroupName(fields[1])
+				if err != nil {
+					return nil, false
+				}
+				groupName = norm
+			}
+			return &SlashCommand{
+				Action:    "ungroup",
+				GroupName: groupName,
 			}, true
 		case "verify", "replay":
 			autoFix := false
@@ -261,6 +294,10 @@ func ExecuteSlashCommandWithFeedback(ctx context.Context, c client.Client, ns st
 		return executeGuideCommand(ctx, c, ns, cmd.Guidance, repoURL, prNumber)
 	case "preview":
 		return executePreviewCommand(ctx, c, ns, repoURL, branch, prNumber)
+	case "group":
+		return executeGroupCommand(ctx, c, ns, cmd, repoURL, branch, prNumber)
+	case "ungroup":
+		return executeUngroupCommand(ctx, c, ns, cmd.GroupName, repoURL, prNumber)
 	case "verify":
 		return executeVerifyCommand(ctx, c, ns, cmd.Paths, cmd.AutoFix, repoURL, branch, prNumber)
 	case "replay":
@@ -433,67 +470,122 @@ func executePreviewCommand(ctx context.Context, c client.Client, ns, repoURL, br
 
 // resolvePreviewTarget resolves the preview environment name, base URL, preview URL, routing mode, and routing header key/value for a PR/MR.
 func resolvePreviewTarget(ctx context.Context, c client.Client, ns, repoURL string, prNumber int) (envName, baseURL, previewURL, routingMode, headerKey, headerValue string, found bool, err error) {
+	envName, _, baseURL, previewURL, routingMode, headerKey, headerValue, _, found, err = resolvePreviewTargetWithGroup(ctx, c, ns, repoURL, prNumber)
+	return envName, baseURL, previewURL, routingMode, headerKey, headerValue, found, err
+}
+
+func resolveFromEnvironmentList(envs []v1alpha1.Environment, fallbackNS, defaultBaseline string) (envName, targetNS, baseURL, previewURL, routingMode, headerKey, headerValue string) {
+	env := envs[0]
+	for i := range envs {
+		if strings.TrimSpace(envs[i].Status.URL) != "" {
+			env = envs[i]
+			break
+		}
+	}
+	envName = env.Name
+	targetNS = strings.TrimSpace(env.Namespace)
+	if targetNS == "" {
+		targetNS = fallbackNS
+	}
+	routingMode = strings.TrimSpace(env.Spec.Routing.Mode)
+	headerKey = replay.DefaultHeaderKey
+	if env.Spec.Routing.HeaderKey != "" {
+		headerKey = env.Spec.Routing.HeaderKey
+	}
+	headerValue = env.Name
+	if env.Spec.Routing.HeaderValue != "" {
+		headerValue = env.Spec.Routing.HeaderValue
+	}
+	statusClean := stripPreviewQueryParam(env.Status.URL)
+	extClean := ""
+	if ext := strings.TrimSpace(env.Spec.Routing.ExternalURL); ext != "" && !strings.Contains(ext, "{") {
+		extClean = stripPreviewQueryParam(ext)
+	}
+	if strings.EqualFold(routingMode, "subdomain") {
+		previewURL = statusClean
+		if extClean != "" && !strings.EqualFold(extClean, previewURL) {
+			baseURL = extClean
+		} else if defaultBaseline != "" {
+			baseURL = defaultBaseline
+		}
+	} else {
+		if statusClean != "" {
+			baseURL = statusClean
+		} else if extClean != "" {
+			baseURL = extClean
+		} else if defaultBaseline != "" {
+			baseURL = defaultBaseline
+		}
+		previewURL = baseURL
+	}
+	return envName, targetNS, baseURL, previewURL, routingMode, headerKey, headerValue
+}
+
+func resolvePreviewTargetWithGroup(ctx context.Context, c client.Client, ns, repoURL string, prNumber int) (envName, targetNS, baseURL, previewURL, routingMode, headerKey, headerValue string, resolvedGroup *v1alpha1.PreviewGroup, found bool, err error) {
 	defaultBaseline := stripPreviewQueryParam(os.Getenv("DIVERGE_BASE_URL"))
 	envs, err := findMatchingEnvironments(ctx, c, ns, repoURL, prNumber)
 	if err != nil {
-		return "", "", "", "", "", "", false, err
+		return "", "", "", "", "", "", "", nil, false, err
 	}
-	if len(envs) > 0 {
-		env := envs[0]
-		for i := range envs {
-			if strings.TrimSpace(envs[i].Status.URL) != "" {
-				env = envs[i]
+
+	var activeEnvs, hibernatedEnvs []v1alpha1.Environment
+	for _, e := range envs {
+		if e.Annotations["divergedev.com/hibernated"] == "true" ||
+			strings.TrimSpace(e.Annotations[previewgroup.AnnotationAttachedPreviewGroup]) != "" {
+			hibernatedEnvs = append(hibernatedEnvs, e)
+		} else {
+			activeEnvs = append(activeEnvs, e)
+		}
+	}
+
+	if len(activeEnvs) > 0 {
+		envName, targetNS, baseURL, previewURL, routingMode, headerKey, headerValue = resolveFromEnvironmentList(activeEnvs, ns, defaultBaseline)
+		return envName, targetNS, baseURL, previewURL, routingMode, headerKey, headerValue, nil, true, nil
+	}
+
+	// Prefer an attached shared PreviewGroup (verified via live membership) before falling back to a per-MR PreviewGroup.
+	var firstHibernatedRef, recordedAttachment string
+	if len(hibernatedEnvs) > 0 {
+		if hibernatedEnvs[0].Namespace != "" {
+			firstHibernatedRef = hibernatedEnvs[0].Namespace + "/" + hibernatedEnvs[0].Name
+		} else {
+			firstHibernatedRef = hibernatedEnvs[0].Name
+		}
+		recordedAttachment = strings.TrimSpace(hibernatedEnvs[0].Annotations[previewgroup.AnnotationAttachedPreviewGroup])
+	}
+	pgs, err := previewgroup.FindGroupsForPROptional(ctx, c, projectFromRepoURL(repoURL), prNumber, firstHibernatedRef)
+	if err != nil {
+		return "", "", "", "", "", "", "", nil, false, err
+	}
+	if recordedAttachment != "" && len(pgs) > 1 {
+		for _, cand := range pgs {
+			if cand.Name == recordedAttachment {
+				pgs = []v1alpha1.PreviewGroup{cand}
 				break
 			}
 		}
-		envName = env.Name
-		routingMode = strings.TrimSpace(env.Spec.Routing.Mode)
-		headerKey = replay.DefaultHeaderKey
-		if env.Spec.Routing.HeaderKey != "" {
-			headerKey = env.Spec.Routing.HeaderKey
-		}
-		headerValue = env.Name
-		if env.Spec.Routing.HeaderValue != "" {
-			headerValue = env.Spec.Routing.HeaderValue
-		}
-		statusClean := stripPreviewQueryParam(env.Status.URL)
-		extClean := ""
-		if ext := strings.TrimSpace(env.Spec.Routing.ExternalURL); ext != "" && !strings.Contains(ext, "{") {
-			extClean = stripPreviewQueryParam(ext)
-		}
-		if strings.EqualFold(routingMode, "subdomain") {
-			previewURL = statusClean
-			if extClean != "" && !strings.EqualFold(extClean, previewURL) {
-				baseURL = extClean
-			} else if defaultBaseline != "" {
-				baseURL = defaultBaseline
-			}
-		} else {
-			if statusClean != "" {
-				baseURL = statusClean
-			} else if extClean != "" {
-				baseURL = extClean
-			} else if defaultBaseline != "" {
-				baseURL = defaultBaseline
-			}
-			previewURL = baseURL
-		}
-		return envName, baseURL, previewURL, routingMode, headerKey, headerValue, true, nil
-	}
-
-	pgs, err := findMatchingPreviewGroups(ctx, c, repoURL, prNumber)
-	if err != nil {
-		return "", "", "", "", "", "", false, err
 	}
 	if len(pgs) == 0 {
-		return "", "", "", "", "", "", false, nil
+		pgs, err = findMatchingPreviewGroupsOptional(ctx, c, repoURL, prNumber)
+		if err != nil {
+			return "", "", "", "", "", "", "", nil, false, err
+		}
+	}
+	if len(pgs) == 0 {
+		if len(hibernatedEnvs) > 0 {
+			envName, targetNS, baseURL, previewURL, routingMode, headerKey, headerValue = resolveFromEnvironmentList(hibernatedEnvs, ns, defaultBaseline)
+			return envName, targetNS, baseURL, previewURL, routingMode, headerKey, headerValue, nil, true, nil
+		}
+		return "", "", "", "", "", "", "", nil, false, nil
 	}
 	if len(pgs) > 1 {
-		return "", "", "", "", "", "", false, fmt.Errorf("multiple PreviewGroups (%d) matched PR/MR #%d; cannot unambiguously resolve preview target", len(pgs), prNumber)
+		return "", "", "", "", "", "", "", nil, false, fmt.Errorf("multiple PreviewGroups (%d) matched PR/MR #%d; cannot unambiguously resolve preview target", len(pgs), prNumber)
 	}
 
 	pg := pgs[0]
+	pgCopy := pg
 	envName = pg.Name
+	targetNS = ns
 	routingMode = strings.TrimSpace(pg.Spec.Routing.Mode)
 	headerKey = replay.DefaultHeaderKey
 	if pg.Spec.Routing.HeaderKey != "" {
@@ -531,7 +623,7 @@ func resolvePreviewTarget(ctx context.Context, c client.Client, ns, repoURL stri
 		}
 		previewURL = baseURL
 	}
-	return envName, baseURL, previewURL, routingMode, headerKey, headerValue, true, nil
+	return envName, targetNS, baseURL, previewURL, routingMode, headerKey, headerValue, &pgCopy, true, nil
 }
 
 // stripPreviewQueryParam removes the _diverge_env sticky-routing query parameter from a preview URL.
@@ -548,7 +640,7 @@ func stripPreviewQueryParam(rawURL string) string {
 
 // executeVerifyCommand runs cluster workload diagnostics and HTTP parity/health probes for a PR/MR preview environment.
 func executeVerifyCommand(ctx context.Context, c client.Client, ns string, paths []string, autoFix bool, repoURL, branch string, prNumber int) (string, error) {
-	envName, baseURL, previewURL, routingMode, headerKey, headerValue, found, err := resolvePreviewTarget(ctx, c, ns, repoURL, prNumber)
+	envName, targetNS, baseURL, previewURL, routingMode, headerKey, headerValue, resolvedGroup, found, err := resolvePreviewTargetWithGroup(ctx, c, ns, repoURL, prNumber)
 	if err != nil {
 		return "", err
 	}
@@ -560,7 +652,57 @@ func executeVerifyCommand(ctx context.Context, c client.Client, ns string, paths
 	}
 
 	diagnoser := doctor.NewDiagnoser(c)
-	docReport, docErr := diagnoser.Diagnose(ctx, ns, envName)
+	var docReport *doctor.Report
+	var docErr error
+	if resolvedGroup != nil {
+		var childList v1alpha1.EnvironmentList
+		if lErr := c.List(ctx, &childList, client.MatchingLabels{
+			"divergedev.com/previewgroup": resolvedGroup.Name,
+			"divergedev.com/managed-by":   "diverge-previewgroup",
+		}); lErr == nil && len(childList.Items) > 0 {
+			agg := &doctor.Report{Healthy: true}
+			for i := range childList.Items {
+				ch := &childList.Items[i]
+				rep, dErr := diagnoser.Diagnose(ctx, ch.Namespace, ch.Name)
+				if dErr != nil {
+					docErr = dErr
+					agg.Healthy = false
+					break
+				}
+				if rep != nil && !rep.Healthy {
+					agg.Healthy = false
+					agg.Issues = append(agg.Issues, rep.Issues...)
+				}
+			}
+			docReport = agg
+		} else if len(resolvedGroup.Status.Services) > 0 {
+			agg := &doctor.Report{Healthy: true}
+			for _, svc := range resolvedGroup.Status.Services {
+				if strings.TrimSpace(svc.EnvironmentName) == "" {
+					continue
+				}
+				cNS := strings.TrimSpace(svc.Namespace)
+				if cNS == "" {
+					cNS = "default"
+				}
+				rep, dErr := diagnoser.Diagnose(ctx, cNS, svc.EnvironmentName)
+				if dErr != nil {
+					docErr = dErr
+					agg.Healthy = false
+					break
+				}
+				if rep != nil && !rep.Healthy {
+					agg.Healthy = false
+					agg.Issues = append(agg.Issues, rep.Issues...)
+				}
+			}
+			docReport = agg
+		} else {
+			docReport = &doctor.Report{Healthy: resolvedGroup.Status.Phase == v1alpha1.PreviewGroupPhaseRunning}
+		}
+	} else {
+		docReport, docErr = diagnoser.Diagnose(ctx, targetNS, envName)
+	}
 
 	var b strings.Builder
 	docHealthy := docErr == nil && docReport != nil && docReport.Healthy
@@ -768,15 +910,39 @@ func spawnWebhookAutoFixTask(ctx context.Context, c client.Client, ns, envName, 
 	return taskName, nil
 }
 
-// executeTeardownCommand deletes all matching Environments, PreviewGroups, and AgentTasks for a PR/MR.
+// executeTeardownCommand detaches the PR/MR from any shared PreviewGroups (deleting a group only when no active
+// non-baseline services remain) and deletes standalone Environments, single-MR PreviewGroups, and AgentTasks owned by the PR/MR.
 func executeTeardownCommand(ctx context.Context, c client.Client, ns, repoURL string, prNumber int) (string, error) {
+	project := projectFromRepoURL(repoURL)
+
 	envs, err := findMatchingEnvironments(ctx, c, ns, repoURL, prNumber)
 	if err != nil {
 		return "", err
 	}
+	var firstEnvRef string
 	for i := range envs {
-		if err := client.IgnoreNotFound(c.Delete(ctx, &envs[i])); err != nil {
-			return "", err
+		if envs[i].Labels != nil && envs[i].Labels["divergedev.com/managed-by"] == "diverge-previewgroup" {
+			continue
+		}
+		if firstEnvRef == "" {
+			if envs[i].Namespace != "" {
+				firstEnvRef = envs[i].Namespace + "/" + envs[i].Name
+			} else {
+				firstEnvRef = envs[i].Name
+			}
+		}
+	}
+
+	// Detach this PR/MR's services from composed PreviewGroups FIRST (before deleting standalone Environments)
+	// so sibling MRs' services are preserved and retries can still locate members by Environment reference if detach fails.
+	detachResults, err := previewgroup.DetachMemberByPR(ctx, c, project, prNumber, firstEnvRef)
+	if err != nil {
+		return "", err
+	}
+	deletedGroupCount := 0
+	for _, dr := range detachResults {
+		if dr.DeletedGroup {
+			deletedGroupCount++
 		}
 	}
 
@@ -785,7 +951,61 @@ func executeTeardownCommand(ctx context.Context, c client.Client, ns, repoURL st
 		return "", err
 	}
 	for i := range pgs {
-		if err := client.IgnoreNotFound(c.Delete(ctx, &pgs[i])); err != nil {
+		pgKey := client.ObjectKey{Name: pgs[i].Name, Namespace: pgs[i].Namespace}
+		curPG := pgs[i]
+		deletedThisPG := false
+		if delErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			// Never delete a PreviewGroup that still holds active non-baseline services belonging to other MRs.
+			if previewGroupHasOtherMRServices(&curPG, project, prNumber) {
+				deletedThisPG = false
+				return nil
+			}
+			var delOpts []client.DeleteOption
+			if curPG.UID != "" || curPG.ResourceVersion != "" {
+				precond := &metav1.Preconditions{}
+				if curPG.UID != "" {
+					uid := curPG.UID
+					precond.UID = &uid
+				}
+				if curPG.ResourceVersion != "" {
+					rv := curPG.ResourceVersion
+					precond.ResourceVersion = &rv
+				}
+				delOpts = append(delOpts, &client.DeleteOptions{Preconditions: precond})
+			}
+			if err := c.Delete(ctx, &curPG, delOpts...); err != nil {
+				if apierrors.IsNotFound(err) {
+					deletedThisPG = true
+					return nil
+				}
+				if apierrors.IsConflict(err) {
+					var latest v1alpha1.PreviewGroup
+					if gErr := c.Get(ctx, pgKey, &latest); gErr != nil {
+						if apierrors.IsNotFound(gErr) {
+							deletedThisPG = true
+							return nil
+						}
+						return gErr
+					}
+					curPG = latest
+				}
+				return err
+			}
+			deletedThisPG = true
+			return nil
+		}); delErr != nil {
+			return "", delErr
+		}
+		if deletedThisPG {
+			deletedGroupCount++
+		}
+	}
+
+	for i := range envs {
+		if envs[i].Labels != nil && envs[i].Labels["divergedev.com/managed-by"] == "diverge-previewgroup" {
+			continue
+		}
+		if err := client.IgnoreNotFound(c.Delete(ctx, &envs[i])); err != nil {
 			return "", err
 		}
 	}
@@ -806,8 +1026,37 @@ func executeTeardownCommand(ctx context.Context, c client.Client, ns, repoURL st
 		}
 	}
 
-	feedback := fmt.Sprintf("🧹 **Teardown requested**: Cleaned up %d preview environment(s), %d preview group(s), and %d agent task(s) for this PR/MR.", len(envs), len(pgs), deletedTasks)
+	feedback := fmt.Sprintf("🧹 **Teardown requested**: Cleaned up %d preview environment(s), %d preview group(s), and %d agent task(s) for this PR/MR.", len(envs), deletedGroupCount, deletedTasks)
 	return feedback, nil
+}
+
+func previewGroupHasOtherMRServices(pg *v1alpha1.PreviewGroup, tearingDownProject string, tearingDownMR int) bool {
+	if pg == nil {
+		return false
+	}
+	members := previewgroup.ParseMembers(pg)
+	memberByService := make(map[string]previewgroup.MemberRecord, len(members))
+	for _, m := range members {
+		memberByService[m.Service] = m
+	}
+	for _, svc := range pg.Spec.Services {
+		if svc.Mode == v1alpha1.ServiceModeBaseline {
+			continue
+		}
+		m, ok := memberByService[svc.Name]
+		if !ok {
+			if pg.Labels != nil && pg.Labels[previewgroup.LabelComposedGroup] == "true" {
+				return true
+			}
+			continue
+		}
+		sameMR := tearingDownMR > 0 && m.MR == tearingDownMR &&
+			(tearingDownProject == "" || m.Project == "" || strings.EqualFold(strings.TrimSpace(m.Project), strings.TrimSpace(tearingDownProject)))
+		if !sameMR {
+			return true
+		}
+	}
+	return false
 }
 
 // executeExtendTTLCommand extends the lifecycle TTL on all matching Environments and PreviewGroups for a PR/MR.
@@ -815,35 +1064,81 @@ func executeExtendTTLCommand(ctx context.Context, c client.Client, ns string, du
 	if dur <= 0 {
 		dur = defaultExtendTTLDuration
 	}
+	nowStr := time.Now().UTC().Format(time.RFC3339)
 
 	envs, err := findMatchingEnvironments(ctx, c, ns, repoURL, prNumber)
 	if err != nil {
 		return "", err
 	}
+	updatedEnvs := 0
 	for i := range envs {
 		env := &envs[i]
+		if env.Labels != nil && env.Labels["divergedev.com/managed-by"] == "diverge-previewgroup" {
+			continue
+		}
+		if env.Annotations == nil {
+			env.Annotations = make(map[string]string)
+		}
+		env.Annotations[previewgroup.AnnotationTTLRenewedAt] = nowStr
 		env.Spec.Lifecycle.TTL = &metav1.Duration{Duration: dur}
 		if err := c.Update(ctx, env); err != nil {
 			return "", err
 		}
+		updatedEnvs++
 	}
 
-	pgs, err := findMatchingPreviewGroups(ctx, c, repoURL, prNumber)
+	pgs, err := findMatchingPreviewGroupsOptional(ctx, c, repoURL, prNumber)
 	if err != nil {
 		return "", err
 	}
-	for i := range pgs {
-		pg := &pgs[i]
-		if pg.Spec.Lifecycle == nil {
-			pg.Spec.Lifecycle = &v1alpha1.PreviewGroupLifecycle{}
+	memberPGs, mErr := previewgroup.FindGroupsForPROptional(ctx, c, projectFromRepoURL(repoURL), prNumber, "")
+	if mErr != nil {
+		return "", mErr
+	}
+	seenPG := make(map[string]bool, len(pgs)+len(memberPGs))
+	var pgKeys []client.ObjectKey
+	for _, pg := range append(pgs, memberPGs...) {
+		if !seenPG[pg.Name] {
+			seenPG[pg.Name] = true
+			pgKeys = append(pgKeys, client.ObjectKey{Name: pg.Name, Namespace: pg.Namespace})
 		}
-		pg.Spec.Lifecycle.TTL = &metav1.Duration{Duration: dur}
-		if err := c.Update(ctx, pg); err != nil {
-			return "", err
+	}
+	updatedPGs := 0
+	for _, key := range pgKeys {
+		notFound := false
+		if uErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			var freshPG v1alpha1.PreviewGroup
+			if gErr := c.Get(ctx, key, &freshPG); gErr != nil {
+				if apierrors.IsNotFound(gErr) && key.Namespace != "" {
+					if cErr := c.Get(ctx, client.ObjectKey{Name: key.Name}, &freshPG); cErr == nil {
+						goto applyTTL
+					}
+				}
+				if apierrors.IsNotFound(gErr) {
+					notFound = true
+					return nil
+				}
+				return gErr
+			}
+		applyTTL:
+			if freshPG.Annotations == nil {
+				freshPG.Annotations = make(map[string]string)
+			}
+			freshPG.Annotations[previewgroup.AnnotationTTLRenewedAt] = nowStr
+			if freshPG.Spec.Lifecycle == nil {
+				freshPG.Spec.Lifecycle = &v1alpha1.PreviewGroupLifecycle{}
+			}
+			freshPG.Spec.Lifecycle.TTL = &metav1.Duration{Duration: dur}
+			return c.Update(ctx, &freshPG)
+		}); uErr != nil {
+			return "", uErr
+		}
+		if !notFound {
+			updatedPGs++
 		}
 	}
 
-	feedback := fmt.Sprintf("⏳ **Preview TTL extended** by %s for %d environment(s).", dur, len(envs)+len(pgs))
+	feedback := fmt.Sprintf("⏳ **Preview TTL extended** by %s for %d environment(s).", dur, updatedEnvs+updatedPGs)
 	return feedback, nil
 }
 
@@ -989,6 +1284,11 @@ func executeStatusCommand(ctx context.Context, c client.Client, ns, repoURL stri
 		return "", fmt.Errorf("list environments: %w", err)
 	}
 
+	sharedGroups, err := previewgroup.FindGroupsForPROptional(ctx, c, projectFromRepoURL(repoURL), prNumber, "")
+	if err != nil {
+		return "", fmt.Errorf("list shared preview groups: %w", err)
+	}
+
 	prStr := strconv.Itoa(prNumber)
 	var matchedTasks []v1alpha1.AgentTask
 	for _, task := range taskList.Items {
@@ -997,7 +1297,7 @@ func executeStatusCommand(ctx context.Context, c client.Client, ns, repoURL stri
 		}
 	}
 
-	if len(matchedTasks) == 0 && len(envs) == 0 {
+	if len(matchedTasks) == 0 && len(envs) == 0 && len(sharedGroups) == 0 {
 		return "ℹ️ No active agent tasks or preview environments found for this PR/MR.\n\nUse `/diverge fix <objective>` to start an agent task or `/diverge preview` to launch a preview environment.", nil
 	}
 
@@ -1045,6 +1345,28 @@ func executeStatusCommand(ctx context.Context, c client.Client, ns, repoURL stri
 		b.WriteString("\n")
 	}
 
+	if len(sharedGroups) > 0 {
+		b.WriteString("#### 🔗 Shared Multi-MR Preview Groups\n\n")
+		b.WriteString("| Group | Phase | Routing Header | Services |\n")
+		b.WriteString("|---|---|---|---|\n")
+		for _, pg := range sharedGroups {
+			phase := string(pg.Status.Phase)
+			if phase == "" {
+				phase = "Pending"
+			}
+			hk := pg.Spec.Routing.HeaderKey
+			if hk == "" {
+				hk = previewgroup.DefaultRoutingHeaderKey
+			}
+			hv := pg.Spec.Routing.HeaderValue
+			if hv == "" {
+				hv = pg.Name
+			}
+			fmt.Fprintf(&b, "| `%s` | %s | `%s: %s` | %d |\n", pg.Name, phase, hk, hv, len(pg.Spec.Services))
+		}
+		b.WriteString("\n")
+	}
+
 	b.WriteString("💡 *Run `/diverge help` to view all available interactive slash commands.*")
 	return b.String(), nil
 }
@@ -1071,11 +1393,30 @@ func normalizeRepoURL(raw string) string {
 	return strings.TrimSuffix(strings.TrimSuffix(strings.ToLower(strings.TrimSpace(raw)), "/"), ".git")
 }
 
-// findMatchingEnvironments returns all Environment resources in ns associated with repoURL and prNumber.
+// findMatchingEnvironments returns all Environment resources (searching ns first and cluster-wide when permitted)
+// associated with repoURL and prNumber.
 func findMatchingEnvironments(ctx context.Context, c client.Client, ns, repoURL string, prNumber int) ([]v1alpha1.Environment, error) {
 	var envList v1alpha1.EnvironmentList
 	if err := c.List(ctx, &envList, client.InNamespace(ns)); err != nil {
 		return nil, err
+	}
+	seen := make(map[string]bool, len(envList.Items))
+	allItems := make([]v1alpha1.Environment, 0, len(envList.Items))
+	for _, item := range envList.Items {
+		key := item.Namespace + "/" + item.Name
+		seen[key] = true
+		allItems = append(allItems, item)
+	}
+	// Best-effort cluster-wide lookup so PR environments in non-default service namespaces are also discovered.
+	var clusterList v1alpha1.EnvironmentList
+	if cErr := c.List(ctx, &clusterList); cErr == nil {
+		for _, item := range clusterList.Items {
+			key := item.Namespace + "/" + item.Name
+			if !seen[key] {
+				seen[key] = true
+				allItems = append(allItems, item)
+			}
+		}
 	}
 
 	if prNumber <= 0 {
@@ -1083,12 +1424,26 @@ func findMatchingEnvironments(ctx context.Context, c client.Client, ns, repoURL 
 	}
 
 	project := projectFromRepoURL(repoURL)
+	var reqProvider string
+	if strings.TrimSpace(repoURL) != "" {
+		reqProvider = providerFromRepoURL(repoURL)
+	}
 	expectedPRName := previewEnvName("pr", project, prNumber)
 	expectedMRName := previewEnvName("mr", project, prNumber)
 	prStr := strconv.Itoa(prNumber)
 
 	var matched []v1alpha1.Environment
-	for _, env := range envList.Items {
+	for _, env := range allItems {
+		if env.Labels["divergedev.com/managed-by"] == "diverge-previewgroup" {
+			continue
+		}
+		// Match SCM provider before project/number so GitHub PRs and GitLab MRs sharing a path cannot collide.
+		// Note: EnvironmentSource stores provider rather than SCM hostname, so two distinct hosts of the same provider
+		// sharing an identical project path cannot be distinguished from Spec.Source alone.
+		envProv := strings.ToLower(strings.TrimSpace(env.Spec.Source.Provider))
+		if reqProvider != "" && envProv != "" && envProv != "local" && envProv != reqProvider {
+			continue
+		}
 		if project != "" {
 			if env.Spec.Source.Project != "" {
 				if !strings.EqualFold(env.Spec.Source.Project, project) {
@@ -1110,6 +1465,7 @@ func findMatchingEnvironments(ctx context.Context, c client.Client, ns, repoURL 
 }
 
 // findMatchingPreviewGroups returns all PreviewGroup resources associated with repoURL and prNumber.
+// Authorization errors (403 Forbidden) are returned to callers so destructive commands can distinguish RBAC denial from an empty list.
 func findMatchingPreviewGroups(ctx context.Context, c client.Client, repoURL string, prNumber int) ([]v1alpha1.PreviewGroup, error) {
 	var pgList v1alpha1.PreviewGroupList
 	if err := c.List(ctx, &pgList); err != nil {
@@ -1124,9 +1480,17 @@ func findMatchingPreviewGroups(ctx context.Context, c client.Client, repoURL str
 	}
 
 	project := projectFromRepoURL(repoURL)
+	var reqProvider string
+	if strings.TrimSpace(repoURL) != "" {
+		reqProvider = providerFromRepoURL(repoURL)
+	}
 	prStr := strconv.Itoa(prNumber)
 	var matched []v1alpha1.PreviewGroup
 	for _, pg := range pgList.Items {
+		pgProv := strings.ToLower(strings.TrimSpace(pg.Spec.Source.Provider))
+		if reqProvider != "" && pgProv != "" && pgProv != "local" && pgProv != reqProvider {
+			continue
+		}
 		if project != "" && !strings.EqualFold(pg.Spec.Source.Project, project) {
 			continue
 		}
@@ -1137,6 +1501,14 @@ func findMatchingPreviewGroups(ctx context.Context, c client.Client, repoURL str
 		}
 	}
 	return matched, nil
+}
+
+func findMatchingPreviewGroupsOptional(ctx context.Context, c client.Client, repoURL string, prNumber int) ([]v1alpha1.PreviewGroup, error) {
+	pgs, err := findMatchingPreviewGroups(ctx, c, repoURL, prNumber)
+	if apierrors.IsForbidden(err) {
+		return nil, nil
+	}
+	return pgs, err
 }
 
 // buildCommandTaskName constructs a deterministic Kubernetes resource name for an AgentTask.

@@ -86,8 +86,9 @@ server:
 
 - **Environment Creation, Target Cluster Placement & Live Feature Flag Overrides (`FlagsTab`)**:
   - Create preview `Environment`s targeting either `local` or a federated spoke cluster (`spec.deploy.clusterRef` + same-namespace kubeconfig `Secret`), inspect resolved target clusters across the Environments list and **Environment Detail** overview, and add, toggle (`true` / `false`), or remove feature flag overrides (`spec.features.overrides`) directly from the **Flags** tab using partial `UpdateMask` (`spec.features.overrides`) updates alongside one-click TTL extension and hook job retries.
-- **Multi-Service `PreviewGroup` Detail**:
-  - Inspect `Overview` (source branch/PR, copyable routing headers, TTL countdown, group target cluster, and child service status table with per-service target cluster resolution and direct links to each child `Environment`), interactive `Topology` graph, Kubernetes `Conditions`, and live `YAML`.
+- **Multi-Service `PreviewGroup` Composition & Detail**:
+  - Compose multi-MR `PreviewGroup`s directly from the **Preview Groups** page (**Compose Preview Group**) by selecting any combination of open PR/MR `Environment`s across namespaces and/or custom service images, choosing per-MR database preservation or a shared group-level database mode (`neon`, `schema`, `cnpg`, `snapshot`, `fresh`, `shared`), and generating a shared routing header + `?_diverge_env=` magic preview link.
+  - Inspect `Overview` (source branch/PR, copyable routing headers, TTL countdown, group target cluster, joined MR provenance badges (`repo#PR · branch`), **Join Services** modal, per-service **Detach** action that auto-cleans the group when the last service leaves, and direct links to each child `Environment`), interactive `Topology` graph, Kubernetes `Conditions`, and live `YAML`.
 - **Autonomous `AgentTask` Steering & Linked Previews**:
   - Send live steering guidance, pause/resume execution with optional USD budget bumps, stream sandbox pod logs, and jump directly to the task's **Linked Preview Environment** (`agent-preview-<task>`) and external preview URL.
 - **FinOps Cost & Usage Analytics (`/analytics` and `/usage`)**:

@@ -30,6 +30,58 @@ export function useListEnvironments(params: { namespace?: string; phase?: string
   })
 }
 
+export function useListAllEnvironments(
+  params: { namespace?: string; phase?: string; pageSize?: number; enabled?: boolean } = {},
+) {
+  const pageSize = params.pageSize ?? 100
+  return useQuery({
+    queryKey: [...queryKeys.environments(params.namespace), 'allPages', params.phase ?? ''] as const,
+    enabled: params.enabled ?? true,
+    queryFn: async () => {
+      const allEnvs: Awaited<ReturnType<typeof environmentClient.listEnvironments>>['environments'] = []
+      let currentToken = ''
+      let lastResp: Awaited<ReturnType<typeof environmentClient.listEnvironments>> | undefined
+      const seenTokens = new Set<string>()
+      const maxPages = 500
+
+      for (let page = 0; page < maxPages; page++) {
+        const resp = await environmentClient.listEnvironments({
+          namespace: params.namespace ?? '',
+          phase: params.phase ?? '',
+          pageSize,
+          pageToken: currentToken,
+        })
+        lastResp = resp
+        allEnvs.push(...(resp.environments ?? []))
+        const nextToken = resp.nextPageToken ?? ''
+        if (!nextToken) {
+          break
+        }
+        if (seenTokens.has(nextToken)) {
+          throw new Error('Pagination cycle detected while listing environments')
+        }
+        if (page + 1 >= maxPages) {
+          throw new Error(`Environment list exceeded ${maxPages} pages without completing`)
+        }
+        seenTokens.add(nextToken)
+        currentToken = nextToken
+      }
+
+      if (lastResp) {
+        const combined = typeof lastResp.clone === 'function' ? lastResp.clone() : { ...lastResp }
+        combined.environments = allEnvs
+        return combined
+      }
+      return environmentClient.listEnvironments({
+        namespace: params.namespace ?? '',
+        phase: params.phase ?? '',
+        pageSize,
+        pageToken: '',
+      })
+    },
+  })
+}
+
 export function useGetEnvironment(namespace: string, name: string) {
   return useQuery({
     queryKey: queryKeys.environment(namespace, name),
@@ -49,7 +101,8 @@ export function useGetPreviewGroup(namespace: string, name: string) {
   return useQuery({
     queryKey: queryKeys.previewGroup(namespace, name),
     queryFn: () => previewGroupClient.getPreviewGroup({ namespace, name }),
-    enabled: !!name && !!namespace,
+    enabled: !!name,
+    refetchInterval: 5000,
   })
 }
 
@@ -144,18 +197,57 @@ export function useExtendTTL() {
 export function useCreatePreviewGroup() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (req: { name: string; namespace: string; spec: Record<string, unknown> }) =>
+    mutationFn: (req: Parameters<typeof previewGroupClient.createPreviewGroup>[0]) =>
       previewGroupClient.createPreviewGroup(req),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['previewGroups'] }) },
+  })
+}
+
+export function useUpdatePreviewGroup() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (req: Parameters<typeof previewGroupClient.updatePreviewGroup>[0]) =>
+      previewGroupClient.updatePreviewGroup(req),
+    onSuccess: (data, vars) => {
+      const resNs = data.previewGroup?.namespace ?? ''
+      const reqNs = vars.previewGroup?.namespace ?? ''
+      const name = data.previewGroup?.name ?? vars.previewGroup?.name ?? ''
+      if (name) {
+        if (data.previewGroup) {
+          qc.setQueryData(queryKeys.previewGroup(resNs, name), data)
+          if (reqNs !== resNs) {
+            qc.setQueryData(queryKeys.previewGroup(reqNs, name), data)
+          }
+          qc.setQueriesData(
+            { queryKey: ['previewGroup'], predicate: (q) => q.queryKey[2] === name },
+            data,
+          )
+        }
+        qc.invalidateQueries({
+          queryKey: ['previewGroup'],
+          predicate: (q) => q.queryKey[2] === name,
+        })
+      }
+      qc.invalidateQueries({ queryKey: ['previewGroups'] })
+    },
   })
 }
 
 export function useDeletePreviewGroup() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (req: { namespace: string; name: string }) =>
-      previewGroupClient.deletePreviewGroup(req),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['previewGroups'] }) },
+    mutationFn: (req: { namespace: string; name: string; ifMatchResourceVersion?: string }) =>
+      previewGroupClient.deletePreviewGroup(
+        { namespace: req.namespace, name: req.name },
+        req.ifMatchResourceVersion ? { headers: { 'If-Match': req.ifMatchResourceVersion } } : undefined,
+      ),
+    onSuccess: (_data, vars) => {
+      qc.removeQueries({
+        queryKey: ['previewGroup'],
+        predicate: (q) => q.queryKey[2] === vars.name,
+      })
+      qc.invalidateQueries({ queryKey: ['previewGroups'] })
+    },
   })
 }
 

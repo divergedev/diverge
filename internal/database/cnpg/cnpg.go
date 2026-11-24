@@ -268,10 +268,12 @@ func (p *CNPGDatabaseProvider) Provision(ctx context.Context, env *v1alpha1.Envi
 	})
 	cluster.Object["spec"] = spec
 
-	if !isRemote && targetNS == env.Namespace && p.Scheme != nil {
+	if !isRemote && targetNS == env.Namespace && p.Scheme != nil && env.UID != "" {
 		if err := controllerutil.SetControllerReference(env, cluster, p.Scheme); err != nil {
 			return nil, fmt.Errorf("failed to set owner reference on CNPG Cluster: %w", err)
 		}
+	} else if !isRemote && env.UID == "" && len(env.OwnerReferences) > 0 {
+		cluster.SetOwnerReferences(env.OwnerReferences)
 	}
 
 	if err := c.Create(ctx, cluster); err != nil && !apierrors.IsAlreadyExists(err) {

@@ -3,6 +3,8 @@ package notifier
 import (
 	"context"
 	"errors"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
@@ -120,15 +122,16 @@ func buildPreviewGroupTemplateData(pg *v1alpha1.PreviewGroup, reason string) Pre
 		})
 	}
 
-	baseURL := pg.Spec.Routing.ExternalURL
+	cleanBaseURL, openPreviewURL, exitPreviewURL := buildPreviewGroupLinks(pg.Spec.Routing.ExternalURL, headerValue)
 
 	return PreviewGroupTemplateData{
 		Name:         pg.Name,
 		Branch:       pg.Spec.Source.Branch,
 		MR:           pg.Spec.Source.MR,
 		TTL:          ttlStr,
-		URL:          baseURL,
-		BaseURL:      baseURL,
+		URL:          openPreviewURL,
+		ExitURL:      exitPreviewURL,
+		BaseURL:      cleanBaseURL,
 		HeaderKey:    headerKey,
 		HeaderValue:  headerValue,
 		ServiceCount: len(pg.Spec.Services),
@@ -137,4 +140,35 @@ func buildPreviewGroupTemplateData(pg *v1alpha1.PreviewGroup, reason string) Pre
 		Reason:       reason,
 		Services:     services,
 	}
+}
+
+func buildPreviewGroupLinks(rawURL, headerValue string) (cleanBase, openURL, exitURL string) {
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		return "", "", ""
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return trimmed, trimmed, ""
+	}
+	baseCopy := *parsed
+	baseQ := baseCopy.Query()
+	baseQ.Del("_diverge_env")
+	baseCopy.RawQuery = baseQ.Encode()
+	cleanBase = baseCopy.String()
+
+	openCopy := *parsed
+	openQ := openCopy.Query()
+	if strings.TrimSpace(headerValue) != "" {
+		openQ.Set("_diverge_env", strings.TrimSpace(headerValue))
+	}
+	openCopy.RawQuery = openQ.Encode()
+	openURL = openCopy.String()
+
+	exitCopy := *parsed
+	exitQ := exitCopy.Query()
+	exitQ.Set("_diverge_env", "clear")
+	exitCopy.RawQuery = exitQ.Encode()
+	exitURL = exitCopy.String()
+	return cleanBase, openURL, exitURL
 }

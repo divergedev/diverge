@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -33,7 +34,7 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 	if controllerutil.ContainsFinalizer(env, environmentFinalizer) {
 		r.Recorder.Event(env, "Normal", "Terminating", "Teardown started")
 
-		if r.StatusReporter != nil {
+		if r.StatusReporter != nil && !isPreviewGroupChildEnvironment(env) {
 			notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
 			if err := r.StatusReporter.PostCommitStatus(notifyCtx, env, "canceled", "Preview environment torn down"); err != nil {
@@ -41,7 +42,7 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 			}
 		}
 
-		if r.Notifier != nil {
+		if r.Notifier != nil && !isPreviewGroupChildEnvironment(env) {
 			tCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
 			if err := r.Notifier.PostEnvironmentTeardown(tCtx, env); err != nil {
@@ -101,7 +102,16 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 			ctx = multicluster.WithTarget(ctx, resolvedTarget)
 		}
 
-		if !skipRemoteTargetCleanup {
+		recordedDedicatedProvider := strings.TrimSpace(env.Status.DatabaseProvider)
+		hasPriorDedicatedDB := recordedDedicatedProvider != "" &&
+			recordedDedicatedProvider != "shared" &&
+			recordedDedicatedProvider != "none" &&
+			recordedDedicatedProvider != "noop"
+		isPureSharedGroupChild := env.Annotations != nil &&
+			env.Annotations[annotationSharedGroupDB] == "true" &&
+			!hasPriorDedicatedDB
+
+		if !skipRemoteTargetCleanup && !isPureSharedGroupChild {
 			tCtxDBResolve, cancelDBResolve := context.WithTimeout(ctx, 15*time.Second)
 			dbProv, _, dbResolveErr := r.resolveDatabaseProviderWithContext(tCtxDBResolve, env, true)
 			cancelDBResolve()

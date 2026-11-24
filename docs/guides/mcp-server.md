@@ -116,6 +116,8 @@ The MCP server provides the following tools grouped by service:
 | `diverge_get_preview_group` | Retrieve status, member services, endpoints, and conditions for a PreviewGroup. |
 | `diverge_list_preview_groups` | List PreviewGroups across namespaces with label selectors and pagination. |
 | `diverge_update_preview_group` | Update configuration or service definitions for a PreviewGroup. |
+| `diverge_join_preview_group` | Create or join a shared multi-MR `PreviewGroup` by attaching existing PR/MR `Environment`s (`environment_names`) or explicit `services` without overwriting other MRs' services (use `force: true` to take over an existing service owned by another MR). Preserves per-service database configs by default unless `shared_database_mode` (`shared`, `schema`, `snapshot`, `fresh`, `cnpg`, `neon`) is set. |
+| `diverge_leave_preview_group` | Detach services (`service_names`), environments (`environment_names` or `environment_name`, e.g. `["frontend/pr-web-101"]`), or `project` + `mr` from a shared `PreviewGroup` (falling back to baseline) and automatically delete the `PreviewGroup` when the last active service leaves (*requires `--allow-destructive`*). |
 | `diverge_delete_preview_group` | Tear down a PreviewGroup and its child environments (*requires `--allow-destructive`*). |
 
 ### Built-in Helper & Diagnostic Tools
@@ -228,12 +230,12 @@ Add the server entry to `.vscode/mcp.json` in your project workspace:
 ## 6. Destructive Operations
 
 By default, the CLI `diverge mcp` `stdio` server operates in **safe mode**:
-- Destructive tools (`diverge_delete_environment`, `diverge_delete_preview_group`, and `diverge_delete_task`) are **omitted** from the CLI's registered tool registry.
-- AI assistants connected over `stdio` cannot accidentally delete active preview environments, tear down running `PreviewGroup`s, or delete running `AgentTask`s unless `--allow-destructive` is set.
+- Destructive tools (`diverge_delete_environment`, `diverge_delete_preview_group`, `diverge_leave_preview_group`, and `diverge_delete_task`) are **omitted** from the CLI's registered tool registry.
+- AI assistants connected over `stdio` cannot accidentally delete active preview environments, detach or tear down running `PreviewGroup`s, or delete running `AgentTask`s unless `--allow-destructive` is set.
 
 ### Enabling Destructive Tools on the CLI
 
-To allow your AI assistant to use `diverge_delete_environment`, `diverge_delete_preview_group`, and `diverge_delete_task` over `diverge mcp`, append the `--allow-destructive` flag:
+To allow your AI assistant to use `diverge_delete_environment`, `diverge_delete_preview_group`, `diverge_leave_preview_group`, and `diverge_delete_task` over `diverge mcp`, append the `--allow-destructive` flag:
 
 ```json
 {
@@ -262,7 +264,7 @@ To allow your AI assistant to use `diverge_delete_environment`, `diverge_delete_
 | Flag | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `--server-url` | `string` | `""` | Diverge API server URL. If empty, falls back to `DIVERGE_SERVER_URL` environment variable. |
-| `--allow-destructive` | `bool` | `false` | Enable destructive tools (`diverge_delete_environment`, `diverge_delete_preview_group`, and `diverge_delete_task`). |
+| `--allow-destructive` | `bool` | `false` | Enable destructive tools (`diverge_delete_environment`, `diverge_delete_preview_group`, `diverge_leave_preview_group`, and `diverge_delete_task`). |
 
 ### Global Flags
 

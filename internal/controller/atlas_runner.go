@@ -55,18 +55,22 @@ func (r *EnvironmentReconciler) ensureAtlasCR(ctx context.Context, env *divergei
 	u.SetName(crName)
 	u.SetNamespace(env.Namespace)
 
-	// Set owner reference
-	t := true
-	u.SetOwnerReferences([]metav1.OwnerReference{
-		{
-			APIVersion:         "divergedev.com/v1alpha1",
-			Kind:               "Environment",
-			Name:               env.Name,
-			UID:                env.UID,
-			Controller:         &t,
-			BlockOwnerDeletion: &t,
-		},
-	})
+	// Set owner reference when owner is persisted in Kubernetes, or inherit cluster-scoped PreviewGroup OwnerReferences
+	if env.UID != "" {
+		t := true
+		u.SetOwnerReferences([]metav1.OwnerReference{
+			{
+				APIVersion:         "divergedev.com/v1alpha1",
+				Kind:               "Environment",
+				Name:               env.Name,
+				UID:                env.UID,
+				Controller:         &t,
+				BlockOwnerDeletion: &t,
+			},
+		})
+	} else if len(env.OwnerReferences) > 0 {
+		u.SetOwnerReferences(env.OwnerReferences)
+	}
 
 	spec := map[string]interface{}{
 		"urlFrom": map[string]interface{}{
@@ -126,6 +130,9 @@ func (r *EnvironmentReconciler) ensureAtlasCR(ctx context.Context, env *divergei
 		}
 		logger.Info(fmt.Sprintf("Creating %s", kind), "name", crName)
 		if err := r.Create(ctx, u); err != nil {
+			if env.UID == "" {
+				_ = client.IgnoreNotFound(r.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: env.Namespace}}))
+			}
 			return fmt.Errorf("failed to create %s: %w", kind, err)
 		}
 		// Treat as newly created, so wait if blocking
@@ -133,8 +140,12 @@ func (r *EnvironmentReconciler) ensureAtlasCR(ctx context.Context, env *divergei
 	} else {
 		existingSpec, _, _ := unstructured.NestedMap(existing.Object, "spec")
 		uSpec, _, _ := unstructured.NestedMap(u.Object, "spec")
-		if !reflect.DeepEqual(existingSpec, uSpec) {
+		ownerMissing := len(existing.GetOwnerReferences()) == 0 && len(u.GetOwnerReferences()) > 0
+		if !reflect.DeepEqual(existingSpec, uSpec) || ownerMissing {
 			logger.Info(fmt.Sprintf("Updating %s", kind), "name", crName)
+			if ownerMissing {
+				existing.SetOwnerReferences(u.GetOwnerReferences())
+			}
 			err = unstructured.SetNestedMap(existing.Object, uSpec, "spec")
 			if err != nil {
 				return fmt.Errorf("failed to set unstructured spec for update: %w", err)
@@ -358,7 +369,7 @@ func (r *EnvironmentReconciler) ensureAtlasJob(ctx context.Context, env *diverge
 // ensureConfigMapOwner attaches the Environment as an OwnerReference to the ConfigMap
 // if it was created and managed by Diverge CLI (labeled divergedev.com/managed-by: diverge).
 func (r *EnvironmentReconciler) ensureConfigMapOwner(ctx context.Context, env *divergeiov1alpha1.Environment, cmName string) {
-	if cmName == "" {
+	if cmName == "" || env.UID == "" {
 		return
 	}
 	var cm corev1.ConfigMap

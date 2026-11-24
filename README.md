@@ -119,7 +119,7 @@ See [charts/diverge/values.yaml](charts/diverge/values.yaml) for configuration o
 *   **Security Hardened**: Macaroon capability tokens, webhook secret constant-time comparison, RFC 7230 header validation, safe SHA handling, ArgoCD namespace bypass prevention, IPv6-safe pod URLs, typed Server-Side Apply (SSA), and strict label validation.
 *   **Finalizer-Based Lifecycle**: Kubernetes finalizers ensure clean teardown of all resources (routing, database, sandboxes, ArgoCD apps) even during force-deletes.
 *   **TTL Auto-Expiry**: Automatic environment cleanup after configurable TTL with requeue-based expiry.
-*   **Multi-SCM Notifiers & Webhooks**: GitLab MR comments and GitHub PR comments with status updates and interactive PR/MR slash commands (`/diverge preview`, `/diverge verify [path]`, `/diverge replay [path ...]`, `/diverge fix <objective>`, `/diverge extend-ttl [duration]`, `/diverge teardown`, `/diverge pause`, `/diverge resume`).
+*   **Multi-SCM Notifiers & Webhooks**: GitLab MR comments and GitHub PR comments with status updates, automatic multi-MR `PreviewGroup` image synchronization on commit push and per-service detach on PR/MR close/merge, and interactive PR/MR slash commands (`/diverge preview`, `/diverge group <name> [--db-mode <mode>]`, `/diverge ungroup [name]`, `/diverge verify [path]`, `/diverge replay [path ...]`, `/diverge fix <objective>`, `/diverge extend-ttl [duration]`, `/diverge teardown`, `/diverge pause`, `/diverge resume`).
 *   **E2E Tested**: End-to-end tests with Kind/k3d, Envoy Gateway, Istio, Cilium, Linkerd, and real CRD reconciliation.
 *   **ConnectRPC API Server & Web Dashboard**: Opt-in API server (`server.enabled: true` in Helm) featuring an embedded React Web UI (`server.dashboard.enabled: true`), ConnectRPC (HTTP/1.1 + HTTP/2), OIDC JWT + K8s TokenReview + Macaroon authentication, namespace-scoped RBAC authorization, structured audit logging, list pagination, optimistic concurrency, and HTTP reverse tunnels.
 *   **Service Topology & Route Simulation**: `diverge route <service>` traces request paths through your service graph. `diverge graph show` renders the topology as Mermaid, DOT, or JSON.
@@ -205,7 +205,7 @@ The `diverge` CLI helps you manage environments efficiently:
 *   `diverge env export` - Export environment variables (dotenv, JSON, shell)
 *   `diverge mcp` - Run MCP server over stdio (`diverge mcp setup` to auto-configure Cursor, Claude Code, and Windsurf)
 *   `diverge task` - Manage autonomous AI coding tasks (`init`, `create`, `status`, `list`, `logs`, `guide`, `pause`, `resume`, `delete`)
-*   `diverge preview` - Create and manage multi-service `PreviewGroup`s from the CLI (`create`, `status`, `watch`, `delete`)
+*   `diverge preview` - Create, inspect, and compose multi-service / multi-MR `PreviewGroup`s from the CLI (`create --upsert`, `join`, `leave`, `status`, `watch`, `delete`)
 *   `diverge diff` - Detect which services changed relative to a base branch
 *   `diverge route` - Simulate request routing through the service topology
 *   `diverge graph` - Display (`show`) or validate (`validate`) the service dependency graph

@@ -19,6 +19,7 @@ export default function App() {
         <Route index element={<EnvironmentList />} />
         <Route path="environments/:namespace/:name" element={<EnvironmentDetail />} />
         <Route path="preview-groups" element={<PreviewGroups />} />
+        <Route path="preview-groups/:name" element={<PreviewGroupDetail />} />
         <Route path="preview-groups/:namespace/:name" element={<PreviewGroupDetail />} />
         <Route path="tasks" element={<AgentTasks />} />
         <Route path="tasks/:namespace/:name" element={<AgentTaskDetail />} />

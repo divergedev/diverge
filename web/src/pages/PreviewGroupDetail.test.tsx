@@ -249,4 +249,111 @@ describe('PreviewGroupDetail', () => {
     expect(screen.getAllByText('eu-central-spoke')).toHaveLength(2)
     expect(screen.getByText('local')).toBeInTheDocument()
   })
+
+  it('displays Source MR badges and detaches an individual MR service without deleting remaining services', async () => {
+    let updatedPayload: Record<string, unknown> | undefined
+
+    server.use(
+      http.post('*/diverge.v1alpha1.PreviewGroupService/GetPreviewGroup', () =>
+        HttpResponse.json({
+          previewGroup: {
+            ...mockPreviewGroup.previewGroup,
+            resourceVersion: '42',
+            annotations: {
+              'divergedev.com/group-members': JSON.stringify([
+                { service: 'api-gateway', project: 'acme/gateway', mr: 101, branch: 'feat/checkout' },
+                { service: 'payments', project: 'acme/payments', mr: 42, branch: 'feat/checkout' },
+              ]),
+            },
+          },
+        }),
+      ),
+      http.post('*/diverge.v1alpha1.PreviewGroupService/UpdatePreviewGroup', async ({ request }) => {
+        updatedPayload = (await request.json()) as Record<string, unknown>
+        const nested = updatedPayload.previewGroup as Record<string, unknown>
+        return HttpResponse.json({ previewGroup: nested })
+      }),
+    )
+
+    renderPage()
+
+    expect(await screen.findByText('acme/gateway#101 · feat/checkout')).toBeInTheDocument()
+    expect(screen.getByText('acme/payments#42 · feat/checkout')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Detach payments' }))
+
+    await waitFor(() => {
+      expect(updatedPayload).toBeDefined()
+    })
+
+    const pg = updatedPayload?.previewGroup as {
+      annotations: Record<string, string>
+      spec: { services: Array<{ name: string }> }
+    }
+    expect(pg.spec.services).toHaveLength(1)
+    expect(pg.spec.services[0].name).toBe('api-gateway')
+    expect(pg.annotations['divergedev.com/group-members']).not.toContain('acme/payments')
+    expect(pg.annotations['divergedev.com/group-members']).toContain('acme/gateway')
+  })
+
+  it('sends If-Match header on final-service detach and refreshes on concurrent join conflict', async () => {
+    let seenIfMatchHeader: string | null = null
+    let getCalls = 0
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    server.use(
+      http.post('*/diverge.v1alpha1.PreviewGroupService/GetPreviewGroup', () => {
+        getCalls++
+        if (getCalls === 1) {
+          return HttpResponse.json({
+            previewGroup: {
+              ...mockPreviewGroup.previewGroup,
+              resourceVersion: '77',
+              spec: {
+                ...mockPreviewGroup.previewGroup.spec,
+                services: [{ name: 'api-gateway', mode: 'image' }],
+              },
+              status: {
+                ...mockPreviewGroup.previewGroup.status,
+                services: [],
+              },
+            },
+          })
+        }
+        return HttpResponse.json({
+          previewGroup: {
+            ...mockPreviewGroup.previewGroup,
+            resourceVersion: '78',
+            spec: {
+              ...mockPreviewGroup.previewGroup.spec,
+              services: [
+                { name: 'api-gateway', mode: 'image' },
+                { name: 'newly-joined-web', mode: 'image' },
+              ],
+            },
+            status: {
+              ...mockPreviewGroup.previewGroup.status,
+              services: [],
+            },
+          },
+        })
+      }),
+      http.post('*/diverge.v1alpha1.PreviewGroupService/DeletePreviewGroup', ({ request }) => {
+        seenIfMatchHeader = request.headers.get('If-Match')
+        return HttpResponse.json({ code: 'aborted', message: 'Precondition failed' }, { status: 409 })
+      }),
+    )
+
+    renderPage()
+
+    // Newly joined spec service renders with Detach button even when status.services is empty
+    const detachBtn = await screen.findByRole('button', { name: 'Detach api-gateway' })
+    fireEvent.click(detachBtn)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Preview group changed while detaching',
+    )
+    expect(seenIfMatchHeader).toBe('77')
+    expect(await screen.findByText('newly-joined-web')).toBeInTheDocument()
+  })
 })

@@ -96,6 +96,7 @@ jobs:
 | `image-tag` | `""` | Image tag for changed services (when omitted, defaults to resolved `preview-name`, e.g. `pr-<number>` or branch slug) |
 | `header-key` | `x-diverge-env` | HTTP routing header key |
 | `ttl` | `4h` | Preview environment TTL |
+| `group` | `""` | Optional shared multi-MR `PreviewGroup` name or branch slug (e.g. `${{ github.head_ref }}`) to join on `deploy` (`diverge preview join`) and detach from on `teardown` (`diverge preview leave`) without overwriting sibling repos' services |
 | `cluster` | `""` | Optional logical spoke cluster name (`local` or federated spoke name) |
 | `cluster-secret` | `""` | Same-namespace Kubernetes Secret holding the spoke kubeconfig when targeting a remote `cluster` |
 | `base-url` | `""` | Optional gateway base URL to emit `preview-url` (`?_diverge_env=`) |
@@ -161,7 +162,7 @@ If you prefer calling the `diverge` CLI directly without the composite action:
 
 ### Turnkey GitLab CI/CD Component (Recommended)
 
-Include the official component (`templates/preview/template.yml`). It automatically runs `diverge diff` when `diverge_services` is omitted, optionally runs `diverge replay` when `diverge_replay_from` is set, and exports dotenv-safe variables in `preview.env` (`DIVERGE_PREVIEW_NAME`, `DIVERGE_SKIPPED`, `DIVERGE_ROUTING_HEADER_B64`, `DIVERGE_PREVIEW_URL`) to downstream jobs:
+Include the official component (`templates/preview/template.yml`). It automatically runs `diverge diff` when `diverge_services` is omitted, optionally joins a cross-repo `PreviewGroup` when `diverge_group` is set (e.g., `diverge_group: "$CI_COMMIT_REF_SLUG"`, detaching only this MR's services on cleanup), optionally runs `diverge replay` when `diverge_replay_from` is set, and exports dotenv-safe variables in `preview.env` (`DIVERGE_PREVIEW_NAME`, `DIVERGE_SKIPPED`, `DIVERGE_ROUTING_HEADER_B64`, `DIVERGE_PREVIEW_URL`) to downstream jobs:
 
 ```yaml
 include:
@@ -263,11 +264,13 @@ In addition to CI-driven preview deployments, Diverge's webhook handlers execute
 | Slash Command | Target Resource(s) | Description |
 | :--- | :--- | :--- |
 | `/diverge preview` | `Environment` | Creates or reconciles an `Environment` (`pr-<num>` / `mr-<num>`) for the current PR/MR branch. |
+| `/diverge group <name> [--db-mode <mode>]` | `PreviewGroup` | Creates or joins a shared multi-MR `PreviewGroup` (`<name>` or branch slug) from this PR/MR's `Environment` or single-MR `PreviewGroup` without overwriting sibling MRs' services (aliases: `/diverge attach`, `/diverge join`). Preserves each MR's own database config by default unless `--db-mode <shared\|schema\|snapshot\|fresh\|cnpg\|neon>` is passed. Subsequent commits pushed to any joined PR/MR automatically sync updated images into the shared group, and closing/merging one PR/MR detaches its service (deleting the group when the last active MR leaves). |
+| `/diverge ungroup [name]` | `PreviewGroup` | Detaches this PR/MR's services from `<name>` (or from all shared `PreviewGroup`s when `[name]` is omitted; aliases: `/diverge detach`, `/diverge leave`), automatically deleting the `PreviewGroup` when no active preview services remain. |
 | `/diverge verify [path] [--fix]` | `Environment`, `PreviewGroup` | Runs Kubernetes workload `doctor` diagnostics and routed HTTP readiness + baseline parity probes against the PR/MR preview environment (defaults to `/` when `[path]` is omitted) and replies with a Markdown scorecard. Pass `--fix` (or `--auto-fix`) to automatically spawn/steer a self-healing `AgentTask` on failure. |
 | `/diverge replay [path ...] [--fix]` | `Environment`, `PreviewGroup` | Replays inline whitespace-separated `GET` probe paths against baseline and the PR/MR preview environment (defaults to `/` when omitted), diffing status codes, latency, and JSON/Protobuf response contracts, and replies with a Markdown scorecard. Supports both header-routed and subdomain-routed environments (when a baseline URL is configured via `spec.routing.externalUrl` or `DIVERGE_BASE_URL`), and spawns a self-healing `AgentTask` when `--fix` / `--auto-fix` is passed. |
 | `/diverge fix <objective>` | `AgentTask` | Spawns or updates an autonomous `AgentTask` (and linked preview environment) targeting the PR/MR branch with `<objective>`. |
 | `/diverge extend-ttl [duration]` | `Environment`, `PreviewGroup` | Extends `spec.lifecycle.ttl` for all preview environments and preview groups matching the PR/MR (defaults to `24h` if `[duration]` is omitted, e.g., `/diverge extend-ttl 48h`). |
-| `/diverge teardown` | `Environment`, `PreviewGroup` | Immediately deletes all `Environment` and `PreviewGroup` resources associated with the PR/MR. |
+| `/diverge teardown` | `Environment`, `PreviewGroup` | Detaches the PR/MR from any shared multi-MR `PreviewGroup`s (deleting the group if empty) and deletes standalone `Environment` and `PreviewGroup` resources owned by the PR/MR. |
 | `/diverge pause` | `AgentTask` | Suspends active `AgentTask` runs associated with the PR/MR (`spec.suspended = true`). |
 | `/diverge resume` | `AgentTask` | Resumes paused `AgentTask` runs associated with the PR/MR (`spec.suspended = false`). |
 
@@ -275,6 +278,8 @@ In addition to CI-driven preview deployments, Diverge's webhook handlers execute
 
 ```text
 /diverge preview
+/diverge group feat-checkout
+/diverge ungroup feat-checkout
 /diverge verify /healthz
 /diverge replay /api/v1/catalog /api/v1/healthz
 /diverge fix Resolve the flaky checkout integration test and update currency rounding

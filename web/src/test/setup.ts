@@ -11,8 +11,12 @@ afterEach(() => {
 afterAll(() => server.close())
 
 
-HTMLDialogElement.prototype.showModal = vi.fn();
-HTMLDialogElement.prototype.close = vi.fn();
+HTMLDialogElement.prototype.showModal = vi.fn(function (this: HTMLDialogElement) {
+  this.setAttribute('open', '')
+})
+HTMLDialogElement.prototype.close = vi.fn(function (this: HTMLDialogElement) {
+  this.removeAttribute('open')
+})
 
 // ResizeObserver mock for topology SVG overlay tests (jsdom doesn't implement it)
 globalThis.ResizeObserver = class ResizeObserver {

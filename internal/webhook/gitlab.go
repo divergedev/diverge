@@ -16,6 +16,7 @@ import (
 	"github.com/divergedev/diverge/internal/config"
 	"github.com/divergedev/diverge/internal/deployer"
 	"github.com/divergedev/diverge/internal/metrics"
+	"github.com/divergedev/diverge/internal/previewgroup"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -35,8 +36,9 @@ type GitLabWebhookHandler struct {
 	DefaultNS     string
 	// SkipWithoutConfig ignores events from projects with no .diverge.yaml on
 	// the source branch, for deployers that cannot run without one.
-	SkipWithoutConfig bool
-	Dedup             *DeliveryDedup
+	SkipWithoutConfig    bool
+	DisablePreviewGroups bool
+	Dedup                *DeliveryDedup
 }
 
 // GitLabMRPayload is a simple struct to decode MR webhook payloads
@@ -161,7 +163,7 @@ func (h *GitLabWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 
 	if payload.ObjectKind == "note" || r.Header.Get("X-Gitlab-Event") == "Note Hook" {
 		action = "note"
-		h.handleNoteEvent(ctx, w, bodyBytes)
+		h.handleNoteEvent(ctx, w, bodyBytes, deliveryID)
 		return
 	}
 
@@ -177,12 +179,14 @@ func (h *GitLabWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	switch payload.ObjectAttributes.Action {
 	case "open", "reopen", "update":
 		if err := h.reconcileEnvironment(ctx, &payload); err != nil {
+			h.Dedup.Release(deliveryID)
 			logger.Error(err, "Failed to reconcile environment")
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
 	case "merge", "close":
 		if err := h.deleteEnvironment(ctx, &payload); err != nil {
+			h.Dedup.Release(deliveryID)
 			logger.Error(err, "Failed to delete environment")
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
@@ -193,7 +197,7 @@ func (h *GitLabWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 }
 
 // handleNoteEvent processes GitLab Note Hook webhook requests for Merge Request slash commands.
-func (h *GitLabWebhookHandler) handleNoteEvent(ctx context.Context, w http.ResponseWriter, bodyBytes []byte) {
+func (h *GitLabWebhookHandler) handleNoteEvent(ctx context.Context, w http.ResponseWriter, bodyBytes []byte, deliveryID string) {
 	logger := log.FromContext(ctx).WithName("gitlab-webhook")
 
 	var payload GitLabNotePayload
@@ -262,6 +266,7 @@ func (h *GitLabWebhookHandler) handleNoteEvent(ctx context.Context, w http.Respo
 		feedback, execErr = ExecuteSlashCommandWithFeedback(ctx, h.Client, h.DefaultNS, cmd, repoURL, branch, mrIID)
 	}
 	if execErr != nil {
+		h.Dedup.Release(deliveryID)
 		logger.Error(execErr, "Failed to execute GitLab slash command", "action", cmd.Action, "mr", mrIID)
 		h.postFeedbackComment(ctx, payload.Project.PathWithNamespace, mrIID, fmt.Sprintf("❌ **Diverge Command Error**\n\nFailed to execute `/diverge %s`: %v\n\nRun `/diverge help` for a list of available commands.", cmd.Action, execErr))
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -386,9 +391,24 @@ func (h *GitLabWebhookHandler) reconcileEnvironment(ctx context.Context, payload
 	})
 	if errors.Is(err, errNoDotDiverge) {
 		log.FromContext(ctx).WithName("gitlab-webhook").Info("Skipping project without .diverge.yaml", "project", env.Spec.Source.Project, "ref", env.Spec.Source.Branch)
-		return client.IgnoreNotFound(h.Client.Delete(ctx, env))
+		if delErr := client.IgnoreNotFound(h.Client.Delete(ctx, env)); delErr != nil {
+			return delErr
+		}
+		if h.DisablePreviewGroups {
+			return nil
+		}
+		_, detachErr := previewgroup.DetachMemberByPR(ctx, h.Client, payload.Project.PathWithNamespace, payload.ObjectAttributes.IID, ns+"/"+envName)
+		return detachErr
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if !h.DisablePreviewGroups {
+		if _, syncErr := previewgroup.SyncMemberEnvironment(ctx, h.Client, env); syncErr != nil {
+			return fmt.Errorf("failed to sync Environment %s/%s to shared PreviewGroups: %w", ns, env.Name, syncErr)
+		}
+	}
+	return nil
 }
 
 func (h *GitLabWebhookHandler) deleteEnvironment(ctx context.Context, payload *GitLabMRPayload) error {
@@ -404,7 +424,14 @@ func (h *GitLabWebhookHandler) deleteEnvironment(ctx context.Context, payload *G
 			Namespace: ns,
 		},
 	}
-	return client.IgnoreNotFound(h.Client.Delete(ctx, env))
+	if err := client.IgnoreNotFound(h.Client.Delete(ctx, env)); err != nil {
+		return err
+	}
+	if h.DisablePreviewGroups {
+		return nil
+	}
+	_, err := previewgroup.DetachMemberByPR(ctx, h.Client, payload.Project.PathWithNamespace, payload.ObjectAttributes.IID, ns+"/"+envName)
+	return err
 }
 
 // normalizeGitLabAction maps webhook actions to a bounded set of known values

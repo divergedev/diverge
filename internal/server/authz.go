@@ -53,7 +53,7 @@ func candidateToolsForAction(verb, resource string) []string {
 	case "environments":
 		switch verb {
 		case "get":
-			return []string{"diverge_get_environment", "diverge_wait_for_ready", "diverge_fetch_errors", "diverge_list_hook_jobs", "diverge_doctor"}
+			return []string{"diverge_get_environment", "diverge_wait_for_ready", "diverge_fetch_errors", "diverge_list_hook_jobs", "diverge_doctor", "diverge_join_preview_group"}
 		case "list", "watch":
 			return []string{"diverge_list_environments", "diverge_watch_environments"}
 		case "cost-summary":
@@ -77,15 +77,15 @@ func candidateToolsForAction(verb, resource string) []string {
 	case "previewgroups":
 		switch verb {
 		case "get":
-			return []string{"diverge_get_preview_group"}
+			return []string{"diverge_get_preview_group", "diverge_join_preview_group", "diverge_leave_preview_group"}
 		case "list", "watch":
 			return []string{"diverge_list_preview_groups", "diverge_watch_preview_groups"}
 		case "create":
-			return []string{"diverge_create_preview_group"}
+			return []string{"diverge_create_preview_group", "diverge_join_preview_group"}
 		case "update":
-			return []string{"diverge_update_preview_group"}
+			return []string{"diverge_update_preview_group", "diverge_join_preview_group", "diverge_leave_preview_group"}
 		case "delete":
-			return []string{"diverge_delete_preview_group"}
+			return []string{"diverge_delete_preview_group", "diverge_leave_preview_group"}
 		}
 	case "agenttasks":
 		switch verb {
@@ -235,6 +235,39 @@ func AuthorizeAction(ctx context.Context, k8sClient kubernetes.Interface, auditL
 		Group:     v1alpha1.GroupVersion.Group,
 		Resource:  resource,
 	}, "permission denied")
+}
+
+// AuthorizePreviewGroupServiceNamespace verifies that the caller is authorized to operate on a service
+// namespace referenced by a cluster-scoped PreviewGroup.
+//   - Macaroon tokens must be bound to svcNamespace and carry the matching previewgroups tool capability.
+//   - Kubernetes RBAC / OIDC principals are checked via SubjectAccessReview for environments in svcNamespace
+//     whenever svcNamespace differs from alreadyCheckedPrimaryNS.
+func AuthorizePreviewGroupServiceNamespace(
+	ctx context.Context,
+	k8sClient kubernetes.Interface,
+	auditLogger *AuditLogger,
+	verb, svcNamespace, _ string,
+) error {
+	effNS := strings.TrimSpace(svcNamespace)
+	if effNS == "" {
+		effNS = "default"
+	}
+	user, ok := auth.UserInfoFromContext(ctx)
+	if !ok {
+		return connect.NewError(connect.CodeUnauthenticated, errors.New("not authenticated"))
+	}
+	if isMacaroonUser(user) {
+		if err := authorizeMacaroon(ctx, auditLogger, user, verb, effNS, "previewgroups", fmt.Sprintf("permission denied for service namespace %s", effNS)); err != nil {
+			return err
+		}
+		return nil
+	}
+	return checkSAR(ctx, k8sClient, auditLogger, user, &authorizationv1.ResourceAttributes{
+		Namespace: effNS,
+		Verb:      verb,
+		Group:     v1alpha1.GroupVersion.Group,
+		Resource:  "environments",
+	}, fmt.Sprintf("permission denied for service namespace %s", effNS))
 }
 
 // AuthorizeCostSummary checks authorization for reading cost and usage analytics.

@@ -32,7 +32,7 @@ const pgReadyTmplStr = `## 🟢 Diverge Preview — Ready!
 | Field | Value |
 |-------|-------|
 | **Status** | ✅ Running |
-{{if .URL}}| **Preview Link** | [🔗 Open Preview]({{.URL | sanitize}}?_diverge_env={{.HeaderValue | sanitize}}) ([Exit Preview]({{.URL | sanitize}}?_diverge_env=clear)) |
+{{if .URL}}| **Preview Link** | [🔗 Open Preview]({{.URL | sanitize}}){{if .ExitURL}} ([Exit Preview]({{.ExitURL | sanitize}})){{end}} |
 {{end}}| **Environment** | ` + "`{{.Name | sanitize}}`" + ` |
 | **Services** | {{.ServiceCount}} ({{.RunningCount}} running) |
 
@@ -75,6 +75,7 @@ type PreviewGroupTemplateData struct {
 	MR           int
 	TTL          string
 	URL          string
+	ExitURL      string
 	BaseURL      string
 	HeaderKey    string
 	HeaderValue  string

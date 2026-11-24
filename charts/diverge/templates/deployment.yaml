@@ -59,6 +59,9 @@ spec:
         - --enable-agent-sandbox={{ .Values.sandbox.enabled }}
         - --sandbox-provider={{ .Values.sandbox.provider | default "agent-sandbox" }}
         {{- end }}
+        {{- if .Values.rbac.namespaceScoped }}
+        - --enable-previewgroups=false
+        {{- end }}
         {{- range .Values.extraArgs }}
         - {{ . | quote }}
         {{- end }}

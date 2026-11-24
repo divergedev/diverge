@@ -1,14 +1,20 @@
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useListPreviewGroups } from '@/api/queries'
 import { useWatchPreviewGroups } from '@/hooks/useWatch'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { StatusBadge } from '@/components/StatusBadge'
 import { EmptyState } from '@/components/EmptyState'
-import { GitBranch } from 'lucide-react'
+import { ComposePreviewGroupModal } from '@/components/ComposePreviewGroupModal'
+import { countDistinctGroupMRs, parseGroupMembers, previewGroupPath } from '@/lib/previewgroup'
+import { GitBranch, Plus } from 'lucide-react'
 
 export default function PreviewGroups() {
   const { data, isLoading } = useListPreviewGroups()
   useWatchPreviewGroups()
+  const [composeOpen, setComposeOpen] = useState(false)
   const groups = data?.previewGroups ?? []
 
   if (isLoading) {
@@ -17,37 +23,75 @@ export default function PreviewGroups() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Preview Groups</h1>
-        <p className="text-muted-foreground">Multi-service preview environment templates</p>
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold">Preview Groups</h1>
+          <p className="text-muted-foreground">Combine multiple services and open MRs behind a shared routing header</p>
+        </div>
+        <Button type="button" onClick={() => setComposeOpen(true)}>
+          <Plus className="h-4 w-4 mr-2" aria-hidden="true" />
+          Compose Preview Group
+        </Button>
       </div>
 
       {groups.length === 0 ? (
-        <EmptyState icon={GitBranch} title="No preview groups" description="Preview groups let you define multi-service preview environments." />
+        <EmptyState
+          icon={GitBranch}
+          title="No preview groups"
+          description="Compose open frontend and backend MRs into a single end-to-end preview environment."
+        />
       ) : (
         <Table>
           <TableHeader>
             <TableRow>
               <TableHead>Name</TableHead>
-              <TableHead>Namespace</TableHead>
+              <TableHead>Scope</TableHead>
+              <TableHead>Routing Header</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Services</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {groups.map((pg) => (
-              <TableRow key={`${pg.namespace}/${pg.name}`}>
-                <TableCell>
-                  <Link to={`/preview-groups/${pg.namespace}/${pg.name}`} className="font-medium text-primary hover:underline">{pg.name}</Link>
-                </TableCell>
-                <TableCell className="text-muted-foreground">{pg.namespace}</TableCell>
-                <TableCell><StatusBadge phase={pg.status?.phase ?? ''} /></TableCell>
-                <TableCell>{pg.spec?.services?.length ?? 0}</TableCell>
-              </TableRow>
-            ))}
+            {groups.map((pg) => {
+              const members = parseGroupMembers(pg.annotations)
+              const mrCount = countDistinctGroupMRs(members)
+              const routing = pg.spec?.routing
+              const header =
+                routing?.headerKey && routing?.headerValue
+                  ? `${routing.headerKey}: ${routing.headerValue}`
+                  : '—'
+              return (
+                <TableRow key={`${pg.namespace || '_cluster'}/${pg.name}`}>
+                  <TableCell>
+                    <div className="flex items-center gap-2">
+                      <Link to={previewGroupPath(pg)} className="font-medium text-primary hover:underline">
+                        {pg.name}
+                      </Link>
+                      {mrCount > 1 ? (
+                        <Badge variant="secondary" className="text-[10px]">
+                          {mrCount} MRs
+                        </Badge>
+                      ) : members.length > 1 ? (
+                        <Badge variant="secondary" className="text-[10px]">
+                          {members.length} joined
+                        </Badge>
+                      ) : null}
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground font-mono text-xs">
+                    {pg.namespace || 'cluster'}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">{header}</TableCell>
+                  <TableCell><StatusBadge phase={pg.status?.phase ?? ''} /></TableCell>
+                  <TableCell>{pg.spec?.services?.length ?? 0}</TableCell>
+                </TableRow>
+              )
+            })}
           </TableBody>
         </Table>
       )}
+
+      <ComposePreviewGroupModal open={composeOpen} onClose={() => setComposeOpen(false)} />
     </div>
   )
 }

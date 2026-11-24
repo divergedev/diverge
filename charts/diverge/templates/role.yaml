@@ -8,10 +8,9 @@ metadata:
   name: {{ $fullname }}-controller-role
   namespace: {{ . }}
 rules:
-  # Diverge CRDs
+  # Diverge CRDs (namespace-scoped; cluster-scoped previewgroups require ClusterRole)
   - apiGroups: ["divergedev.com"]
     resources: [environments, environments/status, environments/finalizers,
-                previewgroups, previewgroups/status, previewgroups/finalizers,
                 agenttasks, agenttasks/status, agenttasks/finalizers]
     verbs: [get, list, watch, create, update, patch, delete]
 
