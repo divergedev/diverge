@@ -50,3 +50,33 @@ func TestSecretNameHelpers(t *testing.T) {
 		t.Fatalf("secret naming helpers must be deterministic")
 	}
 }
+
+func TestCredentialRevision(t *testing.T) {
+	if got := CredentialRevision(nil); got != "" {
+		t.Fatalf("expected empty revision for empty map, got %q", got)
+	}
+	a := CredentialRevision(map[string]string{
+		"DATABASE_URL": "postgres://secret-user:secret-pass@db:5432/app",
+		"DB_HOST":      "db",
+	})
+	b := CredentialRevision(map[string]string{
+		"DB_HOST":      "db",
+		"DATABASE_URL": "postgres://secret-user:secret-pass@db:5432/app",
+	})
+	c := CredentialRevision(map[string]string{
+		"DATABASE_URL": "postgres://new-user:new-pass@db:5432/app",
+		"DB_HOST":      "db",
+	})
+	if len(a) != 16 {
+		t.Fatalf("expected 16-hex revision, got %q", a)
+	}
+	if a != b {
+		t.Fatalf("expected deterministic revision across key order, got %q vs %q", a, b)
+	}
+	if a == c {
+		t.Fatalf("expected different revision for different DSN")
+	}
+	if strings.Contains(a, "secret-pass") || strings.Contains(a, "postgres") {
+		t.Fatalf("revision must not leak secret contents: %q", a)
+	}
+}

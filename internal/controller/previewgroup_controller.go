@@ -145,7 +145,7 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			}
 			return ctrl.Result{}, nil
 		}
-		requeueAfter = time.Until(expiryTime)
+		requeueAfter = clampPositiveRequeue(time.Until(expiryTime))
 	}
 
 	if pg.Status.LeaseRenewedAt != nil {
@@ -187,10 +187,7 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			return ctrl.Result{}, nil
 		}
 
-		d := time.Until(expiration)
-		if requeueAfter == 0 || d < requeueAfter {
-			requeueAfter = d
-		}
+		requeueAfter = shorterRequeueDelay(requeueAfter, clampPositiveRequeue(time.Until(expiration)))
 	}
 
 	// Reconcile child Environments for each service
@@ -216,9 +213,12 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	// Provision a single shared group-level database when Spec.Database is configured on a concrete provider
 	groupDBVars, groupDBAnchorNS, groupDBHandled, groupDBReady, groupDBNeedsRequeue, groupDBErr := r.reconcileGroupDatabase(ctx, &pg)
+	if errors.Is(groupDBErr, errPreviewGroupRevisionChanged) || isConflictError(groupDBErr) {
+		return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
+	}
 	// Always refresh statusBase ResourceVersion/annotations in case reconcileGroupDatabase persisted or cleared metadata
 	statusBase.ResourceVersion = pg.ResourceVersion
-	statusBase.Annotations = pg.DeepCopy().Annotations
+	statusBase.Annotations = cloneStringMap(pg.Annotations)
 	var shortRequeue time.Duration
 	if groupDBNeedsRequeue {
 		shortRequeue = 3 * time.Second
@@ -249,16 +249,14 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 				}, "failed", failMsg)
 				cancelS()
 				if sErr == nil {
-					metaBase := pg.DeepCopy()
-					if pg.Annotations == nil {
-						pg.Annotations = make(map[string]string)
-					}
-					pg.Annotations[annotationReportedCommit] = failCommitKey
-					desiredStatus := pg.Status.DeepCopy()
-					if mErr := r.Patch(ctx, &pg, client.MergeFrom(metaBase)); mErr == nil {
-						pg.Status = *desiredStatus
+					if revChanged, mErr := r.patchPreviewGroupAnnotations(ctx, &pg, func(annos map[string]string) {
+						annos[annotationReportedCommit] = failCommitKey
+					}); mErr == nil {
+						if revChanged {
+							return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
+						}
 						statusBase.ResourceVersion = pg.ResourceVersion
-						statusBase.Annotations = pg.DeepCopy().Annotations
+						statusBase.Annotations = cloneStringMap(pg.Annotations)
 					}
 				}
 			}
@@ -279,7 +277,11 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			} else {
 				pg.Status.CommentSource = ""
 			}
-			_ = r.Status().Patch(ctx, &pg, client.MergeFrom(statusBase))
+			statusPatch := client.MergeFrom(statusBase)
+			if statusBase.ResourceVersion != "" {
+				statusPatch = client.MergeFromWithOptions(statusBase, client.MergeFromWithOptimisticLock{})
+			}
+			_ = r.Status().Patch(ctx, &pg, statusPatch)
 			return ctrl.Result{}, groupDBErr
 		}
 		if !groupDBReady {
@@ -360,10 +362,13 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 		var sharedDBSecretName string
 		if groupDBHandled && svc.Database == nil && len(groupDBVars) > 0 {
-			secName, secErr := r.ensureChildSharedDBSecret(ctx, &pg, svc, envName, targetNS, groupDBAnchorNS, groupDBVars)
+			secName, secRevChanged, secErr := r.ensureChildSharedDBSecret(ctx, &pg, svc, envName, targetNS, groupDBAnchorNS, groupDBVars)
 			// Refresh statusBase ResourceVersion/annotations in case ensureChildSharedDBSecret recorded a remote target on pg
 			statusBase.ResourceVersion = pg.ResourceVersion
-			statusBase.Annotations = pg.DeepCopy().Annotations
+			statusBase.Annotations = cloneStringMap(pg.Annotations)
+			if isConflictError(secErr) || secRevChanged {
+				return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
+			}
 			if secErr != nil {
 				svcStatus.Phase = divergeiov1alpha1.PhaseFailed
 				svcStatus.Reason = "SharedDatabaseSecretFailed"
@@ -509,7 +514,10 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	orphanCleanupRequeue, orphanCleanupErr := r.deleteOrphanedEnvironments(ctx, &pg, desiredEnvNames)
 	// Refresh statusBase ResourceVersion/annotations in case cleanupOrphanedChildSharedDBSecrets pruned recorded targets on pg
 	statusBase.ResourceVersion = pg.ResourceVersion
-	statusBase.Annotations = pg.DeepCopy().Annotations
+	statusBase.Annotations = cloneStringMap(pg.Annotations)
+	if errors.Is(orphanCleanupErr, errPreviewGroupRevisionChanged) || isConflictError(orphanCleanupErr) {
+		return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
+	}
 	if orphanCleanupRequeue && (shortRequeue == 0 || 3*time.Second < shortRequeue) {
 		shortRequeue = 3 * time.Second
 	}
@@ -638,23 +646,31 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	// Persist reported-commit metadata separately when updated; CommentID + CommentSource are persisted atomically in Status().Patch below.
 	if reportedCommitUpdated && prevReportedCommit != currentCommitStateKey {
-		desiredStatus := pg.Status.DeepCopy()
-		metaBase := pg.DeepCopy()
-		if pg.Annotations == nil {
-			pg.Annotations = make(map[string]string)
-		}
-		pg.Annotations[annotationReportedCommit] = currentCommitStateKey
-		if mErr := r.Patch(ctx, &pg, client.MergeFrom(metaBase)); mErr != nil {
+		revChanged, mErr := r.patchPreviewGroupAnnotations(ctx, &pg, func(annos map[string]string) {
+			annos[annotationReportedCommit] = currentCommitStateKey
+		})
+		if mErr != nil {
+			if isConflictError(mErr) {
+				return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
+			}
 			return ctrl.Result{}, fmt.Errorf("failed to persist PreviewGroup notification metadata: %w", mErr)
 		}
-		pg.Status = *desiredStatus
+		if revChanged {
+			return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
+		}
 		statusBase.ResourceVersion = pg.ResourceVersion
-		statusBase.Annotations = pg.DeepCopy().Annotations
+		statusBase.Annotations = cloneStringMap(pg.Annotations)
 	}
 
 	// Persist status (including CommentID + CommentSource together atomically)
 	patch := client.MergeFrom(statusBase)
+	if statusBase.ResourceVersion != "" {
+		patch = client.MergeFromWithOptions(statusBase, client.MergeFromWithOptimisticLock{})
+	}
 	if err := r.Status().Patch(ctx, &pg, patch); err != nil {
+		if isConflictError(err) {
+			return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
+		}
 		return ctrl.Result{}, fmt.Errorf("failed to update PreviewGroup status: %w", err)
 	}
 
@@ -667,12 +683,10 @@ func (r *PreviewGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if len(childSecretErrs) > 0 {
 		return ctrl.Result{}, errors.Join(childSecretErrs...)
 	}
-	if requeue && (shortRequeue == 0 || 1*time.Second < shortRequeue) {
-		shortRequeue = 1 * time.Second
+	if requeue {
+		shortRequeue = shorterRequeueDelay(shortRequeue, 1*time.Second)
 	}
-	if shortRequeue > 0 && (requeueAfter == 0 || shortRequeue < requeueAfter) {
-		requeueAfter = shortRequeue
-	}
+	requeueAfter = shorterRequeueDelay(requeueAfter, shortRequeue)
 	if requeueAfter > 0 {
 		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
@@ -699,20 +713,12 @@ func (r *PreviewGroupReconciler) handleTeardown(ctx context.Context, pg *diverge
 		return ctrl.Result{}, fmt.Errorf("failed to list child Environments: %w", err)
 	}
 
-	hasPinned := pg.Annotations != nil &&
-		(strings.TrimSpace(pg.Annotations[annotationGroupDBNamespace]) != "" ||
-			strings.TrimSpace(pg.Annotations[annotationGroupDBProvider]) != "")
-	usesSharedGroupSecrets := hasDedicatedGroupDatabase(pg) || hasPinned
-
 	// Delete children that haven't been deleted yet
 	remaining := 0
 	for i := range children {
 		child := &children[i]
-		if child.Spec.Deploy.ClusterRef != nil && multicluster.IsRemoteEnv(child) &&
-			(usesSharedGroupSecrets ||
-				child.Annotations[annotationSharedGroupDB] == "true" ||
-				child.Annotations[annotationSharedGroupDBDraining] == "true") {
-			if recErr := r.recordSharedDBSecretTarget(ctx, pg, child.Namespace, child.Spec.Deploy.ClusterRef); recErr != nil {
+		if child.Spec.Deploy.ClusterRef != nil && multicluster.IsRemoteEnv(child) && childMayHoldSharedDBSecret(child, nil) {
+			if _, recErr := r.recordSharedDBSecretTarget(ctx, pg, child.Namespace, child.Spec.Deploy.ClusterRef); recErr != nil {
 				logger.Error(recErr, "failed to record remote spoke target before deleting child Environment", "name", child.Name, "namespace", child.Namespace)
 				remaining++
 				continue
@@ -1072,12 +1078,12 @@ func (r *PreviewGroupReconciler) deleteOrphanedEnvironments(ctx context.Context,
 		child := &children[i]
 		if !desired[child.Namespace+"/"+child.Name] && !desired[child.Name] {
 			logger.Info("Deleting orphaned Environment", "name", child.Name, "namespace", child.Namespace)
-			if child.Spec.Deploy.ClusterRef != nil && multicluster.IsRemoteEnv(child) &&
-				(usesSharedGroupSecrets ||
-					child.Annotations[annotationSharedGroupDB] == "true" ||
-					child.Annotations[annotationSharedGroupDBDraining] == "true") {
-				if recErr := r.recordSharedDBSecretTarget(ctx, pg, child.Namespace, child.Spec.Deploy.ClusterRef); recErr != nil {
+			if child.Spec.Deploy.ClusterRef != nil && multicluster.IsRemoteEnv(child) && childMayHoldSharedDBSecret(child, nil) {
+				if recRevChanged, recErr := r.recordSharedDBSecretTarget(ctx, pg, child.Namespace, child.Spec.Deploy.ClusterRef); recErr != nil {
 					errs = append(errs, fmt.Errorf("failed to record remote spoke target for orphaned Environment %s/%s: %w", child.Namespace, child.Name, recErr))
+					continue
+				} else if recRevChanged {
+					errs = append(errs, errPreviewGroupRevisionChanged)
 					continue
 				}
 			}
@@ -1288,4 +1294,21 @@ func (r *PreviewGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.mapEnvironmentToGroup),
 		).
 		Complete(r)
+}
+
+func clampPositiveRequeue(d time.Duration) time.Duration {
+	if d <= 0 {
+		return 100 * time.Millisecond
+	}
+	return d
+}
+
+func shorterRequeueDelay(current, candidate time.Duration) time.Duration {
+	if candidate <= 0 {
+		return current
+	}
+	if current <= 0 || candidate < current {
+		return candidate
+	}
+	return current
 }

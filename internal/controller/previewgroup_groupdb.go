@@ -16,6 +16,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -41,6 +42,7 @@ const (
 	annotationGroupDBMigrationHash  = "divergedev.com/group-db-migration-hash"
 	annotationGroupDBSecretTargets  = "divergedev.com/group-db-secret-targets"
 	labelSharedGroupDBSecret        = "divergedev.com/shared-group-db-secret"
+	labelLegacyGroupDBDrainingOwner = "divergedev.com/legacy-group-db-owner"
 	annotationSharedGroupDBDraining = "divergedev.com/shared-group-db-draining"
 	annotationLegacyGroupDBDraining = "divergedev.com/legacy-group-db-draining"
 	annotationLegacyGroupDBOwner    = "divergedev.com/legacy-group-db-owner"
@@ -285,14 +287,69 @@ func canonicalClusterRefKey(ns string, ref *divergeiov1alpha1.ClusterTargetRef) 
 	return fmt.Sprintf("%s|%s|%s|%s|%s", normNS, name, secNS, secName, secKey)
 }
 
+var errPreviewGroupRevisionChanged = errors.New("previewgroup specification changed during reconciliation")
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func isConflictError(err error) bool {
+	return err != nil && apierrors.IsConflict(err)
+}
+
+func (r *PreviewGroupReconciler) patchPreviewGroupAnnotations(
+	ctx context.Context,
+	pg *divergeiov1alpha1.PreviewGroup,
+	mutate func(annos map[string]string),
+) (bool, error) {
+	if r == nil || r.Client == nil || pg == nil {
+		return false, nil
+	}
+	base := pg.DeepCopy()
+	patched := pg.DeepCopy()
+	if patched.Annotations == nil {
+		patched.Annotations = make(map[string]string)
+	}
+	mutate(patched.Annotations)
+
+	var patch client.Patch
+	if base.ResourceVersion != "" {
+		patch = client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
+	} else {
+		patch = client.MergeFrom(base)
+	}
+	if err := r.Patch(ctx, patched, patch); err != nil {
+		return false, err
+	}
+
+	revisionChanged := (patched.Generation != 0 && pg.Generation != 0 && patched.Generation != pg.Generation) ||
+		strings.TrimSpace(patched.Spec.Source.CommitSHA) != strings.TrimSpace(pg.Spec.Source.CommitSHA) ||
+		!equality.Semantic.DeepEqual(patched.Spec.Services, pg.Spec.Services) ||
+		!equality.Semantic.DeepEqual(patched.Spec.Database, pg.Spec.Database) ||
+		!equality.Semantic.DeepEqual(patched.Spec.ClusterRef, pg.Spec.ClusterRef) ||
+		!equality.Semantic.DeepEqual(patched.Spec.Routing, pg.Spec.Routing)
+
+	// Carry forward only metadata needed for this pass; never overwrite pg.Spec, pg.Generation, or pg.Status.
+	pg.ResourceVersion = patched.ResourceVersion
+	pg.Annotations = cloneStringMap(patched.Annotations)
+	return revisionChanged, nil
+}
+
 func (r *PreviewGroupReconciler) recordSharedDBSecretTarget(
 	ctx context.Context,
 	pg *divergeiov1alpha1.PreviewGroup,
 	targetNS string,
 	ref *divergeiov1alpha1.ClusterTargetRef,
-) error {
+) (bool, error) {
 	if r == nil || r.Client == nil || pg == nil || ref == nil {
-		return nil
+		return false, nil
 	}
 	normNS := strings.TrimSpace(targetNS)
 	if normNS == "" {
@@ -302,7 +359,7 @@ func (r *PreviewGroupReconciler) recordSharedDBSecretTarget(
 	existing := parseRecordedSharedDBSecretTargets(pg)
 	for _, rt := range existing {
 		if canonicalClusterRefKey(rt.Namespace, rt.ClusterRef) == key {
-			return nil
+			return false, nil
 		}
 	}
 	updated := append(existing, recordedGroupDBSecretTarget{
@@ -311,33 +368,28 @@ func (r *PreviewGroupReconciler) recordSharedDBSecretTarget(
 	})
 	encoded, err := json.Marshal(updated)
 	if err != nil {
-		return fmt.Errorf("failed to marshal recorded shared DB Secret targets: %w", err)
+		return false, fmt.Errorf("failed to marshal recorded shared DB Secret targets: %w", err)
 	}
-	desiredStatus := pg.Status.DeepCopy()
-	base := pg.DeepCopy()
-	if pg.Annotations == nil {
-		pg.Annotations = make(map[string]string)
+	revChanged, patchErr := r.patchPreviewGroupAnnotations(ctx, pg, func(annos map[string]string) {
+		annos[annotationGroupDBSecretTargets] = string(encoded)
+	})
+	if patchErr != nil {
+		return false, fmt.Errorf("failed to persist recorded shared DB Secret target %s: %w", normNS, patchErr)
 	}
-	pg.Annotations[annotationGroupDBSecretTargets] = string(encoded)
-	if err := r.Patch(ctx, pg, client.MergeFrom(base)); err != nil {
-		pg.Status = *desiredStatus
-		return fmt.Errorf("failed to persist recorded shared DB Secret target %s: %w", normNS, err)
-	}
-	pg.Status = *desiredStatus
-	return nil
+	return revChanged, nil
 }
 
 func (r *PreviewGroupReconciler) pruneRecordedSharedDBSecretTargets(
 	ctx context.Context,
 	pg *divergeiov1alpha1.PreviewGroup,
 	removableKeys map[string]bool,
-) error {
+) (bool, error) {
 	if r == nil || r.Client == nil || pg == nil || len(removableKeys) == 0 {
-		return nil
+		return false, nil
 	}
 	existing := parseRecordedSharedDBSecretTargets(pg)
 	if len(existing) == 0 {
-		return nil
+		return false, nil
 	}
 	var kept []recordedGroupDBSecretTarget
 	changed := false
@@ -349,28 +401,27 @@ func (r *PreviewGroupReconciler) pruneRecordedSharedDBSecretTargets(
 		kept = append(kept, rt)
 	}
 	if !changed {
-		return nil
+		return false, nil
 	}
-	desiredStatus := pg.Status.DeepCopy()
-	base := pg.DeepCopy()
-	if len(kept) == 0 {
-		delete(pg.Annotations, annotationGroupDBSecretTargets)
-	} else {
-		encoded, err := json.Marshal(kept)
+	var encoded string
+	if len(kept) > 0 {
+		b, err := json.Marshal(kept)
 		if err != nil {
-			return fmt.Errorf("failed to marshal remaining shared DB Secret targets: %w", err)
+			return false, fmt.Errorf("failed to marshal remaining shared DB Secret targets: %w", err)
 		}
-		if pg.Annotations == nil {
-			pg.Annotations = make(map[string]string)
+		encoded = string(b)
+	}
+	revChanged, patchErr := r.patchPreviewGroupAnnotations(ctx, pg, func(annos map[string]string) {
+		if encoded == "" {
+			delete(annos, annotationGroupDBSecretTargets)
+		} else {
+			annos[annotationGroupDBSecretTargets] = encoded
 		}
-		pg.Annotations[annotationGroupDBSecretTargets] = string(encoded)
+	})
+	if patchErr != nil {
+		return false, fmt.Errorf("failed to prune recorded shared DB Secret targets: %w", patchErr)
 	}
-	if err := r.Patch(ctx, pg, client.MergeFrom(base)); err != nil {
-		pg.Status = *desiredStatus
-		return fmt.Errorf("failed to prune recorded shared DB Secret targets: %w", err)
-	}
-	pg.Status = *desiredStatus
-	return nil
+	return revChanged, nil
 }
 
 func hasEnvironmentControllerOwnerRef(sec *corev1.Secret) bool {
@@ -905,21 +956,49 @@ func (r *PreviewGroupReconciler) childOrWorkloadStillUsesSharedDBSecret(
 
 	if drainingSec != nil {
 		base := drainingSec.DeepCopy()
-		delete(drainingSec.Annotations, annotationLegacyGroupDBDraining)
-		delete(drainingSec.Annotations, annotationLegacyGroupDBOwner)
-		if pErr := targetClient.Patch(ctx, drainingSec, client.MergeFrom(base)); pErr != nil && !apierrors.IsNotFound(pErr) {
+		patchedSec := drainingSec.DeepCopy()
+		delete(patchedSec.Annotations, annotationLegacyGroupDBDraining)
+		delete(patchedSec.Annotations, annotationLegacyGroupDBOwner)
+		delete(patchedSec.Labels, labelLegacyGroupDBDrainingOwner)
+		var patch client.Patch
+		if base.ResourceVersion != "" {
+			patch = client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
+		} else {
+			patch = client.MergeFrom(base)
+		}
+		if pErr := targetClient.Patch(ctx, patchedSec, patch); pErr != nil && !apierrors.IsNotFound(pErr) {
 			return true, fmt.Errorf("failed to clear legacy draining annotations on Secret %s/%s: %w", drainingSec.Namespace, drainingSec.Name, pErr)
 		}
 	}
+	return false, nil
+}
 
-	if child.Annotations[annotationSharedGroupDBDraining] == "true" {
-		base := child.DeepCopy()
-		delete(child.Annotations, annotationSharedGroupDBDraining)
-		if pErr := r.Patch(ctx, child, client.MergeFrom(base)); pErr != nil && !apierrors.IsNotFound(pErr) {
-			return true, fmt.Errorf("failed to clear draining annotation on child %s/%s: %w", child.Namespace, child.Name, pErr)
+func childMayHoldSharedDBSecret(child *divergeiov1alpha1.Environment, sharedDesiredKeys map[string]bool) bool {
+	if child == nil {
+		return false
+	}
+	if sharedDesiredKeys[child.Namespace+"/"+child.Name] {
+		return true
+	}
+	if child.Annotations[annotationSharedGroupDB] == "true" ||
+		child.Annotations[annotationSharedGroupDBDraining] == "true" {
+		return true
+	}
+	connRef := strings.TrimSpace(child.Spec.Database.ConnectionRef)
+	return connRef != "" && (connRef == sharedGroupDBSecretName(child.Name) || connRef == legacySharedGroupDBSecretName(child.Name))
+}
+
+func hasRecordedTargetForNamespaceAndRef(pg *divergeiov1alpha1.PreviewGroup, ns string, ref *divergeiov1alpha1.ClusterTargetRef) bool {
+	if pg == nil || ref == nil {
+		return false
+	}
+	targetKey := canonicalClusterRefKey(ns, ref)
+	for _, rt := range parseRecordedSharedDBSecretTargets(pg) {
+		if rt.ClusterRef != nil && canonicalClusterRefKey(rt.Namespace, rt.ClusterRef) == targetKey {
+			return true
 		}
 	}
-	return false, nil
+	return false
 }
 
 func (r *PreviewGroupReconciler) legacyGroupSecretStillUsed(
@@ -971,7 +1050,13 @@ func (r *PreviewGroupReconciler) reconcileGroupDatabase(
 				return nil, "", true, false, false, cErr
 			}
 			for i := range children {
-				inUse, useErr := r.childOrWorkloadStillUsesSharedDBSecret(ctx, pg.Name, &children[i])
+				child := &children[i]
+				if multicluster.IsRemoteEnv(child) &&
+					!childMayHoldSharedDBSecret(child, nil) &&
+					!hasRecordedTargetForNamespaceAndRef(pg, child.Namespace, child.Spec.Deploy.ClusterRef) {
+					continue
+				}
+				inUse, useErr := r.childOrWorkloadStillUsesSharedDBSecret(ctx, pg.Name, child)
 				if useErr != nil {
 					return nil, "", true, false, false, useErr
 				}
@@ -988,16 +1073,17 @@ func (r *PreviewGroupReconciler) reconcileGroupDatabase(
 				return nil, "", false, true, true, nil
 			}
 			if hasPinned {
-				desiredStatus := pg.Status.DeepCopy()
-				baseCopy := pg.DeepCopy()
-				delete(pg.Annotations, annotationGroupDBNamespace)
-				delete(pg.Annotations, annotationGroupDBProvider)
-				delete(pg.Annotations, annotationGroupDBMigrationHash)
-				if err := r.Patch(ctx, pg, client.MergeFrom(baseCopy)); err != nil {
-					pg.Status = *desiredStatus
+				revChanged, err := r.patchPreviewGroupAnnotations(ctx, pg, func(annos map[string]string) {
+					delete(annos, annotationGroupDBNamespace)
+					delete(annos, annotationGroupDBProvider)
+					delete(annos, annotationGroupDBMigrationHash)
+				})
+				if err != nil {
 					return nil, "", true, false, false, fmt.Errorf("failed to clear group database annotations: %w", err)
 				}
-				pg.Status = *desiredStatus
+				if revChanged {
+					return nil, "", true, false, false, errPreviewGroupRevisionChanged
+				}
 			}
 			return nil, "", false, true, false, nil
 		}
@@ -1033,22 +1119,22 @@ func (r *PreviewGroupReconciler) reconcileGroupDatabase(
 	}
 
 	// Write-ahead persist the group DB anchor namespace and provider before external provisioning so teardown is deterministic.
-	needPatch := false
-	baseCopy := pg.DeepCopy()
-	if pg.Annotations == nil {
-		pg.Annotations = make(map[string]string)
-	}
-	if pg.Annotations[annotationGroupDBNamespace] != anchorNS {
-		pg.Annotations[annotationGroupDBNamespace] = anchorNS
-		needPatch = true
-	}
-	if resolvedName != "" && pg.Annotations[annotationGroupDBProvider] == "" {
-		pg.Annotations[annotationGroupDBProvider] = resolvedName
-		needPatch = true
-	}
-	if needPatch {
-		if patchErr := r.Patch(ctx, pg, client.MergeFrom(baseCopy)); patchErr != nil {
+	needNS := pg.Annotations == nil || pg.Annotations[annotationGroupDBNamespace] != anchorNS
+	needProv := resolvedName != "" && (pg.Annotations == nil || pg.Annotations[annotationGroupDBProvider] == "")
+	if needNS || needProv {
+		revChanged, patchErr := r.patchPreviewGroupAnnotations(ctx, pg, func(annos map[string]string) {
+			if needNS {
+				annos[annotationGroupDBNamespace] = anchorNS
+			}
+			if needProv {
+				annos[annotationGroupDBProvider] = resolvedName
+			}
+		})
+		if patchErr != nil {
 			return nil, anchorNS, true, false, false, fmt.Errorf("failed to persist group database metadata: %w", patchErr)
+		}
+		if revChanged {
+			return nil, anchorNS, true, false, false, errPreviewGroupRevisionChanged
 		}
 	}
 
@@ -1104,13 +1190,14 @@ func (r *PreviewGroupReconciler) reconcileGroupDatabase(
 					return nil, anchorNS, true, false, false, migErr
 				}
 			} else {
-				migBase := pg.DeepCopy()
-				if pg.Annotations == nil {
-					pg.Annotations = make(map[string]string)
-				}
-				pg.Annotations[annotationGroupDBMigrationHash] = migDigest
-				if patchErr := r.Patch(ctx, pg, client.MergeFrom(migBase)); patchErr != nil {
+				revChanged, patchErr := r.patchPreviewGroupAnnotations(ctx, pg, func(annos map[string]string) {
+					annos[annotationGroupDBMigrationHash] = migDigest
+				})
+				if patchErr != nil {
 					return nil, anchorNS, true, false, false, fmt.Errorf("failed to persist group migration completion: %w", patchErr)
+				}
+				if revChanged {
+					return nil, anchorNS, true, false, false, errPreviewGroupRevisionChanged
 				}
 			}
 		}
@@ -1179,9 +1266,9 @@ func (r *PreviewGroupReconciler) ensureChildSharedDBSecret(
 	svc divergeiov1alpha1.PreviewGroupServiceSpec,
 	childEnvName, targetNS, anchorNS string,
 	groupVars map[string]string,
-) (string, error) {
+) (string, bool, error) {
 	if len(groupVars) == 0 {
-		return "", nil
+		return "", false, nil
 	}
 	helper := r.envProvisionHelper()
 	var effectiveClusterRef *divergeiov1alpha1.ClusterTargetRef
@@ -1193,7 +1280,7 @@ func (r *PreviewGroupReconciler) ensureChildSharedDBSecret(
 	}
 	if isClusterLocalDBVars(groupVars, groupDatabaseAnchorName(pg.Name)) &&
 		!divergeiov1alpha1.EqualClusterTargetRefInNamespaces(pg.Spec.ClusterRef, anchorNS, effectiveClusterRef, targetNS) {
-		return "", fmt.Errorf("service %q targets a different cluster than shared group database in %q; cluster-local databases cannot be routed across clusters", svc.Name, anchorNS)
+		return "", false, fmt.Errorf("service %q targets a different cluster than shared group database in %q; cluster-local databases cannot be routed across clusters", svc.Name, anchorNS)
 	}
 	probeEnv := &divergeiov1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{Name: childEnvName, Namespace: targetNS},
@@ -1206,11 +1293,15 @@ func (r *PreviewGroupReconciler) ensureChildSharedDBSecret(
 	}
 	targetClient, _, isRemote, err := helper.resolveTargetCluster(ctx, probeEnv)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	if isRemote && effectiveClusterRef != nil {
-		if rErr := r.recordSharedDBSecretTarget(ctx, pg, targetNS, effectiveClusterRef); rErr != nil {
-			return "", rErr
+		revChanged, rErr := r.recordSharedDBSecretTarget(ctx, pg, targetNS, effectiveClusterRef)
+		if rErr != nil {
+			return "", false, rErr
+		}
+		if revChanged {
+			return "", true, nil
 		}
 	}
 
@@ -1240,9 +1331,9 @@ func (r *PreviewGroupReconciler) ensureChildSharedDBSecret(
 		return nil
 	})
 	if err != nil {
-		return "", fmt.Errorf("failed to ensure shared database secret %s/%s: %w", targetNS, secretName, err)
+		return "", false, fmt.Errorf("failed to ensure shared database secret %s/%s: %w", targetNS, secretName, err)
 	}
-	return secretName, nil
+	return secretName, false, nil
 }
 
 func (r *PreviewGroupReconciler) teardownGroupDatabase(ctx context.Context, pg *divergeiov1alpha1.PreviewGroup) (bool, error) {
@@ -1366,10 +1457,16 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 	}
 	keepSecrets := make(map[string]bool, (len(children)+len(desiredEnvNames))*2)
 	deferredKeepSecrets := make(map[string]bool)
+	drainingClearCandidates := make(map[string]bool)
 	var errs []error
 	for i := range children {
 		child := &children[i]
 		childKey := child.Namespace + "/" + child.Name
+		if multicluster.IsRemoteEnv(child) &&
+			!childMayHoldSharedDBSecret(child, sharedDesiredKeys) &&
+			!hasRecordedTargetForNamespaceAndRef(pg, child.Namespace, child.Spec.Deploy.ClusterRef) {
+			continue
+		}
 		sharedSecName := sharedGroupDBSecretName(child.Name)
 		legacySecName := legacySharedGroupDBSecretName(child.Name)
 		sharedKey := child.Namespace + "/" + sharedSecName
@@ -1398,6 +1495,8 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 					deferredKeepSecrets[legacyKey] = true
 				}
 			}
+		} else if !sharedDesiredKeys[childKey] && child.Annotations[annotationSharedGroupDBDraining] == "true" {
+			drainingClearCandidates[childKey] = true
 		}
 	}
 	for envKey := range desiredEnvNames {
@@ -1472,8 +1571,11 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 
 	helper := r.envProvisionHelper()
 	anchorNS := resolveGroupDatabaseAnchorNamespace(pg)
+	hasPinned := pg.Annotations != nil &&
+		(strings.TrimSpace(pg.Annotations[annotationGroupDBNamespace]) != "" ||
+			strings.TrimSpace(pg.Annotations[annotationGroupDBProvider]) != "")
 	activeRemoteTargetKeys := make(map[string]bool)
-	if pg.Spec.ClusterRef != nil {
+	if pg.Spec.ClusterRef != nil && (hasDedicatedGroupDatabase(pg) || hasPinned) {
 		activeRemoteTargetKeys[canonicalClusterRefKey(anchorNS, pg.Spec.ClusterRef)] = true
 		probeAnchor := &divergeiov1alpha1.Environment{
 			ObjectMeta: metav1.ObjectMeta{Name: groupDatabaseAnchorName(pg.Name), Namespace: anchorNS},
@@ -1487,36 +1589,48 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 			addRemoteScan(t, anchorNS, pg.Spec.ClusterRef)
 		}
 	}
-	for _, svc := range pg.Spec.Services {
-		svcNS := strings.TrimSpace(svc.Namespace)
-		if svcNS == "" {
-			svcNS = "default"
-		}
-		effClusterRef := pg.Spec.ClusterRef
-		if svc.ClusterRef != nil {
-			effClusterRef = svc.ClusterRef
-		}
-		if effClusterRef != nil {
-			activeRemoteTargetKeys[canonicalClusterRefKey(svcNS, effClusterRef)] = true
-			probeSvc := &divergeiov1alpha1.Environment{
-				ObjectMeta: metav1.ObjectMeta{Name: childEnvironmentName(pg.Name, svc.Name), Namespace: svcNS},
-				Spec:       divergeiov1alpha1.EnvironmentSpec{Deploy: divergeiov1alpha1.EnvironmentDeploy{Namespace: "same", ClusterRef: effClusterRef}},
+	if hasDedicatedGroupDatabase(pg) {
+		for _, svc := range pg.Spec.Services {
+			if svc.Mode == divergeiov1alpha1.ServiceModeBaseline || svc.Database != nil {
+				continue
 			}
-			if t, tErr := helper.resolveTarget(ctx, probeSvc); tErr != nil {
-				if multicluster.IsRemoteEnv(probeSvc) {
-					errs = append(errs, fmt.Errorf("failed to resolve spoke cluster for service %q shared DB Secret cleanup: %w", svc.Name, tErr))
+			svcNS := strings.TrimSpace(svc.Namespace)
+			if svcNS == "" {
+				svcNS = "default"
+			}
+			effClusterRef := pg.Spec.ClusterRef
+			if svc.ClusterRef != nil {
+				effClusterRef = svc.ClusterRef
+			}
+			if effClusterRef != nil {
+				activeRemoteTargetKeys[canonicalClusterRefKey(svcNS, effClusterRef)] = true
+				probeSvc := &divergeiov1alpha1.Environment{
+					ObjectMeta: metav1.ObjectMeta{Name: childEnvironmentName(pg.Name, svc.Name), Namespace: svcNS},
+					Spec:       divergeiov1alpha1.EnvironmentSpec{Deploy: divergeiov1alpha1.EnvironmentDeploy{Namespace: "same", ClusterRef: effClusterRef}},
 				}
-			} else {
-				addRemoteScan(t, svcNS, effClusterRef)
+				if t, tErr := helper.resolveTarget(ctx, probeSvc); tErr != nil {
+					if multicluster.IsRemoteEnv(probeSvc) {
+						errs = append(errs, fmt.Errorf("failed to resolve spoke cluster for service %q shared DB Secret cleanup: %w", svc.Name, tErr))
+					}
+				} else {
+					addRemoteScan(t, svcNS, effClusterRef)
+				}
 			}
 		}
 	}
+	childScanIdx := make(map[string]int)
+	childScanFailed := make(map[string]bool)
 	for i := range children {
 		child := &children[i]
-		if child.Spec.Deploy.ClusterRef == nil {
+		if child.Spec.Deploy.ClusterRef == nil || !childMayHoldSharedDBSecret(child, sharedDesiredKeys) {
 			continue
 		}
-		activeRemoteTargetKeys[canonicalClusterRefKey(child.Namespace, child.Spec.Deploy.ClusterRef)] = true
+		childKey := child.Namespace + "/" + child.Name
+		sharedKey := child.Namespace + "/" + sharedGroupDBSecretName(child.Name)
+		legacyKey := child.Namespace + "/" + legacySharedGroupDBSecretName(child.Name)
+		if sharedDesiredKeys[childKey] || keepSecrets[sharedKey] || keepSecrets[legacyKey] {
+			activeRemoteTargetKeys[canonicalClusterRefKey(child.Namespace, child.Spec.Deploy.ClusterRef)] = true
+		}
 		probeChild := &divergeiov1alpha1.Environment{
 			ObjectMeta: metav1.ObjectMeta{Name: child.Name, Namespace: child.Namespace},
 			Spec:       divergeiov1alpha1.EnvironmentSpec{Deploy: divergeiov1alpha1.EnvironmentDeploy{Namespace: "same", ClusterRef: child.Spec.Deploy.ClusterRef}},
@@ -1524,9 +1638,15 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 		if t, tErr := helper.resolveTarget(ctx, probeChild); tErr != nil {
 			if multicluster.IsRemoteEnv(probeChild) {
 				errs = append(errs, fmt.Errorf("failed to resolve spoke cluster for child %s/%s shared DB Secret cleanup: %w", child.Namespace, child.Name, tErr))
+				childScanFailed[childKey] = true
 			}
 		} else {
-			addRemoteScan(t, child.Namespace, child.Spec.Deploy.ClusterRef)
+			if idx, ok := addRemoteScan(t, child.Namespace, child.Spec.Deploy.ClusterRef); ok {
+				childScanIdx[childKey] = idx
+			}
+			if previewNS := child.PreviewNamespace(); previewNS != "" && previewNS != child.Namespace {
+				addRemoteScan(t, previewNS, child.Spec.Deploy.ClusterRef)
+			}
 		}
 	}
 
@@ -1561,49 +1681,70 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 		}
 	}
 
+	listSecretsWithFallback := func(scan targetScan, labels client.MatchingLabels, errKind string) (items []corev1.Secret, clusterOK bool, nsOK map[string]bool) {
+		nsOK = make(map[string]bool)
+		var secList corev1.SecretList
+		if lErr := scan.client.List(ctx, &secList, labels); lErr != nil {
+			if meta.IsNoMatchError(lErr) || runtime.IsNotRegisteredError(lErr) {
+				clusterOK = true
+			} else if scan.isRemote && apierrors.IsForbidden(lErr) && len(scan.namespaces) > 0 {
+				for _, ns := range scan.namespaces {
+					var nsList corev1.SecretList
+					if nsErr := scan.client.List(ctx, &nsList, client.InNamespace(ns), labels); nsErr != nil {
+						if meta.IsNoMatchError(nsErr) || runtime.IsNotRegisteredError(nsErr) {
+							nsOK[ns] = true
+							continue
+						}
+						errs = append(errs, fmt.Errorf("failed to list %s in %s: %w", errKind, ns, nsErr))
+						continue
+					}
+					nsOK[ns] = true
+					items = append(items, nsList.Items...)
+				}
+			} else {
+				errs = append(errs, fmt.Errorf("failed to list %s: %w", errKind, lErr))
+			}
+		} else {
+			clusterOK = true
+			items = secList.Items
+		}
+		return items, clusterOK, nsOK
+	}
+
 	matchLabels := client.MatchingLabels{
 		labelPreviewGroup:           truncateLabel(pg.Name),
 		"divergedev.com/managed-by": "diverge",
 	}
+	takeoverMatchLabels := client.MatchingLabels{
+		labelLegacyGroupDBDrainingOwner: truncateLabel(pg.Name),
+		"divergedev.com/managed-by":     "diverge",
+	}
 	requeueNeeded := len(deferredKeepSecrets) > 0
 	prunableKeys := make(map[string]bool)
-	for _, scan := range scans {
-		clusterListOK := false
-		nsListOK := make(map[string]bool)
+	scanGroupClusterOK := make([]bool, len(scans))
+	scanGroupNSOK := make([]map[string]bool, len(scans))
+	scanTakeoverClusterOK := make([]bool, len(scans))
+	scanTakeoverNSOK := make([]map[string]bool, len(scans))
+	scanRemainingSecrets := make([]map[string]bool, len(scans))
+	for scanIdx, scan := range scans {
 		remainingNS := make(map[string]bool)
-		var secList corev1.SecretList
-		if lErr := scan.client.List(ctx, &secList, matchLabels); lErr != nil {
-			if meta.IsNoMatchError(lErr) || runtime.IsNotRegisteredError(lErr) {
-				clusterListOK = true
-			} else if scan.isRemote && apierrors.IsForbidden(lErr) && len(scan.namespaces) > 0 {
-				for _, ns := range scan.namespaces {
-					var nsList corev1.SecretList
-					if nsErr := scan.client.List(ctx, &nsList, client.InNamespace(ns), matchLabels); nsErr != nil {
-						if meta.IsNoMatchError(nsErr) || runtime.IsNotRegisteredError(nsErr) {
-							nsListOK[ns] = true
-							continue
-						}
-						errs = append(errs, fmt.Errorf("failed to list shared DB Secrets in %s: %w", ns, nsErr))
-						continue
-					}
-					nsListOK[ns] = true
-					secList.Items = append(secList.Items, nsList.Items...)
-				}
-			} else {
-				errs = append(errs, fmt.Errorf("failed to list shared DB Secrets: %w", lErr))
-				continue
-			}
-		} else {
-			clusterListOK = true
-		}
-		for i := range secList.Items {
-			sec := &secList.Items[i]
+		remainingSecrets := make(map[string]bool)
+		handledGroupKeys := make(map[string]bool)
+
+		secItems, groupClusterOK, groupNSOK := listSecretsWithFallback(scan, matchLabels, "shared DB Secrets")
+		scanGroupClusterOK[scanIdx] = groupClusterOK
+		scanGroupNSOK[scanIdx] = groupNSOK
+		scanRemainingSecrets[scanIdx] = remainingSecrets
+		for i := range secItems {
+			sec := &secItems[i]
 			if !isGroupOwnedSharedDBSecret(sec, pg.Name) {
 				continue
 			}
 			secKey := sec.Namespace + "/" + sec.Name
+			handledGroupKeys[secKey] = true
 			if keepSecrets[secKey] {
 				remainingNS[sec.Namespace] = true
+				remainingSecrets[secKey] = true
 				if deferredKeepSecrets[secKey] {
 					requeueNeeded = true
 				}
@@ -1612,11 +1753,13 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 			inUse, checkErr := namespaceWorkloadsStillUseSecret(ctx, scan.client, sec.Namespace, "", []string{sec.Name}, false, nil, "")
 			if checkErr != nil {
 				remainingNS[sec.Namespace] = true
+				remainingSecrets[secKey] = true
 				errs = append(errs, checkErr)
 				continue
 			}
 			if inUse {
 				remainingNS[sec.Namespace] = true
+				remainingSecrets[secKey] = true
 				requeueNeeded = true
 				continue
 			}
@@ -1636,23 +1779,174 @@ func (r *PreviewGroupReconciler) cleanupOrphanedChildSharedDBSecrets(
 			dErr := scan.client.Delete(ctx, sec, delOpts...)
 			if apierrors.IsConflict(dErr) {
 				remainingNS[sec.Namespace] = true
+				remainingSecrets[secKey] = true
 				requeueNeeded = true
 				continue
 			}
 			if dErr != nil && !apierrors.IsNotFound(dErr) {
 				remainingNS[sec.Namespace] = true
+				remainingSecrets[secKey] = true
 				errs = append(errs, fmt.Errorf("failed to delete orphaned shared DB Secret %s/%s: %w", sec.Namespace, sec.Name, dErr))
 			}
 		}
+
+		// Independently inspect legacy takeover drain records even when the child Environment is gone,
+		// holding DB teardown while tracked Pods still run without deleting the per-service Secret.
+		takeoverItems, takeoverClusterOK, takeoverNSOK := listSecretsWithFallback(scan, takeoverMatchLabels, "legacy takeover DB Secrets")
+		scanTakeoverClusterOK[scanIdx] = takeoverClusterOK
+		scanTakeoverNSOK[scanIdx] = takeoverNSOK
+		seenTakeoverKeys := make(map[string]bool)
+		for i := range takeoverItems {
+			sec := &takeoverItems[i]
+			secKey := sec.Namespace + "/" + sec.Name
+			if seenTakeoverKeys[secKey] || handledGroupKeys[secKey] || isGroupOwnedSharedDBSecret(sec, pg.Name) {
+				continue
+			}
+			seenTakeoverKeys[secKey] = true
+			if keepSecrets[secKey] {
+				remainingNS[sec.Namespace] = true
+				remainingSecrets[secKey] = true
+				if deferredKeepSecrets[secKey] {
+					requeueNeeded = true
+				}
+				continue
+			}
+			val := strings.TrimSpace(sec.Annotations[annotationLegacyGroupDBDraining])
+			if val == legacyGroupDBDrainingPending {
+				remainingNS[sec.Namespace] = true
+				remainingSecrets[secKey] = true
+				requeueNeeded = true
+				continue
+			}
+			if strings.HasPrefix(val, legacyGroupDBDrainingUIDPrefix) {
+				rawIDs := strings.TrimPrefix(val, legacyGroupDBDrainingUIDPrefix)
+				var drainingPodIDs map[string]bool
+				for _, id := range strings.Split(rawIDs, ",") {
+					id = strings.TrimSpace(id)
+					if id != "" {
+						if drainingPodIDs == nil {
+							drainingPodIDs = make(map[string]bool)
+						}
+						drainingPodIDs[id] = true
+					}
+				}
+				if len(drainingPodIDs) > 0 {
+					inUse, checkErr := namespaceWorkloadsStillUseSecret(ctx, scan.client, sec.Namespace, "", nil, false, drainingPodIDs, sec.Name)
+					if checkErr != nil {
+						remainingNS[sec.Namespace] = true
+						remainingSecrets[secKey] = true
+						errs = append(errs, checkErr)
+						continue
+					}
+					if inUse {
+						remainingNS[sec.Namespace] = true
+						remainingSecrets[secKey] = true
+						requeueNeeded = true
+						continue
+					}
+				}
+			}
+			base := sec.DeepCopy()
+			patchedSec := sec.DeepCopy()
+			delete(patchedSec.Annotations, annotationLegacyGroupDBDraining)
+			delete(patchedSec.Annotations, annotationLegacyGroupDBOwner)
+			delete(patchedSec.Labels, labelLegacyGroupDBDrainingOwner)
+			var patch client.Patch
+			if base.ResourceVersion != "" {
+				patch = client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
+			} else {
+				patch = client.MergeFrom(base)
+			}
+			if pErr := scan.client.Patch(ctx, patchedSec, patch); pErr != nil {
+				if apierrors.IsConflict(pErr) {
+					remainingNS[sec.Namespace] = true
+					remainingSecrets[secKey] = true
+					requeueNeeded = true
+					continue
+				}
+				if !apierrors.IsNotFound(pErr) {
+					remainingNS[sec.Namespace] = true
+					remainingSecrets[secKey] = true
+					errs = append(errs, fmt.Errorf("failed to clear legacy draining metadata on Secret %s/%s: %w", sec.Namespace, sec.Name, pErr))
+				}
+			}
+		}
+
 		for _, rt := range scan.recordedInactive {
-			if (clusterListOK || nsListOK[rt.ns]) && !remainingNS[rt.ns] && !nonPrunableKeys[rt.key] {
+			groupOK := groupClusterOK || groupNSOK[rt.ns]
+			takeoverOK := takeoverClusterOK || takeoverNSOK[rt.ns]
+			if groupOK && takeoverOK && !remainingNS[rt.ns] && !nonPrunableKeys[rt.key] {
 				prunableKeys[rt.key] = true
 			}
 		}
 	}
+
+	for i := range children {
+		child := &children[i]
+		childKey := child.Namespace + "/" + child.Name
+		if !drainingClearCandidates[childKey] || childScanFailed[childKey] {
+			continue
+		}
+		scanIdx := 0
+		if multicluster.IsRemoteEnv(child) {
+			idx, ok := childScanIdx[childKey]
+			if !ok {
+				continue
+			}
+			scanIdx = idx
+		}
+		checkNS := []string{child.Namespace}
+		if previewNS := child.PreviewNamespace(); previewNS != "" && previewNS != child.Namespace {
+			checkNS = append(checkNS, previewNS)
+		}
+		sharedSecName := sharedGroupDBSecretName(child.Name)
+		legacySecName := legacySharedGroupDBSecretName(child.Name)
+		canClear := true
+		for _, ns := range checkNS {
+			groupOK := scanGroupClusterOK[scanIdx] || scanGroupNSOK[scanIdx][ns]
+			takeoverOK := scanTakeoverClusterOK[scanIdx] || scanTakeoverNSOK[scanIdx][ns]
+			if !groupOK || !takeoverOK {
+				canClear = false
+				break
+			}
+			sharedKey := ns + "/" + sharedSecName
+			legacyKey := ns + "/" + legacySecName
+			if scanRemainingSecrets[scanIdx][sharedKey] ||
+				scanRemainingSecrets[scanIdx][legacyKey] ||
+				keepSecrets[sharedKey] ||
+				keepSecrets[legacyKey] {
+				canClear = false
+				break
+			}
+		}
+		if !canClear {
+			continue
+		}
+		base := child.DeepCopy()
+		patched := child.DeepCopy()
+		delete(patched.Annotations, annotationSharedGroupDBDraining)
+		var patch client.Patch
+		if base.ResourceVersion != "" {
+			patch = client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
+		} else {
+			patch = client.MergeFrom(base)
+		}
+		if pErr := r.Patch(ctx, patched, patch); pErr != nil {
+			if apierrors.IsConflict(pErr) {
+				requeueNeeded = true
+			} else if !apierrors.IsNotFound(pErr) {
+				errs = append(errs, fmt.Errorf("failed to clear draining annotation on child %s/%s: %w", child.Namespace, child.Name, pErr))
+			}
+		} else {
+			delete(child.Annotations, annotationSharedGroupDBDraining)
+		}
+	}
 	if len(prunableKeys) > 0 {
-		if pErr := r.pruneRecordedSharedDBSecretTargets(ctx, pg, prunableKeys); pErr != nil {
+		revChanged, pErr := r.pruneRecordedSharedDBSecretTargets(ctx, pg, prunableKeys)
+		if pErr != nil {
 			errs = append(errs, pErr)
+		} else if revChanged {
+			errs = append(errs, errPreviewGroupRevisionChanged)
 		}
 	}
 	return requeueNeeded, errors.Join(errs...)

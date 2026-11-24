@@ -297,7 +297,9 @@ func (r *EnvironmentReconciler) reconcileProvisioningWithTarget(ctx context.Cont
 			resolvedDBName == "neon" ||
 			strings.TrimSpace(env.Status.DatabaseProvider) == "neon" ||
 			env.Annotations["divergedev.com/database-provider"] != ""
-		if (env.Spec.Database.ConnectionRef == "" || isBranchingMode) && (len(dbStatus.EnvVars) > 0 || env.Spec.Database.Mode == "schema") {
+		if env.Annotations[annotationSharedGroupDB] != "true" &&
+			(env.Spec.Database.ConnectionRef == "" || env.Spec.Database.ConnectionRef == internaldb.EnvSecretName(env.Name) || isBranchingMode) &&
+			(len(dbStatus.EnvVars) > 0 || env.Spec.Database.Mode == "schema") {
 			envVars := dbStatus.EnvVars
 			if len(envVars) == 0 {
 				envVars = map[string]string{
@@ -987,12 +989,23 @@ func (r *EnvironmentReconciler) ensureDatabaseEnvSecret(ctx context.Context, env
 		}
 
 		if wasGroupOwned {
+			if prevGroup != "" {
+				secret.Labels[labelLegacyGroupDBDrainingOwner] = prevGroup
+			}
 			if secret.Annotations == nil {
 				secret.Annotations = make(map[string]string)
 			}
 			secret.Annotations[annotationLegacyGroupDBDraining] = legacyGroupDBDrainingPending
 			if prevGroup != "" {
 				secret.Annotations[annotationLegacyGroupDBOwner] = prevGroup
+			}
+		}
+		if wasGroupOwned || strings.TrimSpace(secret.Annotations[internaldb.AnnotationDBCredentialRevision]) != "" {
+			if credRev := internaldb.CredentialRevision(envVars); credRev != "" {
+				if secret.Annotations == nil {
+					secret.Annotations = make(map[string]string)
+				}
+				secret.Annotations[internaldb.AnnotationDBCredentialRevision] = credRev
 			}
 		}
 
@@ -1040,10 +1053,17 @@ func (r *EnvironmentReconciler) ensureDatabaseEnvSecret(ctx context.Context, env
 		} else {
 			delete(secret.Annotations, annotationLegacyGroupDBDraining)
 			delete(secret.Annotations, annotationLegacyGroupDBOwner)
+			delete(secret.Labels, labelLegacyGroupDBDrainingOwner)
 		}
 		if pErr := targetClient.Patch(ctx, secret, client.MergeFrom(base)); pErr != nil && !apierrors.IsNotFound(pErr) {
 			return fmt.Errorf("failed to record draining pods on legacy DB Secret %s/%s: %w", targetNS, secretName, pErr)
 		}
+	}
+	if credRev := strings.TrimSpace(secret.Annotations[internaldb.AnnotationDBCredentialRevision]); credRev != "" {
+		if env.Annotations == nil {
+			env.Annotations = make(map[string]string)
+		}
+		env.Annotations[internaldb.AnnotationDBCredentialRevision] = credRev
 	}
 	return nil
 }

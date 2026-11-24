@@ -13,11 +13,17 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
+	internaldb "github.com/divergedev/diverge/internal/database"
 )
 
 func (r *EnvironmentReconciler) reconcileDeploy(ctx context.Context, env *divergeiov1alpha1.Environment, statusBase *divergeiov1alpha1.Environment) (ctrl.Result, bool, error) {
 	ctx, span := otel.Tracer("diverge").Start(ctx, "reconcileDeploy")
 	defer span.End()
+	defer func() {
+		if (statusBase == nil || statusBase.Annotations[internaldb.AnnotationDBCredentialRevision] == "") && env != nil && env.Annotations != nil {
+			delete(env.Annotations, internaldb.AnnotationDBCredentialRevision)
+		}
+	}()
 
 	prevFP := strings.TrimSpace(env.Annotations[AnnotationBaselineFingerprint])
 	alreadyDeployedByDriftSync := false

@@ -191,7 +191,7 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		}
 
 		// Teardown features (executed only after deployer workloads have terminated)
-		if !skipRemoteTargetCleanup {
+		if !skipRemoteTargetCleanup && deployerStatusErr == nil {
 			if fp, fpErr := r.getFeatureProvider(ctx, env); fpErr != nil {
 				errs = append(errs, fmt.Errorf("failed to resolve feature provider for teardown: %w", fpErr))
 			} else if fp != nil {
@@ -206,7 +206,7 @@ func (r *EnvironmentReconciler) handleTeardown(ctx context.Context, env *diverge
 		// C4: Wait for workloads to be fully deleted before deleting the namespace,
 		// preventing finalizer deadlocks where the namespace enters Terminating
 		// but resources still retain finalizers.
-		if env.Spec.Deploy.Namespace == "create" && !skipRemoteTargetCleanup && targetClient != nil {
+		if env.Spec.Deploy.Namespace == "create" && !skipRemoteTargetCleanup && targetClient != nil && deployerStatusErr == nil {
 			ns := &corev1.Namespace{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: env.PreviewNamespace(),

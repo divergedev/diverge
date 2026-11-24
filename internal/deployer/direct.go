@@ -214,6 +214,19 @@ func (d *DirectDeployer) Deploy(ctx context.Context, env *v1alpha1.Environment) 
 			}
 		}
 
+		// Inject credential revision digest on Pod templates when a legacy DB Secret takeover updated credentials in place
+		if rev := strings.TrimSpace(env.Annotations[database.AnnotationDBCredentialRevision]); rev != "" {
+			kind := obj.GetKind()
+			if kind == "Deployment" || kind == "StatefulSet" || kind == "DaemonSet" || kind == "Rollout" {
+				annos, found, _ := unstructured.NestedStringMap(obj.Object, "spec", "template", "metadata", "annotations")
+				if !found || annos == nil {
+					annos = make(map[string]string)
+				}
+				annos[database.AnnotationDBCredentialRevision] = rev
+				_ = unstructured.SetNestedStringMap(obj.Object, annos, "spec", "template", "metadata", "annotations")
+			}
+		}
+
 		if strings.EqualFold(strings.TrimSpace(env.Annotations["divergedev.com/hibernated"]), "true") {
 			kind := obj.GetKind()
 			if kind == "Deployment" || kind == "StatefulSet" {

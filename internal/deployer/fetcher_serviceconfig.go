@@ -246,6 +246,14 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 		annos["divergedev.com/baseline-fingerprint"] = fp
 		_ = unstructured.SetNestedStringMap(deploy.Object, annos, "spec", "template", "metadata", "annotations")
 	}
+	if rev := strings.TrimSpace(env.Annotations[database.AnnotationDBCredentialRevision]); rev != "" {
+		annos, found, _ := unstructured.NestedStringMap(deploy.Object, "spec", "template", "metadata", "annotations")
+		if !found || annos == nil {
+			annos = make(map[string]string)
+		}
+		annos[database.AnnotationDBCredentialRevision] = rev
+		_ = unstructured.SetNestedStringMap(deploy.Object, annos, "spec", "template", "metadata", "annotations")
+	}
 
 	// Service
 	svc := unstructured.Unstructured{

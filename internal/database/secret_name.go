@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -12,7 +13,26 @@ const (
 	DBEnvSecretPrefix = "diverge-db-env-"
 	// GroupDBEnvSecretPrefix is the Kubernetes Secret name prefix for PreviewGroup shared DB credentials.
 	GroupDBEnvSecretPrefix = "diverge-group-db-env-"
+	// AnnotationDBCredentialRevision records a non-secret digest of taken-over DB credentials to trigger workload rollouts.
+	AnnotationDBCredentialRevision = "divergedev.com/db-credential-revision"
 )
+
+// CredentialRevision returns a stable 16-hex SHA-256 digest of envVars without exposing credential values.
+func CredentialRevision(envVars map[string]string) string {
+	if len(envVars) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(envVars))
+	for k := range envVars {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	h := sha256.New()
+	for _, k := range keys {
+		_, _ = fmt.Fprintf(h, "%s=%s\x00", k, envVars[k])
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))[:16]
+}
 
 var (
 	secretNameNonAlnum  = regexp.MustCompile(`[^a-z0-9-]`)

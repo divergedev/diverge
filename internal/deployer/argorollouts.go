@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/divergedev/diverge/api/v1alpha1"
+	"github.com/divergedev/diverge/internal/database"
 	"github.com/divergedev/diverge/internal/multicluster"
 	"github.com/divergedev/diverge/pkg/registry"
 )
@@ -595,6 +596,14 @@ func (d *ArgoRolloutsDeployer) buildRollout(env *v1alpha1.Environment, targetNS,
 	}
 
 	_ = unstructured.SetNestedSlice(rollout.Object, []interface{}{containerSpec}, "spec", "template", "spec", "containers")
+	if rev := strings.TrimSpace(env.Annotations[database.AnnotationDBCredentialRevision]); rev != "" {
+		annos, found, _ := unstructured.NestedStringMap(rollout.Object, "spec", "template", "metadata", "annotations")
+		if !found || annos == nil {
+			annos = make(map[string]string)
+		}
+		annos[database.AnnotationDBCredentialRevision] = rev
+		_ = unstructured.SetNestedStringMap(rollout.Object, annos, "spec", "template", "metadata", "annotations")
+	}
 
 	canarySpec := map[string]interface{}{
 		"canaryService": targetName,
