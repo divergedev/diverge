@@ -37,7 +37,7 @@ func (f *ServiceConfigFetcher) Fetch(ctx context.Context, env *v1alpha1.Environm
 		return nil, fmt.Errorf("serviceConfig.image is required")
 	}
 
-	previewName := fmt.Sprintf("%s-%s", env.Name, cfg.ServiceName)
+	previewName := v1alpha1.ServiceConfigServiceName(env.Name, cfg.ServiceName)
 	previewID := env.Name
 
 	// Default imagePullPolicy to IfNotPresent

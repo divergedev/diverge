@@ -35,9 +35,12 @@ func TestServiceConfigFetcher_Fetch(t *testing.T) {
 
 	require.Len(t, objs, 2, "expected 2 objects (Deployment + Service)")
 
+	expectedName := v1alpha1.ServiceConfigServiceName(env.Name, env.Spec.ServiceConfig.ServiceName)
+
 	// Check Deployment
 	deploy := objs[0]
 	assert.Equal(t, "Deployment", deploy.GetKind())
+	assert.Equal(t, expectedName, deploy.GetName())
 	assert.Equal(t, "mr-42-payments-api", deploy.GetName())
 	labels := deploy.GetLabels()
 	assert.Equal(t, "preview", labels["divergedev.com/role"])
@@ -46,6 +49,7 @@ func TestServiceConfigFetcher_Fetch(t *testing.T) {
 	// Check Service
 	svc := objs[1]
 	assert.Equal(t, "Service", svc.GetKind())
+	assert.Equal(t, expectedName, svc.GetName())
 	assert.Equal(t, "mr-42-payments-api", svc.GetName())
 }
 

@@ -100,6 +100,9 @@ func NewServeMux(cfg ServeMuxConfig) (*http.ServeMux, *TunnelManager) {
 	if tunnelCfg.StreamLimiter == nil {
 		tunnelCfg.StreamLimiter = cfg.StreamLimiter
 	}
+	if tunnelCfg.InformerMgr == nil {
+		tunnelCfg.InformerMgr = cfg.InformerMgr
+	}
 	tunnelMgr := NewTunnelManagerWithConfig(tunnelCfg)
 	tunnelPath, tunnelHandler := divergev1alpha1connect.NewTunnelServiceHandler(tunnelMgr, interceptors)
 	mux.Handle(tunnelPath, tunnelHandler)

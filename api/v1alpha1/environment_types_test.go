@@ -142,3 +142,7 @@ func TestPreviewNamespaceDottedNames(t *testing.T) {
 	assert.NotContains(t, result, ".", "dots must be replaced")
 	assert.Contains(t, result, "my-env-with-dots", "dots should become hyphens")
 }
+
+func TestServiceConfigServiceName(t *testing.T) {
+	assert.Equal(t, "mr-42-payments-api", ServiceConfigServiceName("mr-42", "payments-api"))
+}
