@@ -3,7 +3,9 @@ package cli
 import (
 	"bytes"
 	"context"
+	"os"
 	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -17,6 +19,25 @@ import (
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/previewgroup"
 )
+
+// isolateGitProcessEnv clears all GIT_* overrides (such as GIT_DIR, GIT_WORK_TREE,
+// GIT_COMMON_DIR, GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY, and GIT_ALTERNATE_OBJECT_DIRECTORIES)
+// from the test process environment and restores them in t.Cleanup so both git setup
+// commands and git.Detect() inspect only the test's temporary checkout.
+func isolateGitProcessEnv(t *testing.T) {
+	t.Helper()
+	for _, entry := range os.Environ() {
+		key, val, ok := strings.Cut(entry, "=")
+		if !ok || !strings.HasPrefix(key, "GIT_") {
+			continue
+		}
+		k, v := key, val
+		require.NoError(t, os.Unsetenv(k))
+		t.Cleanup(func() {
+			_ = os.Setenv(k, v)
+		})
+	}
+}
 
 func TestPreviewJoinAndLeaveCommands(t *testing.T) {
 	scheme := runtime.NewScheme()
@@ -139,6 +160,7 @@ func TestPreviewLeaveCommand_ProviderValidationAndGitFallbackWithExplicitProject
 	assert.Contains(t, err.Error(), "github or gitlab")
 
 	// 2. --project acme/api --mr 7 inside a GitHub checkout detects provider=github and preserves gitlab member
+	isolateGitProcessEnv(t)
 	repoDir := t.TempDir()
 	require.NoError(t, exec.Command("git", "init", repoDir).Run())
 	require.NoError(t, exec.Command("git", "-C", repoDir, "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "--allow-empty", "-m", "init").Run())
@@ -156,4 +178,50 @@ func TestPreviewLeaveCommand_ProviderValidationAndGitFallbackWithExplicitProject
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "shared-prov"}, &updated))
 	require.Len(t, updated.Spec.Services, 1)
 	assert.Equal(t, "gl-api", updated.Spec.Services[0].Name)
+}
+
+func TestPreviewLeaveCommand_IdempotentNotFoundAndNoMatchingMember(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, divergeiov1alpha1.AddToScheme(scheme))
+
+	t.Run("not_found_group_succeeds_idempotently", func(t *testing.T) {
+		c := fake.NewClientBuilder().WithScheme(scheme).Build()
+		app := &App{Client: c} // Empty Namespace exercises default "default" fallback
+		cmd := newPreviewLeaveCmd(app)
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetArgs([]string{"nonexistent-group", "--provider", "github", "--project", "acme/api", "--mr", "42"})
+		require.NoError(t, cmd.Execute())
+		assert.Contains(t, out.String(), "not found (already cleaned up)")
+	})
+
+	t.Run("no_matching_member_leaves_group_intact", func(t *testing.T) {
+		pg := &divergeiov1alpha1.PreviewGroup{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "shared-grp",
+			},
+			Spec: divergeiov1alpha1.PreviewGroupSpec{
+				Services: []divergeiov1alpha1.PreviewGroupServiceSpec{
+					{Name: "web-app", Namespace: "default", Mode: "image", Image: "ghcr.io/acme/web:pr-101"},
+				},
+			},
+		}
+		require.NoError(t, previewgroup.SetMembers(pg, []previewgroup.MemberRecord{
+			{Service: "web-app", Namespace: "default", Provider: "github", Project: "acme/web", MR: 101},
+		}))
+
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pg).Build()
+		app := &App{Client: c}
+		cmd := newPreviewLeaveCmd(app)
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetArgs([]string{"shared-grp", "--provider", "github", "--project", "acme/other", "--mr", "99"})
+		require.NoError(t, cmd.Execute())
+		assert.Contains(t, out.String(), "No matching services were present")
+
+		var kept divergeiov1alpha1.PreviewGroup
+		require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "shared-grp"}, &kept))
+		require.Len(t, kept.Spec.Services, 1)
+		assert.Equal(t, "web-app", kept.Spec.Services[0].Name)
+	})
 }

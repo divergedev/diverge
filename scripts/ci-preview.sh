@@ -331,7 +331,7 @@ case "$INPUT_ACTION" in
           if [[ -n "$SCM_PROJECT" ]]; then
             REVERT_LEAVE_ARGS+=(--project "$SCM_PROJECT")
           fi
-          "$DIVERGE_BIN" "${REVERT_LEAVE_ARGS[@]}" || true
+          "$DIVERGE_BIN" "${REVERT_LEAVE_ARGS[@]}"
         fi
         emit_output "preview-name" "$PREVIEW_NAME"
         emit_output "changed-services" "[]"

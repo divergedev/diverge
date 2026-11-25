@@ -68,6 +68,7 @@ func TestGitHubActionYAMLSchema(t *testing.T) {
 		"kubeconfig",
 		"namespace",
 		"preview-name",
+		"group",
 		"base-ref",
 		"branch",
 		"pr-number",
@@ -86,6 +87,10 @@ func TestGitHubActionYAMLSchema(t *testing.T) {
 		if _, ok := spec.Inputs[in]; !ok {
 			t.Errorf("missing required input %q in action.yml", in)
 		}
+	}
+	imageTagDesc := spec.Inputs["image-tag"].Description
+	if !strings.Contains(imageTagDesc, "preview-name") || !strings.Contains(imageTagDesc, "GITHUB_SHA") {
+		t.Errorf("expected image-tag description to document both preview-name and GITHUB_SHA defaults, got %q", imageTagDesc)
 	}
 
 	requiredOutputs := []string{
@@ -138,15 +143,18 @@ func TestGitLabComponentYAMLSchema(t *testing.T) {
 		"diverge_ttl",
 		"diverge_registry",
 		"diverge_namespace",
+		"diverge_group",
 		"diverge_base_url",
 		"diverge_kubectl_version",
 	}
 
+	rawFiles := make([][]byte, 0, len(componentPaths))
 	for _, p := range componentPaths {
 		raw, err := os.ReadFile(p)
 		if err != nil {
 			t.Fatalf("failed to read %s: %v", p, err)
 		}
+		rawFiles = append(rawFiles, raw)
 
 		parts := strings.SplitN(string(raw), "\n---\n", 2)
 		if len(parts) != 2 {
@@ -179,6 +187,27 @@ func TestGitLabComponentYAMLSchema(t *testing.T) {
 		if !strings.Contains(parts[1], "allow_failure: true") {
 			t.Errorf("%s missing allow_failure: true on manual cleanup rule", p)
 		}
+
+		joined := strings.ReplaceAll(parts[1], "\\\n", " ")
+		leaveCount := 0
+		for _, line := range strings.Split(joined, "\n") {
+			if !strings.Contains(line, "diverge preview leave") {
+				continue
+			}
+			leaveCount++
+			if !strings.Contains(line, "--provider gitlab") {
+				t.Errorf("%s: diverge preview leave command missing --provider gitlab: %q", p, strings.TrimSpace(line))
+			}
+			if strings.Contains(line, "|| true") {
+				t.Errorf("%s: diverge preview leave must not swallow failures with || true: %q", p, strings.TrimSpace(line))
+			}
+		}
+		if leaveCount < 2 {
+			t.Errorf("%s: expected at least 2 diverge preview leave invocations (revert + cleanup), found %d", p, leaveCount)
+		}
+	}
+	if !bytes.Equal(rawFiles[0], rawFiles[1]) {
+		t.Errorf("GitLab component files diverged between %s and %s", componentPaths[0], componentPaths[1])
 	}
 
 	// editorconfig-checker-disable
@@ -239,11 +268,24 @@ func TestCIPreviewScriptEndToEnd(t *testing.T) {
 		t.Fatalf("failed to write mock kubectl: %v", err)
 	}
 
+	cleanGitEnv := func(extra ...string) []string {
+		env := os.Environ()
+		filtered := make([]string, 0, len(env)+len(extra))
+		for _, entry := range env {
+			if strings.HasPrefix(entry, "GIT_") {
+				continue
+			}
+			filtered = append(filtered, entry)
+		}
+		return append(filtered, extra...)
+	}
+
 	repoDir := t.TempDir()
 	runGit := func(args ...string) {
 		t.Helper()
 		cmd := exec.Command("git", args...)
 		cmd.Dir = repoDir
+		cmd.Env = cleanGitEnv()
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
 		}
@@ -307,7 +349,7 @@ services:
 
 		cmd := exec.Command(scriptPath)
 		cmd.Dir = repoDir
-		cmdEnv := append(os.Environ(),
+		cmdEnv := cleanGitEnv(
 			"DIVERGE_BIN="+divergeBin,
 			"KUBECTL_BIN="+kubectlBin,
 			"GITHUB_OUTPUT="+ghOutFile,
@@ -464,7 +506,7 @@ services:
 		encodedKube := base64.StdEncoding.EncodeToString([]byte("apiVersion: v1\nkind: Config\n"))
 		cmd := exec.Command(scriptPath)
 		cmd.Dir = repoDir
-		cmd.Env = append(os.Environ(),
+		cmd.Env = cleanGitEnv(
 			"DIVERGE_BIN="+mockDiverge,
 			"KUBECTL_BIN="+mockKubectl,
 			"GITHUB_OUTPUT="+ghOutFile,
@@ -494,7 +536,7 @@ services:
 		// When kubectl get previewgroup fails, script must fail rather than emitting job defaults
 		cmdFail := exec.Command(scriptPath)
 		cmdFail.Dir = repoDir
-		cmdFail.Env = append(os.Environ(),
+		cmdFail.Env = cleanGitEnv(
 			"DIVERGE_BIN="+mockDiverge,
 			"KUBECTL_BIN="+mockKubectl,
 			"MOCK_KUBECTL_FAIL=1",
@@ -508,6 +550,89 @@ services:
 		)
 		if failOut, failErr := cmdFail.CombinedOutput(); failErr == nil {
 			t.Fatalf("expected non-zero exit when effective routing snapshot lookup fails, got output:\n%s", string(failOut))
+		}
+	})
+
+	t.Run("deploy_group_zero_changes_detaches_and_propagates_leave_errors", func(t *testing.T) {
+		mockDir := t.TempDir()
+		mockDiverge := filepath.Join(mockDir, "diverge")
+		leaveLog := filepath.Join(mockDir, "leave.log")
+		mockDivergeScript := "#!/usr/bin/env bash\n" +
+			"if [[ \"$1\" == \"diff\" ]]; then\n" +
+			"\tprintf '{\"services\":[],\"count\":0}\\n'\n" +
+			"\texit 0\n" +
+			"fi\n" +
+			"if [[ \"$1\" == \"preview\" && \"$2\" == \"leave\" ]]; then\n" +
+			"\tprintf '%s\\n' \"$*\" >> " + leaveLog + "\n" +
+			"\tif [[ \"${MOCK_LEAVE_FAIL:-0}\" == \"1\" ]]; then\n" +
+			"\t\techo \"Error: forbidden\" >&2\n" +
+			"\t\texit 1\n" +
+			"\tfi\n" +
+			"\texit 0\n" +
+			"fi\n" +
+			"exit 0\n"
+		if err := os.WriteFile(mockDiverge, []byte(mockDivergeScript), 0o755); err != nil {
+			t.Fatalf("failed to write mock diverge: %v", err)
+		}
+
+		encodedKube := base64.StdEncoding.EncodeToString([]byte("apiVersion: v1\nkind: Config\n"))
+		ghOutFile := filepath.Join(t.TempDir(), "github_output")
+		cmdOK := exec.Command(scriptPath)
+		cmdOK.Dir = repoDir
+		cmdOK.Env = cleanGitEnv(
+			"DIVERGE_BIN="+mockDiverge,
+			"KUBECTL_BIN="+kubectlBin,
+			"MOCK_LEAVE_FAIL=0",
+			"GITHUB_OUTPUT="+ghOutFile,
+			"GITHUB_REPOSITORY=acme/commerce",
+			"INPUT_ACTION=deploy",
+			"INPUT_BASE_REF=HEAD",
+			"INPUT_GROUP=feat/checkout-discount",
+			"INPUT_PR_NUMBER=42",
+			"INPUT_NAMESPACE=staging",
+			"INPUT_KUBECONFIG="+encodedKube,
+		)
+		okOut, okErr := cmdOK.CombinedOutput()
+		if okErr != nil {
+			t.Fatalf("expected zero-change group deploy to succeed, got %v:\n%s", okErr, string(okOut))
+		}
+		ghOut := parseKeyValueFile(ghOutFile)
+		if ghOut["skipped"] != "true" {
+			t.Errorf("expected skipped=true, got %q", ghOut["skipped"])
+		}
+		if ghOut["changed-count"] != "0" {
+			t.Errorf("expected changed-count=0, got %q", ghOut["changed-count"])
+		}
+		leaveBytes, err := os.ReadFile(leaveLog)
+		if err != nil {
+			t.Fatalf("failed to read leave log: %v", err)
+		}
+		expectedArgs := "preview leave feat/checkout-discount -n staging --mr 42 --provider github --project acme/commerce"
+		if !strings.Contains(string(leaveBytes), expectedArgs) {
+			t.Errorf("expected leave args %q, got:\n%s", expectedArgs, string(leaveBytes))
+		}
+
+		cmdFail := exec.Command(scriptPath)
+		cmdFail.Dir = repoDir
+		cmdFail.Env = cleanGitEnv(
+			"DIVERGE_BIN="+mockDiverge,
+			"KUBECTL_BIN="+kubectlBin,
+			"MOCK_LEAVE_FAIL=1",
+			"GITHUB_OUTPUT="+filepath.Join(t.TempDir(), "github_output"),
+			"GITHUB_REPOSITORY=acme/commerce",
+			"INPUT_ACTION=deploy",
+			"INPUT_BASE_REF=HEAD",
+			"INPUT_GROUP=feat/checkout-discount",
+			"INPUT_PR_NUMBER=42",
+			"INPUT_NAMESPACE=staging",
+			"INPUT_KUBECONFIG="+encodedKube,
+		)
+		failOut, failErr := cmdFail.CombinedOutput()
+		if failErr == nil {
+			t.Fatalf("expected non-zero exit when preview leave fails, got output:\n%s", string(failOut))
+		}
+		if !strings.Contains(string(failOut), "Error: forbidden") {
+			t.Errorf("expected output to contain Error: forbidden, got:\n%s", string(failOut))
 		}
 	})
 }

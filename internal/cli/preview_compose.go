@@ -468,7 +468,7 @@ func newPreviewLeaveCmd(app *App) *cobra.Command {
 
 			res, err := previewgroup.Leave(cmd.Context(), c, previewgroup.LeaveOptions{
 				GroupName:    groupName,
-				Namespace:    app.Namespace,
+				Namespace:    ns,
 				ServiceNames: services,
 				Provider:     effProvider,
 				Project:      effProject,
