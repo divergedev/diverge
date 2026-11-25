@@ -20,19 +20,28 @@ type TokenCache struct {
 	order   []string // LRU order: oldest at front, newest at end
 	maxSize int
 	ttl     time.Duration
+	now     func() time.Time
 }
 
 // NewTokenCache creates a cache with the given maximum size and entry TTL.
 // A maxSize <= 0 creates a no-op cache that never stores entries.
 func NewTokenCache(maxSize int, ttl time.Duration) *TokenCache {
+	return newTokenCacheWithClock(maxSize, ttl, time.Now)
+}
+
+func newTokenCacheWithClock(maxSize int, ttl time.Duration, now func() time.Time) *TokenCache {
 	if maxSize <= 0 {
 		maxSize = 0
+	}
+	if now == nil {
+		now = time.Now
 	}
 	return &TokenCache{
 		entries: make(map[string]*cacheEntry, maxSize),
 		order:   make([]string, 0, maxSize),
 		maxSize: maxSize,
 		ttl:     ttl,
+		now:     now,
 	}
 }
 
@@ -43,7 +52,11 @@ func hashToken(token string) string {
 
 // Get looks up a cached user identity by token.
 // Returns nil if not found or expired. Promotes the entry to newest on hit (LRU).
+// Always returns a DeepCopy so callers cannot mutate cached state.
 func (c *TokenCache) Get(token string) *UserInfo {
+	if c.maxSize <= 0 {
+		return nil
+	}
 	key := hashToken(token)
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -53,8 +66,9 @@ func (c *TokenCache) Get(token string) *UserInfo {
 		return nil
 	}
 
-	// Check expiration
-	if time.Now().After(entry.expiresAt) {
+	now := c.now()
+	// Check cache TTL and underlying token expiration
+	if now.After(entry.expiresAt) || (entry.user != nil && !entry.user.ExpiresAt.IsZero() && now.After(entry.user.ExpiresAt)) {
 		delete(c.entries, key)
 		c.removeFromOrder(key)
 		return nil
@@ -64,13 +78,30 @@ func (c *TokenCache) Get(token string) *UserInfo {
 	c.removeFromOrder(key)
 	c.order = append(c.order, key)
 
-	return entry.user
+	return entry.user.DeepCopy()
 }
 
 // Set stores an authenticated user identity keyed by token hash.
 // Only cache successful authentications — never cache failures.
 // If the key already exists, it is updated in-place without eviction.
 func (c *TokenCache) Set(token string, user *UserInfo) {
+	if c.maxSize <= 0 || user == nil {
+		return
+	}
+	now := c.now()
+	exp := now.Add(c.ttl)
+	if !user.ExpiresAt.IsZero() {
+		if !user.ExpiresAt.After(now) {
+			return
+		}
+		if user.ExpiresAt.Before(exp) {
+			exp = user.ExpiresAt
+		}
+	}
+
+	stored := user.DeepCopy()
+	stored.FromCookie = false
+
 	key := hashToken(token)
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -78,8 +109,8 @@ func (c *TokenCache) Set(token string, user *UserInfo) {
 	// Check if key already exists — update in-place
 	if _, exists := c.entries[key]; exists {
 		c.entries[key] = &cacheEntry{
-			user:      user,
-			expiresAt: time.Now().Add(c.ttl),
+			user:      stored,
+			expiresAt: exp,
 		}
 		// Promote to newest
 		c.removeFromOrder(key)
@@ -97,8 +128,8 @@ func (c *TokenCache) Set(token string, user *UserInfo) {
 	}
 
 	c.entries[key] = &cacheEntry{
-		user:      user,
-		expiresAt: time.Now().Add(c.ttl),
+		user:      stored,
+		expiresAt: exp,
 	}
 	c.order = append(c.order, key)
 }

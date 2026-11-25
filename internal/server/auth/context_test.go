@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"testing"
+	"time"
 
 	authorizationv1 "k8s.io/api/authorization/v1"
 	"pgregory.net/rapid"
@@ -108,5 +109,29 @@ func TestUserInfo_DeepCopy_Nil(t *testing.T) {
 	copied := orig.DeepCopy()
 	if copied != nil {
 		t.Errorf("expected nil, got %v", copied)
+	}
+}
+
+func TestUserInfo_DeepCopy_MetadataFields(t *testing.T) {
+	exp := time.Now().Add(10 * time.Minute).UTC().Truncate(time.Second)
+	orig := &UserInfo{
+		Username:   "alice",
+		ExpiresAt:  exp,
+		AuthType:   "oidc",
+		FromCookie: true,
+	}
+	copied := orig.DeepCopy()
+	if !copied.ExpiresAt.Equal(exp) {
+		t.Errorf("ExpiresAt = %v, want %v", copied.ExpiresAt, exp)
+	}
+	if copied.AuthType != "oidc" {
+		t.Errorf("AuthType = %q, want oidc", copied.AuthType)
+	}
+	if !copied.FromCookie {
+		t.Errorf("FromCookie = false, want true")
+	}
+	orig.FromCookie = false
+	if !copied.FromCookie {
+		t.Errorf("mutating orig affected copied.FromCookie")
 	}
 }

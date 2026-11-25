@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"connectrpc.com/connect"
 	"github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/server/auth"
 	authorizationv1 "k8s.io/api/authorization/v1"
@@ -220,4 +221,63 @@ func TestAuthorizeAction_UsesCRDAPIGroup(t *testing.T) {
 	assert.Equal(t, "divergedev.com", capturedSAR.Spec.ResourceAttributes.Group)
 	assert.Equal(t, v1alpha1.GroupVersion.Group, capturedSAR.Spec.ResourceAttributes.Group)
 	assert.Equal(t, "environments", capturedSAR.Spec.ResourceAttributes.Resource)
+}
+
+func TestAuthorizeAction_BlocksReservedOIDCPrincipalsBeforeSAR(t *testing.T) {
+	sarCalled := false
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("create", "subjectaccessreviews", func(action coretesting.Action) (handled bool, ret runtime.Object, err error) {
+		sarCalled = true
+		sar := action.(coretesting.CreateAction).GetObject().(*authorizationv1.SubjectAccessReview)
+		sar.Status.Allowed = true
+		return true, sar, nil
+	})
+	auditLogger := NewAuditLogger(slog.Default())
+
+	// OIDC user with system:masters group must be denied before SAR is issued.
+	ctxOIDC := auth.ContextWithUserInfo(context.Background(), &auth.UserInfo{
+		Username: "alice",
+		Groups:   []string{"system:masters"},
+		AuthType: "oidc",
+	})
+	err := AuthorizeAction(ctxOIDC, client, auditLogger, "create", "default", "environments")
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+	assert.False(t, sarCalled, "SAR must not be called for reserved OIDC principals")
+
+	// Session user with divergedev: prefix must also be denied before SAR.
+	ctxSess := auth.ContextWithUserInfo(context.Background(), &auth.UserInfo{
+		Username: "divergedev:spoof",
+		AuthType: "session",
+	})
+	err = AuthorizeAction(ctxSess, client, auditLogger, "create", "default", "environments")
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+	assert.False(t, sarCalled)
+
+	// TokenReview ServiceAccount principal with system:serviceaccount: must still proceed to SAR.
+	ctxSA := auth.ContextWithUserInfo(context.Background(), &auth.UserInfo{
+		Username: "system:serviceaccount:dev:ci",
+		Groups:   []string{"system:serviceaccounts", "system:authenticated"},
+		AuthType: "tokenreview",
+	})
+	err = AuthorizeAction(ctxSA, client, auditLogger, "create", "default", "environments")
+	require.NoError(t, err)
+	assert.True(t, sarCalled)
+}
+
+func TestIsMacaroonUser_ChecksAuthTypeWithoutExtra(t *testing.T) {
+	assert.False(t, isMacaroonUser(nil))
+	assert.True(t, isMacaroonUser(&auth.UserInfo{
+		Username: "macaroon-user",
+		AuthType: "macaroon",
+	}))
+	assert.True(t, isMacaroonUser(&auth.UserInfo{
+		Username: "macaroon-user",
+		Extra:    map[string]authorizationv1.ExtraValue{auth.ExtraKeyAuthType: {"macaroon"}},
+	}))
+	assert.False(t, isMacaroonUser(&auth.UserInfo{
+		Username: "oidc-user",
+		AuthType: "oidc",
+	}))
 }

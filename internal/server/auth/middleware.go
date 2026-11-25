@@ -63,10 +63,12 @@ func NewMiddleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 			}
 
 			token := extractBearerToken(r.Header.Get("Authorization"))
+			fromCookie := false
 			// Fall back to session cookie if no Authorization header
 			if token == "" {
 				if cookie, err := r.Cookie("diverge_token"); err == nil {
 					token = cookie.Value
+					fromCookie = true
 				}
 			}
 			if token == "" {
@@ -95,6 +97,7 @@ func NewMiddleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 						cfg.Metrics.Attempts.WithLabelValues("cache", "success").Inc()
 					}
 				}
+				user.FromCookie = fromCookie
 				ctx := ContextWithUserInfo(r.Context(), user)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
@@ -134,7 +137,7 @@ func NewMiddleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 			}
 
 			// Cache successful auth (never cache failures)
-			cfg.Cache.Set(token, user.DeepCopy())
+			cfg.Cache.Set(token, user)
 
 			if cfg.Metrics != nil && cfg.Metrics.Attempts != nil {
 				cfg.Metrics.Attempts.WithLabelValues("tokenreview", "success").Inc()
@@ -145,7 +148,9 @@ func NewMiddleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 				cfg.Logger.Info("auth.success", "user", user.Username, "groups", user.Groups, "path", r.URL.Path, "source_ip", r.RemoteAddr)
 			}
 
-			ctx := ContextWithUserInfo(r.Context(), user)
+			ctxUser := user.DeepCopy()
+			ctxUser.FromCookie = fromCookie
+			ctx := ContextWithUserInfo(r.Context(), ctxUser)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

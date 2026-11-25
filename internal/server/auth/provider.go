@@ -2,14 +2,48 @@ package auth
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
+	"strings"
+	"time"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
+
+// extractJWTExpiry extracts the exp claim from an already-verified JWT token so
+// short-lived ServiceAccount tokens are not cached past their expiration.
+// Returns zero time for non-JWT tokens or malformed/unusable exp claims.
+func extractJWTExpiry(token string) time.Time {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 || parts[1] == "" {
+		return time.Time{}
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		payload, err = base64.URLEncoding.DecodeString(parts[1])
+		if err != nil {
+			return time.Time{}
+		}
+	}
+	var claims struct {
+		Exp *float64 `json:"exp"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil || claims.Exp == nil {
+		return time.Time{}
+	}
+	exp := *claims.Exp
+	if math.IsNaN(exp) || math.IsInf(exp, 0) || exp <= 0 || exp > 1e12 {
+		return time.Time{}
+	}
+	sec, frac := math.Modf(exp)
+	return time.Unix(int64(sec), int64(frac*float64(time.Second))).UTC()
+}
 
 // AuthProvider authenticates a bearer token and returns user identity.
 type AuthProvider interface {
@@ -61,9 +95,11 @@ func (p *TokenReviewProvider) Authenticate(ctx context.Context, token string) (*
 	}
 
 	return &UserInfo{
-		Username: result.Status.User.Username,
-		UID:      result.Status.User.UID,
-		Groups:   result.Status.User.Groups,
-		Extra:    extra,
+		Username:  result.Status.User.Username,
+		UID:       result.Status.User.UID,
+		Groups:    result.Status.User.Groups,
+		Extra:     extra,
+		ExpiresAt: extractJWTExpiry(token),
+		AuthType:  "tokenreview",
 	}, nil
 }

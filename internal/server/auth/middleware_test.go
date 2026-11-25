@@ -519,3 +519,38 @@ func TestMiddleware_BrowserRedirect_PostRequestsKeep401(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnauthorized, w.Result().StatusCode)
 }
+
+func TestMiddleware_FromCookieTrackingAndCacheIsolation(t *testing.T) {
+	provider := &mockProvider{user: &UserInfo{Username: "alice", AuthType: "session"}}
+	cfg := MiddlewareConfig{
+		Provider: provider,
+		Cache:    NewTokenCache(10, time.Minute),
+		Logger:   testLogger(),
+	}
+	mw := NewMiddleware(cfg)
+
+	var ctxUser *UserInfo
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctxUser, _ = UserInfoFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// 1. Cookie request sets FromCookie = true
+	reqCookie := httptest.NewRequest("GET", "/api", nil)
+	reqCookie.AddCookie(&http.Cookie{Name: "diverge_token", Value: "shared-tok"})
+	w1 := httptest.NewRecorder()
+	handler.ServeHTTP(w1, reqCookie)
+	require.Equal(t, http.StatusOK, w1.Result().StatusCode)
+	require.NotNil(t, ctxUser)
+	assert.True(t, ctxUser.FromCookie)
+
+	// 2. Same token sent via Bearer hits cache but sets FromCookie = false
+	reqBearer := httptest.NewRequest("GET", "/api", nil)
+	reqBearer.Header.Set("Authorization", "Bearer shared-tok")
+	w2 := httptest.NewRecorder()
+	handler.ServeHTTP(w2, reqBearer)
+	require.Equal(t, http.StatusOK, w2.Result().StatusCode)
+	require.NotNil(t, ctxUser)
+	assert.False(t, ctxUser.FromCookie)
+	assert.Equal(t, 1, provider.calls)
+}

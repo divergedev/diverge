@@ -22,6 +22,111 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// CloseCode indicates the machine-readable reason a tunnel stream closed.
+type CloseCode int32
+
+const (
+	CloseCode_CLOSE_CODE_UNSPECIFIED       CloseCode = 0
+	CloseCode_CLOSE_CODE_SERVER_SHUTDOWN   CloseCode = 1
+	CloseCode_CLOSE_CODE_EVICTED           CloseCode = 2
+	CloseCode_CLOSE_CODE_HEARTBEAT_TIMEOUT CloseCode = 3
+	CloseCode_CLOSE_CODE_AUTH_EXPIRED      CloseCode = 4
+)
+
+// Enum value maps for CloseCode.
+var (
+	CloseCode_name = map[int32]string{
+		0: "CLOSE_CODE_UNSPECIFIED",
+		1: "CLOSE_CODE_SERVER_SHUTDOWN",
+		2: "CLOSE_CODE_EVICTED",
+		3: "CLOSE_CODE_HEARTBEAT_TIMEOUT",
+		4: "CLOSE_CODE_AUTH_EXPIRED",
+	}
+	CloseCode_value = map[string]int32{
+		"CLOSE_CODE_UNSPECIFIED":       0,
+		"CLOSE_CODE_SERVER_SHUTDOWN":   1,
+		"CLOSE_CODE_EVICTED":           2,
+		"CLOSE_CODE_HEARTBEAT_TIMEOUT": 3,
+		"CLOSE_CODE_AUTH_EXPIRED":      4,
+	}
+)
+
+func (x CloseCode) Enum() *CloseCode {
+	p := new(CloseCode)
+	*p = x
+	return p
+}
+
+func (x CloseCode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (CloseCode) Descriptor() protoreflect.EnumDescriptor {
+	return file_diverge_v1alpha1_tunnel_proto_enumTypes[0].Descriptor()
+}
+
+func (CloseCode) Type() protoreflect.EnumType {
+	return &file_diverge_v1alpha1_tunnel_proto_enumTypes[0]
+}
+
+func (x CloseCode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use CloseCode.Descriptor instead.
+func (CloseCode) EnumDescriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_tunnel_proto_rawDescGZIP(), []int{0}
+}
+
+type ResolvedTargetMode int32
+
+const (
+	ResolvedTargetMode_RESOLVED_TARGET_MODE_UNSPECIFIED ResolvedTargetMode = 0
+	ResolvedTargetMode_RESOLVED_TARGET_MODE_ENVIRONMENT ResolvedTargetMode = 1
+	ResolvedTargetMode_RESOLVED_TARGET_MODE_TUNNEL      ResolvedTargetMode = 2
+)
+
+// Enum value maps for ResolvedTargetMode.
+var (
+	ResolvedTargetMode_name = map[int32]string{
+		0: "RESOLVED_TARGET_MODE_UNSPECIFIED",
+		1: "RESOLVED_TARGET_MODE_ENVIRONMENT",
+		2: "RESOLVED_TARGET_MODE_TUNNEL",
+	}
+	ResolvedTargetMode_value = map[string]int32{
+		"RESOLVED_TARGET_MODE_UNSPECIFIED": 0,
+		"RESOLVED_TARGET_MODE_ENVIRONMENT": 1,
+		"RESOLVED_TARGET_MODE_TUNNEL":      2,
+	}
+)
+
+func (x ResolvedTargetMode) Enum() *ResolvedTargetMode {
+	p := new(ResolvedTargetMode)
+	*p = x
+	return p
+}
+
+func (x ResolvedTargetMode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ResolvedTargetMode) Descriptor() protoreflect.EnumDescriptor {
+	return file_diverge_v1alpha1_tunnel_proto_enumTypes[1].Descriptor()
+}
+
+func (ResolvedTargetMode) Type() protoreflect.EnumType {
+	return &file_diverge_v1alpha1_tunnel_proto_enumTypes[1]
+}
+
+func (x ResolvedTargetMode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ResolvedTargetMode.Descriptor instead.
+func (ResolvedTargetMode) EnumDescriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_tunnel_proto_rawDescGZIP(), []int{1}
+}
+
 // TunnelServiceTunnelRequest is the client-to-server envelope.
 type TunnelServiceTunnelRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -32,6 +137,7 @@ type TunnelServiceTunnelRequest struct {
 	//	*TunnelServiceTunnelRequest_Pong
 	//	*TunnelServiceTunnelRequest_Close
 	//	*TunnelServiceTunnelRequest_ResponseChunk
+	//	*TunnelServiceTunnelRequest_RawData
 	Payload       isTunnelServiceTunnelRequest_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -119,6 +225,15 @@ func (x *TunnelServiceTunnelRequest) GetResponseChunk() *TunnelResponseChunk {
 	return nil
 }
 
+func (x *TunnelServiceTunnelRequest) GetRawData() []byte {
+	if x != nil {
+		if x, ok := x.Payload.(*TunnelServiceTunnelRequest_RawData); ok {
+			return x.RawData
+		}
+	}
+	return nil
+}
+
 type isTunnelServiceTunnelRequest_Payload interface {
 	isTunnelServiceTunnelRequest_Payload()
 }
@@ -143,6 +258,10 @@ type TunnelServiceTunnelRequest_ResponseChunk struct {
 	ResponseChunk *TunnelResponseChunk `protobuf:"bytes,9,opt,name=response_chunk,json=responseChunk,proto3,oneof"`
 }
 
+type TunnelServiceTunnelRequest_RawData struct {
+	RawData []byte `protobuf:"bytes,11,opt,name=raw_data,json=rawData,proto3,oneof"` // Protocol v3: HTTP/2 frames (client -> server)
+}
+
 func (*TunnelServiceTunnelRequest_Register) isTunnelServiceTunnelRequest_Payload() {}
 
 func (*TunnelServiceTunnelRequest_HttpResponse) isTunnelServiceTunnelRequest_Payload() {}
@@ -152,6 +271,8 @@ func (*TunnelServiceTunnelRequest_Pong) isTunnelServiceTunnelRequest_Payload() {
 func (*TunnelServiceTunnelRequest_Close) isTunnelServiceTunnelRequest_Payload() {}
 
 func (*TunnelServiceTunnelRequest_ResponseChunk) isTunnelServiceTunnelRequest_Payload() {}
+
+func (*TunnelServiceTunnelRequest_RawData) isTunnelServiceTunnelRequest_Payload() {}
 
 // TunnelServiceTunnelResponse is the server-to-client envelope.
 type TunnelServiceTunnelResponse struct {
@@ -163,6 +284,7 @@ type TunnelServiceTunnelResponse struct {
 	//	*TunnelServiceTunnelResponse_Ping
 	//	*TunnelServiceTunnelResponse_Close
 	//	*TunnelServiceTunnelResponse_RequestChunk
+	//	*TunnelServiceTunnelResponse_RawData
 	Payload       isTunnelServiceTunnelResponse_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -250,6 +372,15 @@ func (x *TunnelServiceTunnelResponse) GetRequestChunk() *TunnelRequestChunk {
 	return nil
 }
 
+func (x *TunnelServiceTunnelResponse) GetRawData() []byte {
+	if x != nil {
+		if x, ok := x.Payload.(*TunnelServiceTunnelResponse_RawData); ok {
+			return x.RawData
+		}
+	}
+	return nil
+}
+
 type isTunnelServiceTunnelResponse_Payload interface {
 	isTunnelServiceTunnelResponse_Payload()
 }
@@ -274,6 +405,10 @@ type TunnelServiceTunnelResponse_RequestChunk struct {
 	RequestChunk *TunnelRequestChunk `protobuf:"bytes,8,opt,name=request_chunk,json=requestChunk,proto3,oneof"`
 }
 
+type TunnelServiceTunnelResponse_RawData struct {
+	RawData []byte `protobuf:"bytes,11,opt,name=raw_data,json=rawData,proto3,oneof"` // Protocol v3: HTTP/2 frames (server -> client)
+}
+
 func (*TunnelServiceTunnelResponse_Ready) isTunnelServiceTunnelResponse_Payload() {}
 
 func (*TunnelServiceTunnelResponse_HttpRequest) isTunnelServiceTunnelResponse_Payload() {}
@@ -284,16 +419,22 @@ func (*TunnelServiceTunnelResponse_Close) isTunnelServiceTunnelResponse_Payload(
 
 func (*TunnelServiceTunnelResponse_RequestChunk) isTunnelServiceTunnelResponse_Payload() {}
 
+func (*TunnelServiceTunnelResponse_RawData) isTunnelServiceTunnelResponse_Payload() {}
+
 // Sent by CLI to register a tunnel.
 type TunnelRegister struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	Service         string                 `protobuf:"bytes,1,opt,name=service,proto3" json:"service,omitempty"`
-	Namespace       string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
-	Port            int32                  `protobuf:"varint,3,opt,name=port,proto3" json:"port,omitempty"`
-	PreviewId       string                 `protobuf:"bytes,4,opt,name=preview_id,json=previewId,proto3" json:"preview_id,omitempty"`
-	ProtocolVersion int32                  `protobuf:"varint,5,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"` // protocol version for forward compat
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Service          string                 `protobuf:"bytes,1,opt,name=service,proto3" json:"service,omitempty"`
+	Namespace        string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Port             int32                  `protobuf:"varint,3,opt,name=port,proto3" json:"port,omitempty"`
+	PreviewId        string                 `protobuf:"bytes,4,opt,name=preview_id,json=previewId,proto3" json:"preview_id,omitempty"`
+	ProtocolVersion  int32                  `protobuf:"varint,5,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"` // protocol version for forward compat
+	Metadata         map[string]string      `protobuf:"bytes,6,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Force            bool                   `protobuf:"varint,7,opt,name=force,proto3" json:"force,omitempty"`
+	SkipK8SService   bool                   `protobuf:"varint,8,opt,name=skip_k8s_service,json=skipK8sService,proto3" json:"skip_k8s_service,omitempty"`
+	ClientInstanceId string                 `protobuf:"bytes,9,opt,name=client_instance_id,json=clientInstanceId,proto3" json:"client_instance_id,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *TunnelRegister) Reset() {
@@ -361,13 +502,44 @@ func (x *TunnelRegister) GetProtocolVersion() int32 {
 	return 0
 }
 
+func (x *TunnelRegister) GetMetadata() map[string]string {
+	if x != nil {
+		return x.Metadata
+	}
+	return nil
+}
+
+func (x *TunnelRegister) GetForce() bool {
+	if x != nil {
+		return x.Force
+	}
+	return false
+}
+
+func (x *TunnelRegister) GetSkipK8SService() bool {
+	if x != nil {
+		return x.SkipK8SService
+	}
+	return false
+}
+
+func (x *TunnelRegister) GetClientInstanceId() string {
+	if x != nil {
+		return x.ClientInstanceId
+	}
+	return ""
+}
+
 // Sent by server when tunnel is active.
 type TunnelReady struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TunnelId      string                 `protobuf:"bytes,1,opt,name=tunnel_id,json=tunnelId,proto3" json:"tunnel_id,omitempty"`
-	Endpoint      string                 `protobuf:"bytes,2,opt,name=endpoint,proto3" json:"endpoint,omitempty"` // cluster-internal endpoint for debugging
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	TunnelId        string                 `protobuf:"bytes,1,opt,name=tunnel_id,json=tunnelId,proto3" json:"tunnel_id,omitempty"`
+	Endpoint        string                 `protobuf:"bytes,2,opt,name=endpoint,proto3" json:"endpoint,omitempty"`                                       // cluster-internal endpoint for debugging
+	ProxyService    string                 `protobuf:"bytes,3,opt,name=proxy_service,json=proxyService,proto3" json:"proxy_service,omitempty"`           // stable :8081 proxy Service endpoint when configured
+	ProtocolVersion int32                  `protobuf:"varint,4,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"` // negotiated protocol version
+	K8SServiceName  string                 `protobuf:"bytes,5,opt,name=k8s_service_name,json=k8sServiceName,proto3" json:"k8s_service_name,omitempty"`   // actual per-tunnel K8s Service name when created
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *TunnelReady) Reset() {
@@ -410,6 +582,27 @@ func (x *TunnelReady) GetTunnelId() string {
 func (x *TunnelReady) GetEndpoint() string {
 	if x != nil {
 		return x.Endpoint
+	}
+	return ""
+}
+
+func (x *TunnelReady) GetProxyService() string {
+	if x != nil {
+		return x.ProxyService
+	}
+	return ""
+}
+
+func (x *TunnelReady) GetProtocolVersion() int32 {
+	if x != nil {
+		return x.ProtocolVersion
+	}
+	return 0
+}
+
+func (x *TunnelReady) GetK8SServiceName() string {
+	if x != nil {
+		return x.K8SServiceName
 	}
 	return ""
 }
@@ -848,6 +1041,7 @@ func (x *TunnelPong) GetTimestamp() *timestamppb.Timestamp {
 type TunnelClose struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Reason        string                 `protobuf:"bytes,1,opt,name=reason,proto3" json:"reason,omitempty"`
+	Code          CloseCode              `protobuf:"varint,2,opt,name=code,proto3,enum=diverge.v1alpha1.CloseCode" json:"code,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -889,35 +1083,510 @@ func (x *TunnelClose) GetReason() string {
 	return ""
 }
 
+func (x *TunnelClose) GetCode() CloseCode {
+	if x != nil {
+		return x.Code
+	}
+	return CloseCode_CLOSE_CODE_UNSPECIFIED
+}
+
+type ListTunnelsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Namespace     string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	PreviewId     string                 `protobuf:"bytes,2,opt,name=preview_id,json=previewId,proto3" json:"preview_id,omitempty"`
+	Service       string                 `protobuf:"bytes,3,opt,name=service,proto3" json:"service,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListTunnelsRequest) Reset() {
+	*x = ListTunnelsRequest{}
+	mi := &file_diverge_v1alpha1_tunnel_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListTunnelsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListTunnelsRequest) ProtoMessage() {}
+
+func (x *ListTunnelsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_tunnel_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListTunnelsRequest.ProtoReflect.Descriptor instead.
+func (*ListTunnelsRequest) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_tunnel_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ListTunnelsRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *ListTunnelsRequest) GetPreviewId() string {
+	if x != nil {
+		return x.PreviewId
+	}
+	return ""
+}
+
+func (x *ListTunnelsRequest) GetService() string {
+	if x != nil {
+		return x.Service
+	}
+	return ""
+}
+
+type TunnelInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TunnelId      string                 `protobuf:"bytes,1,opt,name=tunnel_id,json=tunnelId,proto3" json:"tunnel_id,omitempty"`
+	Namespace     string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	PreviewId     string                 `protobuf:"bytes,3,opt,name=preview_id,json=previewId,proto3" json:"preview_id,omitempty"`
+	Service       string                 `protobuf:"bytes,4,opt,name=service,proto3" json:"service,omitempty"`
+	Port          int32                  `protobuf:"varint,5,opt,name=port,proto3" json:"port,omitempty"`
+	Owner         string                 `protobuf:"bytes,6,opt,name=owner,proto3" json:"owner,omitempty"`
+	HolderPod     string                 `protobuf:"bytes,7,opt,name=holder_pod,json=holderPod,proto3" json:"holder_pod,omitempty"`
+	Metadata      map[string]string      `protobuf:"bytes,8,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	StartedAt     *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
+	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TunnelInfo) Reset() {
+	*x = TunnelInfo{}
+	mi := &file_diverge_v1alpha1_tunnel_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TunnelInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TunnelInfo) ProtoMessage() {}
+
+func (x *TunnelInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_tunnel_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TunnelInfo.ProtoReflect.Descriptor instead.
+func (*TunnelInfo) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_tunnel_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *TunnelInfo) GetTunnelId() string {
+	if x != nil {
+		return x.TunnelId
+	}
+	return ""
+}
+
+func (x *TunnelInfo) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *TunnelInfo) GetPreviewId() string {
+	if x != nil {
+		return x.PreviewId
+	}
+	return ""
+}
+
+func (x *TunnelInfo) GetService() string {
+	if x != nil {
+		return x.Service
+	}
+	return ""
+}
+
+func (x *TunnelInfo) GetPort() int32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *TunnelInfo) GetOwner() string {
+	if x != nil {
+		return x.Owner
+	}
+	return ""
+}
+
+func (x *TunnelInfo) GetHolderPod() string {
+	if x != nil {
+		return x.HolderPod
+	}
+	return ""
+}
+
+func (x *TunnelInfo) GetMetadata() map[string]string {
+	if x != nil {
+		return x.Metadata
+	}
+	return nil
+}
+
+func (x *TunnelInfo) GetStartedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.StartedAt
+	}
+	return nil
+}
+
+func (x *TunnelInfo) GetExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
+}
+
+type ListTunnelsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Tunnels       []*TunnelInfo          `protobuf:"bytes,1,rep,name=tunnels,proto3" json:"tunnels,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListTunnelsResponse) Reset() {
+	*x = ListTunnelsResponse{}
+	mi := &file_diverge_v1alpha1_tunnel_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListTunnelsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListTunnelsResponse) ProtoMessage() {}
+
+func (x *ListTunnelsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_tunnel_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListTunnelsResponse.ProtoReflect.Descriptor instead.
+func (*ListTunnelsResponse) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_tunnel_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *ListTunnelsResponse) GetTunnels() []*TunnelInfo {
+	if x != nil {
+		return x.Tunnels
+	}
+	return nil
+}
+
+type ResolvePreviewRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PreviewId     string                 `protobuf:"bytes,1,opt,name=preview_id,json=previewId,proto3" json:"preview_id,omitempty"`
+	Namespace     string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResolvePreviewRequest) Reset() {
+	*x = ResolvePreviewRequest{}
+	mi := &file_diverge_v1alpha1_tunnel_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolvePreviewRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolvePreviewRequest) ProtoMessage() {}
+
+func (x *ResolvePreviewRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_tunnel_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolvePreviewRequest.ProtoReflect.Descriptor instead.
+func (*ResolvePreviewRequest) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_tunnel_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *ResolvePreviewRequest) GetPreviewId() string {
+	if x != nil {
+		return x.PreviewId
+	}
+	return ""
+}
+
+func (x *ResolvePreviewRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+type ResolvedTarget struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Service         string                 `protobuf:"bytes,1,opt,name=service,proto3" json:"service,omitempty"`
+	Namespace       string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Mode            ResolvedTargetMode     `protobuf:"varint,3,opt,name=mode,proto3,enum=diverge.v1alpha1.ResolvedTargetMode" json:"mode,omitempty"`
+	Ready           bool                   `protobuf:"varint,4,opt,name=ready,proto3" json:"ready,omitempty"`
+	UpstreamUrl     string                 `protobuf:"bytes,5,opt,name=upstream_url,json=upstreamUrl,proto3" json:"upstream_url,omitempty"`
+	ProxyHeaders    map[string]string      `protobuf:"bytes,6,rep,name=proxy_headers,json=proxyHeaders,proto3" json:"proxy_headers,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	TunnelId        string                 `protobuf:"bytes,7,opt,name=tunnel_id,json=tunnelId,proto3" json:"tunnel_id,omitempty"`
+	EnvironmentName string                 `protobuf:"bytes,8,opt,name=environment_name,json=environmentName,proto3" json:"environment_name,omitempty"`
+	Port            int32                  `protobuf:"varint,9,opt,name=port,proto3" json:"port,omitempty"`
+	Owner           string                 `protobuf:"bytes,10,opt,name=owner,proto3" json:"owner,omitempty"`
+	Metadata        map[string]string      `protobuf:"bytes,11,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ResolvedTarget) Reset() {
+	*x = ResolvedTarget{}
+	mi := &file_diverge_v1alpha1_tunnel_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolvedTarget) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolvedTarget) ProtoMessage() {}
+
+func (x *ResolvedTarget) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_tunnel_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolvedTarget.ProtoReflect.Descriptor instead.
+func (*ResolvedTarget) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_tunnel_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *ResolvedTarget) GetService() string {
+	if x != nil {
+		return x.Service
+	}
+	return ""
+}
+
+func (x *ResolvedTarget) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *ResolvedTarget) GetMode() ResolvedTargetMode {
+	if x != nil {
+		return x.Mode
+	}
+	return ResolvedTargetMode_RESOLVED_TARGET_MODE_UNSPECIFIED
+}
+
+func (x *ResolvedTarget) GetReady() bool {
+	if x != nil {
+		return x.Ready
+	}
+	return false
+}
+
+func (x *ResolvedTarget) GetUpstreamUrl() string {
+	if x != nil {
+		return x.UpstreamUrl
+	}
+	return ""
+}
+
+func (x *ResolvedTarget) GetProxyHeaders() map[string]string {
+	if x != nil {
+		return x.ProxyHeaders
+	}
+	return nil
+}
+
+func (x *ResolvedTarget) GetTunnelId() string {
+	if x != nil {
+		return x.TunnelId
+	}
+	return ""
+}
+
+func (x *ResolvedTarget) GetEnvironmentName() string {
+	if x != nil {
+		return x.EnvironmentName
+	}
+	return ""
+}
+
+func (x *ResolvedTarget) GetPort() int32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *ResolvedTarget) GetOwner() string {
+	if x != nil {
+		return x.Owner
+	}
+	return ""
+}
+
+func (x *ResolvedTarget) GetMetadata() map[string]string {
+	if x != nil {
+		return x.Metadata
+	}
+	return nil
+}
+
+type ResolvePreviewResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PreviewId     string                 `protobuf:"bytes,1,opt,name=preview_id,json=previewId,proto3" json:"preview_id,omitempty"`
+	Namespace     string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Targets       []*ResolvedTarget      `protobuf:"bytes,3,rep,name=targets,proto3" json:"targets,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResolvePreviewResponse) Reset() {
+	*x = ResolvePreviewResponse{}
+	mi := &file_diverge_v1alpha1_tunnel_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolvePreviewResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolvePreviewResponse) ProtoMessage() {}
+
+func (x *ResolvePreviewResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_diverge_v1alpha1_tunnel_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolvePreviewResponse.ProtoReflect.Descriptor instead.
+func (*ResolvePreviewResponse) Descriptor() ([]byte, []int) {
+	return file_diverge_v1alpha1_tunnel_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *ResolvePreviewResponse) GetPreviewId() string {
+	if x != nil {
+		return x.PreviewId
+	}
+	return ""
+}
+
+func (x *ResolvePreviewResponse) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *ResolvePreviewResponse) GetTargets() []*ResolvedTarget {
+	if x != nil {
+		return x.Targets
+	}
+	return nil
+}
+
 var File_diverge_v1alpha1_tunnel_proto protoreflect.FileDescriptor
 
 const file_diverge_v1alpha1_tunnel_proto_rawDesc = "" +
 	"\n" +
-	"\x1ddiverge/v1alpha1/tunnel.proto\x12\x10diverge.v1alpha1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xef\x02\n" +
+	"\x1ddiverge/v1alpha1/tunnel.proto\x12\x10diverge.v1alpha1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x8c\x03\n" +
 	"\x1aTunnelServiceTunnelRequest\x12>\n" +
 	"\bregister\x18\x01 \x01(\v2 .diverge.v1alpha1.TunnelRegisterH\x00R\bregister\x12K\n" +
 	"\rhttp_response\x18\x04 \x01(\v2$.diverge.v1alpha1.TunnelHTTPResponseH\x00R\fhttpResponse\x122\n" +
 	"\x04pong\x18\x06 \x01(\v2\x1c.diverge.v1alpha1.TunnelPongH\x00R\x04pong\x125\n" +
 	"\x05close\x18\a \x01(\v2\x1d.diverge.v1alpha1.TunnelCloseH\x00R\x05close\x12N\n" +
-	"\x0eresponse_chunk\x18\t \x01(\v2%.diverge.v1alpha1.TunnelResponseChunkH\x00R\rresponseChunkB\t\n" +
-	"\apayload\"\xe1\x02\n" +
+	"\x0eresponse_chunk\x18\t \x01(\v2%.diverge.v1alpha1.TunnelResponseChunkH\x00R\rresponseChunk\x12\x1b\n" +
+	"\braw_data\x18\v \x01(\fH\x00R\arawDataB\t\n" +
+	"\apayload\"\xfe\x02\n" +
 	"\x1bTunnelServiceTunnelResponse\x125\n" +
 	"\x05ready\x18\x02 \x01(\v2\x1d.diverge.v1alpha1.TunnelReadyH\x00R\x05ready\x12H\n" +
 	"\fhttp_request\x18\x03 \x01(\v2#.diverge.v1alpha1.TunnelHTTPRequestH\x00R\vhttpRequest\x122\n" +
 	"\x04ping\x18\x05 \x01(\v2\x1c.diverge.v1alpha1.TunnelPingH\x00R\x04ping\x125\n" +
 	"\x05close\x18\a \x01(\v2\x1d.diverge.v1alpha1.TunnelCloseH\x00R\x05close\x12K\n" +
-	"\rrequest_chunk\x18\b \x01(\v2$.diverge.v1alpha1.TunnelRequestChunkH\x00R\frequestChunkB\t\n" +
-	"\apayload\"\xa6\x01\n" +
+	"\rrequest_chunk\x18\b \x01(\v2$.diverge.v1alpha1.TunnelRequestChunkH\x00R\frequestChunk\x12\x1b\n" +
+	"\braw_data\x18\v \x01(\fH\x00R\arawDataB\t\n" +
+	"\apayload\"\x9d\x03\n" +
 	"\x0eTunnelRegister\x12\x18\n" +
 	"\aservice\x18\x01 \x01(\tR\aservice\x12\x1c\n" +
 	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12\x12\n" +
 	"\x04port\x18\x03 \x01(\x05R\x04port\x12\x1d\n" +
 	"\n" +
 	"preview_id\x18\x04 \x01(\tR\tpreviewId\x12)\n" +
-	"\x10protocol_version\x18\x05 \x01(\x05R\x0fprotocolVersion\"F\n" +
+	"\x10protocol_version\x18\x05 \x01(\x05R\x0fprotocolVersion\x12J\n" +
+	"\bmetadata\x18\x06 \x03(\v2..diverge.v1alpha1.TunnelRegister.MetadataEntryR\bmetadata\x12\x14\n" +
+	"\x05force\x18\a \x01(\bR\x05force\x12(\n" +
+	"\x10skip_k8s_service\x18\b \x01(\bR\x0eskipK8sService\x12,\n" +
+	"\x12client_instance_id\x18\t \x01(\tR\x10clientInstanceId\x1a;\n" +
+	"\rMetadataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xc0\x01\n" +
 	"\vTunnelReady\x12\x1b\n" +
 	"\ttunnel_id\x18\x01 \x01(\tR\btunnelId\x12\x1a\n" +
-	"\bendpoint\x18\x02 \x01(\tR\bendpoint\"7\n" +
+	"\bendpoint\x18\x02 \x01(\tR\bendpoint\x12#\n" +
+	"\rproxy_service\x18\x03 \x01(\tR\fproxyService\x12)\n" +
+	"\x10protocol_version\x18\x04 \x01(\x05R\x0fprotocolVersion\x12(\n" +
+	"\x10k8s_service_name\x18\x05 \x01(\tR\x0ek8sServiceName\"7\n" +
 	"\vHeaderEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x16\n" +
 	"\x06values\x18\x02 \x03(\tR\x06values\"\xd3\x01\n" +
@@ -952,11 +1621,80 @@ const file_diverge_v1alpha1_tunnel_proto_rawDesc = "" +
 	"\ttimestamp\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"F\n" +
 	"\n" +
 	"TunnelPong\x128\n" +
-	"\ttimestamp\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"%\n" +
+	"\ttimestamp\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"V\n" +
 	"\vTunnelClose\x12\x16\n" +
-	"\x06reason\x18\x01 \x01(\tR\x06reason2z\n" +
+	"\x06reason\x18\x01 \x01(\tR\x06reason\x12/\n" +
+	"\x04code\x18\x02 \x01(\x0e2\x1b.diverge.v1alpha1.CloseCodeR\x04code\"k\n" +
+	"\x12ListTunnelsRequest\x12\x1c\n" +
+	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x1d\n" +
+	"\n" +
+	"preview_id\x18\x02 \x01(\tR\tpreviewId\x12\x18\n" +
+	"\aservice\x18\x03 \x01(\tR\aservice\"\xc4\x03\n" +
+	"\n" +
+	"TunnelInfo\x12\x1b\n" +
+	"\ttunnel_id\x18\x01 \x01(\tR\btunnelId\x12\x1c\n" +
+	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12\x1d\n" +
+	"\n" +
+	"preview_id\x18\x03 \x01(\tR\tpreviewId\x12\x18\n" +
+	"\aservice\x18\x04 \x01(\tR\aservice\x12\x12\n" +
+	"\x04port\x18\x05 \x01(\x05R\x04port\x12\x14\n" +
+	"\x05owner\x18\x06 \x01(\tR\x05owner\x12\x1d\n" +
+	"\n" +
+	"holder_pod\x18\a \x01(\tR\tholderPod\x12F\n" +
+	"\bmetadata\x18\b \x03(\v2*.diverge.v1alpha1.TunnelInfo.MetadataEntryR\bmetadata\x129\n" +
+	"\n" +
+	"started_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x129\n" +
+	"\n" +
+	"expires_at\x18\n" +
+	" \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x1a;\n" +
+	"\rMetadataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"M\n" +
+	"\x13ListTunnelsResponse\x126\n" +
+	"\atunnels\x18\x01 \x03(\v2\x1c.diverge.v1alpha1.TunnelInfoR\atunnels\"T\n" +
+	"\x15ResolvePreviewRequest\x12\x1d\n" +
+	"\n" +
+	"preview_id\x18\x01 \x01(\tR\tpreviewId\x12\x1c\n" +
+	"\tnamespace\x18\x02 \x01(\tR\tnamespace\"\xd0\x04\n" +
+	"\x0eResolvedTarget\x12\x18\n" +
+	"\aservice\x18\x01 \x01(\tR\aservice\x12\x1c\n" +
+	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x128\n" +
+	"\x04mode\x18\x03 \x01(\x0e2$.diverge.v1alpha1.ResolvedTargetModeR\x04mode\x12\x14\n" +
+	"\x05ready\x18\x04 \x01(\bR\x05ready\x12!\n" +
+	"\fupstream_url\x18\x05 \x01(\tR\vupstreamUrl\x12W\n" +
+	"\rproxy_headers\x18\x06 \x03(\v22.diverge.v1alpha1.ResolvedTarget.ProxyHeadersEntryR\fproxyHeaders\x12\x1b\n" +
+	"\ttunnel_id\x18\a \x01(\tR\btunnelId\x12)\n" +
+	"\x10environment_name\x18\b \x01(\tR\x0fenvironmentName\x12\x12\n" +
+	"\x04port\x18\t \x01(\x05R\x04port\x12\x14\n" +
+	"\x05owner\x18\n" +
+	" \x01(\tR\x05owner\x12J\n" +
+	"\bmetadata\x18\v \x03(\v2..diverge.v1alpha1.ResolvedTarget.MetadataEntryR\bmetadata\x1a?\n" +
+	"\x11ProxyHeadersEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a;\n" +
+	"\rMetadataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x91\x01\n" +
+	"\x16ResolvePreviewResponse\x12\x1d\n" +
+	"\n" +
+	"preview_id\x18\x01 \x01(\tR\tpreviewId\x12\x1c\n" +
+	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12:\n" +
+	"\atargets\x18\x03 \x03(\v2 .diverge.v1alpha1.ResolvedTargetR\atargets*\x9e\x01\n" +
+	"\tCloseCode\x12\x1a\n" +
+	"\x16CLOSE_CODE_UNSPECIFIED\x10\x00\x12\x1e\n" +
+	"\x1aCLOSE_CODE_SERVER_SHUTDOWN\x10\x01\x12\x16\n" +
+	"\x12CLOSE_CODE_EVICTED\x10\x02\x12 \n" +
+	"\x1cCLOSE_CODE_HEARTBEAT_TIMEOUT\x10\x03\x12\x1b\n" +
+	"\x17CLOSE_CODE_AUTH_EXPIRED\x10\x04*\x81\x01\n" +
+	"\x12ResolvedTargetMode\x12$\n" +
+	" RESOLVED_TARGET_MODE_UNSPECIFIED\x10\x00\x12$\n" +
+	" RESOLVED_TARGET_MODE_ENVIRONMENT\x10\x01\x12\x1f\n" +
+	"\x1bRESOLVED_TARGET_MODE_TUNNEL\x10\x022\xd6\x01\n" +
 	"\rTunnelService\x12i\n" +
-	"\x06Tunnel\x12,.diverge.v1alpha1.TunnelServiceTunnelRequest\x1a-.diverge.v1alpha1.TunnelServiceTunnelResponse(\x010\x01BHZFgithub.com/divergedev/diverge/api/gen/diverge/v1alpha1;divergev1alpha1b\x06proto3"
+	"\x06Tunnel\x12,.diverge.v1alpha1.TunnelServiceTunnelRequest\x1a-.diverge.v1alpha1.TunnelServiceTunnelResponse(\x010\x01\x12Z\n" +
+	"\vListTunnels\x12$.diverge.v1alpha1.ListTunnelsRequest\x1a%.diverge.v1alpha1.ListTunnelsResponse2\x82\x01\n" +
+	"\x16PreviewResolverService\x12h\n" +
+	"\x0eResolvePreview\x12'.diverge.v1alpha1.ResolvePreviewRequest\x1a(.diverge.v1alpha1.ResolvePreviewResponse\"\x03\x90\x02\x01BHZFgithub.com/divergedev/diverge/api/gen/diverge/v1alpha1;divergev1alpha1b\x06proto3"
 
 var (
 	file_diverge_v1alpha1_tunnel_proto_rawDescOnce sync.Once
@@ -970,44 +1708,71 @@ func file_diverge_v1alpha1_tunnel_proto_rawDescGZIP() []byte {
 	return file_diverge_v1alpha1_tunnel_proto_rawDescData
 }
 
-var file_diverge_v1alpha1_tunnel_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_diverge_v1alpha1_tunnel_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_diverge_v1alpha1_tunnel_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_diverge_v1alpha1_tunnel_proto_goTypes = []any{
-	(*TunnelServiceTunnelRequest)(nil),  // 0: diverge.v1alpha1.TunnelServiceTunnelRequest
-	(*TunnelServiceTunnelResponse)(nil), // 1: diverge.v1alpha1.TunnelServiceTunnelResponse
-	(*TunnelRegister)(nil),              // 2: diverge.v1alpha1.TunnelRegister
-	(*TunnelReady)(nil),                 // 3: diverge.v1alpha1.TunnelReady
-	(*HeaderEntry)(nil),                 // 4: diverge.v1alpha1.HeaderEntry
-	(*TunnelHTTPRequest)(nil),           // 5: diverge.v1alpha1.TunnelHTTPRequest
-	(*TunnelRequestChunk)(nil),          // 6: diverge.v1alpha1.TunnelRequestChunk
-	(*TunnelHTTPResponse)(nil),          // 7: diverge.v1alpha1.TunnelHTTPResponse
-	(*TunnelResponseChunk)(nil),         // 8: diverge.v1alpha1.TunnelResponseChunk
-	(*TunnelPing)(nil),                  // 9: diverge.v1alpha1.TunnelPing
-	(*TunnelPong)(nil),                  // 10: diverge.v1alpha1.TunnelPong
-	(*TunnelClose)(nil),                 // 11: diverge.v1alpha1.TunnelClose
-	(*timestamppb.Timestamp)(nil),       // 12: google.protobuf.Timestamp
+	(CloseCode)(0),                      // 0: diverge.v1alpha1.CloseCode
+	(ResolvedTargetMode)(0),             // 1: diverge.v1alpha1.ResolvedTargetMode
+	(*TunnelServiceTunnelRequest)(nil),  // 2: diverge.v1alpha1.TunnelServiceTunnelRequest
+	(*TunnelServiceTunnelResponse)(nil), // 3: diverge.v1alpha1.TunnelServiceTunnelResponse
+	(*TunnelRegister)(nil),              // 4: diverge.v1alpha1.TunnelRegister
+	(*TunnelReady)(nil),                 // 5: diverge.v1alpha1.TunnelReady
+	(*HeaderEntry)(nil),                 // 6: diverge.v1alpha1.HeaderEntry
+	(*TunnelHTTPRequest)(nil),           // 7: diverge.v1alpha1.TunnelHTTPRequest
+	(*TunnelRequestChunk)(nil),          // 8: diverge.v1alpha1.TunnelRequestChunk
+	(*TunnelHTTPResponse)(nil),          // 9: diverge.v1alpha1.TunnelHTTPResponse
+	(*TunnelResponseChunk)(nil),         // 10: diverge.v1alpha1.TunnelResponseChunk
+	(*TunnelPing)(nil),                  // 11: diverge.v1alpha1.TunnelPing
+	(*TunnelPong)(nil),                  // 12: diverge.v1alpha1.TunnelPong
+	(*TunnelClose)(nil),                 // 13: diverge.v1alpha1.TunnelClose
+	(*ListTunnelsRequest)(nil),          // 14: diverge.v1alpha1.ListTunnelsRequest
+	(*TunnelInfo)(nil),                  // 15: diverge.v1alpha1.TunnelInfo
+	(*ListTunnelsResponse)(nil),         // 16: diverge.v1alpha1.ListTunnelsResponse
+	(*ResolvePreviewRequest)(nil),       // 17: diverge.v1alpha1.ResolvePreviewRequest
+	(*ResolvedTarget)(nil),              // 18: diverge.v1alpha1.ResolvedTarget
+	(*ResolvePreviewResponse)(nil),      // 19: diverge.v1alpha1.ResolvePreviewResponse
+	nil,                                 // 20: diverge.v1alpha1.TunnelRegister.MetadataEntry
+	nil,                                 // 21: diverge.v1alpha1.TunnelInfo.MetadataEntry
+	nil,                                 // 22: diverge.v1alpha1.ResolvedTarget.ProxyHeadersEntry
+	nil,                                 // 23: diverge.v1alpha1.ResolvedTarget.MetadataEntry
+	(*timestamppb.Timestamp)(nil),       // 24: google.protobuf.Timestamp
 }
 var file_diverge_v1alpha1_tunnel_proto_depIdxs = []int32{
-	2,  // 0: diverge.v1alpha1.TunnelServiceTunnelRequest.register:type_name -> diverge.v1alpha1.TunnelRegister
-	7,  // 1: diverge.v1alpha1.TunnelServiceTunnelRequest.http_response:type_name -> diverge.v1alpha1.TunnelHTTPResponse
-	10, // 2: diverge.v1alpha1.TunnelServiceTunnelRequest.pong:type_name -> diverge.v1alpha1.TunnelPong
-	11, // 3: diverge.v1alpha1.TunnelServiceTunnelRequest.close:type_name -> diverge.v1alpha1.TunnelClose
-	8,  // 4: diverge.v1alpha1.TunnelServiceTunnelRequest.response_chunk:type_name -> diverge.v1alpha1.TunnelResponseChunk
-	3,  // 5: diverge.v1alpha1.TunnelServiceTunnelResponse.ready:type_name -> diverge.v1alpha1.TunnelReady
-	5,  // 6: diverge.v1alpha1.TunnelServiceTunnelResponse.http_request:type_name -> diverge.v1alpha1.TunnelHTTPRequest
-	9,  // 7: diverge.v1alpha1.TunnelServiceTunnelResponse.ping:type_name -> diverge.v1alpha1.TunnelPing
-	11, // 8: diverge.v1alpha1.TunnelServiceTunnelResponse.close:type_name -> diverge.v1alpha1.TunnelClose
-	6,  // 9: diverge.v1alpha1.TunnelServiceTunnelResponse.request_chunk:type_name -> diverge.v1alpha1.TunnelRequestChunk
-	4,  // 10: diverge.v1alpha1.TunnelHTTPRequest.headers:type_name -> diverge.v1alpha1.HeaderEntry
-	4,  // 11: diverge.v1alpha1.TunnelHTTPResponse.headers:type_name -> diverge.v1alpha1.HeaderEntry
-	12, // 12: diverge.v1alpha1.TunnelPing.timestamp:type_name -> google.protobuf.Timestamp
-	12, // 13: diverge.v1alpha1.TunnelPong.timestamp:type_name -> google.protobuf.Timestamp
-	0,  // 14: diverge.v1alpha1.TunnelService.Tunnel:input_type -> diverge.v1alpha1.TunnelServiceTunnelRequest
-	1,  // 15: diverge.v1alpha1.TunnelService.Tunnel:output_type -> diverge.v1alpha1.TunnelServiceTunnelResponse
-	15, // [15:16] is the sub-list for method output_type
-	14, // [14:15] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	4,  // 0: diverge.v1alpha1.TunnelServiceTunnelRequest.register:type_name -> diverge.v1alpha1.TunnelRegister
+	9,  // 1: diverge.v1alpha1.TunnelServiceTunnelRequest.http_response:type_name -> diverge.v1alpha1.TunnelHTTPResponse
+	12, // 2: diverge.v1alpha1.TunnelServiceTunnelRequest.pong:type_name -> diverge.v1alpha1.TunnelPong
+	13, // 3: diverge.v1alpha1.TunnelServiceTunnelRequest.close:type_name -> diverge.v1alpha1.TunnelClose
+	10, // 4: diverge.v1alpha1.TunnelServiceTunnelRequest.response_chunk:type_name -> diverge.v1alpha1.TunnelResponseChunk
+	5,  // 5: diverge.v1alpha1.TunnelServiceTunnelResponse.ready:type_name -> diverge.v1alpha1.TunnelReady
+	7,  // 6: diverge.v1alpha1.TunnelServiceTunnelResponse.http_request:type_name -> diverge.v1alpha1.TunnelHTTPRequest
+	11, // 7: diverge.v1alpha1.TunnelServiceTunnelResponse.ping:type_name -> diverge.v1alpha1.TunnelPing
+	13, // 8: diverge.v1alpha1.TunnelServiceTunnelResponse.close:type_name -> diverge.v1alpha1.TunnelClose
+	8,  // 9: diverge.v1alpha1.TunnelServiceTunnelResponse.request_chunk:type_name -> diverge.v1alpha1.TunnelRequestChunk
+	20, // 10: diverge.v1alpha1.TunnelRegister.metadata:type_name -> diverge.v1alpha1.TunnelRegister.MetadataEntry
+	6,  // 11: diverge.v1alpha1.TunnelHTTPRequest.headers:type_name -> diverge.v1alpha1.HeaderEntry
+	6,  // 12: diverge.v1alpha1.TunnelHTTPResponse.headers:type_name -> diverge.v1alpha1.HeaderEntry
+	24, // 13: diverge.v1alpha1.TunnelPing.timestamp:type_name -> google.protobuf.Timestamp
+	24, // 14: diverge.v1alpha1.TunnelPong.timestamp:type_name -> google.protobuf.Timestamp
+	0,  // 15: diverge.v1alpha1.TunnelClose.code:type_name -> diverge.v1alpha1.CloseCode
+	21, // 16: diverge.v1alpha1.TunnelInfo.metadata:type_name -> diverge.v1alpha1.TunnelInfo.MetadataEntry
+	24, // 17: diverge.v1alpha1.TunnelInfo.started_at:type_name -> google.protobuf.Timestamp
+	24, // 18: diverge.v1alpha1.TunnelInfo.expires_at:type_name -> google.protobuf.Timestamp
+	15, // 19: diverge.v1alpha1.ListTunnelsResponse.tunnels:type_name -> diverge.v1alpha1.TunnelInfo
+	1,  // 20: diverge.v1alpha1.ResolvedTarget.mode:type_name -> diverge.v1alpha1.ResolvedTargetMode
+	22, // 21: diverge.v1alpha1.ResolvedTarget.proxy_headers:type_name -> diverge.v1alpha1.ResolvedTarget.ProxyHeadersEntry
+	23, // 22: diverge.v1alpha1.ResolvedTarget.metadata:type_name -> diverge.v1alpha1.ResolvedTarget.MetadataEntry
+	18, // 23: diverge.v1alpha1.ResolvePreviewResponse.targets:type_name -> diverge.v1alpha1.ResolvedTarget
+	2,  // 24: diverge.v1alpha1.TunnelService.Tunnel:input_type -> diverge.v1alpha1.TunnelServiceTunnelRequest
+	14, // 25: diverge.v1alpha1.TunnelService.ListTunnels:input_type -> diverge.v1alpha1.ListTunnelsRequest
+	17, // 26: diverge.v1alpha1.PreviewResolverService.ResolvePreview:input_type -> diverge.v1alpha1.ResolvePreviewRequest
+	3,  // 27: diverge.v1alpha1.TunnelService.Tunnel:output_type -> diverge.v1alpha1.TunnelServiceTunnelResponse
+	16, // 28: diverge.v1alpha1.TunnelService.ListTunnels:output_type -> diverge.v1alpha1.ListTunnelsResponse
+	19, // 29: diverge.v1alpha1.PreviewResolverService.ResolvePreview:output_type -> diverge.v1alpha1.ResolvePreviewResponse
+	27, // [27:30] is the sub-list for method output_type
+	24, // [24:27] is the sub-list for method input_type
+	24, // [24:24] is the sub-list for extension type_name
+	24, // [24:24] is the sub-list for extension extendee
+	0,  // [0:24] is the sub-list for field type_name
 }
 
 func init() { file_diverge_v1alpha1_tunnel_proto_init() }
@@ -1021,6 +1786,7 @@ func file_diverge_v1alpha1_tunnel_proto_init() {
 		(*TunnelServiceTunnelRequest_Pong)(nil),
 		(*TunnelServiceTunnelRequest_Close)(nil),
 		(*TunnelServiceTunnelRequest_ResponseChunk)(nil),
+		(*TunnelServiceTunnelRequest_RawData)(nil),
 	}
 	file_diverge_v1alpha1_tunnel_proto_msgTypes[1].OneofWrappers = []any{
 		(*TunnelServiceTunnelResponse_Ready)(nil),
@@ -1028,19 +1794,21 @@ func file_diverge_v1alpha1_tunnel_proto_init() {
 		(*TunnelServiceTunnelResponse_Ping)(nil),
 		(*TunnelServiceTunnelResponse_Close)(nil),
 		(*TunnelServiceTunnelResponse_RequestChunk)(nil),
+		(*TunnelServiceTunnelResponse_RawData)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_diverge_v1alpha1_tunnel_proto_rawDesc), len(file_diverge_v1alpha1_tunnel_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   12,
+			NumEnums:      2,
+			NumMessages:   22,
 			NumExtensions: 0,
-			NumServices:   1,
+			NumServices:   2,
 		},
 		GoTypes:           file_diverge_v1alpha1_tunnel_proto_goTypes,
 		DependencyIndexes: file_diverge_v1alpha1_tunnel_proto_depIdxs,
+		EnumInfos:         file_diverge_v1alpha1_tunnel_proto_enumTypes,
 		MessageInfos:      file_diverge_v1alpha1_tunnel_proto_msgTypes,
 	}.Build()
 	File_diverge_v1alpha1_tunnel_proto = out.File

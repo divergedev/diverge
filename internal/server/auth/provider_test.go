@@ -2,8 +2,11 @@ package auth
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,7 +26,7 @@ func TestTokenReviewProvider_Authenticate(t *testing.T) {
 		wantErr       bool
 		wantUser      *UserInfo
 	}{
-		{"authenticated token", true, "", nil, false, &UserInfo{Username: "testuser", UID: "123", Groups: []string{"dev"}, Extra: map[string]authorizationv1.ExtraValue{"foo": {"bar"}}}},
+		{"authenticated token", true, "", nil, false, &UserInfo{Username: "testuser", UID: "123", Groups: []string{"dev"}, Extra: map[string]authorizationv1.ExtraValue{"foo": {"bar"}}, AuthType: "tokenreview"}},
 		{"rejected token", false, "token expired", nil, true, nil},
 		{"unauthenticated", false, "", nil, true, nil},
 		{"client error", false, "", errors.New("client error"), true, nil},
@@ -77,4 +80,31 @@ func TestTokenReviewProvider_Authenticate(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTokenReviewProvider_ExtractsJWTExpiry(t *testing.T) {
+	expUnix := time.Now().Add(10 * time.Minute).Truncate(time.Second).UTC().Unix()
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256"}`))
+	payload := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"sub":"system:serviceaccount:default:dev","exp":%d}`, expUnix)))
+	jwtToken := header + "." + payload + ".sig"
+
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("create", "tokenreviews", func(action coretesting.Action) (bool, runtime.Object, error) {
+		tr := action.(coretesting.CreateAction).GetObject().(*authenticationv1.TokenReview)
+		tr.Status = authenticationv1.TokenReviewStatus{
+			Authenticated: true,
+			User:          authenticationv1.UserInfo{Username: "system:serviceaccount:default:dev"},
+		}
+		return true, tr, nil
+	})
+
+	provider := NewTokenReviewProvider(client, []string{"diverge-server"})
+	got, err := provider.Authenticate(context.Background(), jwtToken)
+	require.NoError(t, err)
+	assert.Equal(t, time.Unix(expUnix, 0).UTC(), got.ExpiresAt)
+
+	assert.True(t, extractJWTExpiry("opaque-token").IsZero())
+	assert.True(t, extractJWTExpiry(header+".not-base64!.sig").IsZero())
+	badExpPayload := base64.RawURLEncoding.EncodeToString([]byte(`{"exp":-5}`))
+	assert.True(t, extractJWTExpiry(header+"."+badExpPayload+".sig").IsZero())
 }

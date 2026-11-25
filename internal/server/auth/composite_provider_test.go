@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"testing"
 )
@@ -63,4 +64,30 @@ func TestCompositeProvider_NoProviders(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
+}
+
+func TestCompositeProvider_StopsOnErrPolicyDenied(t *testing.T) {
+	secondCalled := false
+	cp := NewCompositeProvider(slog.Default())
+	cp.Add("oidc", &compositeTestProvider{
+		err: fmt.Errorf("%w: user not in allowed groups", ErrPolicyDenied),
+	})
+	cp.Add("tokenreview", compositeTestFuncProvider(func(context.Context, string) (*UserInfo, error) {
+		secondCalled = true
+		return &UserInfo{Username: "fallback"}, nil
+	}))
+
+	_, err := cp.Authenticate(context.Background(), "token")
+	if !errors.Is(err, ErrPolicyDenied) {
+		t.Fatalf("expected ErrPolicyDenied, got %v", err)
+	}
+	if secondCalled {
+		t.Fatal("CompositeProvider must not fall through after ErrPolicyDenied")
+	}
+}
+
+type compositeTestFuncProvider func(context.Context, string) (*UserInfo, error)
+
+func (f compositeTestFuncProvider) Authenticate(ctx context.Context, token string) (*UserInfo, error) {
+	return f(ctx, token)
 }

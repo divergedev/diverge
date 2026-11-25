@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -17,6 +18,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/cors"
 	"golang.org/x/sync/errgroup"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -60,20 +62,29 @@ func main() {
 		shutdownTimeout    time.Duration
 		dashboardEnabled   bool
 		// OIDC SSO flags
-		oidcIssuerURL     string
-		oidcClientID      string
-		oidcClientSecret  string
-		oidcRedirectURL   string
-		oidcScopes        string
-		oidcProviderName  string
-		oidcUsernameClaim string
-		oidcGroupsClaim   string
-		oidcAllowedGroups string
+		oidcIssuerURL      string
+		oidcClientID       string
+		oidcClientSecret   string
+		oidcRedirectURL    string
+		oidcScopes         string
+		oidcProviderName   string
+		oidcUsernameClaim  string
+		oidcGroupsClaim    string
+		oidcAllowedGroups  string
+		oidcUsernamePrefix string
+		oidcGroupsPrefix   string
 		// Session flags
 		sessionSecret string
 		sessionMaxAge time.Duration
 		// Macaroon capability token auth
 		macaroonRootKey string
+		// Tunnel policy flags
+		tunnelNamespaces          string
+		defaultTunnelNamespace    string
+		tunnelCreateServices      bool
+		tunnelProxyAuthToken      string
+		tunnelProxyServiceAddr    string
+		tunnelSharedPreviewOwners string
 	)
 
 	flag.StringVar(&addr, "addr", ":8443", "Main server listen address")
@@ -102,11 +113,57 @@ func main() {
 	flag.StringVar(&oidcUsernameClaim, "oidc-username-claim", "preferred_username", "OIDC JWT claim for username")
 	flag.StringVar(&oidcGroupsClaim, "oidc-groups-claim", "groups", "OIDC JWT claim for groups")
 	flag.StringVar(&oidcAllowedGroups, "oidc-allowed-groups", "", "Comma-separated list of allowed OIDC groups (empty = all)")
+	flag.StringVar(&oidcUsernamePrefix, "oidc-username-prefix", auth.DefaultOIDCPrefix, "Prefix applied to OIDC/session usernames before K8s SAR ('-' disables)")
+	flag.StringVar(&oidcGroupsPrefix, "oidc-groups-prefix", auth.DefaultOIDCPrefix, "Prefix applied to OIDC/session groups before K8s SAR ('-' disables)")
 	// Session
 	flag.StringVar(&sessionSecret, "session-secret", "", "HMAC signing key for session JWTs (base64-encoded, or set DIVERGE_SESSION_SECRET env)")
 	flag.DurationVar(&sessionMaxAge, "session-max-age", 24*time.Hour, "Session cookie max age")
 	flag.StringVar(&macaroonRootKey, "macaroon-root-key", "", "HMAC root key for AgentTask Macaroon capability tokens (or set DIVERGE_MACAROON_ROOT_KEY env)")
+	// Tunnel policy
+	flag.StringVar(&tunnelNamespaces, "tunnel-namespaces", "", "Optional comma-separated allowlist of namespaces for tunnels (empty = all allowed via SAR)")
+	flag.StringVar(&defaultTunnelNamespace, "default-tunnel-namespace", "", "Default namespace when omitted by tunnel clients")
+	flag.BoolVar(&tunnelCreateServices, "tunnel-create-services", true, "Create per-tunnel Kubernetes Services/EndpointSlices/Endpoints for v3 tunnels")
+	flag.StringVar(&tunnelProxyAuthToken, "tunnel-proxy-auth-token", "", "Optional shared secret checked via X-Diverge-Proxy-Token on :8081 (or DIVERGE_TUNNEL_PROXY_TOKEN)")
+	flag.StringVar(&tunnelProxyServiceAddr, "tunnel-proxy-service-addr", "", "Cluster-internal host:port of the tunnel proxy service returned to ConnectRPC callers (or DIVERGE_TUNNEL_PROXY_SERVICE_ADDR)")
+	flag.StringVar(&tunnelSharedPreviewOwners, "shared-preview-owners", "", "Comma-separated owner usernames onto whose disjoint multi-service previews other users may attach unforced")
 	flag.Parse()
+
+	explicitFlags := make(map[string]bool)
+	flag.Visit(func(f *flag.Flag) {
+		explicitFlags[f.Name] = true
+	})
+	if !explicitFlags["oidc-username-prefix"] {
+		if v, ok := os.LookupEnv("DIVERGE_OIDC_USERNAME_PREFIX"); ok {
+			oidcUsernamePrefix = v
+		}
+	}
+	if !explicitFlags["oidc-groups-prefix"] {
+		if v, ok := os.LookupEnv("DIVERGE_OIDC_GROUPS_PREFIX"); ok {
+			oidcGroupsPrefix = v
+		}
+	}
+	if !explicitFlags["tunnel-namespaces"] && tunnelNamespaces == "" {
+		tunnelNamespaces = os.Getenv("DIVERGE_TUNNEL_NAMESPACES")
+	}
+	if !explicitFlags["default-tunnel-namespace"] && defaultTunnelNamespace == "" {
+		defaultTunnelNamespace = os.Getenv("DIVERGE_DEFAULT_TUNNEL_NAMESPACE")
+	}
+	if !explicitFlags["tunnel-create-services"] {
+		if v := strings.TrimSpace(os.Getenv("DIVERGE_TUNNEL_CREATE_SERVICES")); v != "" {
+			tunnelCreateServices = !strings.EqualFold(v, "false") && v != "0"
+		}
+	}
+	if !explicitFlags["tunnel-proxy-auth-token"] && tunnelProxyAuthToken == "" {
+		tunnelProxyAuthToken = os.Getenv("DIVERGE_TUNNEL_PROXY_TOKEN")
+	}
+	tunnelProxyAuthToken = strings.TrimSpace(tunnelProxyAuthToken)
+	if !explicitFlags["tunnel-proxy-service-addr"] && tunnelProxyServiceAddr == "" {
+		tunnelProxyServiceAddr = os.Getenv("DIVERGE_TUNNEL_PROXY_SERVICE_ADDR")
+	}
+	tunnelProxyServiceAddr = strings.TrimSpace(tunnelProxyServiceAddr)
+	if !explicitFlags["shared-preview-owners"] && tunnelSharedPreviewOwners == "" {
+		tunnelSharedPreviewOwners = os.Getenv("DIVERGE_SHARED_PREVIEW_OWNERS")
+	}
 
 	// Structured logger
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
@@ -257,11 +314,13 @@ func main() {
 
 		// Create OIDC auth provider for JWT verification
 		oidcProvider, err = auth.NewOIDCProvider(context.Background(), auth.OIDCProviderConfig{
-			IssuerURL:     oidcIssuerURL,
-			ClientID:      oidcClientID,
-			UsernameClaim: oidcUsernameClaim,
-			GroupsClaim:   oidcGroupsClaim,
-			AllowedGroups: allowedGroups,
+			IssuerURL:      oidcIssuerURL,
+			ClientID:       oidcClientID,
+			UsernameClaim:  oidcUsernameClaim,
+			GroupsClaim:    oidcGroupsClaim,
+			AllowedGroups:  allowedGroups,
+			UsernamePrefix: oidcUsernamePrefix,
+			GroupsPrefix:   oidcGroupsPrefix,
 		}, sessionMgr, logger)
 		if err != nil {
 			logger.Error("failed to create OIDC provider", "error", err)
@@ -326,9 +385,10 @@ func main() {
 	}
 
 	authMiddleware := auth.NewMiddleware(auth.MiddlewareConfig{
-		Provider: authProvider,
-		Cache:    tokenCache,
-		Logger:   logger,
+		Provider:    authProvider,
+		Cache:       tokenCache,
+		Logger:      logger,
+		AuditLogger: auditLogger,
 		Metrics: &auth.AuthMetrics{
 			Latency:     authMetrics.Latency,
 			CacheHits:   authMetrics.CacheHits,
@@ -342,6 +402,9 @@ func main() {
 		// session expires, so this is the routine path, not an edge.
 		LoginURL: loginURL,
 	})
+
+	parsedTunnelNamespaces := splitCSV(tunnelNamespaces)
+	parsedSharedOwners := splitCSV(tunnelSharedPreviewOwners)
 
 	// Build the ConnectRPC mux
 	mux, tunnelMgr := server.NewServeMux(server.ServeMuxConfig{
@@ -357,18 +420,18 @@ func main() {
 		DashboardEnabled: dashboardEnabled,
 		MacaroonVerifier: macaroonProvider,
 		TokenStore:       tokenStore,
+		TunnelConfig: &server.TunnelManagerConfig{
+			AllowedNamespaces:       parsedTunnelNamespaces,
+			DefaultNamespace:        defaultTunnelNamespace,
+			CreatePerTunnelServices: &tunnelCreateServices,
+			ProxyAuthToken:          tunnelProxyAuthToken,
+			ProxyServiceAddr:        tunnelProxyServiceAddr,
+			SharedPreviewOwners:     parsedSharedOwners,
+		},
 	})
 
 	if tunnelMgr != nil {
-		gcNamespaces := []string{"default"}
-		if watchNS := strings.TrimSpace(os.Getenv("WATCH_NAMESPACE")); watchNS != "" {
-			gcNamespaces = nil
-			for _, ns := range strings.Split(watchNS, ",") {
-				if trimmed := strings.TrimSpace(ns); trimmed != "" {
-					gcNamespaces = append(gcNamespaces, trimmed)
-				}
-			}
-		}
+		gcNamespaces := resolveGCNamespaces(parsedTunnelNamespaces, defaultTunnelNamespace, os.Getenv("WATCH_NAMESPACE"))
 		tunnelMgr.StartGC(ctx, gcNamespaces)
 	}
 
@@ -383,6 +446,10 @@ func main() {
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		if tunnelMgr != nil && !tunnelMgr.IsReady() {
+			http.Error(w, "shutting down", http.StatusServiceUnavailable)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
 	})
@@ -505,12 +572,14 @@ func main() {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer shutdownCancel()
 
-		// 1. Close broadcasters FIRST to unblock watch handlers.
+		// 1. Close broadcasters and drain tunnels FIRST to unblock watch and tunnel handlers.
 		// http.Server.Shutdown() waits for active handlers but does NOT
-		// cancel their request contexts. Watch handlers block on
-		// <-sub.Events(), so we must close the channels first to let
-		// them return, otherwise Shutdown() hangs for the full timeout.
+		// cancel their request contexts. Watch and tunnel handlers block on
+		// channels/streams, so we must close and drain them first.
 		informerMgr.Close()
+		if tunnelMgr != nil {
+			tunnelMgr.Shutdown(shutdownCtx)
+		}
 
 		// 2. Drain HTTP servers concurrently (sends GOAWAY, waits for handlers)
 		var shutdownWg sync.WaitGroup
@@ -591,4 +660,39 @@ func newCORSOptions(corsAllowedOrigins string, corsMaxAge int) cors.Options {
 		opts.AllowedOrigins = origins
 	}
 	return opts
+}
+
+func splitCSV(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+// resolveGCNamespaces computes the namespaces swept by TunnelGC.
+// When an explicit allowlist or WATCH_NAMESPACE is configured and defaultNamespace
+// is non-empty, defaultNamespace is included so fallback-namespace tunnels are swept.
+// When neither is configured, metav1.NamespaceAll ("") is returned so tunnels created
+// in any SAR-authorized namespace are garbage-collected.
+func resolveGCNamespaces(parsedTunnelNamespaces []string, defaultNamespace, watchNamespace string) []string {
+	gcNamespaces := make([]string, 0, len(parsedTunnelNamespaces)+1)
+	gcNamespaces = append(gcNamespaces, parsedTunnelNamespaces...)
+	if len(gcNamespaces) == 0 {
+		if trimmedWatch := strings.TrimSpace(watchNamespace); trimmedWatch != "" {
+			gcNamespaces = splitCSV(trimmedWatch)
+		}
+	}
+	if len(gcNamespaces) == 0 {
+		return []string{metav1.NamespaceAll}
+	}
+	if def := strings.TrimSpace(defaultNamespace); def != "" && !slices.Contains(gcNamespaces, def) {
+		gcNamespaces = append(gcNamespaces, def)
+	}
+	return gcNamespaces
 }

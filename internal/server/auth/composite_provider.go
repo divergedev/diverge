@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 )
@@ -43,6 +44,10 @@ func (cp *CompositeProvider) Authenticate(ctx context.Context, token string) (*U
 		if err == nil {
 			cp.logger.Debug("authentication succeeded", "provider", np.name, "user", user.Username)
 			return user, nil
+		}
+		if errors.Is(err, ErrPolicyDenied) {
+			cp.logger.Warn("authentication denied by policy, stopping fallthrough", "provider", np.name, "error", err)
+			return nil, err
 		}
 		lastErr = err
 		cp.logger.Debug("authentication failed, trying next provider", "provider", np.name, "error", err)

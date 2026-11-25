@@ -14,6 +14,17 @@ service TunnelService {
   // Tunnel establishes a bidirectional stream for routing
   // cluster traffic to the developer's local machine.
   rpc Tunnel(stream TunnelServiceTunnelRequest) returns (stream TunnelServiceTunnelResponse);
+
+  // ListTunnels lists active tunnels in allowed namespaces.
+  rpc ListTunnels(ListTunnelsRequest) returns (ListTunnelsResponse);
+}
+
+// PreviewResolverService resolves active preview targets for a given preview_id.
+service PreviewResolverService {
+  // ResolvePreview returns active preview environments and local tunnels.
+  rpc ResolvePreview(ResolvePreviewRequest) returns (ResolvePreviewResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
 }
 
 // TunnelServiceTunnelRequest is the client-to-server envelope.
@@ -24,6 +35,7 @@ message TunnelServiceTunnelRequest {
     TunnelPong pong = 6;
     TunnelClose close = 7;
     TunnelResponseChunk response_chunk = 9;
+    bytes raw_data = 11; // Protocol v3: HTTP/2 frames (client -> server)
   }
 }
 
@@ -35,6 +47,7 @@ message TunnelServiceTunnelResponse {
     TunnelPing ping = 5;
     TunnelClose close = 7;
     TunnelRequestChunk request_chunk = 8;
+    bytes raw_data = 11; // Protocol v3: HTTP/2 frames (server -> client)
   }
 }
 
@@ -45,12 +58,19 @@ message TunnelRegister {
   int32 port = 3;
   string preview_id = 4;
   int32 protocol_version = 5; // protocol version for forward compat
+  map<string, string> metadata = 6;
+  bool force = 7;
+  bool skip_k8s_service = 8;
+  string client_instance_id = 9;
 }
 
 // Sent by server when tunnel is active.
 message TunnelReady {
   string tunnel_id = 1;
   string endpoint = 2; // cluster-internal endpoint for debugging
+  string proxy_service = 3; // stable :8081 proxy Service endpoint when configured
+  int32 protocol_version = 4; // negotiated protocol version
+  string k8s_service_name = 5; // actual per-tunnel K8s Service name when created
 }
 
 // Header entry supporting multi-value headers (Set-Cookie, Accept, etc.)
@@ -105,7 +125,71 @@ message TunnelPong {
   google.protobuf.Timestamp timestamp = 1;
 }
 
+// CloseCode indicates the machine-readable reason a tunnel stream closed.
+enum CloseCode {
+  CLOSE_CODE_UNSPECIFIED = 0;
+  CLOSE_CODE_SERVER_SHUTDOWN = 1;
+  CLOSE_CODE_EVICTED = 2;
+  CLOSE_CODE_HEARTBEAT_TIMEOUT = 3;
+  CLOSE_CODE_AUTH_EXPIRED = 4;
+}
+
 // Close the tunnel.
 message TunnelClose {
   string reason = 1;
+  CloseCode code = 2;
+}
+
+message ListTunnelsRequest {
+  string namespace = 1;
+  string preview_id = 2;
+  string service = 3;
+}
+
+message TunnelInfo {
+  string tunnel_id = 1;
+  string namespace = 2;
+  string preview_id = 3;
+  string service = 4;
+  int32 port = 5;
+  string owner = 6;
+  string holder_pod = 7;
+  map<string, string> metadata = 8;
+  google.protobuf.Timestamp started_at = 9;
+  google.protobuf.Timestamp expires_at = 10;
+}
+
+message ListTunnelsResponse {
+  repeated TunnelInfo tunnels = 1;
+}
+
+message ResolvePreviewRequest {
+  string preview_id = 1;
+  string namespace = 2;
+}
+
+enum ResolvedTargetMode {
+  RESOLVED_TARGET_MODE_UNSPECIFIED = 0;
+  RESOLVED_TARGET_MODE_ENVIRONMENT = 1;
+  RESOLVED_TARGET_MODE_TUNNEL = 2;
+}
+
+message ResolvedTarget {
+  string service = 1;
+  string namespace = 2;
+  ResolvedTargetMode mode = 3;
+  bool ready = 4;
+  string upstream_url = 5;
+  map<string, string> proxy_headers = 6;
+  string tunnel_id = 7;
+  string environment_name = 8;
+  int32 port = 9;
+  string owner = 10;
+  map<string, string> metadata = 11;
+}
+
+message ResolvePreviewResponse {
+  string preview_id = 1;
+  string namespace = 2;
+  repeated ResolvedTarget targets = 3;
 }

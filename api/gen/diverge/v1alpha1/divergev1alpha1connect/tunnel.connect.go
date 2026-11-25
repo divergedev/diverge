@@ -23,6 +23,8 @@ const _ = connect.IsAtLeastVersion1_13_0
 const (
 	// TunnelServiceName is the fully-qualified name of the TunnelService service.
 	TunnelServiceName = "diverge.v1alpha1.TunnelService"
+	// PreviewResolverServiceName is the fully-qualified name of the PreviewResolverService service.
+	PreviewResolverServiceName = "diverge.v1alpha1.PreviewResolverService"
 )
 
 // These constants are the fully-qualified names of the RPCs defined in this package. They're
@@ -35,6 +37,12 @@ const (
 const (
 	// TunnelServiceTunnelProcedure is the fully-qualified name of the TunnelService's Tunnel RPC.
 	TunnelServiceTunnelProcedure = "/diverge.v1alpha1.TunnelService/Tunnel"
+	// TunnelServiceListTunnelsProcedure is the fully-qualified name of the TunnelService's ListTunnels
+	// RPC.
+	TunnelServiceListTunnelsProcedure = "/diverge.v1alpha1.TunnelService/ListTunnels"
+	// PreviewResolverServiceResolvePreviewProcedure is the fully-qualified name of the
+	// PreviewResolverService's ResolvePreview RPC.
+	PreviewResolverServiceResolvePreviewProcedure = "/diverge.v1alpha1.PreviewResolverService/ResolvePreview"
 )
 
 // TunnelServiceClient is a client for the diverge.v1alpha1.TunnelService service.
@@ -42,6 +50,8 @@ type TunnelServiceClient interface {
 	// Tunnel establishes a bidirectional stream for routing
 	// cluster traffic to the developer's local machine.
 	Tunnel(context.Context) *connect.BidiStreamForClient[v1alpha1.TunnelServiceTunnelRequest, v1alpha1.TunnelServiceTunnelResponse]
+	// ListTunnels lists active tunnels in allowed namespaces.
+	ListTunnels(context.Context, *connect.Request[v1alpha1.ListTunnelsRequest]) (*connect.Response[v1alpha1.ListTunnelsResponse], error)
 }
 
 // NewTunnelServiceClient constructs a client for the diverge.v1alpha1.TunnelService service. By
@@ -61,12 +71,19 @@ func NewTunnelServiceClient(httpClient connect.HTTPClient, baseURL string, opts 
 			connect.WithSchema(tunnelServiceMethods.ByName("Tunnel")),
 			connect.WithClientOptions(opts...),
 		),
+		listTunnels: connect.NewClient[v1alpha1.ListTunnelsRequest, v1alpha1.ListTunnelsResponse](
+			httpClient,
+			baseURL+TunnelServiceListTunnelsProcedure,
+			connect.WithSchema(tunnelServiceMethods.ByName("ListTunnels")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // tunnelServiceClient implements TunnelServiceClient.
 type tunnelServiceClient struct {
-	tunnel *connect.Client[v1alpha1.TunnelServiceTunnelRequest, v1alpha1.TunnelServiceTunnelResponse]
+	tunnel      *connect.Client[v1alpha1.TunnelServiceTunnelRequest, v1alpha1.TunnelServiceTunnelResponse]
+	listTunnels *connect.Client[v1alpha1.ListTunnelsRequest, v1alpha1.ListTunnelsResponse]
 }
 
 // Tunnel calls diverge.v1alpha1.TunnelService.Tunnel.
@@ -74,11 +91,18 @@ func (c *tunnelServiceClient) Tunnel(ctx context.Context) *connect.BidiStreamFor
 	return c.tunnel.CallBidiStream(ctx)
 }
 
+// ListTunnels calls diverge.v1alpha1.TunnelService.ListTunnels.
+func (c *tunnelServiceClient) ListTunnels(ctx context.Context, req *connect.Request[v1alpha1.ListTunnelsRequest]) (*connect.Response[v1alpha1.ListTunnelsResponse], error) {
+	return c.listTunnels.CallUnary(ctx, req)
+}
+
 // TunnelServiceHandler is an implementation of the diverge.v1alpha1.TunnelService service.
 type TunnelServiceHandler interface {
 	// Tunnel establishes a bidirectional stream for routing
 	// cluster traffic to the developer's local machine.
 	Tunnel(context.Context, *connect.BidiStream[v1alpha1.TunnelServiceTunnelRequest, v1alpha1.TunnelServiceTunnelResponse]) error
+	// ListTunnels lists active tunnels in allowed namespaces.
+	ListTunnels(context.Context, *connect.Request[v1alpha1.ListTunnelsRequest]) (*connect.Response[v1alpha1.ListTunnelsResponse], error)
 }
 
 // NewTunnelServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -94,10 +118,18 @@ func NewTunnelServiceHandler(svc TunnelServiceHandler, opts ...connect.HandlerOp
 		connect.WithSchema(tunnelServiceMethods.ByName("Tunnel")),
 		connect.WithHandlerOptions(opts...),
 	)
+	tunnelServiceListTunnelsHandler := connect.NewUnaryHandler(
+		TunnelServiceListTunnelsProcedure,
+		svc.ListTunnels,
+		connect.WithSchema(tunnelServiceMethods.ByName("ListTunnels")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/diverge.v1alpha1.TunnelService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case TunnelServiceTunnelProcedure:
 			tunnelServiceTunnelHandler.ServeHTTP(w, r)
+		case TunnelServiceListTunnelsProcedure:
+			tunnelServiceListTunnelsHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -109,4 +141,83 @@ type UnimplementedTunnelServiceHandler struct{}
 
 func (UnimplementedTunnelServiceHandler) Tunnel(context.Context, *connect.BidiStream[v1alpha1.TunnelServiceTunnelRequest, v1alpha1.TunnelServiceTunnelResponse]) error {
 	return connect.NewError(connect.CodeUnimplemented, errors.New("diverge.v1alpha1.TunnelService.Tunnel is not implemented"))
+}
+
+func (UnimplementedTunnelServiceHandler) ListTunnels(context.Context, *connect.Request[v1alpha1.ListTunnelsRequest]) (*connect.Response[v1alpha1.ListTunnelsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("diverge.v1alpha1.TunnelService.ListTunnels is not implemented"))
+}
+
+// PreviewResolverServiceClient is a client for the diverge.v1alpha1.PreviewResolverService service.
+type PreviewResolverServiceClient interface {
+	// ResolvePreview returns active preview environments and local tunnels.
+	ResolvePreview(context.Context, *connect.Request[v1alpha1.ResolvePreviewRequest]) (*connect.Response[v1alpha1.ResolvePreviewResponse], error)
+}
+
+// NewPreviewResolverServiceClient constructs a client for the
+// diverge.v1alpha1.PreviewResolverService service. By default, it uses the Connect protocol with
+// the binary Protobuf Codec, asks for gzipped responses, and sends uncompressed requests. To use
+// the gRPC or gRPC-Web protocols, supply the connect.WithGRPC() or connect.WithGRPCWeb() options.
+//
+// The URL supplied here should be the base URL for the Connect or gRPC server (for example,
+// http://api.acme.com or https://acme.com/grpc).
+func NewPreviewResolverServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...connect.ClientOption) PreviewResolverServiceClient {
+	baseURL = strings.TrimRight(baseURL, "/")
+	previewResolverServiceMethods := v1alpha1.File_diverge_v1alpha1_tunnel_proto.Services().ByName("PreviewResolverService").Methods()
+	return &previewResolverServiceClient{
+		resolvePreview: connect.NewClient[v1alpha1.ResolvePreviewRequest, v1alpha1.ResolvePreviewResponse](
+			httpClient,
+			baseURL+PreviewResolverServiceResolvePreviewProcedure,
+			connect.WithSchema(previewResolverServiceMethods.ByName("ResolvePreview")),
+			connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+			connect.WithClientOptions(opts...),
+		),
+	}
+}
+
+// previewResolverServiceClient implements PreviewResolverServiceClient.
+type previewResolverServiceClient struct {
+	resolvePreview *connect.Client[v1alpha1.ResolvePreviewRequest, v1alpha1.ResolvePreviewResponse]
+}
+
+// ResolvePreview calls diverge.v1alpha1.PreviewResolverService.ResolvePreview.
+func (c *previewResolverServiceClient) ResolvePreview(ctx context.Context, req *connect.Request[v1alpha1.ResolvePreviewRequest]) (*connect.Response[v1alpha1.ResolvePreviewResponse], error) {
+	return c.resolvePreview.CallUnary(ctx, req)
+}
+
+// PreviewResolverServiceHandler is an implementation of the diverge.v1alpha1.PreviewResolverService
+// service.
+type PreviewResolverServiceHandler interface {
+	// ResolvePreview returns active preview environments and local tunnels.
+	ResolvePreview(context.Context, *connect.Request[v1alpha1.ResolvePreviewRequest]) (*connect.Response[v1alpha1.ResolvePreviewResponse], error)
+}
+
+// NewPreviewResolverServiceHandler builds an HTTP handler from the service implementation. It
+// returns the path on which to mount the handler and the handler itself.
+//
+// By default, handlers support the Connect, gRPC, and gRPC-Web protocols with the binary Protobuf
+// and JSON codecs. They also support gzip compression.
+func NewPreviewResolverServiceHandler(svc PreviewResolverServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
+	previewResolverServiceMethods := v1alpha1.File_diverge_v1alpha1_tunnel_proto.Services().ByName("PreviewResolverService").Methods()
+	previewResolverServiceResolvePreviewHandler := connect.NewUnaryHandler(
+		PreviewResolverServiceResolvePreviewProcedure,
+		svc.ResolvePreview,
+		connect.WithSchema(previewResolverServiceMethods.ByName("ResolvePreview")),
+		connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+		connect.WithHandlerOptions(opts...),
+	)
+	return "/diverge.v1alpha1.PreviewResolverService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case PreviewResolverServiceResolvePreviewProcedure:
+			previewResolverServiceResolvePreviewHandler.ServeHTTP(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+}
+
+// UnimplementedPreviewResolverServiceHandler returns CodeUnimplemented from all methods.
+type UnimplementedPreviewResolverServiceHandler struct{}
+
+func (UnimplementedPreviewResolverServiceHandler) ResolvePreview(context.Context, *connect.Request[v1alpha1.ResolvePreviewRequest]) (*connect.Response[v1alpha1.ResolvePreviewResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("diverge.v1alpha1.PreviewResolverService.ResolvePreview is not implemented"))
 }
