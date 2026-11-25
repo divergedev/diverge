@@ -20,16 +20,23 @@ import (
 	"github.com/divergedev/diverge/internal/previewgroup"
 )
 
-func cleanGitEnv() []string {
-	env := os.Environ()
-	filtered := make([]string, 0, len(env))
-	for _, entry := range env {
-		if strings.HasPrefix(entry, "GIT_") {
+// isolateGitProcessEnv clears all GIT_* overrides (such as GIT_DIR, GIT_WORK_TREE,
+// GIT_COMMON_DIR, GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY, and GIT_ALTERNATE_OBJECT_DIRECTORIES)
+// from the test process environment and restores them in t.Cleanup so both git setup
+// commands and git.Detect() inspect only the test's temporary checkout.
+func isolateGitProcessEnv(t *testing.T) {
+	t.Helper()
+	for _, entry := range os.Environ() {
+		key, val, ok := strings.Cut(entry, "=")
+		if !ok || !strings.HasPrefix(key, "GIT_") {
 			continue
 		}
-		filtered = append(filtered, entry)
+		k, v := key, val
+		require.NoError(t, os.Unsetenv(k))
+		t.Cleanup(func() {
+			_ = os.Setenv(k, v)
+		})
 	}
-	return filtered
 }
 
 func TestPreviewJoinAndLeaveCommands(t *testing.T) {
@@ -153,16 +160,11 @@ func TestPreviewLeaveCommand_ProviderValidationAndGitFallbackWithExplicitProject
 	assert.Contains(t, err.Error(), "github or gitlab")
 
 	// 2. --project acme/api --mr 7 inside a GitHub checkout detects provider=github and preserves gitlab member
+	isolateGitProcessEnv(t)
 	repoDir := t.TempDir()
-	runCleanGit := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Env = cleanGitEnv()
-		require.NoError(t, cmd.Run())
-	}
-	runCleanGit("init", repoDir)
-	runCleanGit("-C", repoDir, "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "--allow-empty", "-m", "init")
-	runCleanGit("-C", repoDir, "remote", "add", "origin", "https://github.com/acme/api.git")
+	require.NoError(t, exec.Command("git", "init", repoDir).Run())
+	require.NoError(t, exec.Command("git", "-C", repoDir, "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "--allow-empty", "-m", "init").Run())
+	require.NoError(t, exec.Command("git", "-C", repoDir, "remote", "add", "origin", "https://github.com/acme/api.git").Run())
 	t.Chdir(repoDir)
 
 	leaveCmd := newPreviewLeaveCmd(app)
