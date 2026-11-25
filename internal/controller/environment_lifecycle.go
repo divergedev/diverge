@@ -73,7 +73,9 @@ func (r *EnvironmentReconciler) reconcileLifecycle(ctx context.Context, env *div
 		}
 	}
 
-	if r.Notifier != nil && oldPhase != newPhase && !isPreviewGroupChildEnvironment(env) {
+	// A push re-renders the note and posts the commit status on the new commit even when the phase stays Running.
+	commitAdvanced := statusBase.Status.CommitSHA != "" && statusBase.Status.CommitSHA != env.Status.CommitSHA
+	if r.Notifier != nil && (oldPhase != newPhase || commitAdvanced) && !isPreviewGroupChildEnvironment(env) {
 		switch newPhase {
 		case divergeiov1alpha1.PhaseRunning:
 			if r.StatusReporter != nil {

@@ -17,6 +17,10 @@ import (
 
 func TestGitLabNotifierPostComment(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		assert.Equal(t, http.MethodPost, r.Method)
 		assert.Equal(t, "/api/v4/projects/my/repo/merge_requests/42/notes", r.URL.Path)
 		assert.Equal(t, "mytoken", r.Header.Get("PRIVATE-TOKEN"))

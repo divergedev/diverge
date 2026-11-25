@@ -161,8 +161,9 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return r.handleTeardown(ctx, &env)
 	}
 
-	// Copy CommitSHA from spec to status early
-	if env.Spec.Source.CommitSHA != "" && env.Status.CommitSHA == "" {
+	// Status follows the newest commit; reconcileLifecycle compares it with statusBase to tell a push.
+	commitAdvanced := env.Status.CommitSHA != "" && env.Spec.Source.CommitSHA != "" && env.Status.CommitSHA != env.Spec.Source.CommitSHA
+	if env.Spec.Source.CommitSHA != "" {
 		env.Status.CommitSHA = env.Spec.Source.CommitSHA
 	}
 
@@ -184,9 +185,17 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		if r.Notifier != nil && !isPreviewGroupChildEnvironment(&env) {
 			tCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
+			priorCommentID := env.Status.CommentID
 			if err := r.Notifier.PostEnvironmentCreated(tCtx, &env); err != nil {
 				logger.Error(err, "failed to post environment created notification")
 				r.Recorder.Event(&env, "Warning", "NotificationFailed", err.Error())
+			}
+			if env.Status.CommentID != priorCommentID {
+				base := env.DeepCopy()
+				base.Status.CommentID = priorCommentID
+				if err := r.Status().Patch(ctx, &env, client.MergeFrom(base)); err != nil {
+					logger.Error(err, "failed to record the notification comment ID")
+				}
 			}
 		}
 		if r.StatusReporter != nil && !isPreviewGroupChildEnvironment(&env) {
@@ -198,6 +207,12 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 		r.Recorder.Event(&env, "Normal", "Created", "Environment created")
 		return ctrl.Result{}, nil
+	}
+
+	if commitAdvanced {
+		if err := r.recordPushActivity(ctx, &env, time.Now()); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	// 5-7.7 Provisioning (Namespace, DB, Routing, Async, Banner, Features) with single-resolve pinned target
