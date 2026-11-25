@@ -23,6 +23,7 @@ import (
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/finops"
 	"github.com/divergedev/diverge/internal/metrics"
+	"github.com/divergedev/diverge/internal/previewgroup"
 )
 
 const (
@@ -352,6 +353,28 @@ func (r *EnvironmentReconciler) dispatchQuotaBudgetAlert(ctx context.Context, re
 	if sent && sev == finops.SeverityWarning && !in.Exceeded && r.Recorder != nil && r.Recorder.EventRecorder != nil && env != nil {
 		r.Recorder.Event(env, "Warning", "BudgetThresholdReached", alertReason)
 	}
+}
+
+// recordPushActivity counts a new commit as traffic: it restarts the idle clock and wakes a
+// preview that idled into hibernation. One attached to a PreviewGroup stays asleep, since the
+// group serves its traffic.
+func (r *EnvironmentReconciler) recordPushActivity(ctx context.Context, env *divergeiov1alpha1.Environment, now time.Time) error {
+	patchTarget := env.DeepCopy()
+	base := patchTarget.DeepCopy()
+	if patchTarget.Annotations == nil {
+		patchTarget.Annotations = make(map[string]string)
+	}
+	patchTarget.Annotations[metrics.AnnotationLastTrafficAt] = now.UTC().Format(time.RFC3339)
+	if patchTarget.Annotations[metrics.AnnotationHibernated] == "true" && patchTarget.Annotations[previewgroup.AnnotationAttachedPreviewGroup] == "" {
+		delete(patchTarget.Annotations, metrics.AnnotationHibernated)
+		patchTarget.Annotations = metrics.RecordEnvironmentWake(patchTarget.Annotations, now)
+	}
+	if err := r.Patch(ctx, patchTarget, client.MergeFrom(base)); err != nil {
+		return fmt.Errorf("failed to record push activity on %s/%s: %w", env.Namespace, env.Name, err)
+	}
+	env.Annotations = patchTarget.Annotations
+	env.ResourceVersion = patchTarget.ResourceVersion
+	return nil
 }
 
 func (r *EnvironmentReconciler) hibernateEnvironment(ctx context.Context, targetEnv *divergeiov1alpha1.Environment, now time.Time, rateCard metrics.CostRateCard) error {

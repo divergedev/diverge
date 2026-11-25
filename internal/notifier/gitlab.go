@@ -23,6 +23,8 @@ type GitLabNotifier struct {
 	BaseURL    string
 	Token      string
 	HTTPClient *http.Client
+
+	authorCache cachedNotifierAuthor
 }
 
 // NewGitLabNotifier creates a Notifier that posts and updates deployment status
@@ -56,55 +58,83 @@ func (g *GitLabNotifier) setCommentID(env *v1alpha1.Environment, id int) {
 	env.Status.CommentID = id
 }
 
+// environmentCommentMarker identifies an Environment's note on its merge request, so a
+// note whose ID never reached status is found again instead of duplicated.
+func environmentCommentMarker(env *v1alpha1.Environment) string {
+	return fmt.Sprintf("<!-- diverge:environment=%s/%s -->", env.Namespace, env.Name)
+}
+
 func (g *GitLabNotifier) postOrUpdateComment(ctx context.Context, env *v1alpha1.Environment, body string) error {
 	project, mr, err := g.getProjectAndMR(env)
 	if err != nil {
 		return err
 	}
 
+	marker := environmentCommentMarker(env)
+	if !strings.Contains(body, marker) {
+		body = body + "\n\n" + marker
+	}
+	jsonPayload, _ := json.Marshal(map[string]string{"body": body})
+	notes := gitlabNotesClient{baseURL: g.BaseURL, token: g.Token, httpClient: g.HTTPClient}
+
 	commentID := g.getCommentID(env)
-
-	payload := map[string]string{"body": body}
-	jsonPayload, _ := json.Marshal(payload)
-
-	var reqURL string
-	var method string
-
-	if commentID != 0 {
-		reqURL = fmt.Sprintf("%s/api/v4/projects/%s/merge_requests/%d/notes/%d", g.BaseURL, project, mr, commentID)
-		method = http.MethodPut
-	} else {
-		reqURL = fmt.Sprintf("%s/api/v4/projects/%s/merge_requests/%d/notes", g.BaseURL, project, mr)
-		method = http.MethodPost
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, reqURL, bytes.NewReader(jsonPayload))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("PRIVATE-TOKEN", g.Token)
-
-	resp, err := g.HTTPClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("gitlab API returned status: %d", resp.StatusCode)
-	}
-
 	if commentID == 0 {
-		var result struct {
-			ID int `json:"id"`
+		// A failed lookup posts a new note, as before the marker existed, rather than drop the update.
+		if found, lookupErr := findGitLabNoteID(ctx, notes, "", &g.authorCache, project, mr, marker); lookupErr == nil {
+			commentID = int(found)
 		}
-		if err := json.NewDecoder(resp.Body).Decode(&result); err == nil && result.ID != 0 {
+	}
+
+	for {
+		reqURL := fmt.Sprintf("%s/api/v4/projects/%s/merge_requests/%d/notes", g.BaseURL, project, mr)
+		method := http.MethodPost
+		if commentID != 0 {
+			reqURL = fmt.Sprintf("%s/%d", reqURL, commentID)
+			method = http.MethodPut
+		}
+
+		req, err := http.NewRequestWithContext(ctx, method, reqURL, bytes.NewReader(jsonPayload))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("PRIVATE-TOKEN", g.Token)
+
+		resp, err := g.HTTPClient.Do(req)
+		if err != nil {
+			return err
+		}
+
+		if commentID != 0 && resp.StatusCode == http.StatusNotFound {
+			_ = resp.Body.Close()
+			commentID = 0
+			continue
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			_ = resp.Body.Close()
+			return fmt.Errorf("gitlab API returned status: %d", resp.StatusCode)
+		}
+
+		var result struct {
+			ID     int `json:"id"`
+			Author struct {
+				ID       int64  `json:"id"`
+				Username string `json:"username"`
+			} `json:"author"`
+		}
+		decErr := json.NewDecoder(resp.Body).Decode(&result)
+		_ = resp.Body.Close()
+		if decErr == nil {
+			g.authorCache.record(result.Author.ID, result.Author.Username)
+		}
+		switch {
+		case method == http.MethodPut:
+			g.setCommentID(env, commentID)
+		case decErr == nil && result.ID != 0:
 			g.setCommentID(env, result.ID)
 		}
+		return nil
 	}
-
-	return nil
 }
 
 func buildTemplateData(env *v1alpha1.Environment, reason string) TemplateData {

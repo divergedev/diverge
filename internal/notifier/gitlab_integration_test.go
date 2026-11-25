@@ -26,6 +26,10 @@ func TestGitLabNotifierFullLifecycle(t *testing.T) {
 	}
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		bodyBytes, _ := io.ReadAll(r.Body)
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		var body map[string]interface{}
 		if len(bodyBytes) > 0 {
 			_ = json.Unmarshal(bodyBytes, &body)

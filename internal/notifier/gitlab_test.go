@@ -27,6 +27,10 @@ func TestGitLabNotifier_LifecycleAndCommentOperations(t *testing.T) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		methods = append(methods, r.Method)
 		paths = append(paths, r.URL.RawPath)
 		if r.URL.RawPath == "" {
@@ -267,4 +271,56 @@ func TestGitLabRegistryProvidersFallbackAndDefaults(t *testing.T) {
 	pgn, err := GroupProviders.Create("gitlab", registry.Deps{})
 	require.NoError(t, err)
 	assert.Equal(t, "https://gitlab.com", pgn.(*GitLabPreviewGroupNotifier).BaseURL)
+}
+
+func TestGitLabNotifier_UpdatesTheNoteFoundByMarker(t *testing.T) {
+	var writes []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v4/user":
+			_, _ = w.Write([]byte(`{"id": 7, "username": "diverge-bot"}`))
+		case r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`[
+				{"id": 556, "body": "quoting <!-- diverge:environment=diverge-previews/mr-1 -->", "author": {"id": 8, "username": "someone"}},
+				{"id": 555, "body": "old <!-- diverge:environment=diverge-previews/mr-1 -->", "author": {"id": 7, "username": "diverge-bot"}}
+			]`))
+		default:
+			writes = append(writes, r.Method+" "+r.URL.Path)
+			_, _ = w.Write([]byte(`{"id": 555}`))
+		}
+	}))
+	defer server.Close()
+
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "mr-1", Namespace: "diverge-previews"},
+		Spec:       v1alpha1.EnvironmentSpec{Source: v1alpha1.EnvironmentSource{Provider: "gitlab", Project: "group/project", MR: 1}},
+	}
+
+	require.NoError(t, NewGitLabNotifier(server.URL, "token").PostEnvironmentReady(context.Background(), env))
+	assert.Equal(t, []string{"PUT /api/v4/projects/group/project/merge_requests/1/notes/555"}, writes)
+	assert.Equal(t, 555, env.Status.CommentID)
+}
+
+func TestGitLabNotifier_PostsAgainWhenTheNoteWasDeleted(t *testing.T) {
+	var writes []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writes = append(writes, r.Method)
+		if r.Method == http.MethodPut {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id": 1000}`))
+	}))
+	defer server.Close()
+
+	env := &v1alpha1.Environment{
+		ObjectMeta: metav1.ObjectMeta{Name: "mr-1", Namespace: "diverge-previews"},
+		Spec:       v1alpha1.EnvironmentSpec{Source: v1alpha1.EnvironmentSource{Provider: "gitlab", Project: "group/project", MR: 1}},
+		Status:     v1alpha1.EnvironmentStatus{CommentID: 999},
+	}
+
+	require.NoError(t, NewGitLabNotifier(server.URL, "token").PostEnvironmentReady(context.Background(), env))
+	assert.Equal(t, []string{http.MethodPut, http.MethodPost}, writes)
+	assert.Equal(t, 1000, env.Status.CommentID)
 }
