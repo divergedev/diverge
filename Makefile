@@ -28,6 +28,7 @@ proto: ## Generate protobuf code
 	buf lint api/proto
 	buf breaking api/proto --against '.git#branch=origin/main'
 	buf generate
+	(cd api/gen && go mod tidy)
 
 .PHONY: proto-web
 proto-web: ## Generate TypeScript protobuf clients for the web dashboard
@@ -44,6 +45,7 @@ fmt: ## Run go fmt against code.
 .PHONY: vet
 vet: ## Run go vet against code.
 	go vet ./...
+	(cd api/gen && go vet ./...)
 
 .PHONY: lint
 lint: ## Run golangci-lint

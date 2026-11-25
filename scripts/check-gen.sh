@@ -34,12 +34,16 @@ done
 
 # Tidy go.mod for all modules (prevents controller-gen failures when deps change)
 echo "▸ Running go mod tidy..."
+(cd api/gen && go mod tidy)
 go mod tidy
 (cd pkg/sdk/temporal && go mod tidy)
 
 # Run code generation (same as `make generate manifests`)
 echo "▸ Running buf generate..."
 buf generate
+(cd api/gen && go mod tidy)
+go mod tidy
+(cd pkg/sdk/temporal && go mod tidy)
 
 echo "▸ Running controller-gen..."
 go run sigs.k8s.io/controller-tools/cmd/controller-gen object paths=./api/...

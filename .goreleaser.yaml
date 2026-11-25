@@ -1,5 +1,9 @@
 version: 2
 project_name: diverge
+git:
+  ignore_tags:
+    - "api/gen/*"
+    - "v1"
 before:
   hooks:
     - bash -c "buf generate --template buf.gen.web.yaml && cd web && npm ci && npm run build && cp -r dist/* ../internal/server/dashboard/dist/"
