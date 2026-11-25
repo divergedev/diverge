@@ -4,7 +4,7 @@ This document provides context and guidelines for AI coding assistants and agent
 
 ## Project Overview
 
-Diverge is an open-source (100% Apache-2.0) Kubernetes operator, environment-as-a-service platform, and autonomous AI agent sandbox engine. Core capabilities include delta deployments (`PreviewGroup` & `Environment`), scale-to-zero hibernation (`activator-proxy`, KEDA, and idle hibernation annotations), service topology resolution, async/storage routing (Kafka, Temporal, Redis/Valkey, S3/GCS/MinIO, Webhook), configurable database provisioning (`schema` with FK/view cloning, `cnpg` CloudNativePG, Ariga Atlas), OpenFeature flags (`flipt`, `unleash`, `flagd`), header-based and subdomain L7 routing, autonomous `AgentTask` sandboxes (`agent-sandbox`, `pod` / `k8s-pod`) with attenuated Macaroon capability tokens and idempotent LLM metering (`POST /api/v1/agenttask/meter`), a ConnectRPC API server with OIDC/TokenReview/Macaroon authentication and embedded React Web UI, and a built-in Model Context Protocol (`diverge mcp` & `POST /mcp`) server.
+Diverge is an open-source (100% Apache-2.0) Kubernetes operator, environment-as-a-service platform, and autonomous AI agent sandbox engine. Core capabilities include delta deployments (`PreviewGroup` & `Environment`), multi-MR `PreviewGroup` composition (`diverge preview join`/`leave`, `/diverge group`/`ungroup`, `diverge_join_preview_group`/`diverge_leave_preview_group`), multi-cluster spoke federation (`clusterRef`), scale-to-zero hibernation (`activator-proxy`, KEDA, and idle hibernation annotations), service topology resolution, async/storage routing (Kafka, Temporal, Redis/Valkey, S3/GCS/MinIO, Webhook), configurable database provisioning (`schema` with FK/view cloning, `cnpg` CloudNativePG, `neon`, Ariga Atlas), OpenFeature flags (`flipt`, `unleash`, `flagd`), header-based and subdomain L7 routing, autonomous `AgentTask` sandboxes (`agent-sandbox`, `pod` / `k8s-pod`) with attenuated Macaroon capability tokens and idempotent LLM metering (`POST /api/v1/agenttask/meter`), a ConnectRPC API server with OIDC/TokenReview/Macaroon authentication and embedded React Web UI, and a built-in Model Context Protocol (`diverge mcp` & `POST /mcp`) server.
 
 ## Architecture
 
@@ -21,15 +21,16 @@ Slim builds are available with build tags: `no_knative`, `no_schema`, `no_tempor
 ## Key Packages
 
 - `cmd/`: Entrypoints for the six binaries (`controller`, `server`, `proxy`, `activator-proxy`, `agent-runner`, `diverge`).
-- `internal/cli/`: Implementation of the Cobra CLI commands (`task`, `verify`, `top`, `mcp`, `doctor`, `init`, `preview`, `dev`, etc.).
+- `internal/cli/`: Implementation of the Cobra CLI commands (`task`, `verify`, `replay`, `record`, `cost`, `top`, `mcp`, `doctor`, `init`, `preview` including `join`/`leave`, `dev`, etc.).
 - `internal/controller/`: K8s operator reconciliation loops (`EnvironmentReconciler`, `PreviewGroupReconciler`, `AgentTaskReconciler`, drift detection, quota enforcement).
+- `internal/previewgroup/`: Multi-MR `PreviewGroup` composition (`Join`, `Leave`, `SyncMemberEnvironment`, `DetachMemberByPR`, `NormalizeGroupName`) with provenance tracking and source-bound standalone hibernation.
 - `internal/sandbox/`: Sandbox providers (`AgentSandboxProvider` for `agents.x-k8s.io/v1alpha1`, `PodSandboxProvider` for zero-CRD hardened native pods, `NoopSandboxProvider`).
 - `internal/agentrunner/`: Autonomous agent runner loop, metering client, and workspace git orchestration.
 - `internal/server/`: ConnectRPC server, auth, embedded dashboard, streaming, `llm_meter.go`, and reverse tunnels.
 - `internal/server/auth/`: OIDC, GitHub, TokenReview, and Macaroon authentication with `CompositeProvider`.
 - `internal/server/dashboard/`: Embedded React dashboard (Vite + TypeScript).
 - `internal/notifier/`: GitLab/GitHub MR/PR comment notifications, `SCMTaskNotifier`, and commit status reporting.
-- `internal/webhook/`: Webhook handlers for GitLab/GitHub events and `/diverge` slash commands (`preview`, `fix`, `guide`, `budget`, `status`, `help`, `pause`, `resume`, `extend-ttl`, `teardown`).
+- `internal/webhook/`: Webhook handlers for GitLab/GitHub events and `/diverge` slash commands (`preview`, `group`, `ungroup`, `verify`, `replay`, `fix`, `guide`, `budget`, `status`, `help`, `pause`, `resume`, `extend-ttl`, `teardown`).
 - `internal/proxy/` & `internal/activator/`: L7 routing proxy and scale-to-zero activator proxy.
 - `internal/routing/`: Gateway API (`HTTPRoute` + `GRPCRoute` + `ReferenceGrant`), Istio, Cilium, Linkerd routers.
 - `internal/argocd/`: ArgoCD `Application` generation (Helm + Kustomize).

@@ -51,7 +51,7 @@ pre-push:
       run: go tool golangci-lint run
     go-test:
       glob: "*.go"
-      run: go test ./... -short
+      run: env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR go test ./... -short
     check-generated-stale:
       glob: "*.{proto,go}"
       run: ./scripts/check-gen.sh

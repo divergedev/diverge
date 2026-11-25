@@ -93,7 +93,7 @@ jobs:
 | `action` | `deploy` | `validate`, `diff`, `deploy`, `verify`, `replay`, or `teardown` |
 | `kubeconfig` | `""` | Raw or base64-encoded kubeconfig for target cluster |
 | `image-registry` | `""` | Registry prefix for changed services (e.g. `ghcr.io/acme`) |
-| `image-tag` | `""` | Image tag for changed services (when omitted, defaults to resolved `preview-name`, e.g. `pr-<number>` or branch slug) |
+| `image-tag` | `""` | Image tag for changed services. Defaults to resolved `preview-name` when `group` is unset, or to the first 12 characters of `GITHUB_SHA` (the synthetic merge commit on `pull_request` events, falling back to `git rev-parse --short=12 HEAD` or `pr-<number>`) when `group` is set. Set explicitly to pin a specific tag. |
 | `header-key` | `x-diverge-env` | HTTP routing header key |
 | `ttl` | `4h` | Preview environment TTL |
 | `group` | `""` | Optional shared multi-MR `PreviewGroup` name or branch slug (e.g. `${{ github.head_ref }}`) to join on `deploy` (`diverge preview join`) and detach from on `teardown` (`diverge preview leave`) without overwriting sibling repos' services |
@@ -162,7 +162,7 @@ If you prefer calling the `diverge` CLI directly without the composite action:
 
 ### Turnkey GitLab CI/CD Component (Recommended)
 
-Include the official component (`templates/preview/template.yml`). It automatically runs `diverge diff` when `diverge_services` is omitted, optionally joins a cross-repo `PreviewGroup` when `diverge_group` is set (e.g., `diverge_group: "$CI_COMMIT_REF_SLUG"`, detaching only this MR's services on cleanup), optionally runs `diverge replay` when `diverge_replay_from` is set, and exports dotenv-safe variables in `preview.env` (`DIVERGE_PREVIEW_NAME`, `DIVERGE_SKIPPED`, `DIVERGE_ROUTING_HEADER_B64`, `DIVERGE_PREVIEW_URL`) to downstream jobs:
+Include the official component (`templates/preview/template.yml`). It automatically runs `diverge diff` when `diverge_services` is omitted, optionally joins a cross-repo `PreviewGroup` when `diverge_group` is set (e.g., `diverge_group: "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"`, detaching only this MR's services on cleanup), optionally runs `diverge replay` when `diverge_replay_from` is set, and exports dotenv-safe variables in `preview.env` (`DIVERGE_PREVIEW_NAME`, `DIVERGE_SKIPPED`, `DIVERGE_ROUTING_HEADER_B64`, `DIVERGE_PREVIEW_URL`) to downstream jobs:
 
 ```yaml
 include:

@@ -63,7 +63,7 @@ inputs:
     required: false
     default: ""
   image-tag:
-    description: "Image tag for changed services (defaults to preview-name)"
+    description: "Image tag for changed services (defaults to preview-name when group is unset, or to the first 12 chars of GITHUB_SHA — falling back to git rev-parse --short=12 HEAD or pr-<number> — when group is set)"
     required: false
     default: ""
   header-key:
