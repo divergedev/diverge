@@ -6,10 +6,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	crmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
@@ -248,9 +250,50 @@ func TestSanitizeMethod_KnownProcedures(t *testing.T) {
 		"/diverge.v1alpha1.AgentTaskService/ResumeTask",
 		"/diverge.v1alpha1.AgentTaskService/GuideTask",
 		"/diverge.v1alpha1.AgentTaskService/StreamTaskLogs",
+		"/diverge.v1alpha1.TunnelService/Tunnel",
+		"/diverge.v1alpha1.TunnelService/ListTunnels",
+		"/diverge.v1alpha1.PreviewResolverService/ResolvePreview",
 	}
 	for _, proc := range known {
 		assert.Equal(t, proc, sanitizeMethod(proc))
 	}
 	assert.Equal(t, "unknown", sanitizeMethod("/diverge.v1alpha1.AgentTaskService/NonExistent"))
+}
+
+func TestTunnelAndResolveMetrics(t *testing.T) {
+	tunnelsActive.Reset()
+	tunnelRequestsTotal.Reset()
+	resolveRequestsTotal.Reset()
+
+	incActiveTunnels("metrics-ns")
+	recordTunnelRequest("metrics-ns", http.StatusOK, 15*time.Millisecond)
+	recordResolveRequest("hit")
+
+	families, err := crmetrics.Registry.Gather()
+	require.NoError(t, err)
+
+	seen := make(map[string]bool)
+	for _, mf := range families {
+		switch mf.GetName() {
+		case "diverge_server_tunnels_active":
+			seen[mf.GetName()] = true
+			require.NotEmpty(t, mf.Metric)
+			assert.Equal(t, float64(1), mf.Metric[0].Gauge.GetValue())
+		case "diverge_server_tunnel_requests_total", "diverge_server_tunnel_request_duration_seconds", "diverge_server_resolve_requests_total":
+			seen[mf.GetName()] = true
+		}
+	}
+	assert.True(t, seen["diverge_server_tunnels_active"])
+	assert.True(t, seen["diverge_server_tunnel_requests_total"])
+	assert.True(t, seen["diverge_server_tunnel_request_duration_seconds"])
+	assert.True(t, seen["diverge_server_resolve_requests_total"])
+
+	decActiveTunnels("metrics-ns")
+	familiesAfter, err := crmetrics.Registry.Gather()
+	require.NoError(t, err)
+	for _, mf := range familiesAfter {
+		if mf.GetName() == "diverge_server_tunnels_active" && len(mf.Metric) > 0 {
+			assert.Equal(t, float64(0), mf.Metric[0].Gauge.GetValue())
+		}
+	}
 }

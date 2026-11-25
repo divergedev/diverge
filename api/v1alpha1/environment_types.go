@@ -587,6 +587,12 @@ func (e *Environment) PreviewNamespace() string {
 	return raw[:63-9] + "-" + hash
 }
 
+// ServiceConfigServiceName returns the Kubernetes Service (and Deployment) name
+// created for a ServiceConfig-based preview environment.
+func ServiceConfigServiceName(envName, serviceName string) string {
+	return fmt.Sprintf("%s-%s", envName, serviceName)
+}
+
 // +kubebuilder:object:root=true
 
 // EnvironmentList contains a list of Environment

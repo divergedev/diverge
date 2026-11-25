@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"connectrpc.com/connect"
@@ -153,6 +154,35 @@ var (
 		Name:      "stream_limiter_rejections_total",
 		Help:      "Total stream limit rejections by reason",
 	}, []string{"reason"})
+
+	tunnelsActive = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "diverge",
+		Subsystem: "server",
+		Name:      "tunnels_active",
+		Help:      "Current number of active developer tunnels by namespace",
+	}, []string{"namespace"})
+
+	tunnelRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "diverge",
+		Subsystem: "server",
+		Name:      "tunnel_requests_total",
+		Help:      "Total HTTP requests handled by the tunnel proxy by namespace and HTTP status code",
+	}, []string{"namespace", "code"})
+
+	tunnelRequestDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "diverge",
+		Subsystem: "server",
+		Name:      "tunnel_request_duration_seconds",
+		Help:      "Duration of HTTP requests handled by the tunnel proxy in seconds",
+		Buckets:   prometheus.DefBuckets,
+	})
+
+	resolveRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "diverge",
+		Subsystem: "server",
+		Name:      "resolve_requests_total",
+		Help:      "Total PreviewResolverService ResolvePreview requests by result",
+	}, []string{"result"})
 )
 
 func init() {
@@ -171,7 +201,37 @@ func init() {
 		streamLimiterActive,
 		streamLimiterMax,
 		streamLimiterRejectionsTotal,
+		tunnelsActive,
+		tunnelRequestsTotal,
+		tunnelRequestDuration,
+		resolveRequestsTotal,
 	)
+}
+
+func incActiveTunnels(namespace string) {
+	if namespace == "" {
+		namespace = "default"
+	}
+	tunnelsActive.WithLabelValues(namespace).Inc()
+}
+
+func decActiveTunnels(namespace string) {
+	if namespace == "" {
+		namespace = "default"
+	}
+	tunnelsActive.WithLabelValues(namespace).Dec()
+}
+
+func recordTunnelRequest(namespace string, statusCode int, duration time.Duration) {
+	if namespace == "" {
+		namespace = "unknown"
+	}
+	tunnelRequestsTotal.WithLabelValues(namespace, strconv.Itoa(statusCode)).Inc()
+	tunnelRequestDuration.Observe(duration.Seconds())
+}
+
+func recordResolveRequest(result string) {
+	resolveRequestsTotal.WithLabelValues(result).Inc()
 }
 
 // NewAuthMetrics returns the auth metrics wired to the auth middleware's expected types.

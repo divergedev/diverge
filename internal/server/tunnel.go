@@ -31,6 +31,7 @@ import (
 	"github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
 	divergeiov1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
 	"github.com/divergedev/diverge/internal/server/auth"
+	"github.com/divergedev/diverge/internal/server/streaming"
 )
 
 const (
@@ -58,6 +59,8 @@ const (
 type TunnelManagerConfig struct {
 	CRDClient               client.Client
 	K8sClient               kubernetes.Interface
+	InformerMgr             *streaming.InformerManager
+	Directory               TunnelDirectory
 	Logger                  *slog.Logger
 	AuditLogger             *AuditLogger
 	StreamLimiter           *StreamLimiter
@@ -78,6 +81,8 @@ type TunnelManager struct {
 	evictedHolders map[string]struct{}
 	crdClient      client.Client
 	k8sClient      kubernetes.Interface
+	informerMgr    *streaming.InformerManager
+	directory      TunnelDirectory
 	logger         *slog.Logger
 	auditLogger    *AuditLogger
 	streamLim      *StreamLimiter
@@ -118,6 +123,7 @@ type activeTunnel struct {
 	clientInstanceID string
 	metadata         map[string]string
 	startedAt        time.Time
+	expiresAt        time.Time
 
 	// Protocol v3 reverse HTTP/2 state
 	bidiConn    *bidiStreamConn
@@ -189,12 +195,13 @@ func NewTunnelManagerWithConfig(cfg TunnelManagerConfig) *TunnelManager {
 		maxLifetime = defaultMaxTunnelLifetime
 	}
 
-	return &TunnelManager{
+	tm := &TunnelManager{
 		tunnels:                 make(map[string]*activeTunnel),
 		admitted:                make(map[string]context.CancelFunc),
 		evictedHolders:          make(map[string]struct{}),
 		crdClient:               cfg.CRDClient,
 		k8sClient:               cfg.K8sClient,
+		informerMgr:             cfg.InformerMgr,
 		logger:                  logger,
 		auditLogger:             cfg.AuditLogger,
 		streamLim:               cfg.StreamLimiter,
@@ -210,6 +217,12 @@ func NewTunnelManagerWithConfig(cfg TunnelManagerConfig) *TunnelManager {
 		sarRecheckInterval:      sarInterval,
 		maxTunnelLifetime:       maxLifetime,
 	}
+	if cfg.Directory != nil {
+		tm.directory = cfg.Directory
+	} else {
+		tm.directory = &localTunnelDirectory{tm: tm}
+	}
+	return tm
 }
 
 func (tm *TunnelManager) holderIdentity(tunnelID string) string {
@@ -243,6 +256,7 @@ func (tm *TunnelManager) Shutdown(ctx context.Context) {
 			if at.admitID != "" {
 				activeAdmitIDs[at.admitID] = struct{}{}
 			}
+			decActiveTunnels(at.namespace)
 		}
 		delete(tm.tunnels, key)
 	}
@@ -549,7 +563,8 @@ func (tm *TunnelManager) Tunnel(ctx context.Context, stream *connect.BidiStream[
 		"tunnel-id", tunnelID,
 	)
 
-	expiresAt := time.Now().Add(tm.maxTunnelLifetime)
+	startedAt := time.Now()
+	expiresAt := startedAt.Add(tm.maxTunnelLifetime)
 	if !user.ExpiresAt.IsZero() && user.ExpiresAt.Before(expiresAt) {
 		expiresAt = user.ExpiresAt
 	}
@@ -584,7 +599,6 @@ func (tm *TunnelManager) Tunnel(ctx context.Context, stream *connect.BidiStream[
 		K8SServiceName:  k8sSvcName,
 	}
 
-	startedAt := time.Now()
 	var metaCopy map[string]string
 	if len(effectiveReg.Metadata) > 0 {
 		metaCopy = make(map[string]string, len(effectiveReg.Metadata))
@@ -607,6 +621,7 @@ func (tm *TunnelManager) Tunnel(ctx context.Context, stream *connect.BidiStream[
 		clientInstanceID: effectiveReg.ClientInstanceId,
 		metadata:         metaCopy,
 		startedAt:        startedAt,
+		expiresAt:        expiresAt,
 		lastPong:         startedAt,
 		ctx:              tCtx,
 		cancel:           tCancel,
@@ -653,7 +668,11 @@ func (tm *TunnelManager) registerActiveTunnel(at *activeTunnel) (string, bool) {
 	if tm.tunnels == nil {
 		tm.tunnels = make(map[string]*activeTunnel)
 	}
+	if prev := tm.tunnels[mapKey]; prev != nil {
+		decActiveTunnels(prev.namespace)
+	}
 	tm.tunnels[mapKey] = at
+	incActiveTunnels(at.namespace)
 	return mapKey, true
 }
 
@@ -661,6 +680,7 @@ func (tm *TunnelManager) unregisterActiveTunnel(mapKey string, at *activeTunnel)
 	tm.mu.Lock()
 	if tm.tunnels[mapKey] == at {
 		delete(tm.tunnels, mapKey)
+		decActiveTunnels(at.namespace)
 	}
 	tm.mu.Unlock()
 }
@@ -1296,6 +1316,7 @@ func (tm *TunnelManager) evictLocalTunnel(namespace, leaseName, previousHolder, 
 		if matched {
 			victims = append(victims, victimEntry{key: key, tunnel: at})
 			delete(tm.tunnels, key)
+			decActiveTunnels(at.namespace)
 		}
 	}
 	if len(victims) == 0 && previousHolder != "" && strings.HasPrefix(previousHolder, tm.podName+":") {
@@ -1786,9 +1807,41 @@ func isHopByHopHeader(key string, connTokens map[string]bool) bool {
 	return connTokens[lower]
 }
 
+type tunnelStatusRecorder struct {
+	http.ResponseWriter
+	status      int
+	wroteHeader bool
+}
+
+func (r *tunnelStatusRecorder) WriteHeader(code int) {
+	if !r.wroteHeader && code >= 200 {
+		r.status = code
+		r.wroteHeader = true
+	}
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *tunnelStatusRecorder) Flush() {
+	if fl, ok := r.ResponseWriter.(http.Flusher); ok {
+		fl.Flush()
+	}
+}
+
+func (r *tunnelStatusRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
+}
+
 // NewTunnelProxyHandler creates the HTTP handler for the cluster-internal tunnel proxy (:8081).
 func (tm *TunnelManager) NewTunnelProxyHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &tunnelStatusRecorder{ResponseWriter: w, status: http.StatusOK}
+		metricNS := "unknown"
+		defer func() {
+			recordTunnelRequest(metricNS, rec.status, time.Since(start))
+		}()
+		w = rec
+
 		parsedHostSvc, parsedHostPreview, parsedHostNS := extractServicePreviewAndNamespaceFromHost(r.Host)
 		headerEnv := strings.TrimSpace(r.Header.Get("X-Diverge-Env"))
 		previewID := headerEnv
@@ -1825,6 +1878,9 @@ func (tm *TunnelManager) NewTunnelProxyHandler() http.Handler {
 				http.Error(w, "namespace not allowed", http.StatusForbidden)
 				return
 			}
+			if len(tm.allowedNamespaces) > 0 {
+				metricNS = namespace
+			}
 		}
 		if service != "" {
 			if err := ValidateDNS1123Label(service, "service"); err != nil {
@@ -1846,6 +1902,7 @@ func (tm *TunnelManager) NewTunnelProxyHandler() http.Handler {
 			http.Error(w, "namespace not allowed", http.StatusForbidden)
 			return
 		}
+		metricNS = at.namespace
 
 		if at.protocolVersion >= 3 && at.proxy != nil {
 			if r.ContentLength > maxProxyRequestBodySize {
@@ -1999,11 +2056,6 @@ func copyFilteredV2ResponseHeaders(dst http.Header, entries []*pb.HeaderEntry) {
 			dst.Add(h.Key, v)
 		}
 	}
-}
-
-// ListTunnels returns active tunnels (full implementation added in PR 2).
-func (tm *TunnelManager) ListTunnels(_ context.Context, _ *connect.Request[pb.ListTunnelsRequest]) (*connect.Response[pb.ListTunnelsResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ListTunnels not yet implemented"))
 }
 
 // divergev1alpha1connect interface compliance

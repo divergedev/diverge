@@ -3,6 +3,7 @@ package streaming
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	divergev1alpha1 "github.com/divergedev/diverge/api/v1alpha1"
@@ -14,6 +15,9 @@ type InformerManager struct {
 	EnvBroadcaster *Broadcaster[*divergev1alpha1.Environment]
 	PgBroadcaster  *Broadcaster[*divergev1alpha1.PreviewGroup]
 	logger         *slog.Logger
+
+	snapMu sync.RWMutex
+	envs   map[string]*divergev1alpha1.Environment
 }
 
 // NewInformerManager creates informer event handlers and connects them to broadcasters.
@@ -22,6 +26,7 @@ func NewInformerManager(logger *slog.Logger, metrics BroadcasterMetrics) *Inform
 		EnvBroadcaster: NewBroadcaster[*divergev1alpha1.Environment](metrics),
 		PgBroadcaster:  NewBroadcaster[*divergev1alpha1.PreviewGroup](metrics),
 		logger:         logger,
+		envs:           make(map[string]*divergev1alpha1.Environment),
 	}
 }
 
@@ -29,6 +34,26 @@ func NewInformerManager(logger *slog.Logger, metrics BroadcasterMetrics) *Inform
 func (m *InformerManager) Close() {
 	m.EnvBroadcaster.Close()
 	m.PgBroadcaster.Close()
+}
+
+// SnapshotEnvironments returns a DeepCopy snapshot of the latest polled Environment CRs.
+// Safe to call on a nil InformerManager (returns nil).
+func (m *InformerManager) SnapshotEnvironments() []*divergev1alpha1.Environment {
+	if m == nil {
+		return nil
+	}
+	m.snapMu.RLock()
+	defer m.snapMu.RUnlock()
+	if len(m.envs) == 0 {
+		return nil
+	}
+	out := make([]*divergev1alpha1.Environment, 0, len(m.envs))
+	for _, env := range m.envs {
+		if env != nil {
+			out = append(out, env.DeepCopy())
+		}
+	}
+	return out
 }
 
 // StartPolling periodically lists EnvironmentList and PreviewGroupList and diffs
@@ -41,68 +66,82 @@ func (m *InformerManager) StartPolling(ctx context.Context, c client.Client, int
 		interval = 2 * time.Second
 	}
 
-	go func() {
-		knownEnvs := make(map[string]*divergev1alpha1.Environment)
-		knownPgs := make(map[string]*divergev1alpha1.PreviewGroup)
+	knownEnvs := make(map[string]*divergev1alpha1.Environment)
+	knownPgs := make(map[string]*divergev1alpha1.PreviewGroup)
 
-		poll := func() {
-			var envList divergev1alpha1.EnvironmentList
-			if err := c.List(ctx, &envList); err != nil {
-				if ctx.Err() == nil && m.logger != nil {
-					m.logger.Warn("informer poll failed to list environments", "error", err)
-				}
-			} else {
-				currentEnvs := make(map[string]*divergev1alpha1.Environment, len(envList.Items))
-				for i := range envList.Items {
-					item := envList.Items[i].DeepCopy()
-					key := item.Namespace + "/" + item.Name
-					currentEnvs[key] = item
-					if prev, exists := knownEnvs[key]; !exists {
-						m.HandleEnvironmentEvent("ADDED", item)
-					} else if prev.UID != item.UID {
-						m.HandleEnvironmentEvent("DELETED", prev)
-						m.HandleEnvironmentEvent("ADDED", item)
-					} else if prev.ResourceVersion != item.ResourceVersion {
-						m.HandleEnvironmentEvent("MODIFIED", item)
-					}
-				}
-				for key, prev := range knownEnvs {
-					if _, exists := currentEnvs[key]; !exists {
-						m.HandleEnvironmentEvent("DELETED", prev)
-					}
-				}
-				knownEnvs = currentEnvs
-			}
+	poll := func() {
+		pollCtx, pollCancel := context.WithTimeout(ctx, 10*time.Second)
+		defer pollCancel()
 
-			var pgList divergev1alpha1.PreviewGroupList
-			if err := c.List(ctx, &pgList); err != nil {
-				if ctx.Err() == nil && m.logger != nil {
-					m.logger.Warn("informer poll failed to list previewgroups", "error", err)
-				}
-			} else {
-				currentPgs := make(map[string]*divergev1alpha1.PreviewGroup, len(pgList.Items))
-				for i := range pgList.Items {
-					item := pgList.Items[i].DeepCopy()
-					key := item.Namespace + "/" + item.Name
-					currentPgs[key] = item
-					if prev, exists := knownPgs[key]; !exists {
-						m.HandlePreviewGroupEvent("ADDED", item)
-					} else if prev.UID != item.UID {
-						m.HandlePreviewGroupEvent("DELETED", prev)
-						m.HandlePreviewGroupEvent("ADDED", item)
-					} else if prev.ResourceVersion != item.ResourceVersion {
-						m.HandlePreviewGroupEvent("MODIFIED", item)
-					}
-				}
-				for key, prev := range knownPgs {
-					if _, exists := currentPgs[key]; !exists {
-						m.HandlePreviewGroupEvent("DELETED", prev)
-					}
-				}
-				knownPgs = currentPgs
+		var envList divergev1alpha1.EnvironmentList
+		if err := c.List(pollCtx, &envList); err != nil {
+			if ctx.Err() == nil && m.logger != nil {
+				m.logger.Warn("informer poll failed to list environments", "error", err)
 			}
+		} else {
+			currentEnvs := make(map[string]*divergev1alpha1.Environment, len(envList.Items))
+			for i := range envList.Items {
+				item := envList.Items[i].DeepCopy()
+				key := item.Namespace + "/" + item.Name
+				currentEnvs[key] = item
+				if prev, exists := knownEnvs[key]; !exists {
+					m.HandleEnvironmentEvent("ADDED", item)
+				} else if prev.UID != item.UID {
+					m.HandleEnvironmentEvent("DELETED", prev)
+					m.HandleEnvironmentEvent("ADDED", item)
+				} else if prev.ResourceVersion != item.ResourceVersion {
+					m.HandleEnvironmentEvent("MODIFIED", item)
+				}
+			}
+			for key, prev := range knownEnvs {
+				if _, exists := currentEnvs[key]; !exists {
+					m.HandleEnvironmentEvent("DELETED", prev)
+				}
+			}
+			knownEnvs = currentEnvs
+			m.snapMu.Lock()
+			m.envs = currentEnvs
+			m.snapMu.Unlock()
 		}
 
+		var pgList divergev1alpha1.PreviewGroupList
+		if err := c.List(pollCtx, &pgList); err != nil {
+			if ctx.Err() == nil && m.logger != nil {
+				m.logger.Warn("informer poll failed to list previewgroups", "error", err)
+			}
+		} else {
+			currentPgs := make(map[string]*divergev1alpha1.PreviewGroup, len(pgList.Items))
+			for i := range pgList.Items {
+				item := pgList.Items[i].DeepCopy()
+				key := item.Namespace + "/" + item.Name
+				currentPgs[key] = item
+				if prev, exists := knownPgs[key]; !exists {
+					m.HandlePreviewGroupEvent("ADDED", item)
+				} else if prev.UID != item.UID {
+					m.HandlePreviewGroupEvent("DELETED", prev)
+					m.HandlePreviewGroupEvent("ADDED", item)
+				} else if prev.ResourceVersion != item.ResourceVersion {
+					m.HandlePreviewGroupEvent("MODIFIED", item)
+				}
+			}
+			for key, prev := range knownPgs {
+				if _, exists := currentPgs[key]; !exists {
+					m.HandlePreviewGroupEvent("DELETED", prev)
+				}
+			}
+			knownPgs = currentPgs
+		}
+	}
+
+	if ctx.Err() != nil {
+		return
+	}
+	poll()
+	if ctx.Err() != nil {
+		return
+	}
+
+	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 

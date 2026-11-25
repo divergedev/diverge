@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -86,4 +87,45 @@ func TestTunnelProxy_OptionalAuthToken(t *testing.T) {
 	recBlank := httptest.NewRecorder()
 	srvBlank.Handler.ServeHTTP(recBlank, reqBlank)
 	assert.Equal(t, http.StatusBadGateway, recBlank.Code)
+}
+
+func TestTunnelProxy_ResolverPathConfusionBlockedByRoutingIntent(t *testing.T) {
+	tm := NewTunnelManagerWithConfig(TunnelManagerConfig{
+		ProxyServiceAddr: "diverge-tunnel-proxy.diverge-system.svc.cluster.local:8081",
+	})
+	srv := NewTunnelProxyServer(tm, 18081, slog.Default())
+
+	resolverPath := "/diverge.v1alpha1.PreviewResolverService/ResolvePreview"
+
+	// 1. Proxied request with X-Diverge-Env to resolver path must go to tunnel proxy (502), never ResolvePreview (200).
+	reqHeader := httptest.NewRequest(http.MethodPost, resolverPath, strings.NewReader(`{"previewId":"pr-1"}`))
+	reqHeader.Header.Set("Content-Type", "application/json")
+	reqHeader.Header.Set("X-Diverge-Env", "pr-1")
+	recHeader := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(recHeader, reqHeader)
+	assert.Equal(t, http.StatusBadGateway, recHeader.Code)
+
+	// 2. Per-tunnel diverge-tunnel-* Host must go to tunnel proxy (502), never ResolvePreview.
+	reqTunnelHost := httptest.NewRequest(http.MethodPost, resolverPath, strings.NewReader(`{"previewId":"pr-1"}`))
+	reqTunnelHost.Header.Set("Content-Type", "application/json")
+	reqTunnelHost.Host = "diverge-tunnel-pr-1.default.svc.cluster.local:8081"
+	recTunnelHost := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(recTunnelHost, reqTunnelHost)
+	assert.Equal(t, http.StatusBadGateway, recTunnelHost.Code)
+
+	// 3. Per-tunnel diverge-tsvc-* Host must go to tunnel proxy (502), never ResolvePreview.
+	reqTsvcHost := httptest.NewRequest(http.MethodPost, resolverPath, strings.NewReader(`{"previewId":"pr-1"}`))
+	reqTsvcHost.Header.Set("Content-Type", "application/json")
+	reqTsvcHost.Host = "diverge-tsvc-pr-1-api-12345678.default.svc.cluster.local:8081"
+	recTsvcHost := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(recTsvcHost, reqTsvcHost)
+	assert.Equal(t, http.StatusBadGateway, recTsvcHost.Code)
+
+	// 4. Control-plane request to central proxy Host without X-Diverge-* headers invokes ResolvePreview (200).
+	reqControl := httptest.NewRequest(http.MethodPost, resolverPath, strings.NewReader(`{"previewId":"pr-1"}`))
+	reqControl.Header.Set("Content-Type", "application/json")
+	reqControl.Host = "diverge-tunnel-proxy.diverge-system.svc.cluster.local:8081"
+	recControl := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(recControl, reqControl)
+	assert.Equal(t, http.StatusOK, recControl.Code)
 }
