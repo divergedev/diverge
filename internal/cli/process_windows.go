@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"time"
 )
 
 func runChildProcess(ctx context.Context, args []string, envMap map[string]string) (*exec.Cmd, error) {
@@ -44,15 +45,51 @@ func runChildProcess(ctx context.Context, args []string, envMap map[string]strin
 	return cmd, nil
 }
 
-func configureSupervisorCmd(cmd *exec.Cmd) {
+// processGroupHandle manages supervised process termination on Windows.
+// On Windows, supervised shutdown terminates only the direct child process
+// (via cmd.Process.Kill); descendant processes spawned by the launcher are not
+// tracked via Job Objects.
+type processGroupHandle struct{}
+
+// configureSupervisorCmd configures cmd for Windows supervised execution,
+// where shutdown terminates only the direct child process.
+func configureSupervisorCmd(cmd *exec.Cmd, _ time.Duration) *processGroupHandle {
+	h := &processGroupHandle{}
 	cmd.Cancel = func() error {
-		if cmd.Process != nil {
-			return cmd.Process.Kill()
-		}
-		return nil
+		return h.terminate(cmd)
 	}
+	return h
+}
+
+func (h *processGroupHandle) capturePID(_ *exec.Cmd) {}
+
+func (h *processGroupHandle) terminate(cmd *exec.Cmd) error {
+	if cmd != nil && cmd.Process != nil {
+		return cmd.Process.Kill()
+	}
+	return nil
+}
+
+func (h *processGroupHandle) markReaped() bool {
+	return false
+}
+
+func (h *processGroupHandle) remainingGrace(grace time.Duration) time.Duration {
+	return grace
+}
+
+func (h *processGroupHandle) killGroup() {}
+
+func (h *processGroupHandle) waitGroupExit(_ bool, _ time.Duration) {}
+
+func signalExitCode(_ *exec.ExitError) int {
+	return 1
 }
 
 func notifySupervisorSignals(sigCh chan os.Signal) {
 	signal.Notify(sigCh, os.Interrupt)
+}
+
+func rootSignals() []os.Signal {
+	return []os.Signal{os.Interrupt}
 }

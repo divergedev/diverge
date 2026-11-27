@@ -4,6 +4,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -60,11 +61,15 @@ func Execute(version, commit, date string) {
 	lazyApp.Commit = commit
 	lazyApp.Date = date
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, os.Interrupt)
+	ctx, cancel := signal.NotifyContext(context.Background(), rootSignals()...)
 	defer cancel()
 
 	err := lazyRootCmd.ExecuteContext(ctx)
 	if err != nil {
+		var childExit *ChildExitError
+		if errors.As(err, &childExit) && childExit.Code > 0 {
+			os.Exit(childExit.Code)
+		}
 		os.Exit(1)
 	}
 }
@@ -98,7 +103,7 @@ func NewRootCmd(app *App) *cobra.Command {
 func cmdRequiresKube(cmd *cobra.Command) bool {
 	for c := cmd; c != nil; c = c.Parent() {
 		switch c.Name() {
-		case "loadtest", "test", "version", "diff", "completion", "init", "validate", "curl", "verify", "replay", "record", "setup", "mcp", "cost":
+		case "loadtest", "test", "version", "diff", "completion", "init", "validate", "curl", "verify", "replay", "record", "setup", "mcp", "cost", "tunnel", "login":
 			return false
 		}
 	}
@@ -123,6 +128,7 @@ func addCommands(root *cobra.Command, app *App) {
 	root.AddCommand(newRouteCmd(app))
 	root.AddCommand(newStatusCmd(app))
 	root.AddCommand(newTopCmd(app))
+	root.AddCommand(newTunnelCmd(app))
 	root.AddCommand(newValidateCmd(app))
 	root.AddCommand(newVerifyCmd(app))
 	root.AddCommand(newReplayCmd(app))

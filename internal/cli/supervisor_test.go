@@ -5,12 +5,20 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // safeBuffer wraps bytes.Buffer with a mutex for race-free concurrent use.
@@ -207,4 +215,272 @@ func TestSupervisor_EnvDiffLogging(t *testing.T) {
 	output := buf.String()
 	assert.Contains(t, output, "DIVERGE_SVC_AUTH_URL")
 	assert.Contains(t, output, "env changed")
+}
+
+func TestSupervisor_ExitOnChildExit(t *testing.T) {
+	t.Run("zero exit code returns nil", func(t *testing.T) {
+		var outBuf, stdoutBuf, stderrBuf safeBuffer
+		var gotCode atomic.Int32
+		gotCode.Store(-1)
+
+		s := NewSupervisorWithOptions(
+			[]string{"sh", "-c", "echo hi; echo err >&2"},
+			nil,
+			WithSupervisorOutput(&outBuf),
+			WithSupervisorChildIO(&stdoutBuf, &stderrBuf),
+			WithExitOnChildExit(true),
+			WithOnChildExit(func(code int, _ error) {
+				gotCode.Store(int32(code))
+			}),
+		)
+		err := s.Run(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, int32(0), gotCode.Load())
+		assert.Equal(t, "hi\n", stdoutBuf.String())
+		assert.Equal(t, "err\n", stderrBuf.String())
+		assert.Empty(t, outBuf.String())
+	})
+
+	t.Run("non-zero exit code returns ChildExitError", func(t *testing.T) {
+		var gotCode atomic.Int32
+		s := NewSupervisorWithOptions(
+			[]string{"sh", "-c", "exit 42"},
+			nil,
+			WithExitOnChildExit(true),
+			WithOnChildExit(func(code int, _ error) {
+				gotCode.Store(int32(code))
+			}),
+		)
+		err := s.Run(t.Context())
+		require.Error(t, err)
+		var childExit *ChildExitError
+		require.True(t, errors.As(err, &childExit))
+		assert.Equal(t, 42, childExit.Code)
+		assert.Equal(t, int32(42), gotCode.Load())
+	})
+
+	t.Run("signal termination returns 128 + signal", func(t *testing.T) {
+		var gotCode atomic.Int32
+		s := NewSupervisorWithOptions(
+			[]string{"sh", "-c", "kill -TERM $$"},
+			nil,
+			WithExitOnChildExit(true),
+			WithOnChildExit(func(code int, _ error) {
+				gotCode.Store(int32(code))
+			}),
+		)
+		err := s.Run(t.Context())
+		require.Error(t, err)
+		var childExit *ChildExitError
+		require.True(t, errors.As(err, &childExit))
+		wantCode := 128 + int(syscall.SIGTERM)
+		assert.Equal(t, wantCode, childExit.Code)
+		assert.Equal(t, int32(wantCode), gotCode.Load())
+	})
+}
+
+func readWorkerPIDFile(t *testing.T, pidFile string) int {
+	t.Helper()
+	var pid int
+	require.Eventually(t, func() bool {
+		data, err := os.ReadFile(pidFile)
+		if err != nil {
+			return false
+		}
+		parsed, err := strconv.Atoi(strings.TrimSpace(string(data)))
+		if err != nil || parsed <= 0 {
+			return false
+		}
+		pid = parsed
+		return true
+	}, 5*time.Second, 20*time.Millisecond, "timed out waiting for worker pid file %s", pidFile)
+	t.Cleanup(func() {
+		if pid > 0 {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	})
+	return pid
+}
+
+const stubbornWorkerLauncherScript = `
+trap 'exit 0' TERM
+sh -c 'trap "" TERM; echo $$ > "$WORKER_PID_FILE.tmp" && mv "$WORKER_PID_FILE.tmp" "$WORKER_PID_FILE"; exec sleep 60' >/dev/null 2>&1 &
+wait
+`
+
+func isProcessTerminated(pid int) bool {
+	if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+		return true
+	}
+	out, err := exec.Command("ps", "-o", "state=", "-p", strconv.Itoa(pid)).Output() // #nosec G204 -- pid is an integer formatted with strconv.Itoa
+	if err != nil {
+		return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH)
+	}
+	state := strings.TrimSpace(string(out))
+	return state == "" || strings.HasPrefix(state, "Z")
+}
+
+func TestSupervisor_KillsStubbornGrandchildWhenLauncherExitsOnSIGTERM(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "worker.pid")
+	envBuilder := func() map[string]string {
+		return map[string]string{
+			"WORKER_PID_FILE": pidFile,
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var outBuf safeBuffer
+	s := NewSupervisorWithOptions(
+		[]string{"sh", "-c", stubbornWorkerLauncherScript},
+		envBuilder,
+		WithSupervisorOutput(&outBuf),
+		WithSupervisorChildIO(&outBuf, &outBuf),
+	)
+	s.gracefulTimeout = 200 * time.Millisecond
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Run(ctx)
+	}()
+
+	workerPID := readWorkerPIDFile(t, pidFile)
+
+	cancel()
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("supervisor did not exit within 3s after canceling session with stubborn worker")
+	}
+
+	assert.Eventually(t, func() bool {
+		return isProcessTerminated(workerPID)
+	}, 500*time.Millisecond, 20*time.Millisecond, "stubborn grandchild worker pid %d should be terminated or zombie", workerPID)
+}
+
+func TestSupervisor_RestartKillsStubbornGrandchildBeforeRespawn(t *testing.T) {
+	pidFile1 := filepath.Join(t.TempDir(), "worker1.pid")
+	pidFile2 := filepath.Join(t.TempDir(), "worker2.pid")
+
+	var worker1PID atomic.Int64
+	var worker1AliveBeforeRespawn atomic.Bool
+	var calls atomic.Int32
+	var outBuf safeBuffer
+
+	envBuilder := func() map[string]string {
+		call := calls.Add(1)
+		if call == 1 {
+			return map[string]string{"WORKER_PID_FILE": pidFile1}
+		}
+		if call == 2 {
+			if pid := int(worker1PID.Load()); pid > 0 {
+				if !isProcessTerminated(pid) {
+					worker1AliveBeforeRespawn.Store(true)
+				}
+			}
+		}
+		return map[string]string{"WORKER_PID_FILE": pidFile2}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	s := NewSupervisorWithOptions(
+		[]string{"sh", "-c", stubbornWorkerLauncherScript},
+		envBuilder,
+		WithSupervisorOutput(&outBuf),
+		WithSupervisorChildIO(&outBuf, &outBuf),
+	)
+	s.gracefulTimeout = 200 * time.Millisecond
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Run(ctx)
+	}()
+
+	pid1 := readWorkerPIDFile(t, pidFile1)
+	worker1PID.Store(int64(pid1))
+
+	s.RequestRestart("env changed", map[string]string{"FOO": "bar"})
+
+	_ = readWorkerPIDFile(t, pidFile2)
+	assert.False(t, worker1AliveBeforeRespawn.Load(), "worker #1 should be terminated before replacement starts")
+	assert.True(t, isProcessTerminated(pid1), "worker #1 pid %d should be terminated or zombie", pid1)
+
+	cancel()
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("supervisor did not shut down within 3s")
+	}
+}
+
+func TestSupervisor_NaturalLauncherExitCleansUpGrandchildAndPreservesExitCode(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "natural-worker.pid")
+	var outBuf safeBuffer
+
+	script := `
+sh -c 'trap "" TERM; echo $$ > "$WORKER_PID_FILE.tmp" && mv "$WORKER_PID_FILE.tmp" "$WORKER_PID_FILE"; exec sleep 60' >/dev/null 2>&1 &
+while [ ! -f "$WORKER_PID_FILE" ]; do sleep 0.02; done
+exit 42
+`
+	s := NewSupervisorWithOptions(
+		[]string{"sh", "-c", script},
+		func() map[string]string { return map[string]string{"WORKER_PID_FILE": pidFile} },
+		WithExitOnChildExit(true),
+		WithSupervisorOutput(&outBuf),
+		WithSupervisorChildIO(&outBuf, &outBuf),
+	)
+	s.gracefulTimeout = 200 * time.Millisecond
+
+	err := s.Run(t.Context())
+	require.Error(t, err)
+	var childExit *ChildExitError
+	require.True(t, errors.As(err, &childExit))
+	assert.Equal(t, 42, childExit.Code)
+
+	workerPID := readWorkerPIDFile(t, pidFile)
+	assert.Eventually(t, func() bool {
+		return isProcessTerminated(workerPID)
+	}, 500*time.Millisecond, 20*time.Millisecond, "stubborn worker pid %d should be cleaned up after natural launcher exit", workerPID)
+}
+
+func TestSupervisor_PromptShutdownWhenGroupExitsOnSIGTERM(t *testing.T) {
+	readyFile := filepath.Join(t.TempDir(), "ready")
+	var outBuf safeBuffer
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	s := NewSupervisorWithOptions(
+		[]string{"sh", "-c", "touch \"$READY_FILE\"; exec sleep 60"},
+		func() map[string]string { return map[string]string{"READY_FILE": readyFile} },
+		WithSupervisorOutput(&outBuf),
+		WithSupervisorChildIO(&outBuf, &outBuf),
+	)
+	s.gracefulTimeout = 5 * time.Second
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Run(ctx)
+	}()
+
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(readyFile)
+		return err == nil
+	}, 5*time.Second, 20*time.Millisecond)
+
+	start := time.Now()
+	cancel()
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(1 * time.Second):
+		t.Fatal("supervisor waited too long when process group exited promptly on SIGTERM")
+	}
+	assert.Less(t, time.Since(start), 1*time.Second)
 }

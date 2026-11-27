@@ -1,4 +1,10 @@
 {{- if .Values.server.enabled }}
+{{- if and .Values.server.tunnelProxy .Values.server.tunnelProxy.service .Values.server.tunnelProxy.service.enabled (gt (int .Values.server.replicaCount) 1) }}
+{{- fail "server.tunnelProxy.service.enabled requires server.replicaCount <= 1 in v0.30.0" }}
+{{- end }}
+{{- if and (gt (int .Values.server.replicaCount) 1) .Values.server.auth.oidc.enabled (not (and .Values.server.auth.session .Values.server.auth.session.secretRef .Values.server.auth.session.secretRef.name)) }}
+{{- fail "server.auth.oidc.enabled with server.replicaCount > 1 requires server.auth.session.secretRef.name" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -57,7 +63,34 @@ spec:
             {{- if .Values.server.auth.oidc.allowedGroups }}
             - "--oidc-allowed-groups={{ .Values.server.auth.oidc.allowedGroups }}"
             {{- end }}
+            {{- if .Values.server.auth.oidc.usernamePrefix }}
+            - --oidc-username-prefix={{ .Values.server.auth.oidc.usernamePrefix }}
+            {{- end }}
+            {{- if .Values.server.auth.oidc.groupsPrefix }}
+            - --oidc-groups-prefix={{ .Values.server.auth.oidc.groupsPrefix }}
+            {{- end }}
+            {{- if and .Values.server.auth.session .Values.server.auth.session.maxAge }}
             - --session-max-age={{ .Values.server.auth.session.maxAge }}s
+            {{- end }}
+            {{- end }}
+            {{- if and (not .Values.server.rbac.clusterWidePodAccess) .Values.server.rbac.targetNamespaces }}
+            - --tunnel-namespaces={{ join "," .Values.server.rbac.targetNamespaces }}
+            {{- end }}
+            {{- with .Values.server.tunnelProxy }}
+            {{- if .defaultNamespace }}
+            - --default-tunnel-namespace={{ .defaultNamespace }}
+            {{- end }}
+            {{- if not (kindIs "invalid" .createPerTunnelServices) }}
+            - --tunnel-create-services={{ .createPerTunnelServices }}
+            {{- end }}
+            {{- if .sharedPreviewOwners }}
+            - --shared-preview-owners={{ join "," .sharedPreviewOwners }}
+            {{- end }}
+            {{- if .proxyServiceAddr }}
+            - --tunnel-proxy-service-addr={{ .proxyServiceAddr }}
+            {{- else if and .service .service.enabled }}
+            - --tunnel-proxy-service-addr={{ include "diverge.fullname" $ }}-tunnel-proxy.{{ $.Release.Namespace }}.svc.cluster.local:{{ .service.port | default 8081 }}
+            {{- end }}
             {{- end }}
           env:
             {{- if .Values.observability.otel.enabled }}
@@ -76,19 +109,49 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
-            {{- if and .Values.server.auth.oidc.enabled .Values.server.auth.oidc.clientSecretSecretRef.name }}
+            {{- $goMemLimit := .Values.server.goMemLimit | default "" }}
+            {{- if not $goMemLimit }}
+              {{- $memLimit := "" }}
+              {{- if and .Values.server.resources .Values.server.resources.limits .Values.server.resources.limits.memory }}
+                {{- $memLimit = toString .Values.server.resources.limits.memory }}
+              {{- end }}
+              {{- if hasSuffix "Mi" $memLimit }}
+                {{- $raw := trimSuffix "Mi" $memLimit }}
+                {{- if regexMatch "^[0-9]+(\\.[0-9]+)?$" $raw }}
+                  {{- $mib := int64 (mulf (float64 $raw) 0.84) }}
+                  {{- if gt $mib 0 }}{{- $goMemLimit = printf "%dMiB" $mib }}{{- end }}
+                {{- end }}
+              {{- else if hasSuffix "Gi" $memLimit }}
+                {{- $raw := trimSuffix "Gi" $memLimit }}
+                {{- if regexMatch "^[0-9]+(\\.[0-9]+)?$" $raw }}
+                  {{- $mib := int64 (mulf (float64 $raw) 1024.0 0.84) }}
+                  {{- if gt $mib 0 }}{{- $goMemLimit = printf "%dMiB" $mib }}{{- end }}
+                {{- end }}
+              {{- end }}
+              {{- if not $goMemLimit }}{{- $goMemLimit = "430MiB" }}{{- end }}
+            {{- end }}
+            - name: GOMEMLIMIT
+              value: {{ $goMemLimit | quote }}
+            {{- if and .Values.server.tunnelProxy .Values.server.tunnelProxy.authTokenSecretRef .Values.server.tunnelProxy.authTokenSecretRef.name }}
+            - name: DIVERGE_TUNNEL_PROXY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.server.tunnelProxy.authTokenSecretRef.name }}
+                  key: {{ .Values.server.tunnelProxy.authTokenSecretRef.key | default "token" }}
+            {{- end }}
+            {{- if and .Values.server.auth.oidc.enabled .Values.server.auth.oidc.clientSecretSecretRef .Values.server.auth.oidc.clientSecretSecretRef.name }}
             - name: DIVERGE_OIDC_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.server.auth.oidc.clientSecretSecretRef.name }}
-                  key: {{ .Values.server.auth.oidc.clientSecretSecretRef.key }}
+                  key: {{ .Values.server.auth.oidc.clientSecretSecretRef.key | default "clientSecret" }}
             {{- end }}
-            {{- if and .Values.server.auth.oidc.enabled .Values.server.auth.session.secretRef.name }}
+            {{- if and .Values.server.auth.oidc.enabled .Values.server.auth.session .Values.server.auth.session.secretRef .Values.server.auth.session.secretRef.name }}
             - name: DIVERGE_SESSION_SECRET
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.server.auth.session.secretRef.name }}
-                  key: {{ .Values.server.auth.session.secretRef.key }}
+                  key: {{ .Values.server.auth.session.secretRef.key | default "session-secret" }}
             {{- end }}
             {{- if and .Values.sandbox .Values.sandbox.macaroonSecretRef .Values.sandbox.macaroonSecretRef.name }}
             - name: DIVERGE_MACAROON_ROOT_KEY
@@ -149,7 +212,7 @@ spec:
             periodSeconds: 15
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /readyz
               port: grpc
             initialDelaySeconds: 5
             periodSeconds: 10
