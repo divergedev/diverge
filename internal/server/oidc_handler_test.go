@@ -28,6 +28,12 @@ func TestOIDCHandler_HandleConfig(t *testing.T) {
 	// We can't test full OIDC handler creation (requires real OIDC discovery),
 	// but we can test the config endpoint and logout handler directly.
 	handler := &OIDCHandler{
+		config: OIDCHandlerConfig{
+			IssuerURL:   "https://idp.example.com",
+			ClientID:    "diverge-web",
+			CLIClientID: "diverge-cli",
+			Scopes:      []string{"openid", "profile", "email", "groups"},
+		},
 		providerName: "TestProvider",
 	}
 
@@ -50,6 +56,33 @@ func TestOIDCHandler_HandleConfig(t *testing.T) {
 	if config.ProviderName != "TestProvider" {
 		t.Errorf("ProviderName = %q, want %q", config.ProviderName, "TestProvider")
 	}
+	if config.IssuerURL != "https://idp.example.com" {
+		t.Errorf("IssuerURL = %q, want %q", config.IssuerURL, "https://idp.example.com")
+	}
+	if config.CLIClientID != "diverge-cli" {
+		t.Errorf("CLIClientID = %q, want %q", config.CLIClientID, "diverge-cli")
+	}
+	if len(config.Scopes) != 4 {
+		t.Errorf("Scopes len = %d, want 4", len(config.Scopes))
+	}
+
+	// Fallback CLIClientID to ClientID when omitted.
+	fallbackHandler := &OIDCHandler{
+		config: OIDCHandlerConfig{
+			IssuerURL: "https://idp.example.com",
+			ClientID:  "diverge-shared",
+		},
+		providerName: "FallbackProvider",
+	}
+	rec2 := httptest.NewRecorder()
+	fallbackHandler.HandleConfig(rec2, httptest.NewRequest("GET", "/auth/config", nil))
+	var fallbackCfg authConfigResponse
+	if err := json.NewDecoder(rec2.Body).Decode(&fallbackCfg); err != nil {
+		t.Fatalf("failed to decode fallback config response: %v", err)
+	}
+	if fallbackCfg.CLIClientID != "diverge-shared" {
+		t.Errorf("fallback CLIClientID = %q, want %q", fallbackCfg.CLIClientID, "diverge-shared")
+	}
 
 	// Test HandleLogout
 	handler.secureCookies = false
@@ -66,7 +99,7 @@ func TestOIDCHandler_HandleConfig(t *testing.T) {
 		t.Errorf("HandleLogout redirect = %q, want %q", location, "/login")
 	}
 
-	// Verify session cookie is cleared
+	// Verify session cookie is cleared with matching SameSite=Lax
 	cookies := rec.Result().Cookies()
 	found := false
 	for _, c := range cookies {
@@ -74,6 +107,9 @@ func TestOIDCHandler_HandleConfig(t *testing.T) {
 			found = true
 			if c.MaxAge != -1 {
 				t.Errorf("diverge_token MaxAge = %d, want -1", c.MaxAge)
+			}
+			if c.SameSite != http.SameSiteLaxMode {
+				t.Errorf("diverge_token clear SameSite = %d, want Lax", c.SameSite)
 			}
 		}
 	}
@@ -116,12 +152,15 @@ func TestOIDCHandler_HandleLogin_CSRF(t *testing.T) {
 	if stateCookie.HttpOnly != true {
 		t.Error("diverge_oauthstate HttpOnly = false, want true")
 	}
-	if stateCookie.SameSite != http.SameSiteStrictMode {
-		t.Errorf("diverge_oauthstate SameSite = %d, want Strict", stateCookie.SameSite)
+	if stateCookie.SameSite != http.SameSiteLaxMode {
+		t.Errorf("diverge_oauthstate SameSite = %d, want Lax", stateCookie.SameSite)
 	}
 
 	if returnCookie == nil {
 		t.Fatal("diverge_returnurl cookie not set")
+	}
+	if returnCookie.SameSite != http.SameSiteLaxMode {
+		t.Errorf("diverge_returnurl SameSite = %d, want Lax", returnCookie.SameSite)
 	}
 	if returnCookie.Value != "/dashboard" {
 		t.Errorf("diverge_returnurl = %q, want %q", returnCookie.Value, "/dashboard")

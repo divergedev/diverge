@@ -269,7 +269,7 @@ func (c *Client) classifyDisconnect(err error, currentBackoff time.Duration, aut
 		}
 	}
 
-	if errors.Is(err, ErrInsecureHTTP) {
+	if errors.Is(err, ErrInsecureHTTP) || errors.Is(err, ErrAuthRequired) || errors.Is(err, ErrNoCredential) {
 		return 0, false, err
 	}
 	switch connect.CodeOf(err) {

@@ -26,12 +26,17 @@ const (
 	defaultMaxTokenStderr      = 4 << 10  // 4 KiB
 )
 
-// ErrNoCredential is returned when no credential can be resolved for the
-// diverge server.
+// ErrNoCredential is returned when no credential source is configured for the
+// diverge server (fatal on reconnect). Transient failures from a configured
+// helper command or rotating token file must not wrap ErrNoCredential.
 var ErrNoCredential = errors.New("no credential available for the diverge server")
 
 // ErrInsecureHTTP is returned when credentials or tunnel streams target a non-loopback plaintext http:// URL.
 var ErrInsecureHTTP = errors.New("insecure HTTP scheme is only allowed for loopback addresses")
+
+// ErrAuthRequired is returned when stored OIDC credentials have expired or been revoked
+// and interactive re-authentication (`diverge login`) is required.
+var ErrAuthRequired = errors.New("authentication required")
 
 // TokenSource provides a bearer credential for authenticating tunnel and control-plane requests.
 type TokenSource interface {
@@ -374,7 +379,7 @@ func (c *CommandTokenSource) execOnce() (string, error) {
 
 	tok := strings.TrimSpace(stdoutBuf.buf.String())
 	if tok == "" {
-		return "", fmt.Errorf("%w: token command returned empty output", ErrNoCredential)
+		return "", errors.New("token command returned empty output")
 	}
 	if strings.ContainsAny(tok, "\r\n") {
 		return "", errors.New("token command output contains invalid newline characters")

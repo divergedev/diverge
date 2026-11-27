@@ -151,11 +151,13 @@ printf "  tok-$(wc -l < %s | tr -d ' ')  \n"
 		assert.Contains(t, err.Error(), "newline")
 	})
 
-	t.Run("rejects empty output", func(t *testing.T) {
+	t.Run("rejects empty output without wrapping ErrNoCredential", func(t *testing.T) {
 		ts, err := NewCommandTokenSource(`printf '   \t  '`)
 		require.NoError(t, err)
 		_, err = ts.Token(context.Background())
-		require.ErrorIs(t, err, ErrNoCredential)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "empty output")
+		assert.NotErrorIs(t, err, ErrNoCredential)
 	})
 
 	t.Run("enforces stdout size cap", func(t *testing.T) {

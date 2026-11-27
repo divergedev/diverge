@@ -12,6 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/client-go/rest"
 	"pgregory.net/rapid"
+
+	"github.com/divergedev/diverge/internal/tunnelclient"
 )
 
 func TestStaticTokenSource(t *testing.T) {
@@ -342,19 +344,21 @@ func TestResolveTunnelToken_PBT(t *testing.T) {
 }
 
 func TestResolveStandaloneTunnelTokenSource(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
 	t.Run("rejects both --token-cmd and --token-file", func(t *testing.T) {
-		_, err := resolveStandaloneTunnelTokenSource(t.Context(), "echo a", "/tmp/tok")
+		_, err := resolveStandaloneTunnelTokenSource(t.Context(), "https://diverge.example.com", "echo a", "/tmp/tok")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "cannot both be set")
 	})
 
 	t.Run("validates --token-cmd POSIX syntax without executing eagerly", func(t *testing.T) {
 		t.Setenv(tunnelTokenEnvVar, "env-tok")
-		_, err := resolveStandaloneTunnelTokenSource(t.Context(), "echo a | cat", "")
+		_, err := resolveStandaloneTunnelTokenSource(t.Context(), "https://diverge.example.com", "echo a | cat", "")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "without a shell")
 
-		ts, err := resolveStandaloneTunnelTokenSource(t.Context(), "printf cmd-tok", "")
+		ts, err := resolveStandaloneTunnelTokenSource(t.Context(), "https://diverge.example.com", "printf cmd-tok", "")
 		require.NoError(t, err)
 		tok, err := ts.Token(t.Context())
 		require.NoError(t, err)
@@ -366,7 +370,7 @@ func TestResolveStandaloneTunnelTokenSource(t *testing.T) {
 		tokPath := filepath.Join(t.TempDir(), "token")
 		require.NoError(t, os.WriteFile(tokPath, []byte("file-tok\n"), 0o600))
 
-		ts, err := resolveStandaloneTunnelTokenSource(t.Context(), "", tokPath)
+		ts, err := resolveStandaloneTunnelTokenSource(t.Context(), "https://diverge.example.com", "", tokPath)
 		require.NoError(t, err)
 		tok, err := ts.Token(t.Context())
 		require.NoError(t, err)
@@ -375,7 +379,7 @@ func TestResolveStandaloneTunnelTokenSource(t *testing.T) {
 
 	t.Run("falls back to DIVERGE_TOKEN", func(t *testing.T) {
 		t.Setenv(tunnelTokenEnvVar, "env-only-tok")
-		ts, err := resolveStandaloneTunnelTokenSource(t.Context(), "", "")
+		ts, err := resolveStandaloneTunnelTokenSource(t.Context(), "https://diverge.example.com", "", "")
 		require.NoError(t, err)
 		tok, err := ts.Token(t.Context())
 		require.NoError(t, err)
@@ -384,10 +388,76 @@ func TestResolveStandaloneTunnelTokenSource(t *testing.T) {
 
 	t.Run("returns actionable ErrNoTunnelCredential when unconfigured", func(t *testing.T) {
 		t.Setenv(tunnelTokenEnvVar, "")
-		_, err := resolveStandaloneTunnelTokenSource(t.Context(), "", "")
+		_, err := resolveStandaloneTunnelTokenSource(t.Context(), "https://diverge.example.com", "", "")
 		require.ErrorIs(t, err, ErrNoTunnelCredential)
 		assert.Contains(t, err.Error(), "--token-cmd")
 		assert.Contains(t, err.Error(), "--token-file")
 		assert.Contains(t, err.Error(), tunnelTokenEnvVar)
+		assert.Contains(t, err.Error(), "diverge login")
+	})
+
+	t.Run("surfaces corrupt credentials.json parse error", func(t *testing.T) {
+		t.Setenv(tunnelTokenEnvVar, "")
+		credPath := filepath.Join(t.TempDir(), "credentials.json")
+		require.NoError(t, os.WriteFile(credPath, []byte("{not-json"), 0o600))
+
+		_, err := resolveStandaloneTunnelTokenSourceWithStore(t.Context(), "https://diverge.example.com", "", "", credPath, nil)
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, ErrNoTunnelCredential)
+		assert.Contains(t, err.Error(), "failed to parse credentials")
+	})
+
+	t.Run("expired unrefreshable stored credential fails eagerly with ErrAuthRequired", func(t *testing.T) {
+		t.Setenv(tunnelTokenEnvVar, "")
+		credPath := filepath.Join(t.TempDir(), "credentials.json")
+		require.NoError(t, SaveCredentialStore(credPath, &CredentialStore{
+			Version: 1,
+			Servers: map[string]ServerCredential{
+				"https://diverge.example.com": {
+					IssuerURL: "https://idp.example.com",
+					ClientID:  "diverge-cli",
+					TokenURL:  "https://idp.example.com/token",
+					IDToken:   "expired-id-tok",
+					ExpiresAt: time.Now().Add(-time.Hour),
+				},
+			},
+		}))
+
+		_, err := resolveStandaloneTunnelTokenSourceWithStore(t.Context(), "https://diverge.example.com", "", "", credPath, nil)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, tunnelclient.ErrAuthRequired)
+	})
+
+	t.Run("missing home dir preserves explicit token sources and surfaces CredentialsPath error otherwise", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", "")
+		t.Setenv("HOME", "")
+		t.Setenv("USERPROFILE", "")
+
+		// Explicit token sources work without HOME/XDG_CONFIG_HOME.
+		t.Setenv(tunnelTokenEnvVar, "env-no-home")
+		tsEnv, err := resolveStandaloneTunnelTokenSource(t.Context(), "https://diverge.example.com", "", "")
+		require.NoError(t, err)
+		tok, err := tsEnv.Token(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, "env-no-home", tok)
+
+		tokPath := filepath.Join(t.TempDir(), "tok")
+		require.NoError(t, os.WriteFile(tokPath, []byte("file-no-home\n"), 0o600))
+		t.Setenv(tunnelTokenEnvVar, "")
+		tsFile, err := resolveStandaloneTunnelTokenSource(t.Context(), "https://diverge.example.com", "", tokPath)
+		require.NoError(t, err)
+		tokF, err := tsFile.Token(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, "file-no-home", tokF)
+
+		tsCmd, err := resolveStandaloneTunnelTokenSource(t.Context(), "https://diverge.example.com", "printf cmd-no-home", "")
+		require.NoError(t, err)
+		require.NotNil(t, tsCmd)
+
+		// Without any explicit token source, CredentialsPath error is surfaced instead of ErrNoTunnelCredential.
+		_, err = resolveStandaloneTunnelTokenSource(t.Context(), "https://diverge.example.com", "", "")
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, ErrNoTunnelCredential)
+		assert.Contains(t, err.Error(), "could not determine user home directory")
 	})
 }

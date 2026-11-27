@@ -55,6 +55,9 @@ spec:
             {{- if .Values.server.auth.oidc.enabled }}
             - --oidc-issuer-url={{ .Values.server.auth.oidc.issuerUrl }}
             - --oidc-client-id={{ .Values.server.auth.oidc.clientId }}
+            {{- if .Values.server.auth.oidc.cliClientId }}
+            - {{ printf "--oidc-cli-client-id=%s" .Values.server.auth.oidc.cliClientId | quote }}
+            {{- end }}
             - --oidc-redirect-url={{ .Values.server.auth.oidc.redirectUrl }}
             - "--oidc-provider-name={{ .Values.server.auth.oidc.providerName }}"
             - --oidc-scopes={{ .Values.server.auth.oidc.scopes }}
@@ -64,10 +67,10 @@ spec:
             - "--oidc-allowed-groups={{ .Values.server.auth.oidc.allowedGroups }}"
             {{- end }}
             {{- if .Values.server.auth.oidc.usernamePrefix }}
-            - --oidc-username-prefix={{ .Values.server.auth.oidc.usernamePrefix }}
+            - {{ printf "--oidc-username-prefix=%s" .Values.server.auth.oidc.usernamePrefix | quote }}
             {{- end }}
             {{- if .Values.server.auth.oidc.groupsPrefix }}
-            - --oidc-groups-prefix={{ .Values.server.auth.oidc.groupsPrefix }}
+            - {{ printf "--oidc-groups-prefix=%s" .Values.server.auth.oidc.groupsPrefix | quote }}
             {{- end }}
             {{- if and .Values.server.auth.session .Values.server.auth.session.maxAge }}
             - --session-max-age={{ .Values.server.auth.session.maxAge }}s

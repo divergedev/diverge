@@ -8,7 +8,11 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -589,6 +593,95 @@ func TestNew_RejectsPortInLocalHostAndInsecureClassifyDisconnect(t *testing.T) {
 	_, retry, outErr := c.classifyDisconnect(fmt.Errorf("dial: %w", ErrInsecureHTTP), time.Second, &authRetried)
 	assert.False(t, retry)
 	assert.ErrorIs(t, outErr, ErrInsecureHTTP)
+
+	authReqErr := connect.NewError(connect.CodeUnknown, fmt.Errorf("refresh failed: %w", ErrAuthRequired))
+	_, retry, outErr = c.classifyDisconnect(authReqErr, time.Second, &authRetried)
+	assert.False(t, retry)
+	assert.ErrorIs(t, outErr, ErrAuthRequired)
+
+	_, retry, outErr = c.classifyDisconnect(ErrNoCredential, time.Second, &authRetried)
+	assert.False(t, retry)
+	assert.ErrorIs(t, outErr, ErrNoCredential)
+
+	_, retry, _ = c.classifyDisconnect(errors.New("token command returned empty output"), time.Second, &authRetried)
+	assert.True(t, retry, "transient empty helper output must stay retryable")
+}
+
+func TestClient_ConnectWithRetry_TransientEmptyCommandTokenRetries(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell test helper relies on sh")
+	}
+
+	tmpDir := t.TempDir()
+	countFile := filepath.Join(tmpDir, "calls.txt")
+	script := filepath.Join(tmpDir, "tok.sh")
+	err := os.WriteFile(script, []byte(fmt.Sprintf(`#!/bin/sh
+echo x >> %s
+calls=$(wc -l < %s | tr -d ' ')
+if [ "$calls" -eq 1 ]; then exit 0; fi
+printf 'fresh-cmd-tok\n'
+`, countFile, countFile)), 0o700)
+	require.NoError(t, err)
+
+	tokSrc, err := NewCommandTokenSource(script)
+	require.NoError(t, err)
+	_, firstErr := tokSrc.Token(t.Context())
+	require.Error(t, firstErr)
+	assert.NotErrorIs(t, firstErr, ErrNoCredential)
+
+	// Re-create script state so ConnectWithRetry sees empty output on attempt 1, then valid token on attempt 2.
+	require.NoError(t, os.WriteFile(countFile, nil, 0o600))
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	var attempts atomic.Int32
+	srv := &retryScenarioServer{
+		stepFn: func(_ int, auth string, stream *connect.BidiStream[pb.TunnelServiceTunnelRequest, pb.TunnelServiceTunnelResponse]) error {
+			attempts.Add(1)
+			assert.Equal(t, "Bearer fresh-cmd-tok", auth)
+			_, _ = stream.Receive()
+			_ = stream.Send(&pb.TunnelServiceTunnelResponse{
+				Payload: &pb.TunnelServiceTunnelResponse_Ready{
+					Ready: &pb.TunnelReady{TunnelId: "t1", ProtocolVersion: 3},
+				},
+			})
+			cancel()
+			return nil
+		},
+	}
+	mux := http.NewServeMux()
+	path, handler := divergev1alpha1connect.NewTunnelServiceHandler(srv)
+	mux.Handle(path, handler)
+	ts := httptest.NewUnstartedServer(mux)
+	ts.EnableHTTP2 = true
+	ts.StartTLS()
+	t.Cleanup(ts.Close)
+
+	authedCli := &http.Client{
+		Transport: &AuthTransport{
+			Base:        ts.Client().Transport,
+			TokenSource: tokSrc,
+		},
+	}
+	client, err := New(Config{
+		ServerAddr:       ts.URL,
+		LocalHost:        "127.0.0.1",
+		LocalPort:        8080,
+		PreviewID:        "p-empty-cmd",
+		Service:          "web",
+		Namespace:        "dev",
+		TokenSource:      tokSrc,
+		TunnelHTTPClient: authedCli,
+		InitialBackoff:   10 * time.Millisecond,
+		MaxBackoff:       30 * time.Millisecond,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, client.ConnectWithRetry(ctx))
+	assert.Equal(t, int32(1), attempts.Load())
+	data, readErr := os.ReadFile(countFile)
+	require.NoError(t, readErr)
+	assert.Len(t, strings.Fields(string(data)), 2, "helper should be invoked once for empty output and once for valid token")
 }
 
 type mockV3CloseServer struct {

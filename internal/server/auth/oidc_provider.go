@@ -30,6 +30,9 @@ type OIDCProviderConfig struct {
 	IssuerURL string
 	// ClientID is the OIDC client ID for token audience validation.
 	ClientID string
+	// CLIClientID is an optional additional OIDC client ID (e.g. a public PKCE CLI client)
+	// accepted as a valid token audience alongside ClientID.
+	CLIClientID string
 	// UsernameClaim is the JWT claim used for the username. Defaults to "preferred_username".
 	UsernameClaim string
 	// GroupsClaim is the JWT claim used for group membership. Defaults to "groups".
@@ -47,6 +50,7 @@ type OIDCProviderConfig struct {
 // It supports both direct OIDC tokens and Diverge session JWTs.
 type OIDCProvider struct {
 	verifier       *oidc.IDTokenVerifier
+	clientIDs      []string
 	session        *SessionManager
 	usernameClaim  string
 	groupsClaim    string
@@ -76,13 +80,26 @@ func IsReservedOIDCPrincipal(principal string) bool {
 // NewOIDCProvider creates a new OIDC authentication provider. It performs
 // OpenID Connect discovery on the issuer URL to fetch the JWKS keys.
 func NewOIDCProvider(ctx context.Context, cfg OIDCProviderConfig, session *SessionManager, logger *slog.Logger) (*OIDCProvider, error) {
+	clientIDs := make([]string, 0, 2)
+	if id := strings.TrimSpace(cfg.ClientID); id != "" {
+		clientIDs = append(clientIDs, id)
+	}
+	if cliID := strings.TrimSpace(cfg.CLIClientID); cliID != "" && !slices.Contains(clientIDs, cliID) {
+		clientIDs = append(clientIDs, cliID)
+	}
+	if len(clientIDs) == 0 {
+		return nil, fmt.Errorf("oidc provider requires client_id or cli_client_id")
+	}
+
 	provider, err := oidc.NewProvider(ctx, cfg.IssuerURL)
 	if err != nil {
 		return nil, fmt.Errorf("oidc discovery failed for %q: %w", cfg.IssuerURL, err)
 	}
 
+	// Skip ClientIDCheck here and validate aud against clientIDs in Authenticate so
+	// signature/expiry verification runs only once and expiry errors are never masked.
 	verifier := provider.Verifier(&oidc.Config{
-		ClientID: cfg.ClientID,
+		SkipClientIDCheck: true,
 	})
 
 	usernameClaim := cfg.UsernameClaim
@@ -101,6 +118,7 @@ func NewOIDCProvider(ctx context.Context, cfg OIDCProviderConfig, session *Sessi
 
 	return &OIDCProvider{
 		verifier:       verifier,
+		clientIDs:      clientIDs,
 		session:        session,
 		usernameClaim:  usernameClaim,
 		groupsClaim:    groupsClaim,
@@ -129,10 +147,20 @@ func (p *OIDCProvider) Authenticate(ctx context.Context, token string) (*UserInf
 		return nil, fmt.Errorf("oidc verifier not configured")
 	}
 
-	// Try OIDC ID token verification (JWKS cached by go-oidc)
+	// Verify OIDC ID token once (JWKS cached by go-oidc), then check configured client audiences.
 	idToken, err := p.verifier.Verify(ctx, token)
 	if err != nil {
 		return nil, fmt.Errorf("oidc token verification failed: %w", err)
+	}
+	audMatched := false
+	for _, aud := range idToken.Audience {
+		if slices.Contains(p.clientIDs, aud) {
+			audMatched = true
+			break
+		}
+	}
+	if !audMatched {
+		return nil, fmt.Errorf("oidc token verification failed: audience %v does not match configured client IDs", idToken.Audience)
 	}
 
 	// Extract claims into a flexible map

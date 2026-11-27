@@ -120,6 +120,7 @@ func addCommands(root *cobra.Command, app *App) {
 	root.AddCommand(newEnvCmd(app))
 	root.AddCommand(newInitCmd(app))
 	root.AddCommand(newListCmd(app))
+	root.AddCommand(newLoginCmd(app))
 	root.AddCommand(newLogsCmd(app))
 	root.AddCommand(newOpenCmd(app))
 	root.AddCommand(newPluginsCmd(app))

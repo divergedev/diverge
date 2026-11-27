@@ -356,4 +356,47 @@ func TestHelmChart_LintAndServerTemplates(t *testing.T) {
 		)
 		require.NoError(t, err, renderedOK)
 	})
+
+	t.Run("oidc cliClientId flag emitted only when set", func(t *testing.T) {
+		renderedWithout, err := renderHelmChart(t,
+			"server.enabled=true",
+			"server.auth.oidc.enabled=true",
+		)
+		require.NoError(t, err, renderedWithout)
+		depWithout := findResource(parseRenderedDocs(t, renderedWithout), "Deployment", "diverge-server")
+		argsWithout := depWithout["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)["args"].([]any)
+		for _, a := range argsWithout {
+			assert.NotContains(t, a.(string), "--oidc-cli-client-id=")
+		}
+
+		renderedWith, err := renderHelmChart(t,
+			"server.enabled=true",
+			"server.auth.oidc.enabled=true",
+			"server.auth.oidc.cliClientId=diverge-cli",
+		)
+		require.NoError(t, err, renderedWith)
+		depWith := findResource(parseRenderedDocs(t, renderedWith), "Deployment", "diverge-server")
+		argsWith := depWith["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)["args"].([]any)
+		for _, a := range argsWith {
+			_, isStr := a.(string)
+			require.True(t, isStr, "every container arg must parse as YAML string, got %T (%v)", a, a)
+		}
+		assert.Contains(t, argsWith, "--oidc-cli-client-id=diverge-cli")
+		assert.Contains(t, argsWith, "--oidc-username-prefix=oidc:")
+		assert.Contains(t, argsWith, "--oidc-groups-prefix=oidc:")
+
+		// Trailing backslash prefixes must render valid YAML and preserve the literal backslash.
+		renderedBackslash, err := renderHelmChart(t,
+			"server.enabled=true",
+			"server.auth.oidc.enabled=true",
+			`server.auth.oidc.usernamePrefix=DOMAIN\\`,
+			`server.auth.oidc.groupsPrefix=CORP\\`,
+		)
+		require.NoError(t, err, renderedBackslash)
+		depBackslash := findResource(parseRenderedDocs(t, renderedBackslash), "Deployment", "diverge-server")
+		require.NotNil(t, depBackslash)
+		argsBackslash := depBackslash["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)["args"].([]any)
+		assert.Contains(t, argsBackslash, `--oidc-username-prefix=DOMAIN\`)
+		assert.Contains(t, argsBackslash, `--oidc-groups-prefix=CORP\`)
+	})
 }
