@@ -67,14 +67,14 @@ diverge top --once
   <img src="docs/assets/delta-vs-duplicated.svg" alt="Delta Preview vs Traditional Full-Stack Duplication" width="100%">
 </p>
 
-### Turnkey CI/CD (`divergedev/diverge@v0.29.0`)
+### Turnkey CI/CD (`divergedev/diverge@v0.30.0`)
 
 Deploy a delta `PreviewGroup` for only the services modified in a Pull Request (or set `group: ${{ github.head_ref }}` to compose multiple open PRs across repos into one shared `PreviewGroup`), run `diverge verify` health & latency SLO checks (or `diverge replay` contract diffing with `--auto-fix` self-healing), and pass `routing-header-json` directly into Playwright E2E tests:
 
 ```yaml
 - name: Deploy Diverge Delta Preview
   id: diverge
-  uses: divergedev/diverge@v0.29.0
+  uses: divergedev/diverge@v0.30.0
   with:
     kubeconfig: ${{ secrets.PREVIEW_KUBECONFIG }}
     image-registry: ghcr.io/acme
@@ -121,7 +121,7 @@ See [charts/diverge/values.yaml](charts/diverge/values.yaml) for configuration o
 *   **TTL Auto-Expiry**: Automatic environment cleanup after configurable TTL with requeue-based expiry.
 *   **Multi-SCM Notifiers & Webhooks**: GitLab MR comments and GitHub PR comments with status updates, automatic multi-MR `PreviewGroup` image synchronization on commit push and per-service detach on PR/MR close/merge, and interactive PR/MR slash commands (`/diverge preview`, `/diverge group <name> [--db-mode <mode>]`, `/diverge ungroup [name]`, `/diverge verify [path]`, `/diverge replay [path ...]`, `/diverge fix <objective>`, `/diverge extend-ttl [duration]`, `/diverge teardown`, `/diverge pause`, `/diverge resume`).
 *   **E2E Tested**: End-to-end tests with Kind/k3d, Envoy Gateway, Istio, Cilium, Linkerd, and real CRD reconciliation.
-*   **ConnectRPC API Server & Web Dashboard**: Opt-in API server (`server.enabled: true` in Helm) featuring an embedded React Web UI (`server.dashboard.enabled: true`), ConnectRPC (HTTP/1.1 + HTTP/2), OIDC JWT + K8s TokenReview + Macaroon authentication, namespace-scoped RBAC authorization, structured audit logging, list pagination, optimistic concurrency, and HTTP reverse tunnels.
+*   **ConnectRPC API Server, Protocol v3 Reverse Tunnels & Web Dashboard**: Opt-in API server (`server.enabled: true` in Helm) featuring an embedded React Web UI (`server.dashboard.enabled: true`), ConnectRPC (HTTP/1.1 + HTTP/2) including `PreviewResolverService.ResolvePreview` and `TunnelService.ListTunnels`, OIDC JWT (with direct IdP PKCE `diverge login`) + K8s TokenReview authentication, namespace-scoped RBAC authorization, structured audit logging, list pagination, optimistic concurrency, HTTP/2 reverse tunnels (`Protocol v3` over `diverge tunnel --json` / `internal/tunnelclient` with kubeconfig-free `--token-cmd` or OIDC), and a standalone zero-Kubernetes `github.com/divergedev/diverge/api/gen` Protobuf/ConnectRPC Go module.
 *   **Service Topology & Route Simulation**: `diverge route <service>` traces request paths through your service graph. `diverge graph show` renders the topology as Mermaid, DOT, or JSON.
 *   **Changed-Service Detection**: `diverge diff` identifies which services are affected by your code changes using git diff + path-based service mapping. Outputs JSON for CI integration.
 *   **Prometheus Topology Discovery**: Auto-discovers service dependencies from Istio, Linkerd, or Cilium mesh metrics. Background cache with stale-while-revalidate for zero-latency CLI responses.
