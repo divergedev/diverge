@@ -21,6 +21,7 @@ ARG TARGETARCH
 
 WORKDIR /workspace
 COPY go.mod go.sum ./
+COPY api/gen/go.mod api/gen/go.sum ./api/gen/
 RUN go mod download
 
 COPY cmd/ cmd/

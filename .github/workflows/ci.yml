@@ -21,9 +21,12 @@ jobs:
       - name: Build
         run: |
           go build ./...
+          (cd api/gen && go build ./...)
           go build -tags=no_knative,no_schema,no_temporal,no_kafka -o /tmp/diverge-controller-slim ./cmd/controller/
       - name: Vet
-        run: go vet ./...
+        run: |
+          go vet ./...
+          (cd api/gen && go vet ./...)
       - name: Test
         run: |
           # E2E tests in /test/ are filtered out because they require a real cluster
@@ -149,10 +152,11 @@ jobs:
         run: |
           rm -rf api/gen/diverge/
           buf generate
+          (cd api/gen && go mod tidy)
       - name: Check for stale generated files
         run: |
-          DIFF=$(git diff -I 'protoc-gen-go v' --stat api/gen/diverge/ 2>/dev/null || true)
-          UNTRACKED=$(git ls-files --others --exclude-standard -- api/gen/diverge/ 2>/dev/null || true)
+          DIFF=$(git diff -I 'protoc-gen-go v' --stat api/gen/diverge/ api/gen/go.mod api/gen/go.sum 2>/dev/null || true)
+          UNTRACKED=$(git ls-files --others --exclude-standard -- api/gen/diverge/ api/gen/go.mod api/gen/go.sum 2>/dev/null || true)
           if [[ -n "$DIFF" || -n "$UNTRACKED" ]]; then
             echo "❌ Generated protobuf/connect files are stale!"
             echo ""
