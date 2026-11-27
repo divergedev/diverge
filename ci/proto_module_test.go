@@ -45,6 +45,21 @@ func runGoInAPIGen(t *testing.T, args ...string) string {
 	return string(out)
 }
 
+func TestRootModule_NoReplaceDirectives(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "go.mod"))
+	require.NoError(t, err)
+	for line := range strings.SplitSeq(string(raw), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "//") {
+			continue
+		}
+		assert.False(t, strings.HasPrefix(trimmed, "replace ") || strings.HasPrefix(trimmed, "replace("),
+			"root go.mod must not contain replace directives (breaks go install @latest): %s", trimmed)
+		assert.NotEqual(t, "github.com/divergedev/diverge/api/gen v0.0.0", trimmed,
+			"root go.mod must pin a published version of github.com/divergedev/diverge/api/gen, not v0.0.0")
+	}
+}
+
 func TestProtoModule_GoModClean(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "api", "gen", "go.mod"))
 	require.NoError(t, err)

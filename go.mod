@@ -6,7 +6,7 @@ require (
 	connectrpc.com/connect v1.20.0
 	connectrpc.com/otelconnect v0.9.0
 	github.com/coreos/go-oidc/v3 v3.20.0
-	github.com/divergedev/diverge/api/gen v0.0.0
+	github.com/divergedev/diverge/api/gen v0.0.0-20261127065627-d48e002b17af
 	github.com/fatih/color v1.19.0
 	github.com/go-logr/logr v1.4.4
 	github.com/gofrs/flock v0.13.0
@@ -333,5 +333,3 @@ tool (
 	github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 	sigs.k8s.io/controller-tools/cmd/controller-gen
 )
-
-replace github.com/divergedev/diverge/api/gen => ./api/gen
