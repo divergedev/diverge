@@ -1,5 +1,26 @@
 # Changelog
 
+## [v0.30.0] - 2026-11-27
+
+### 🚀 Highlights & New Features
+
+#### ⚡ Reverse HTTP/2 Tunnels (`Protocol v3`), Atomic Leases & Auth Hardening (`#352`, `#353`, `#354`)
+- **Reverse HTTP/2 Tunnel Data Plane (`internal/server/tunnel_conn.go`, `internal/server/tunnel.go`, `internal/server/tunnel_proxy.go`, `api/proto/diverge/v1alpha1/tunnel.proto`) (#352)**: Replaced buffered HTTP-in-Protobuf v2 forwarding with bidirectional Go stdlib `net/http` HTTP/2 (`h2c`) over ConnectRPC `raw_data` (`Protocol v3`) and `httputil.ReverseProxy` on both server and CLI, delivering native RFC 9113 per-stream flow control, unbounded SSE/ConnectRPC streaming, HTTP/2 trailers, immediate client-disconnect cancellation, and redirect-free loopback forwarding (while keeping legacy `Protocol v2` compatibility).
+- **Multi-Service Previews, Atomic Leases & Lifecycle Hardening (`internal/server/tunnel_lease.go`, `internal/server/tunnel_gc.go`, `internal/server/tunnel_naming.go`, `cmd/server/main.go`) (#352)**: Keyed active tunnels and `<= 63`-char DNS-1123 Services/Leases by `(namespace, preview_id, service)`, added per-machine `client_instance_id` reconnect fencing alongside elevated cross-user `--force` RBAC (`update` + `delete` `environments`) and `--shared-preview-owners` CI hybrid attachment, enforced `UID` + `ResourceVersion` preconditions in `TunnelLease.Release` and `TunnelGC`, added `SIGTERM` tunnel draining (`CLOSE_CODE_SERVER_SHUTDOWN`), and moved readiness probes to `/readyz`.
+- **Tunnel Auth & Data-Plane Guardrails (`internal/server/auth/`, `internal/server/authz.go`, `internal/server/audit.go`, `internal/server/tunnel_proxy.go`) (#352)**: Enforced prefixed OIDC SAR identities (`--oidc-username-prefix` / `--oidc-groups-prefix`, defaulting to `"oidc:"` and blocking `system:` / `divergedev:`), rejected `diverge_token` cookies and Macaroon capability tokens on `TunnelService/Tunnel`, bounded tunnel lifetimes with periodic 5m SAR re-checks (`CLOSE_CODE_AUTH_EXPIRED`), wired `StreamLimiter` and `AuditLogger`, returned deep-copied `TokenCache` entries, and added optional `--tunnel-proxy-auth-token` (`X-Diverge-Proxy-Token`) verification on `:8081`.
+- **Unified Preview Resolution & Tunnel Listing (`internal/server/tunnel_resolve.go`, `internal/server/streaming/informer.go`, `internal/server/metrics.go`) (#353)**: Added `TunnelDirectory`, ConnectRPC `PreviewResolverService.ResolvePreview` (`NO_SIDE_EFFECTS` HTTP/2 POST + GET on `:8081`) combining active local tunnels (tunnel-wins precedence) and ready `Environment` previews with immediate initial `InformerManager` sync, authenticated `TunnelService.ListTunnels` with per-namespace SAR, and Prometheus metrics (`diverge_server_tunnels_active`, `diverge_server_tunnel_requests_total`, `diverge_server_tunnel_request_duration_seconds`, `diverge_server_resolve_requests_total`).
+
+#### 💻 Kubeconfig-Free `diverge tunnel` CLI, Direct IdP PKCE `diverge login` & Helm Updates (`#354`, `#355`)
+- **Standalone `diverge tunnel` & `internal/tunnelclient` (`internal/cli/tunnel.go`, `internal/cli/tunnel_token.go`, `internal/cli/supervisor.go`, `internal/cli/dev.go`, `internal/tunnelclient/`) (#354)**: Added zero-kubeconfig `diverge tunnel` (`--json` NDJSON event stream, `--wait-ready`, `--meta`, `--force`, `--skip-k8s-service`) and `diverge tunnel list` backed by the Kubernetes-free `internal/tunnelclient` package, POSIX-split `singleflight` `--token-cmd` execution (blocking untrusted repo `.diverge.yaml` overrides), process-group-safe `Supervisor` child teardown, and hardened `dev.go` session/tunnel error handling.
+- **Direct IdP OIDC PKCE Login (`internal/cli/login.go`, `internal/server/oidc_handler.go`, `internal/server/auth/oidc_provider.go`) (#355)**: Added RFC 8252 `diverge login` / `diverge login status` / `diverge login clear` with `/auth/config` discovery (`--oidc-cli-client-id`), dual-audience `OIDCProvider` JWT verification, file-locked OAuth2 refresh with rotated-grant preservation (`PendingIDToken`), `prompt=consent` for `offline_access`, and web OIDC cookie `SameSite=Lax` compatibility.
+- **Helm Chart Updates (`charts/diverge/`) (#354, `#355`)**: Added `server.service.appProtocol` (`kubernetes.io/h2c`), opt-in `diverge-tunnel-proxy` `:8081` Service (`app.kubernetes.io/component: tunnel-proxy`), `/readyz` readiness probe, `512Mi` memory limit with dynamic `GOMEMLIMIT`, `server.rbac.oidcTunnelGroups` RBAC templates, `server.auth.oidc.{cliClientId,usernamePrefix,groupsPrefix}` quoting, and `replicaCount > 1` safety `fail` guards.
+
+#### 📦 Standalone `api/gen` Go Submodule & CI Hardening (`#356`, `#357`, `#359`)
+- **Zero-Kubernetes Proto Module (`api/gen/go.mod`, `.github/workflows/release.yml`, `ci/proto_module_test.go`) (#356, `#359`)**: Extracted `github.com/divergedev/diverge/api/gen` into an independent Go submodule free of `k8s.io/*` / `controller-runtime` / `grpc` dependencies, pinned the published submodule in root `go.mod` without `replace` directives so `go install github.com/divergedev/diverge/cmd/diverge@latest` succeeds, and added automated `api/gen/vX.Y.Z` release tagging.
+- **CI & CLI Polish (`internal/cli/preview_compose.go`, `docs/`) (#357)**: Hardened `diverge preview leave` error propagation and git test isolation.
+
+---
+
 ## [v0.29.0] - 2026-11-23
 
 ### 🚀 Highlights & New Features
