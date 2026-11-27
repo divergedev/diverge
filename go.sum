@@ -142,6 +142,8 @@ github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc h1:U9qPSI2PIWSS1
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/denis-tingaikin/go-header v0.5.0 h1:SRdnP5ZKvcO9KKRP1KJrhFR3RrlGuD+42t4429eC9k8=
 github.com/denis-tingaikin/go-header v0.5.0/go.mod h1:mMenU5bWrok6Wl2UsZjy+1okegmwQ3UgWl4V1D8gjlY=
+github.com/divergedev/diverge/api/gen v0.0.0-20261127065627-d48e002b17af h1:st8/mwhk7VUDTkx6NlPJQAJLxzCdiGa1lKBG575B6lQ=
+github.com/divergedev/diverge/api/gen v0.0.0-20261127065627-d48e002b17af/go.mod h1:7MCcEB7Nf2GHioj1rxUGuCnk17afYsvOt01bMO4jMPo=
 github.com/dlclark/regexp2 v1.12.0 h1:0j4c5qQmnC6XOWNjP3PIXURXN2gWx76rd3KvgdPkCz8=
 github.com/dlclark/regexp2 v1.12.0/go.mod h1:DHkYz0B9wPfa6wondMfaivmHpzrQ3v9q8cnmRbL6yW8=
 github.com/dlclark/regexp2/v2 v2.2.1 h1:mf4KkFUj0gJuarK8P+LgiS+Lit7m9N1yAwEfPbee7R0=
